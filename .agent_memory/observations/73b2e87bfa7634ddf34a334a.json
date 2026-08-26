@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/isdir_test.py; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::filesystem::test_is_dir_alone 2>&1 | tail -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/isdir_test.py; CARGO_INCREMENTAL=0 RUST_MIN_STAC",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/isdir_test.py; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::filesystem::test_is_dir_alone 2>&1 | tail -5: the crash is pinned by a program that names nothing else running 1 test test codegen::io::filesystem::test_is_dir_alone_in_a_program ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8892 filtered out; finished in 1.03s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "73b2e87bfa7634ddf34a334a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:34:18.875Z",
+  "stored_at": "2026-08-23T12:34:18.876Z"
+}

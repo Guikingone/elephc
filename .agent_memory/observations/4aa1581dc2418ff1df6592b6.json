@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 scripts/check_asm_comments.py src/codegen_support/runtime/exceptions/uncaught_report.rs src/codegen_support/runtime/data/fixed.rs 2>&1 | tail -8; cargo fmt --check 2>&1 | head -20; echo FMT_DONE",
+  "summary": "python3 scripts/check_asm_comments.py src/codegen_support/runtime/exceptions/uncaught_report.rs src/codegen_support/runtime/data/fixed.rs 2>&1 | tail -8; cargo fmt --check 2>&1 | head -20; echo FMT_DONE: All assembly comments aligned. FMT_DONE",
+  "text": "python3 scripts/check_asm_comments.py src/codegen_support/runtime/exceptions/uncaught_report.rs src/codegen_support/runtime/data/fixed.rs 2>&1 | tail -8; cargo fmt --check 2>&1 | head -20; echo FMT_DONE: All assembly comments aligned. FMT_DONE",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4aa1581dc2418ff1df6592b6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:57:21.523Z",
+  "stored_at": "2026-08-24T17:57:21.524Z"
+}

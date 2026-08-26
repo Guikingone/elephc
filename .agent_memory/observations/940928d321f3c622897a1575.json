@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn block_may_throw\" -A 20 src/optimize/ | head -28",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn block_may_throw\" -A 20 src/optimize/ | head -28: ` for a single statement, including all nested expressions. src/optimize/effects.rs-64-/// Covers all `StmtKind` variants, classifying reads, writes, calls, throw",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn block_may_throw\" -A 20 src/optimize/ | head -28: ` for a single statement, including all nested expressions. src/optimize/effects.rs-64-/// Covers all `StmtKind` variants, classifying reads, writes, calls, throws, output, and runtime-state interactions. src/optimize/effects.rs-65-pub(super) fn stmt_effect(stmt: &Stmt) -> Effect { src/optimize/effects.rs-66- match &stmt.kind { src/optimize/effects.rs-67- StmtKind::Synthetic(stmts) => block_effect(stmts), src/optimize/effects.rs-68- StmtKind::IncludeOnceMark { .. } => Effect::PURE.with_side_effects(), src/optimize/effects.rs-69- StmtKind::IncludeOnceGuard { body, .. } => block_effect(body).with_side_effects(), src/optimize/effects.rs-70- StmtKind::Echo(expr) => expr_effect(expr).with_side_effects(), src/optimize/effects.rs-71- StmtKind::ExprStmt(expr) src/optimize/effects.rs-72- | StmtKind::ConstDecl { value: expr, .. } src/optimize/effects.rs-73- | StmtKind::StaticVar { init: expr, .. }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "940928d321f3c622897a1575",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:48:29.422Z",
+  "stored_at": "2026-08-23T17:48:29.422Z"
+}

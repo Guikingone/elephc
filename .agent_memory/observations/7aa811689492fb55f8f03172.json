@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/frame_balance.py')\nt = p.read_text()\nt = t.replace(\"for name, c in unanalysable[:40]:\", \"for name, c in unanalysable:\")\np.write_text(t)\nprint('uncapped')\nPY\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/frame_balance.py -v 2>&1 | grep \"^   ? \" | sort -u",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/frame_balance.py')\nt = p.read_text()\nt = t.replace(\"for name, c in unanalysable[:40]:\", \"for name, c in",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/frame_balance.py')\nt = p.read_text()\nt = t.replace(\"for name, c in unanalysable[:40]:\", \"for name, c in unanalysable:\")\np.write_text(t)\nprint('uncapped')\nPY\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/frame_balance.py -v 2>&1 | grep \"^   ? \" | sort -u: uncapped ? __rt_bcmath_call_free: UNANALYSABLE: `br x9` ? __rt_bcmath_call_last_error: UNANALYSABLE: `br x9` ? __rt_closure_bind: UNANALYSABLE: `and rsp, -16` ? __rt_exception_matches: UNANALYSABLE: `and rsp, -16` ? __rt_fiber_switch: UNANALYSABLE: `mov rsp, QWORD PTR [rip + _fiber_main_saved_sp]` ? __rt_fiber_switch: UNANALYSABLE: `mov sp, x11` ? __rt_mixed_count: UNANALYSABLE: `br x12` ? __rt_sprintf: UNANALYSABLE: `add sp, sp, x0` ? __rt_sprintf: UNANALYSABLE: `lea rsp, [rsp + rcx + 16]`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7aa811689492fb55f8f03172",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:04:04.862Z",
+  "stored_at": "2026-08-21T16:04:04.862Z"
+}

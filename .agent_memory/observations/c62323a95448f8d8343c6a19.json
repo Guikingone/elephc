@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dynamic_stream_calls.py 2>&1 | head -35",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dynamic_stream_calls.py 2>&1 | head -35: --- php --- feof ok ftell ok fclose ok Fatal error: Uncaught TypeError: fclose(): Argument #1 ($stream) ",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dynamic_stream_calls.py 2>&1 | head -35: --- php --- feof ok ftell ok fclose ok Fatal error: Uncaught TypeError: fclose(): Argument #1 ($stream) must be an open stream resource in p.php:17 Stack trace: #0 p.php(17): fclose(Resource id #8) #1 {main} thrown in p.php on line 17 --- elephc --- feof ok ftell ok fclose ok Fatal error: Uncaught TypeError: fclose(): Argument #1 ($stream) must be an open stream resource",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c62323a95448f8d8343c6a19",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:29:41.645Z",
+  "stored_at": "2026-08-21T18:29:41.645Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cd $S/e11 && ./p 2>/dev/null | grep -c Warning; echo \"--- stderr count ---\"; cd $S/e11 && ./p 2>&1 >/dev/null | grep -c Warning",
+  "summary": "About to run: S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cd $S/e11 && ./p 2>/dev/nul",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e9f8e92fcf6a872e3211f736",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:33:52.463Z",
+  "stored_at": "2026-08-24T19:33:52.464Z"
+}

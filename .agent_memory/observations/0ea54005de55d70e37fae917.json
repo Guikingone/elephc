@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -i '' 's/^    public \\$b = \"abcdef\";$/    public $context;\\n    public $b = \"abcdef\";/' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/sctspin.php; php -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/sctspin.php",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -i '' 's/^    public \\$b = \"abcdef\";$/    public $context;\\n    public $b = \"abcdef\";/' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-48",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -i '' 's/^    public \\$b = \"abcdef\";$/    public $context;\\n    public $b = \"abcdef\";/' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/sctspin.php; php -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/sctspin.php: Warning: stream_copy_to_stream(): Stream does not support seeking in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/sctspin.php on line 17 Warning: stream_copy_to_stream(): Failed to seek to position 2 in the stream in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/sctspin.php on line 17 false| Warning: stream_copy_to_stream(): Failed to seek to position 2 in the stream in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/sctspin.php on line 17 false|",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0ea54005de55d70e37fae917",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:59:21.236Z",
+  "stored_at": "2026-08-22T20:59:21.236Z"
+}

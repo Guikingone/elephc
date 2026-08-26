@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"ref_params\" src/types/checker/mod.rs | head -10; echo \"---\"; grep -rn \"pub ref_params\" src | head",
+  "summary": "About to run: grep -rn \"ref_params\" src/types/checker/mod.rs | head -10; echo \"---\"; grep -rn \"pub ref_params\" src | head",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "88e971e162a45bbc9d21bc99",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:42:17.970Z",
+  "stored_at": "2026-08-18T09:42:17.970Z"
+}

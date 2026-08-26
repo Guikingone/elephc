@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"with 2 arguments is deprecated\" src/ | head -5",
+  "summary": "About to run: grep -rn \"with 2 arguments is deprecated\" src/ | head -5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e2c194912c55e7a05cc6a272",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:02:14.904Z",
+  "stored_at": "2026-08-21T17:02:14.905Z",
+  "low_signal": true
+}

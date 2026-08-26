@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"label_global(\\\"__rt_stream_state\\|__rt_stream_state_ptr\\|fn emit_stream_state\" src/codegen_support/runtime/io/*.rs | head -5",
+  "summary": "grep -rn \"label_global(\\\"__rt_stream_state\\|__rt_stream_state_ptr\\|fn emit_stream_state\" src/codegen_support/runtime/io/*.rs | head -5 completed",
+  "text": "grep -rn \"label_global(\\\"__rt_stream_state\\|__rt_stream_state_ptr\\|fn emit_stream_state\" src/codegen_support/runtime/io/*.rs | head -5 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c10d856264a5fed08d40a2fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:45:07.624Z",
+  "stored_at": "2026-08-18T11:45:07.624Z"
+}

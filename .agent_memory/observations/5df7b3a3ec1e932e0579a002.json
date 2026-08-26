@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"x19\\|x20\\|allocatable\\|ALLOCATABLE\" src/codegen/regalloc*.rs src/codegen/regalloc/*.rs 2>/dev/null | grep -i \"const\\|list\\|pool\" | head -6",
+  "summary": "grep -rn \"x19\\|x20\\|allocatable\\|ALLOCATABLE\" src/codegen/regalloc*.rs src/codegen/regalloc/*.rs 2>/dev/null | grep -i \"const\\|list\\|pool\" | head -6: (eval):1: no matches found: src/codegen/regalloc*.rs",
+  "text": "grep -rn \"x19\\|x20\\|allocatable\\|ALLOCATABLE\" src/codegen/regalloc*.rs src/codegen/regalloc/*.rs 2>/dev/null | grep -i \"const\\|list\\|pool\" | head -6: (eval):1: no matches found: src/codegen/regalloc*.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5df7b3a3ec1e932e0579a002",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:46:03.993Z",
+  "stored_at": "2026-08-18T13:46:03.993Z"
+}

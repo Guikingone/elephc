@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '3425,3445p' tests/codegen/regressions/arrays.rs",
+  "summary": "sed -n '3425,3445p' tests/codegen/regressions/arrays.rs: assert_eq!(out.stdout, \"indexed-null\\nassoc-null\\nassigned-null\\n\"); assert_eq!( out.diagnostics.matches(\"Warning: Undefined array key 5\").count(), 1 ); assert_eq!( out.diagnostics.matches(\"Warning: Undefined array key 6\").count(), 1 ); assert_eq!( out.diagnostic",
+  "text": "sed -n '3425,3445p' tests/codegen/regressions/arrays.rs: assert_eq!(out.stdout, \"indexed-null\\nassoc-null\\nassigned-null\\n\"); assert_eq!( out.diagnostics.matches(\"Warning: Undefined array key 5\").count(), 1 ); assert_eq!( out.diagnostics.matches(\"Warning: Undefined array key 6\").count(), 1 ); assert_eq!( out.diagnostics.matches(\"Warning: Undefined array key 7\").count(), 1 ); assert!( out.diagnostics.contains(\"HEAP DEBUG: leak summary: clean\"), \"expected a clean heap, got: {}\", out.diagnostics ); } /// Keyed writes on sentinel-derived nulls follow PHP for integer, negative, and",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "63e0f2c22a9f49f2ab9ffc4c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:57:20.841Z",
+  "stored_at": "2026-08-18T20:57:20.842Z"
+}

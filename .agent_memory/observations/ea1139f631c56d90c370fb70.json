@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"params property\\|filter_params_offset\\|user_filter_params\" -B3 -A18 src/codegen_support/runtime/data/user.rs | head -40",
+  "summary": "About to run: grep -n \"params property\\|filter_params_offset\\|user_filter_params\" -B3 -A18 src/codegen_support/runtime/data/user.rs | head -40",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ea1139f631c56d90c370fb70",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:31:27.323Z",
+  "stored_at": "2026-08-21T09:31:27.323Z"
+}

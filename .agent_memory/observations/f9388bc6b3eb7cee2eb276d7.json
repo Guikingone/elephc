@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && sed -n '960,1015p' Zend/zend_exceptions.c",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && sed -n '960,1015p' Zend/zend_exceptions.c: ring call to %s::__toString()\", ZSTR_VAL(Z_OBJCE(zv)->name), ZSTR_VAL(ce_exception->name)); if (fil",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && sed -n '960,1015p' Zend/zend_exceptions.c: ring call to %s::__toString()\", ZSTR_VAL(Z_OBJCE(zv)->name), ZSTR_VAL(ce_exception->name)); if (file) { zend_string_release_ex(file, 0); } } str = zval_get_string(GET_PROPERTY_SILENT(&exception, ZEND_STR_STRING)); file = zval_get_string(GET_PROPERTY_SILENT(&exception, ZEND_STR_FILE)); line = zval_get_long(GET_PROPERTY_SILENT(&exception, ZEND_STR_LINE)); zend_error_va(severity | E_DONT_BAIL, (file && ZSTR_LEN(file) > 0) ? file : NULL, line, \"Uncaught %S\\n thrown\", str); zend_string_release_ex(str, 0); zend_string_release_ex(file, 0); } else if (ce_exception == &zend_ce_unwind_exit || ce_exception == &zend_ce_graceful_exit) { /* We successfully unwound, nothing more to do. * We still return FAILURE in this case, as further execution should still be aborted. */ } else { zend_error(severity, \"Uncaught exception %s\", ZSTR_VAL(ce_exception->name)); } OBJ_RELEASE(ex); return result; } /* }}} */",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f9388bc6b3eb7cee2eb276d7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:43:46.784Z",
+  "stored_at": "2026-08-18T15:43:46.785Z"
+}

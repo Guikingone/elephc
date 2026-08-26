@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"vd_prop\\|value_tag\" src/codegen_support/runtime/data/user.rs | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"vd_prop\\|value_tag\" src/codegen_support/runtime/data/user.rs | head -20: 1106: let tag = prop_value_tag(class_info, prop_name, prop_ty); 2876: tag: prop_value_tag(class_info, &prop_name, prop_ty), 2895: tag: prop_va",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"vd_prop\\|value_tag\" src/codegen_support/runtime/data/user.rs | head -20: 1106: let tag = prop_value_tag(class_info, prop_name, prop_ty); 2876: tag: prop_value_tag(class_info, &prop_name, prop_ty), 2895: tag: prop_value_tag(class_info, prop_name, prop_ty), 3096:fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f7ff0616c3b3b7a2b09446d5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:46:06.279Z",
+  "stored_at": "2026-08-23T08:46:06.279Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '330,352p' src/types/checker/functions/resolution/specialization.rs",
+  "summary": "rtk proxy sed -n '330,352p' src/types/checker/functions/resolution/specialization.rs: ut the join // below, the element type inferred at the FIRST call site that resolved this function // decides the tail array's memory layout for the WHOLE program, and a later call whose // tail holds a different scalar pushes its raw",
+  "text": "rtk proxy sed -n '330,352p' src/types/checker/functions/resolution/specialization.rs: ut the join // below, the element type inferred at the FIRST call site that resolved this function // decides the tail array's memory layout for the WHOLE program, and a later call whose // tail holds a different scalar pushes its raw machine word into that layout — read // back reinterpreted, with no diagnostic. // // The join uses `union_param_type`, not `wider_type`: a variadic tail is a PHP array // whose elements keep their own type tags, so an int seen next to a float must become // `Mixed` (boxed) rather than being coerced to `Float` and stored as raw bits. if stored_sig.variadic.is_some() && seen_idx > regular_param_count && !variadic_param_is_by_ref(stored_sig) { let regular_names: Vec<String> = stored_sig.params[..regular_param_count] .iter() .map(|(name, _)| name.clone()) .collect(); let joined = if Self::has_unknown_named_variadic_arg(args, &regular_names) { PhpType::Iterable",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0521d24df329f13030406d07",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:02:29.899Z",
+  "stored_at": "2026-08-16T20:02:29.899Z"
+}

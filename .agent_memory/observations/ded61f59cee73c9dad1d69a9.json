@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fpc_wrapper_route.py; export CARGO_INCREMENTAL=0; cargo build -p elephc 2>&1 | grep -E \"^(error|warning)\" -A 8 | head -40; echo \"--- build done ---\"",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fpc_wrapper_route.py; export CARGO_INCREMENTAL=0; cargo build -p elephc 2>&1 | grep -E \"^(error|warning)\" -A 8 | head -40; echo \"--- build do",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fpc_wrapper_route.py; export CARGO_INCREMENTAL=0; cargo build -p elephc 2>&1 | grep -E \"^(error|warning)\" -A 8 | head -40; echo \"--- build done ---\": phar_write.rs: file_put_contents writes through a user wrapper --- build done ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ded61f59cee73c9dad1d69a9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:18:44.683Z",
+  "stored_at": "2026-08-21T18:18:44.683Z"
+}

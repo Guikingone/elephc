@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '14600,14645p' tests/codegen/io/streams.rs",
+  "summary": "sed -n '14600,14645p' tests/codegen/io/streams.rs: keeps its own false. #[test] fn test_missing_read_and_stat_hooks_answer_false_not_a_value() { let out = compile_and_run( r#\"<?php class Bare { public $context; function stream_open($p, $m, $o, &$op) { $op = $p; return true; } } class HasStat { public $context; function",
+  "text": "sed -n '14600,14645p' tests/codegen/io/streams.rs: keeps its own false. #[test] fn test_missing_read_and_stat_hooks_answer_false_not_a_value() { let out = compile_and_run( r#\"<?php class Bare { public $context; function stream_open($p, $m, $o, &$op) { $op = $p; return true; } } class HasStat { public $context; function stream_open($p, $m, $o, &$op) { $op = $p; return true; } function url_stat($path, $flags) { return [\"size\" => 42]; } } stream_wrapper_register(\"bare\", \"Bare\"); stream_wrapper_register(\"hs\", \"HasStat\"); var_dump(@filesize(\"bare://y\")); var_dump(@filesize(\"hs://y\")); var_dump(@filesize(\"/definitely/not/here\")); $f = fopen(\"bare://x\", \"r\"); var_dump(fread($f, 5)); fclose($f); \"#, ); assert_eq!(out, \"bool(false)\\nint(42)\\nbool(false)\\nbool(false)\\n\"); } /// The path operations warn by class and method too, naming the BUILTIN that called them. /// /// These share one runtime helper across unlink/rename/mkdir/rmdir and the whole",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "67d5f5fc42317463de10a120",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:24:02.519Z",
+  "stored_at": "2026-08-21T14:24:02.519Z"
+}

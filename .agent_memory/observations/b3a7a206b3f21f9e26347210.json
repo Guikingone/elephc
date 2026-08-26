@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"STREAM_BACKEND_DIRECTORY\\|STREAM_BACKEND_KIND_OFFSET\" -A2 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs | head -12",
+  "summary": "rtk proxy grep -rn \"STREAM_BACKEND_DIRECTORY\\|STREAM_BACKEND_KIND_OFFSET\" -A2 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs | head -12: ktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs-258- /Users/g",
+  "text": "rtk proxy grep -rn \"STREAM_BACKEND_DIRECTORY\\|STREAM_BACKEND_KIND_OFFSET\" -A2 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs | head -12: ktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs-258- /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs-259-/// Backend kind for a buffered Phar write stream. -- /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs:334: assert!(STREAM_WRAPPER_ID_OFFSET == STREAM_BACKEND_KIND_OFFSET + 8); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs-335- assert!(STREAM_URI_PTR_OFFSET == STREAM_FD_OFFSET + 8); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs-336- assert!(STREAM_URI_LEN_OFFSET == STREAM_URI_PTR_OFFSET + 8);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b3a7a206b3f21f9e26347210",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:32:30.865Z",
+  "stored_at": "2026-08-17T07:32:30.866Z"
+}

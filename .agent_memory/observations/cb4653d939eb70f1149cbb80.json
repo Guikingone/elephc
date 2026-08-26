@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Read",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/pipeline.rs",
+  "command": "",
+  "summary": "About to run: Read",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cb4653d939eb70f1149cbb80",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:11:19.673Z",
+  "stored_at": "2026-08-16T16:11:19.673Z",
+  "low_signal": true
+}

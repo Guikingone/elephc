@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/ir_backend_smoke_test.rs\")\ns = p.read_text()\nold = '''    assert_eq!(\n        compile_and_run_ir_backend(\"stream_csv_round_trip\", source),\n        \"12:hello:world:array\"\n    );'''\nnew = '''    // php 8.5 deprecates the omitted `$escape` on BOTH calls, and prints the line as it goes —\n    // MEASURED on `php -n` 8.5.6, which emits the same two lines around the same data. The\n    // expectation was written before elephc raised them, so it pinned their absence; the script\n    // path inside each is a per-run temp directory, which is why they… [+748 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/ir_backend_smoke_test.rs\")\ns = p.read_text()\nold = '''    assert_eq!(\n        compile_and_run_ir_backend(\"stream_csv_round_trip\", source),\n        \"12:hello:world:array\"\n    );'''\nnew = '''    // php 8.5 deprecates the omitted `$escape` on BOTH calls, and prints t",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/ir_backend_smoke_test.rs\")\ns = p.read_text()\nold = '''    assert_eq!(\n        compile_and_run_ir_backend(\"stream_csv_round_trip\", source),\n        \"12:hello:world:array\"\n    );'''\nnew = '''    // php 8.5 deprecates the omitted `$escape` on BOTH calls, and prints the line as it goes —\n    // MEASURED on `php -n` 8.5.6, which emits the same two lines around the same data. The\n    // expectation was written before elephc raised them, so it pinned their absence; the script\n    // path inside each is a per-run temp directory, which is why they are filtered rather than\n    // spelled out.\n    let out = compile_and_run_ir_backend(\"stream_csv_round_trip\", source);\n    assert_eq!(out.matches(\"Deprecated: fputcsv():\").count(), 1, \"got {out}\");\n    assert_eq!(out.matches(\"Deprecated: fgetcsv():\").count(), 1, \"got {out}\");\n    let data: String = out\n        .lines()\n        .filter(|line| !line.starts_with(\"Deprecated:\"))\n        .collect::<Vec<_>>()\n        .join(\"\");\n    assert_eq!(data, \"12:hello:world:array\");'''\nassert s.count(old) == 1, s.count(old)\np.write_text(s.replace(old, new))\nprint(\"csv expectation remeasured\")\nPY\nCARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles_stream_csv_round_trip 2>&1 | tail -3: csv expectation remeasured test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 256 filtered out; finished in 3.20s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ced9cd8e18f17cfa41a08086",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:33:10.489Z",
+  "stored_at": "2026-08-25T08:33:10.490Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py offfalse.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py offfalse.php: ay offset on false in <dir>/p.php on line 5 NULL Warning: Trying to access array offset on true in <dir>/p.php on lin",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py offfalse.php: ay offset on false in <dir>/p.php on line 5 NULL Warning: Trying to access array offset on true in <dir>/p.php on line 7 NULL Warning: Trying to access array offset on int in <dir>/p.php on line 9 NULL Warning: Trying to access array offset on float in <dir>/p.php on line 11 NULL Warning: Trying to access array offset on null in <dir>/p.php on line 13 NULL string(1) \"b\" done === elephc === Warning: Trying to access array offset on false in <dir>/p.php on line 4 NULL Warning: Trying to access array offset on false in <dir>/p.php on line 5 NULL Warning: Trying to access array offset on true in <dir>/p.php on line 7 NULL Warning: Trying to access array offset on int in <dir>/p.php on line 9 NULL Warning: Trying to access array offset on float in <dir>/p.php on line 11 NULL Warning: Trying to access array offset on null in <dir>/p.php on line 13 NULL string(1) \"b\" done --- exit 0 (php 0) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "108cdf9e85a91924516923ba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:43:44.673Z",
+  "stored_at": "2026-08-24T07:43:44.674Z"
+}

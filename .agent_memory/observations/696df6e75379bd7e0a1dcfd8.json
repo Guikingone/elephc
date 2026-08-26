@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '6129,6155p' crates/elephc-builtin-contract/src/catalog_data.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '6129,6155p' crates/elephc-builtin-contract/src/catalog_data.rs: id: BuiltinId::from_canonical_name(\"fgetc\"), name: \"fgetc\", area: Area::Io, kind: BuiltinKind::Function, params: &[ ParamSpec { name: \"stream\", ty: Type",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '6129,6155p' crates/elephc-builtin-contract/src/catalog_data.rs: id: BuiltinId::from_canonical_name(\"fgetc\"), name: \"fgetc\", area: Area::Io, kind: BuiltinKind::Function, params: &[ ParamSpec { name: \"stream\", ty: TypeSpec::Mixed, default: None, by_ref: false, writes: None, }, ], variadic: None, variadic_writes: None, min_args: None, max_args: None, arity_error: None, returns: TypeSpec::Mixed, by_ref_return: false, summary: \"Gets a character from the given file pointer.\", examples: &[ ], php_manual: Some(\"function.fgetc\"), deprecation: None, extension: false, internal: false,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "696df6e75379bd7e0a1dcfd8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T12:42:45.310Z",
+  "stored_at": "2026-08-24T12:42:45.311Z"
+}

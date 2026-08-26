@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"PHP builtins\\|builtins are\\|518\\|515\" docs/php/compatibility.md 2>/dev/null | head -10",
+  "summary": "grep -rn \"PHP builtins\\|builtins are\\|518\\|515\" docs/php/compatibility.md 2>/dev/null | head -10 completed",
+  "text": "grep -rn \"PHP builtins\\|builtins are\\|518\\|515\" docs/php/compatibility.md 2>/dev/null | head -10 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "07c9fe42ea4149aad3daf6bb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:21:41.737Z",
+  "stored_at": "2026-08-21T12:21:41.738Z"
+}

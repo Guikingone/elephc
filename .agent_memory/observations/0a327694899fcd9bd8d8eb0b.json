@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"by-ref .vars\\|by-reference .vars\\|BY-REF .vars\" src docs tests 2>/dev/null | head",
+  "summary": "grep -rn \"by-ref .vars\\|by-reference .vars\\|BY-REF .vars\" src docs tests 2>/dev/null | head: tests/error_tests/io_builtins/streams.rs:175: \"fscanf(): the by-ref $vars output form is not supported\", tests/error_tests/string_builtins.rs:461: \"sscanf(): the by-ref $vars output form is not supported\",",
+  "text": "grep -rn \"by-ref .vars\\|by-reference .vars\\|BY-REF .vars\" src docs tests 2>/dev/null | head: tests/error_tests/io_builtins/streams.rs:175: \"fscanf(): the by-ref $vars output form is not supported\", tests/error_tests/string_builtins.rs:461: \"sscanf(): the by-ref $vars output form is not supported\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0a327694899fcd9bd8d8eb0b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:31:24.015Z",
+  "stored_at": "2026-08-18T10:31:24.015Z"
+}

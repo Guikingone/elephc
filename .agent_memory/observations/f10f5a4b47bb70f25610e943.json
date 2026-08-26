@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '2580,2615p' src/codegen_support/runtime/data/user.rs",
+  "summary": "sed -n '2580,2615p' src/codegen_support/runtime/data/user.rs: ss_info.class_id )); for method_name in &USER_WRAPPER_METHOD_NAMES { let is_public = class_info .method_visibilities .get(*method_name) .is_some_and(|visibility| matches!(visibility, Visibility::Public)); let impl_class = class_info.method_impl_classes.get(*",
+  "text": "sed -n '2580,2615p' src/codegen_support/runtime/data/user.rs: ss_info.class_id )); for method_name in &USER_WRAPPER_METHOD_NAMES { let is_public = class_info .method_visibilities .get(*method_name) .is_some_and(|visibility| matches!(visibility, Visibility::Public)); let impl_class = class_info.method_impl_classes.get(*method_name); if is_public && impl_class.is_some() { out.push_str(&format!( \" .quad {}\\n\", method_symbol(impl_class.unwrap(), method_name) )); } else { out.push_str(\" .quad 0\\n\"); } } // One trailing quad after the method pointers: the boxed-result mask. out.push_str(&format!( \" .quad {}\\n\", user_wrapper_boxed_result_mask(class_info) )); } /// Emits the per-class callable-method name table and count for __invoke support. /// Only public instance methods are included. Each method name is emitted as an /// ASCII label; the table is indexed by class_id at runtime. fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f10f5a4b47bb70f25610e943",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:31:18.408Z",
+  "stored_at": "2026-08-21T09:31:18.408Z"
+}

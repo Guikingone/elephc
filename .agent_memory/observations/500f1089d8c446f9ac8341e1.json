@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$h = fopen(\"php://memory\",\"w+\");\\nfputcsv($h, [\"a\"]);\\nfclose($h);\\necho \"STDOUT-MARKER\\\\n\";\\n' > d1.php && echo \"--- stdout seul (stderr jeté) ---\" && php -n d1.php 2>/dev/null && echo \"--- stderr seul (stdout jeté) ---\" && php -n d1.php 2>&1 >/dev/null",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$h = fopen(\"php://memory\",\"w+\");\\nfputcsv($h, [\"a\"]);\\nfclose($h);\\necho \"STDOUT-MARKER\\\\n\";\\n' > d1.php && echo \"--- stdout seu",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$h = fopen(\"php://memory\",\"w+\");\\nfputcsv($h, [\"a\"]);\\nfclose($h);\\necho \"STDOUT-MARKER\\\\n\";\\n' > d1.php && echo \"--- stdout seul (stderr jeté) ---\" && php -n d1.php 2>/dev/null && echo \"--- stderr seul (stdout jeté) ---\" && php -n d1.php 2>&1 >/dev/null: --- stdout seul (stderr jeté) --- Deprecated: fputcsv(): the $escape parameter must be provided as its default value will change in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/d1.php on line 3 STDOUT-MARKER --- stderr seul (stdout jeté) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "500f1089d8c446f9ac8341e1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:37:16.583Z",
+  "stored_at": "2026-08-18T13:37:16.584Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_nullable_typespec.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_nullable_typespec.py: \"\"\"The catalogue could not say `?int`, so `stream_select()`'s \"block forever\" became \"poll\".\n\nphp's stub is `stream_selec",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_nullable_typespec.py: \"\"\"The catalogue could not say `?int`, so `stream_select()`'s \"block forever\" became \"poll\".\n\nphp's stub is `stream_select($r, $w, $e, ?int $seconds, ?int $microseconds = null)`. The catalogue\ndeclared `$seconds` as plain `Int` with no default, because nullability had nowhere to live: the\nonly thing resembling it is `default: Some(DefaultSpec::Null)`, which says what an OMITTED argument\nbecomes, and `$seconds` is REQUIRED. So a written `null` was coerced to `0` — and for this function\nthose are opposite instructions:\n\n    stream_select($r, $w, $e, null)     blocks forever — there is no timeout",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "129cb1bf9a1a2757e735fb24",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:28:53.487Z",
+  "stored_at": "2026-08-21T17:28:53.488Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_INCREMENTAL=0 cargo build --example gen_builtins 2>&1 | tail -2 && python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -2 && python3 scripts/docs/audit_builtins.py 2>&1 | tail -4",
+  "summary": "CARGO_INCREMENTAL=0 cargo build --example gen_builtins 2>&1 | tail -2 && python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -2 && python3 scripts/docs/audit_builtins.py 2>&1 | tail -4: Compiling elephc-magician v0.1.0 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-",
+  "text": "CARGO_INCREMENTAL=0 cargo build --example gen_builtins 2>&1 | tail -2 && python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -2 && python3 scripts/docs/audit_builtins.py 2>&1 | tail -4: Compiling elephc-magician v0.1.0 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/crates/elephc-magician) Finished `dev` profile [unoptimized + debuginfo] target(s) in 49.89s Wrote 576 builtins to /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json Rendered: 1112 pages (0 kept hand-written). Master index at /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/builtins.md Area index checks: 536 Backend contract checks: 32 Override tables checked: 5 Errors: 0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8aa79bcfe86daf67a0009c8d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:51:21.291Z",
+  "stored_at": "2026-08-21T14:51:21.292Z"
+}

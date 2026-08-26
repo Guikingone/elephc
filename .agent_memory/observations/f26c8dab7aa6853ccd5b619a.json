@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r 'var_dump(defined(\"ARRAY_FILTER_USE_VALUE\"), defined(\"ARRAY_FILTER_USE_KEY\"), defined(\"ARRAY_FILTER_USE_BOTH\"));' ; php -n -r 'try { array_filter([1], fn($v) => true, 7); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }'",
+  "summary": "php -n -r 'var_dump(defined(\"ARRAY_FILTER_USE_VALUE\"), defined(\"ARRAY_FILTER_USE_KEY\"), defined(\"ARRAY_FILTER_USE_BOTH\"));' ; php -n -r 'try { array_filter([1], fn($v) => true, 7); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }': bool(false) bool(true) bool(true)",
+  "text": "php -n -r 'var_dump(defined(\"ARRAY_FILTER_USE_VALUE\"), defined(\"ARRAY_FILTER_USE_KEY\"), defined(\"ARRAY_FILTER_USE_BOTH\"));' ; php -n -r 'try { array_filter([1], fn($v) => true, 7); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }': bool(false) bool(true) bool(true)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f26c8dab7aa6853ccd5b619a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:53:55.640Z",
+  "stored_at": "2026-08-22T09:53:55.641Z"
+}

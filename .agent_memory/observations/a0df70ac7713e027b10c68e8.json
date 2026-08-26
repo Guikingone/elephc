@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w9 $S/e9; mkdir -p $S/w9 $S/e9; cp $S/probes2/plain-warnings.php $S/w9/p.php; cp $S/probes2/plain-warnings.php $S/e9/p.php; cd $S/w9 && php -n p.php 2>&1 | grep -c 'Warning:'; cd $S/w9 && php -n p.php 2>&1 | grep -o 'Warning: [a-z_]*(' | sort | uniq -c",
+  "summary": "About to run: S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w9 $S/e9; mkdir -",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a0df70ac7713e027b10c68e8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:21:03.929Z",
+  "stored_at": "2026-08-24T18:21:03.930Z"
+}

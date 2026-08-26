@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && php -n -r '$r=new ReflectionFunction(\"fputcsv\"); echo $r->getReturnType(),\" | \"; foreach($r->getParameters() as $p){ printf(\"%s=%s \", $p->getName(), $p->isDefaultValueAvailable()? var_export($p->getDefaultValue(),true) : \"<req>\"); } echo \"\\n\";'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && php -n -r '$r=new ReflectionFunction(\"fputcsv\"); echo $r->getReturnType(),\" | \"; foreach($r->getParameters() as $p){ printf(\"%s=%s \", $p->getName()",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && php -n -r '$r=new ReflectionFunction(\"fputcsv\"); echo $r->getReturnType(),\" | \"; foreach($r->getParameters() as $p){ printf(\"%s=%s \", $p->getName(), $p->isDefaultValueAvailable()? var_export($p->getDefaultValue(),true) : \"<req>\"); } echo \"\\n\";': int|false | stream=<req> fields=<req> separator=',' enclosure='\"' escape='\\\\' eol=' '",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "651df6487155f26e55333b99",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:40:03.192Z",
+  "stored_at": "2026-08-22T06:40:03.193Z"
+}

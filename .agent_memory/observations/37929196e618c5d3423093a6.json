@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport pathlib\np = pathlib.Path('tests/codegen/array_basics.rs')\nt = p.read_text()\nold = '    assert_eq!(out, \\\"[null,true,\\\\\\\\\\\"apple\\\\\\\\\\\",\\\\\\\\\\\"banana\\\\\\\\\\\",2,10]\\\\\\\\n[10,2,\\\\\\\\\\\"banana\\\\\\\\\\\",\\\\\\\\\\\"apple\\\\\\\\\\\",true,null]\\\\\\\\n\\\");'\nnew = '''    // php's ordering here is not the intuitive one — \\`true\\` sorts LAST ascending and \\`null\\`\n    // last descending, because a bool operand converts both sides to bool before comparing.\n    // Measured on \\`php -n\\` 8.5.6 rather than reasoned about.\n    assert_eq!(\n        out,\n        \\\"[null,2,10,\\\\\\\\\\\"apple\\\\\\\\\\\",\\\\\\\\\\\"banana\\\\\\\\\\\",tru… [+362 chars truncated]",
+  "summary": "python3 -c \"\nimport pathlib\np = pathlib.Path('tests/codegen/array_basics.rs')\nt = p.read_text()\nold = '    assert_eq!(out, \\\"[null,true,\\\\\\\\\\\"apple\\\\\\\\\\\",\\\\\\\\\\\"banana\\\\\\\\\\\",2,10]\\\\\\\\n[10,2,\\\\\\\\\\\"banana\\\\\\\\\\\",\\\\\\\\\\\"apple\\\\\\\\\\\",true,null]\\\\\\\\n\\\");'\nnew = '''    // php's ordering here is not the intuitive one — \\`true\\` s",
+  "text": "python3 -c \"\nimport pathlib\np = pathlib.Path('tests/codegen/array_basics.rs')\nt = p.read_text()\nold = '    assert_eq!(out, \\\"[null,true,\\\\\\\\\\\"apple\\\\\\\\\\\",\\\\\\\\\\\"banana\\\\\\\\\\\",2,10]\\\\\\\\n[10,2,\\\\\\\\\\\"banana\\\\\\\\\\\",\\\\\\\\\\\"apple\\\\\\\\\\\",true,null]\\\\\\\\n\\\");'\nnew = '''    // php's ordering here is not the intuitive one — \\`true\\` sorts LAST ascending and \\`null\\`\n    // last descending, because a bool operand converts both sides to bool before comparing.\n    // Measured on \\`php -n\\` 8.5.6 rather than reasoned about.\n    assert_eq!(\n        out,\n        \\\"[null,2,10,\\\\\\\\\\\"apple\\\\\\\\\\\",\\\\\\\\\\\"banana\\\\\\\\\\\",true]\\\\\\\\n[\\\\\\\\\\\"banana\\\\\\\\\\\",\\\\\\\\\\\"apple\\\\\\\\\\\",10,2,true,null]\\\\\\\\n\\\"\n    );'''\nassert t.count(old) == 1, 'expectation line not found'\np.write_text(t.replace(old, new, 1))\nprint('expectation replaced with the measured one')\n\"; RUST_MIN_STACK=33554432 cargo test --test codegen_tests array_basics::test_sort 2>&1 | grep -E \"^test |test result|left|right\" | head -10: expectation replaced with the measured one test codegen::array_basics::test_sort_mixed_from_a_readdir_loop ... ok test codegen::array_basics::test_sort ... ok test codegen::array_basics::test_sort_mixed_uses_phps_numeric_string_ordering ... ok test codegen::array_basics::test_sort_orders_mixed_elements_like_php ... ok test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 8839 filtered out; finished in 1.73s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "37929196e618c5d3423093a6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:21:17.949Z",
+  "stored_at": "2026-08-22T10:21:17.950Z"
+}

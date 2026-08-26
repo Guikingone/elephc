@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/p4b.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/p4b.php: <?php\n$p = sys_get_temp_dir() . '/p4b.txt';\nfile_put_contents($p, \"alpha 12 3.5\\nbeta 7 1.25\\n\");\n// previously-set var when the conve",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/p4b.php: <?php\n$p = sys_get_temp_dir() . '/p4b.txt';\nfile_put_contents($p, \"alpha 12 3.5\\nbeta 7 1.25\\n\");\n// previously-set var when the conversion cannot match\n$h = fopen($p, 'r');\n$keep = 'KEEP';\n$n = fscanf($h, \"%d\", $keep);\nvar_dump($n, $keep);\nfclose($h);\n// partial match: only the first specifier matches\nfile_put_contents($p, \"77 xx\\n\");\n$h = fopen($p, 'r');\n$a = 'A'; $b = 'B';\n$n = fscanf($h, \"%d %d\", $a, $b);\nvar_dump($n, $a, $b);\nfclose($h);\n// literal text in the format\nfile_put_contents($p, \"age=42\\n\");\n$h = fopen($p, 'r');\n$n = fscanf($h, \"age=%d\", $v);\nvar_dump($n, $v);\nfclose($h);\n@unlin",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b3f5ccc44d5f69a34ed84e2a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:32:15.405Z",
+  "stored_at": "2026-08-16T15:32:15.405Z"
+}

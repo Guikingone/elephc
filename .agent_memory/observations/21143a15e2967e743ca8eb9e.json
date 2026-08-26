@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn supports_by_ref_boxed_storage\" -A25 src/types/checker/type_compat/declarations.rs; grep -rn \"fn supports_by_ref_boxed_storage\" -A25 src/types/checker/type_compat/*.rs | head -40",
+  "summary": "grep -n \"fn supports_by_ref_boxed_storage\" -A25 src/types/checker/type_compat/declarations.rs; grep -rn \"fn supports_by_ref_boxed_storage\" -A25 src/types/checker/type_compat/*.rs | head -40: 439:fn supports_by_ref_boxed_storage(ty: &PhpType) -> bool { 440- matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedSca",
+  "text": "grep -n \"fn supports_by_ref_boxed_storage\" -A25 src/types/checker/type_compat/declarations.rs; grep -rn \"fn supports_by_ref_boxed_storage\" -A25 src/types/checker/type_compat/*.rs | head -40: 439:fn supports_by_ref_boxed_storage(ty: &PhpType) -> bool { 440- matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar) 441-} src/types/checker/type_compat/declarations.rs:439:fn supports_by_ref_boxed_storage(ty: &PhpType) -> bool { src/types/checker/type_compat/declarations.rs-440- matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar) src/types/checker/type_compat/declarations.rs-441-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "21143a15e2967e743ca8eb9e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:41:16.847Z",
+  "stored_at": "2026-08-18T09:41:16.848Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn ensure_stream_resource\" -A 6 src/types/checker/builtins/io/common.rs | head -12; echo \"--- callers sample:\"; grep -rn \"ensure_stream_resource(checker\" src/builtins/io/*.rs | head -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn ensure_stream_resource\" -A 6 src/types/checker/builtins/io/common.rs | head -12; echo \"--- callers sample:\"; grep -rn \"ensure_stream_resource(checker\" src/builtins/io/*.rs | head -5: src/types/checker/builtins/i",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn ensure_stream_resource\" -A 6 src/types/checker/builtins/io/common.rs | head -12; echo \"--- callers sample:\"; grep -rn \"ensure_stream_resource(checker\" src/builtins/io/*.rs | head -5: src/types/checker/builtins/io/common.rs:25:pub(crate) fn ensure_stream_resource( src/types/checker/builtins/io/common.rs-26- checker: &mut Checker, src/types/checker/builtins/io/common.rs-27- name: &str, src/types/checker/builtins/io/common.rs-28- arg: &Expr, src/types/checker/builtins/io/common.rs-29- env: &TypeEnv, src/types/checker/builtins/io/common.rs-30-) -> Result<(), CompileError> { src/types/checker/builtins/io/common.rs-31- let actual = checker.infer_type(arg, env)?; --- callers sample:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d70420ec1166f9ba8d80c589",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T12:42:18.003Z",
+  "stored_at": "2026-08-24T12:42:18.003Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '84,135p' src/codegen_support/runtime/io/stream_get_line.rs",
+  "summary": "sed -n '84,135p' src/codegen_support/runtime/io/stream_get_line.rs: er.instruction(\"mov w9, #0x4000\"); // high half of USER_WRAPPER_FD_BASE emitter.instruction(\"lsl w9, w9, #16\"); // form 0x40000000 in w9 emitter.instruction(\"cmp x0, x9\"); // is this a synthetic user-wrapper fd? emitter.instruction(\"b.lo __rt_stream_ge",
+  "text": "sed -n '84,135p' src/codegen_support/runtime/io/stream_get_line.rs: er.instruction(\"mov w9, #0x4000\"); // high half of USER_WRAPPER_FD_BASE emitter.instruction(\"lsl w9, w9, #16\"); // form 0x40000000 in w9 emitter.instruction(\"cmp x0, x9\"); // is this a synthetic user-wrapper fd? emitter.instruction(\"b.lo __rt_stream_get_line_loop\"); // native descriptors use the byte-read loop below // The wrapper fd range ends at the allocated handle capacity, not a // fixed 256: a slot beyond the bound would be misread as a native fd. super::emit_load_handles_cap(emitter, \"x10\"); emitter.instruction(\"add x10, x9, x10\"); // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity emitter.instruction(\"cmp x0, x10\"); // is the backend above the wrapper range? emitter.instruction(\"b.lo __rt_sgl_wrapper_entry\"); // wrappers read via the feof-gated stream_read loop below emitter.label(\"__rt_stream_get_line_loop\"); emitter.instruction(\"ldr x10, [sp, #56]\"); // running total",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18b6c90503dd9c20d290f9e2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:17:14.699Z",
+  "stored_at": "2026-08-24T17:17:14.699Z"
+}

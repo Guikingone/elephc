@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd ~/.cache/elephc; objdump -d --start-address=0x34f4 --stop-address=0x3580 runtime-v0.26.5-macos-aarch64-rta9a52f5f50e36c45-heap8388608.o 2>/dev/null | head -40",
+  "summary": "cd ~/.cache/elephc; objdump -d --start-address=0x34f4 --stop-address=0x3580 runtime-v0.26.5-macos-aarch64-rta9a52f5f50e36c45-heap8388608.o 2>/dev/null | head -40: 351c: d10043ff sub sp, sp, #0x10 3520: f90007fe str x30, [sp, #0x8] 3524: 94000000 bl 0x3524 <__rt_stream_unlink_if_owned+0x8> 3528: b4000160 cbz x0, 0x3554 ",
+  "text": "cd ~/.cache/elephc; objdump -d --start-address=0x34f4 --stop-address=0x3580 runtime-v0.26.5-macos-aarch64-rta9a52f5f50e36c45-heap8388608.o 2>/dev/null | head -40: 351c: d10043ff sub sp, sp, #0x10 3520: f90007fe str x30, [sp, #0x8] 3524: 94000000 bl 0x3524 <__rt_stream_unlink_if_owned+0x8> 3528: b4000160 cbz x0, 0x3554 <__rt_stream_unlink_if_owned+0x38> 352c: f9409409 ldr x9, [x0, #0x128] 3530: f277013f tst x9, #0x200 3534: 54000100 b.eq 0x3554 <__rt_stream_unlink_if_owned+0x38> 3538: 9276f929 and x9, x9, #0xfffffffffffffdff 353c: f9009409 str x9, [x0, #0x128] 3540: f9400c01 ldr x1, [x0, #0x18] 3544: f9401002 ldr x2, [x0, #0x20] 3548: b4000061 cbz x1, 0x3554 <__rt_stream_unlink_if_owned+0x38> 354c: 94000000 bl 0x354c <__rt_stream_unlink_if_owned+0x30> 3550: 94000000 bl 0x3550 <__rt_stream_unlink_if_owned+0x34> 3554: f94007fe ldr x30, [sp, #0x8] 3558: 910043ff add sp, sp, #0x10 355c: d65f03c0 ret 0000000000003560 <__rt_stream_wrapper_pos_set>: 3560: d10083ff sub sp, sp, #0x20 3564: a9017bfd stp x29, x30, [sp, #0x10] 3568: 910043fd add x29, sp, #0x10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "57156071526f32e622337c9a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:12:23.740Z",
+  "stored_at": "2026-08-23T08:12:23.740Z"
+}

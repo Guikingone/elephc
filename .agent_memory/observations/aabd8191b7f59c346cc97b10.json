@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '2329,2375p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs",
+  "summary": "rtk proxy sed -n '2329,2375p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs: ( \" .quad {}\\n\", method_symbol(impl_class.unwrap(), method_name) )); } else { out.push_str(\" .quad 0\\n\"); } } // -- slot 3: filter()-arity flag (0 = 1-arg s",
+  "text": "rtk proxy sed -n '2329,2375p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs: ( \" .quad {}\\n\", method_symbol(impl_class.unwrap(), method_name) )); } else { out.push_str(\" .quad 0\\n\"); } } // -- slot 3: filter()-arity flag (0 = 1-arg string contract, 1 = 4-arg brigade) // The arity is detected by counting the visible parameters of filter() when // it lives on this class. 4 params → PHP-canonical // filter($in, $out, &$consumed, $closing): int. Anything else → 1-arg. let brigade_arity = class_info .methods .get(\"filter\") .map(|sig| sig.params.len() == 4) .unwrap_or(false); out.push_str(&format!(\" .quad {}\\n\", if brigade_arity { 1 } else { 0 })); let params_offset = class_info .property_offsets .get(\"params\") .copied() .unwrap_or(0); out.push_str(&format!(\" .quad {}\\n\", params_offset)); } /// Emits runtime metadata for user wrapper vtable. fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) { if !class_has_user_wrapper_method(class_info) { return; }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aabd8191b7f59c346cc97b10",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:24:49.683Z",
+  "stored_at": "2026-08-17T09:24:49.684Z"
+}

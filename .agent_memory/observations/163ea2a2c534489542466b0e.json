@@ -1,0 +1,17 @@
+{
+  "type": "file_change",
+  "tool": "Read",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/str_persist.rs",
+  "command": "",
+  "summary": "Read: text",
+  "text": "text",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "163ea2a2c534489542466b0e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:18:36.799Z",
+  "stored_at": "2026-08-17T13:18:36.799Z",
+  "low_signal": true
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/widen_dynamic_callables.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/widen_dynamic_callables.py: \"\"\"A builtin the program NAMES can be called through a variable.\n\nOnly 36 of 577 builtins could: `$fn = \"fgets\"; $fn($h",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/widen_dynamic_callables.py: \"\"\"A builtin the program NAMES can be called through a variable.\n\nOnly 36 of 577 builtins could: `$fn = \"fgets\"; $fn($h);` and `array_map(\"strtoupper\", $a)` were\n`Fatal error: Call to undefined function <dynamic>()` where php simply calls them. The 488 others\nshare one blanket refusal — \"typed backend operation has no runtime-selected wrapper contract\" —\nwhich is a policy default rather than a finding about any of them: MEASURED, adding four\nresource-taking stream builtins to the hand-written allowlist made `$fn($h)` answer exactly what\nphp answers, resource argument and all. The doc comment c",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d34ce0f144e34e780654caf6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:07:20.433Z",
+  "stored_at": "2026-08-22T11:07:20.434Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy sed -n '295,325p' $SRC/main/streams/cast.c; echo \"=== cast_names:\"; grep -n \"cast_names\" -A8 $SRC/main/streams/cast.c | head -14",
+  "summary": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy sed -n '295,325p' $SRC/main/streams/cast.c; echo \"=== cast_names:\"; grep -n \"cast_names\" -A8 $SRC/main/streams/cast.c | head -14: URE",
+  "text": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy sed -n '295,325p' $SRC/main/streams/cast.c; echo \"=== cast_names:\"; grep -n \"cast_names\" -A8 $SRC/main/streams/cast.c | head -14: URE; } else if (stream->ops->cast && stream->ops->cast(stream, castas, ret) == SUCCESS) { goto exit_success; } if (show_err) { /* these names depend on the values of the PHP_STREAM_AS_XXX defines in php_streams.h */ static const char *cast_names[4] = { \"STDIO FILE*\", \"File Descriptor\", \"Socket Descriptor\", \"select()able descriptor\" }; php_error_docref(NULL, E_WARNING, \"Cannot represent a stream of type %s as a %s\", stream->ops->label, cast_names[castas]); } return FAILURE; exit_success: if ((stream->writepos - stream->readpos) > 0 && === cast_names: 311: static const char *cast_names[4] = { 312- \"STDIO FILE*\", 313- \"File Descriptor\", 314- \"Socket Descriptor\", 315- \"select()able descriptor\" 316- }; 317- 318: php_error_docref(NULL, E_WARNING, \"Cannot represent a stream of type %s as a %s\", stream->ops->label, cast_names[castas]); 319- } 320- 321- return FAILURE; 322- 323-exit_success: 324-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "63875babd3de5b255ea5740e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:34:13.106Z",
+  "stored_at": "2026-08-17T06:34:13.107Z"
+}

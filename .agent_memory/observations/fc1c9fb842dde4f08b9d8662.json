@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn '\"preg_match\"' --include=*.rs -r crates/ 2>/dev/null | head; ls crates 2>/dev/null | head",
+  "summary": "grep -rn '\"preg_match\"' --include=*.rs -r crates/ 2>/dev/null | head; ls crates 2>/dev/null | head: (eval):1: no matches found: --include=*.rs elephc-bcmath elephc-builtin-contract elephc-crypto elephc-image elephc-magician elephc-pdo elephc-phar elephc-tls elephc-tz elephc-web",
+  "text": "grep -rn '\"preg_match\"' --include=*.rs -r crates/ 2>/dev/null | head; ls crates 2>/dev/null | head: (eval):1: no matches found: --include=*.rs elephc-bcmath elephc-builtin-contract elephc-crypto elephc-image elephc-magician elephc-pdo elephc-phar elephc-tls elephc-tz elephc-web",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fc1c9fb842dde4f08b9d8662",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:06:01.183Z",
+  "stored_at": "2026-08-25T13:06:01.184Z"
+}

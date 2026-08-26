@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '9218,9280p' tests/codegen/io/streams.rs; echo \"==== 10158-10230 ====\"; sed -n '10158,10230p' tests/codegen/io/streams.rs",
+  "summary": "sed -n '9218,9280p' tests/codegen/io/streams.rs; echo \"==== 10158-10230 ====\"; sed -n '10158,10230p' tests/codegen/io/streams.rs: ` came back as a fragment of /// `seekable` or `blocked`. The state's pointer was also left dangling for its own teardown. #[test] fn test_stream_get_meta_data_uri_survives_repeated_reads() ",
+  "text": "sed -n '9218,9280p' tests/codegen/io/streams.rs; echo \"==== 10158-10230 ====\"; sed -n '10158,10230p' tests/codegen/io/streams.rs: ` came back as a fragment of /// `seekable` or `blocked`. The state's pointer was also left dangling for its own teardown. #[test] fn test_stream_get_meta_data_uri_survives_repeated_reads() { let (out, dir) = compile_and_run_in_dir( r#\"<?php file_put_contents(\"uri_meta.txt\", \"seed\"); $h = fopen(\"uri_meta.txt\", \"r\"); echo stream_get_meta_data($h)[\"uri\"], \"|\"; echo stream_get_meta_data($h)[\"uri\"], \"|\"; echo stream_get_meta_data($h)[\"uri\"], \"|\"; echo stream_get_meta_data($h)[\"uri\"]; fclose($h); \"#, ); assert_eq!(out, \"uri_meta.txt|uri_meta.txt|uri_meta.txt|uri_meta.txt\"); let _ = fs::remove_dir_all(&dir); } /// Verifies `c` opens a file for writing without truncating it, and creates it when absent. /// /// The mode parser accepted only `r`, `w` and `a`, so `c` — which PHP added precisely to let a /// caller take an advisory lock before deciding to truncate — returned `false` with a warning.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "73dfccdbe993a6da2cb9bb63",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:42.009Z",
+  "stored_at": "2026-08-14T14:15:42.009Z"
+}

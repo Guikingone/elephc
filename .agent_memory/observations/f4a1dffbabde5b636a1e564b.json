@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>b4qycjkw1</task-id>\n<tool-use-id>toolu_01L1dRBxPTP5ZzxA5SPjn8FN</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b4qycjkw1.output</output-file>\n<status>completed</status>\n<summary>Background command \"Run the streams module in the foreground\" completed (exit code 0)</summary>\n</task-notification>",
+  "summary": "<task-notification> <task-id>b4qycjkw1</task-id> <tool-use-id>toolu_01L1dRBxPTP5ZzxA5SPjn8FN</tool-use-id> <output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8db",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f4a1dffbabde5b636a1e564b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T08:28:44.260Z",
+  "stored_at": "2026-08-18T08:28:44.260Z",
+  "low_signal": true
+}

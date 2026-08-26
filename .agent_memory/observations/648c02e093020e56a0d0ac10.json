@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='src/codegen_support/runtime/data/fixed.rs'\ns=open(p).read()\nold = '    out.push_str(\".globl _resource_type_stream\\\\n_resource_type_stream:\\\\n    .ascii \\\\\"stream\\\\\"\\\\n\");'\nassert s.count(old)==1\nnew = old + '\\n    // php names a filter resource `stream filter`, not `stream`: `var_dump()` and\\n    // `get_resource_type()` both read this, and a filter answering `stream` made the two\\n    // resource kinds indistinguishable from PHP.\\n    out.push_str(\".globl _resource_type_stream_filter\\\\n_resource_type_stream_filter:\\\\n    .ascii \\\\\"stream filter\\\\\"\\\\n\");'\nopen(p,'w').write(… [+277 chars truncated]",
+  "summary": "python3 - <<'PY'\np='src/codegen_support/runtime/data/fixed.rs'\ns=open(p).read()\nold = '    out.push_str(\".globl _resource_type_stream\\\\n_resource_type_stream:\\\\n    .ascii \\\\\"stream\\\\\"\\\\n\");'\nassert s.count(old)==1\nnew = old + '\\n    // php names a filter resource `stream filter`, not `stream`: `var_dump()` and\\n    //",
+  "text": "python3 - <<'PY'\np='src/codegen_support/runtime/data/fixed.rs'\ns=open(p).read()\nold = '    out.push_str(\".globl _resource_type_stream\\\\n_resource_type_stream:\\\\n    .ascii \\\\\"stream\\\\\"\\\\n\");'\nassert s.count(old)==1\nnew = old + '\\n    // php names a filter resource `stream filter`, not `stream`: `var_dump()` and\\n    // `get_resource_type()` both read this, and a filter answering `stream` made the two\\n    // resource kinds indistinguishable from PHP.\\n    out.push_str(\".globl _resource_type_stream_filter\\\\n_resource_type_stream_filter:\\\\n    .ascii \\\\\"stream filter\\\\\"\\\\n\");'\nopen(p,'w').write(s.replace(old,new))\nprint(\"literal added\")\nPY\nrtk proxy grep -n \"RESOURCE_TYPE_STREAM_LEN\\|RESOURCE_TYPE_UNKNOWN_LEN\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/resource_type_name.rs | head -4: literal added 59:const RESOURCE_TYPE_STREAM_LEN: i64 = 6; 62:const RESOURCE_TYPE_UNKNOWN_LEN: i64 = 7; 107: abi::emit_load_int_immediate(emitter, \"x2\", RESOURCE_TYPE_STREAM_LEN); // an open resource reports the type it was created with 115: abi::emit_load_int_immediate(emitter, \"x2\", RESOURCE_TYPE_UNKNOWN_LEN); // PHP renames every closed resource to Unknown, whatever it was",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "648c02e093020e56a0d0ac10",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:09:18.918Z",
+  "stored_at": "2026-08-17T08:09:18.918Z"
+}

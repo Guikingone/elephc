@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_warned_null\" -A 25 src/ir_lower/ | head -32",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_warned_null\" -A 25 src/ir_lower/ | head -32:  PhpType::Void, src/ir_lower/context.rs-1262- Ownership::NonHeap, src/ir_lower/context.rs-1263- Op::WarnedNull.default_effects(), src/ir_lower/context.rs-1264- s",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_warned_null\" -A 25 src/ir_lower/ | head -32:  PhpType::Void, src/ir_lower/context.rs-1262- Ownership::NonHeap, src/ir_lower/context.rs-1263- Op::WarnedNull.default_effects(), src/ir_lower/context.rs-1264- span, src/ir_lower/context.rs-1265- ) src/ir_lower/context.rs-1266- .expect(\"warned_null produces a value\"); src/ir_lower/context.rs-1267- LoweredValue { src/ir_lower/context.rs-1268- value, src/ir_lower/context.rs-1269- ir_type: IrType::I64, src/ir_lower/context.rs-1270- } src/ir_lower/context.rs-1271- } src/ir_lower/context.rs-1272- src/ir_lower/context.rs-1273- /// Emits the warning PHP raises for a read of a variable that was never assigned. src/ir_lower/context.rs-1274- fn emit_undefined_local_read(&mut self, name: &str, span: Option<Span>) -> LoweredValue { src/ir_lower/context.rs-1275- self.emit_warned_null(&format!(\"Warning: Undefined variable ${name}\\n\"), span) src/ir_lower/context.rs-1276- } src/ir_lower/context.rs-1277-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5a2bcebc7877671cc50b0c1b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:38:58.123Z",
+  "stored_at": "2026-08-24T07:38:58.123Z"
+}

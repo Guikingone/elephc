@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn lookup' -A 20 src/builtins/registry.rs | head -40",
+  "summary": "About to run: grep -rn 'fn lookup' -A 20 src/builtins/registry.rs | head -40",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0a9dcfb7479e195df3b42594",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:05:51.885Z",
+  "stored_at": "2026-08-25T13:05:51.886Z"
+}

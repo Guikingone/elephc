@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_offtest.py; CARGO_PROFILE_DEV_DEBUG=false CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::offset_on_scalar)' 2>&1 | tail -12",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_offtest.py; CARGO_PROFILE_DEV_DEBUG=false ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_offtest.py; CARGO_PROFILE_DEV_DEBUG=false CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::offset_on_scalar)' 2>&1 | tail -12: calar::test_a_boxed_scalar_warns_with_phps_word PASS [ 3.271s] (3/9) elephc::codegen_tests codegen::offset_on_scalar::test_the_offset_warning_names_its_line PASS [ 3.536s] (4/9) elephc::codegen_tests codegen::offset_on_scalar::test_the_bool_word_follows_the_value PASS [ 3.781s] (5/9) elephc::codegen_tests codegen::offset_on_scalar::test_a_chained_offset_warns_at_every_level PASS [ 4.054s] (6/9) elephc::codegen_tests codegen::offset_on_scalar::test_every_scalar_base_warns_and_answers_null PASS [ 4.275s] (7/9) elephc::codegen_tests codegen::offset_on_scalar::test_the_null_probes_say_nothing_about_a_boxed_scalar PASS [ 4.530s] (8/9) elephc::codegen_tests codegen::offset_on_scalar::test_a_runtime_union_warns_on_its_false_arm PASS [ 4.776s] (9/9) elephc::codegen_tests codegen::offset_on_scalar::test_a_string_base_still_indexes ──────────── Summary [ 4.833s] 9 tests run: 9 passed, 8923 skipped",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "27b610cee556b27578c00c2a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T09:16:08.742Z",
+  "stored_at": "2026-08-24T09:16:08.743Z"
+}

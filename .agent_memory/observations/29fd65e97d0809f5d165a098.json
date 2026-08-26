@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/internal_line.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/internal_line.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signatur",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/internal_line.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\n\n# ---- the slot ------------------------------------------------------------------------------\np = ROOT / \"src/codegen_support/runtime/data/fixed.rs\"\ns = p.read_text()\nanchor = '    out.push_str(\".globl _rt_path_url\\\\n_rt_path_url:\\\\n    .quad 0\\\\n\");\\n'\nassert s.count(anchor) == 1, (\"slot\", s.count(anchor))\ns = s.replace(\n    anchor,\n    anchor\n    + '    // The line of the call a program made INTO a builtin class. php reports the CALL SITE\\n'\n    + '    //",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "29fd65e97d0809f5d165a098",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:31:12.179Z",
+  "stored_at": "2026-08-25T12:31:12.180Z"
+}

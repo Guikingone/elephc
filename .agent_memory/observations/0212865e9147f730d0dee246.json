@@ -1,0 +1,16 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/residtest.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/residtest.php: <?php\nfunction id($r): string { return (string) (int) $r; }\n$a = fopen(\"php://memory\", \"r\");\n$b = fopen(\"php://temp\", \"r\");\n$c = fo",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/residtest.php: <?php\nfunction id($r): string { return (string) (int) $r; }\n$a = fopen(\"php://memory\", \"r\");\n$b = fopen(\"php://temp\", \"r\");\n$c = fopen(\"php://memory\", \"r\");\necho id($a), \" \", id($b), \" \", id($c), \"\\n\";\n$dyn = \"php://\" . \"temp\";\n$d = fopen($dyn, \"r\");\n$e = fopen(\"php://memory\", \"r\");\necho id($d), \" \", id($e), \"\\n\";\n$m = fopen(\"php://temp/maxmemory:64\", \"r\");\n$f = fopen(\"php://memory\", \"r\");\necho id($m), \" \", id($f), \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0212865e9147f730d0dee246",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:28:11.611Z",
+  "stored_at": "2026-08-24T13:28:11.612Z",
+  "low_signal": true
+}

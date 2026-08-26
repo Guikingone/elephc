@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cp $S/probes2/warn-shapes.php $S/probes/warn-shapes.php; cp $S/probes2/plain-warnings.php $S/probes/plain-warnings.php; cp $S/probes2/file-scheme.php $S/probes/file-scheme.php; cp $S/probes2/file-scheme3.php $S/probes/file-scheme3.php; cp $S/probes2/file-scheme5.php $S/probes/file-scheme5.php; cp $S/probes2/file-scheme6.php $S/probes/file-scheme6.php; cp $S/probes2/file-scheme7.php $S/probes/file-scheme7.php; cp $S/probes2/… [+97 chars truncated]",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cp $S/probes2/warn-shapes.php $S/probes/warn-shapes.php; cp $S/probes2/plain-warnings.php $S/probes/plain-warnings.php; cp $S/probes2/file-scheme.p",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cp $S/probes2/warn-shapes.php $S/probes/warn-shapes.php; cp $S/probes2/plain-warnings.php $S/probes/plain-warnings.php; cp $S/probes2/file-scheme.php $S/probes/file-scheme.php; cp $S/probes2/file-scheme3.php $S/probes/file-scheme3.php; cp $S/probes2/file-scheme5.php $S/probes/file-scheme5.php; cp $S/probes2/file-scheme6.php $S/probes/file-scheme6.php; cp $S/probes2/file-scheme7.php $S/probes/file-scheme7.php; cp $S/probes2/file-scheme8.php $S/probes/file-scheme8.php; cd $S && timeout 3000 python3 run.py 2>&1 | head -40: ory in <dir>/p.php on line 6 elephc: Warning: readfile(/no/such/dir/x.txt): Failed to open stream: No such file or directory in <dir>/p.php on line 6 php : Warning: file(file:///no/such/dir/x.txt): Failed to open stream: No such file or directory in <dir>/p.php on line 7 elephc: Warning: file(/no/such/dir/x.txt): Failed to open stream: No such file or directory in <dir>/p.php on line 7 php : Warning: copy(file:///no/such/dir/x.txt): Failed to open stream: No such file or directory in <dir>/p.php on line 11 elephc: Warning: copy(/no/such/dir/x.txt): Failed to open stream: No such file or directory in <dir>/p.php on line 11 php : Warning: file_put_contents(file:///no/such/dir/y.txt): Failed to open stream: No such file or directory in <dir>/p.php on line 12 elephc: Warning: file_put_contents(/no/such/dir/y.txt): Failed to open stream: No such file or directory in <dir>/p.php on line 12 ...",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "313aab814eb1a474d6a491b3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:51:58.119Z",
+  "stored_at": "2026-08-24T18:51:58.119Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; cat src/builtins/*/json_decode.rs 2>/dev/null | head -40 || find src/builtins -name \"json_decode*\" | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; cat src/builtins/*/json_decode.rs 2>/dev/null | head -40 || find src/builtins -name \"json_decode*\" | head: k: check, semantics: crate::builtins::semantics::with_argument_lowering( crate::builtins::semantics::runtime_fn_seman",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; cat src/builtins/*/json_decode.rs 2>/dev/null | head -40 || find src/builtins -name \"json_decode*\" | head: k: check, semantics: crate::builtins::semantics::with_argument_lowering( crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::JsonDecode), crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode, ), } /// Validates the json argument is string-compatible, the associative argument is /// bool-compatible or null, and depth/flags are integers. /// /// Reports type errors at the span of the offending argument, not the call span. fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> { let json_ty = cx.checker.infer_type(&cx.args[0], cx.env)?; if !json_support::is_json_string_arg_type(&json_ty) { return Err(CompileError::new( cx.args[0].span, \"json_decode() json argument must be string-compatible\", )); } if let Some(assoc) = cx.args.get(1) { let assoc_ty = cx.checker.infer_type(assoc, cx.env)?; if !json_support::is_json_associative_arg_type(&assoc_ty) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0cdad456860092541321caa2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:05:25.512Z",
+  "stored_at": "2026-08-22T19:05:25.513Z"
+}

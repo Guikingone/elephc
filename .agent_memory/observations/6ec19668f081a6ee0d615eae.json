@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\n    \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc\"\n    \"--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56\"\n    \"/scratchpad/sweep/probes/symlink-family.php\"\n)\ns = p.read_text()\nold = '''// realpath through a link, and on a dangling one.\nvar_dump(basename((string)realpath(\"link.txt\")));\nvar_dump(@realpath(\"dangling.txt\"));'''\nnew = '''// realpath through a link, and on a dangling one.\n// clearstatcache first: a FAILED `file_get_contents(\"dangling.txt\")` above populates php's\n// realpath… [+591 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\n    \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc\"\n    \"--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56\"\n    \"/scratchpad/sweep/probes/symlink-family.php\"\n)\ns = p.read_text()\nold = '''// realpath through a lin",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\n    \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc\"\n    \"--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56\"\n    \"/scratchpad/sweep/probes/symlink-family.php\"\n)\ns = p.read_text()\nold = '''// realpath through a link, and on a dangling one.\nvar_dump(basename((string)realpath(\"link.txt\")));\nvar_dump(@realpath(\"dangling.txt\"));'''\nnew = '''// realpath through a link, and on a dangling one.\n// clearstatcache first: a FAILED `file_get_contents(\"dangling.txt\")` above populates php's\n// realpath cache with the expanded path, after which `realpath()` answers that instead of\n// `false` — measured. That is cache state, not a rule about dangling links.\nclearstatcache(true);\nvar_dump(basename((string)realpath(\"link.txt\")));\nvar_dump(@realpath(\"dangling.txt\"));'''\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nprint(\"probe made deterministic\")\nPY\ncd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 2500 python3 run.py symlink 2>&1 | tail -10: probe made deterministic IDENTICAL 1 DIFFERS 0 REFUSED 0 php parse 0 --- REFUSED --- --- DIFFERS ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6ec19668f081a6ee0d615eae",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:55:53.384Z",
+  "stored_at": "2026-08-26T08:55:53.385Z"
+}

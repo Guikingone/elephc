@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n std2.php > php_std2.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o std2 std2.php 2>&1|tail -2; ./std2 > el_std2.txt 2>&1; diff php_std2.txt el_std2.txt && echo IDENTICAL; echo \"--- php ---\"; cat php_std2.txt; echo \"--- elephc ---\"; cat el_std2.txt",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n std2.php > php_std2.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n std2.php > php_std2.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o std2 std2.php 2>&1|tail -2; ./std2 > el_std2.txt 2>&1; diff php_std2.txt el_std2.txt && echo IDENTICAL; echo \"--- php ---\"; cat php_std2.txt; echo \"--- elephc ---\"; cat el_std2.txt: Compiled 'std2.php' -> 'std2' IDENTICAL --- php --- direct gettype=resource is_resource=true local gettype=resource is_resource=true in-list gettype=resource is_resource=true fopen gettype=resource is_resource=true f-list gettype=resource is_resource=true --- elephc --- direct gettype=resource is_resource=true local gettype=resource is_resource=true in-list gettype=resource is_resource=true fopen gettype=resource is_resource=true f-list gettype=resource is_resource=true",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "94ae98c1f55d1b1deb94960b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:41:49.927Z",
+  "stored_at": "2026-08-22T16:41:49.927Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/lock_write_tests.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/lock_write_tests.py: import pathlib\n\np = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'streams-c",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/lock_write_tests.py: import pathlib\n\np = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'streams-csv-signature/tests/codegen/io/streams.rs'\n)\nt = p.read_text()\nANCHOR = '''/// `stream_select($r, $w, $e, 0)` with `$w`/`$e` never assigned is a null set, not eight elements.'''\nNEW = '''/// A SOCKET does not support locking; a pipe and a plain file do.\n///\n/// MEASURED on `php -n` 8.5.6 across seven streams — the engines already agreed on six, and\n/// disagreed on the socket pair. php gives a socket `php_stream_socket_ops`, which has no\n/// `set_option` and therefore no ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "246fdc78681511d25c156b5a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:52:02.683Z",
+  "stored_at": "2026-08-23T07:52:02.683Z"
+}

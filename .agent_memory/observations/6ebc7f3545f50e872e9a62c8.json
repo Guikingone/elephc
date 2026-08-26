@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '155,215p' src/codegen/lower_inst/builtins/io/filesystem_ops.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '155,215p' src/codegen/lower_inst/builtins/io/filesystem_ops.rs:  write copied an empty file ctx.emitter.instruction(\"movzx rax, al\"); ctx.emitter.instruction(&format!(\"jmp {}\", done)); ctx.emitter.label(&failed); ctx",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '155,215p' src/codegen/lower_inst/builtins/io/filesystem_ops.rs:  write copied an empty file ctx.emitter.instruction(\"movzx rax, al\"); ctx.emitter.instruction(&format!(\"jmp {}\", done)); ctx.emitter.label(&failed); ctx.emitter.instruction(\"xor eax, eax\"); ctx.emitter.label(&done); } } if context_scope { finish_fopen_context_scope(ctx); } store_if_result(ctx, inst) } /// Publishes the name php should print in open-failure warnings, or clears it. /// /// `Some((prefix symbol, prefix length, bare name symbol, bare name length))` while a delegating /// builtin owns the diagnostics; `None` hands them back to the helpers that raise them. fn emit_open_diag_name( ctx: &mut FunctionContext<'_>, published: Option<(&str, usize, &str, usize)>, ) { let scratch = abi::secondary_scratch_reg(ctx.emitter); let value = abi::tertiary_scratch_reg(ctx.emitter); let slots: [(&str, Option<(&str, usize)>); 2] = match published { Some((prefix, prefix_len, name, name_len)) => [",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6ebc7f3545f50e872e9a62c8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T09:19:40.691Z",
+  "stored_at": "2026-08-24T09:19:40.692Z"
+}

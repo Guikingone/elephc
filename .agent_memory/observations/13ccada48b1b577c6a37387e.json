@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"label_global\" src/codegen_support/runtime/io/stat.rs | head -20; echo \"=== buffer ===\"; grep -rn \"_stat_buf\" src/codegen_support/runtime/data/*.rs | head -5; echo \"=== offsets ===\"; grep -rn \"ST_INO\\|st_ino\\|ST_DEV\" src/codegen_support/runtime/io/stat.rs src/codegen_support/runtime/io/stat_array.rs src/codegen_support/platform*.rs 2>/dev/null | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"label_global\" src/codegen_support/runtime/io/stat.rs | head -20; echo \"=== buffer ===\"; grep -rn \"_stat_buf\" src/codegen_support/runtime/data/*.rs | head -5; echo \"=== offsets ===\"; grep -rn \"ST_INO\\|st_ino\\|ST_DEV\"",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"label_global\" src/codegen_support/runtime/io/stat.rs | head -20; echo \"=== buffer ===\"; grep -rn \"_stat_buf\" src/codegen_support/runtime/data/*.rs | head -5; echo \"=== offsets ===\"; grep -rn \"ST_INO\\|st_ino\\|ST_DEV\" src/codegen_support/runtime/io/stat.rs src/codegen_support/runtime/io/stat_array.rs src/codegen_support/platform*.rs 2>/dev/null | head -20: 39: emitter.label_global(\"__rt_file_exists\"); 69: emitter.label_global(\"__rt_is_file\"); 110: emitter.label_global(\"__rt_is_dir\"); 115: emitter.label_global(\"__rt_is_dir_core\"); 154: emitter.label_global(\"__rt_is_readable\"); 186: emitter.label_global(\"__rt_is_writable\"); 218: emitter.label_global(\"__rt_filesize\"); 259: emitter.label_global(\"__rt_filemtime\"); 304: emitter.label_global(\"__rt_file_exists\"); 317: emitter.label_global(\"__rt_is_file\"); 338: emitter.label_global(\"__rt_is_dir\"); 343: emitter.label_global(\"__rt_is_dir_core\"); 362: emitter.label_global(\"__rt_is_readable\"); 369: emitter.label_global(\"__rt_is_writable\"); 376: emitter.label_global(\"__rt_filesize\"); 398: emitter.label_global(\"__rt_filemtime\"); === buffer === === offsets === (eval):1: no matches found: src/codegen_support/platform*.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "13ccada48b1b577c6a37387e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:10:26.786Z",
+  "stored_at": "2026-08-22T21:10:26.787Z"
+}

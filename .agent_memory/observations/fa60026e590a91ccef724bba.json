@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/for-clauses-accepted-only-one-assignment.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/for-clauses-accepted-only-one-assignment.md: ---\nname: for-clauses-accepted-only-one-assignment\ndescription: \"for ($i = 0, $n = count($a); …) et toute clause qui n'est pas une écriture de variable simple (un appel,",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/for-clauses-accepted-only-one-assignment.md: ---\nname: for-clauses-accepted-only-one-assignment\ndescription: \"for ($i = 0, $n = count($a); …) et toute clause qui n'est pas une écriture de variable simple (un appel, $b[$k] = …) étaient REFUSÉES à l'analyse — 5 formes de php sur 5 mesurées échouaient.\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\n`parse_for` appelait `parse_assign_inline` UNE fois par clause, et ce parseur n'accepte qu'une\nforme : `$v = …`, `$v op= …`, `$v++`, `++$v`. Tout le reste de ce que php écrit dans un `for`\nétait refusé **à l'analyse syntaxique** — le programme entier ne compilait pas :\n\n| forme php | avant |",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fa60026e590a91ccef724bba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:31:50.234Z",
+  "stored_at": "2026-08-23T13:31:50.235Z"
+}

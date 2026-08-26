@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"wrapper_type|_meta_wrapper|RESOURCE_KIND_SOCKET|SLOT_KIND\" src/codegen_support/runtime/io/stream_get_meta_data.rs | head -40",
+  "summary": "About to run: rg -n \"wrapper_type|_meta_wrapper|RESOURCE_KIND_SOCKET|SLOT_KIND\" src/codegen_support/runtime/io/stream_get_meta_data.rs | head -40",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee0f963aa3eaa95ed9cdd2a9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:10:52.851Z",
+  "stored_at": "2026-08-17T13:10:52.852Z"
+}

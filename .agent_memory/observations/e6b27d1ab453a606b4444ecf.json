@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction f(array &$a): void { foreach ($a as $k => $x) { $a[$k] = $x * 2; } }\\n$arr = [1,2,3]; f($arr); var_dump($arr);\\nfunction g(&...$v): void { $n = count($v); $i = 0; while ($i < $n) { $v[$i] = 100 + $i; $i++; } }\\n$p=0;$q=0; g($p,$q); var_dump($p,$q);\\nfunction h(&...$v): void { $v[0] = 1; $v[1] = 2; }\\n$s=0;$t=0; h($s,$t); var_dump($s,$t);\\n' > p11.php && php -n p11.php && echo \"=== elephc ===\" &&… [+145 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction f(array &$a): void { foreach ($a as $k => $x) { $a[$k] = $x * 2; } }\\n$arr = [1,2,3]; f($arr); var_dump($arr);\\nfunctio",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction f(array &$a): void { foreach ($a as $k => $x) { $a[$k] = $x * 2; } }\\n$arr = [1,2,3]; f($arr); var_dump($arr);\\nfunction g(&...$v): void { $n = count($v); $i = 0; while ($i < $n) { $v[$i] = 100 + $i; $i++; } }\\n$p=0;$q=0; g($p,$q); var_dump($p,$q);\\nfunction h(&...$v): void { $v[0] = 1; $v[1] = 2; }\\n$s=0;$t=0; h($s,$t); var_dump($s,$t);\\n' > p11.php && php -n p11.php && echo \"=== elephc ===\" && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run p11.php 2>&1|head -3 && ./p11: array(3) { [0]=> int(2) [1]=> int(4) [2]=> int(6) } int(100) int(101) int(1) int(2) === elephc === Compiled 'p11.php' -> 'p11' array(3) { [0]=> int(4370660792) [1]=> int(4370660984) [2]=> int(4370661096) } int(0) int(0) int(0) int(2)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e6b27d1ab453a606b4444ecf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:41:05.846Z",
+  "stored_at": "2026-08-16T15:41:05.847Z"
+}

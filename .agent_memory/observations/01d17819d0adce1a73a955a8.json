@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -rn \"is_ref_bound_local\" -g '*.rs' src/ir_lower/ | head -8",
+  "summary": "rtk proxy rg -rn \"is_ref_bound_local\" -g '*.rs' src/ir_lower/ | head -8: src/ir_lower/context.rs: pub(crate) fn n(&self, name: &str) -> bool { src/ir_lower/context.rs: let is_ref_bound = self.n(name) && !uses_global && kind == LocalKind::PhpLocal; src/ir_lower/context.rs: self.n(name) && !uses_global && kind == LocalKi",
+  "text": "rtk proxy rg -rn \"is_ref_bound_local\" -g '*.rs' src/ir_lower/ | head -8: src/ir_lower/context.rs: pub(crate) fn n(&self, name: &str) -> bool { src/ir_lower/context.rs: let is_ref_bound = self.n(name) && !uses_global && kind == LocalKind::PhpLocal; src/ir_lower/context.rs: self.n(name) && !uses_global && kind == LocalKind::PhpLocal; src/ir_lower/context.rs: if self.n(name) { src/ir_lower/context.rs: let is_ref_bound = self.n(name); src/ir_lower/context.rs: && !self.n(name) src/ir_lower/context.rs: self.n(name) && !uses_global && previous_kind == LocalKind::PhpLocal; src/ir_lower/context.rs: self.n(name) && previous_kind == LocalKind::PhpLocal; rtk: Broken pipe (os error 32)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "01d17819d0adce1a73a955a8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:20:00.477Z",
+  "stored_at": "2026-08-16T19:20:00.478Z"
+}

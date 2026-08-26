@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff 783c63af13bce20312cd093f85a92c83ea4b9aee..origin/main -- src/codegen/lower_inst/exceptions.rs | head -40",
+  "summary": "git diff 783c63af13bce20312cd093f85a92c83ea4b9aee..origin/main -- src/codegen/lower_inst/exceptions.rs | head -40: 9,7 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler( // Drain buffered output first: PHP emits it before the report, and this path used to // exit without flushing, discarding everything a progra",
+  "text": "git diff 783c63af13bce20312cd093f85a92c83ea4b9aee..origin/main -- src/codegen/lower_inst/exceptions.rs | head -40: 9,7 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler( // Drain buffered output first: PHP emits it before the report, and this path used to // exit without flushing, discarding everything a program had buffered. `bl` leaves sp // untouched, so the message slots read below are unaffected. - ctx.emitter.instruction(\"bl __rt_ob_flush_all\"); + ctx.emitter.instruction(\"bl __rt_ob_flush_all\"); // drain buffered output before the fatal report ctx.emitter.instruction(\"mov x0, #1\"); // fd = stdout for the dynamic-error prefix abi::emit_symbol_address(ctx.emitter, \"x1\", &prefix_label); abi::emit_load_int_immediate(ctx.emitter, \"x2\", prefix_len as i64); @@ -512,10 +512,10 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler( // dynamic form reads its message from temporary stack slots, which `and rsp, -16` // alone would move out from under it. r15 is callee-saved and the flush helper",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca0da1d92beec0d2b511ec3d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:08:19.410Z",
+  "stored_at": "2026-08-21T19:08:19.410Z"
+}

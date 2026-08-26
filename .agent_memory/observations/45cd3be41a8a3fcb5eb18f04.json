@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/ladder_closure.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/ladder_closure.py: \"\"\"A boxed CLOSURE reached the tail of the ladder and was accepted.\n\nMEASURED on `php -n` 8.5.6:\n\n    stream_context_create(fun",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/ladder_closure.py: \"\"\"A boxed CLOSURE reached the tail of the ladder and was accepted.\n\nMEASURED on `php -n` 8.5.6:\n\n    stream_context_create(function () {});\n    php:    TypeError: ... must be of type ?array, Closure given\n    elephc: accepted\n\nA closure carries runtime tag 10, not the object tag 6, so the arm that reads a class name out of\n`_class_name_entries` never saw it. php prints `Closure` for both a closure and a first-class\ncallable, and that name is fixed, so this arm is a whole pre-baked message like the scalars.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "45cd3be41a8a3fcb5eb18f04",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:31:12.710Z",
+  "stored_at": "2026-08-22T17:31:12.711Z"
+}

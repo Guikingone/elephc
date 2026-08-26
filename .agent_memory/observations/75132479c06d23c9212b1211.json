@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$a = null;\\nvar_dump($a);\\n$a = 5;\\nvar_dump($a);\\n' > rmM.php && zsh difftests.sh rmM 2>&1 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc build rmM.php --emit-ir 2>&1 | grep -A14 \"function main\"",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$a = null;\\nvar_dump($a);\\n$a = 5;\\nvar_dump($a);\\n' > rmM.php && zsh difftests.sh rmM 2>&1 && /Users/guillaumeloulier/PhpstormP",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$a = null;\\nvar_dump($a);\\n$a = 5;\\nvar_dump($a);\\n' > rmM.php && zsh difftests.sh rmM 2>&1 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc build rmM.php --emit-ir 2>&1 | grep -A14 \"function main\": an: 3:1 v1: I64 php=null = load_local slot[0] ; effects: reads_local ; span: 3:10 v2: I64 php=null = runtime_call v1 runtime.var_dump ; effects: reads_local, writes_local, reads_heap, writes_heap, reads_global, reads_fs, writes_fs, reads_process, writes_process, output, alloc_heap, alloc_concat, may_throw, may_fatal, may_warn, may_deopt ; span: 3:1 concat_reset ; effects: writes_global ; span: 4:1 v3: I64 php=int = const_i64 5 ; span: 4:6 store_local v3 slot[0] ; effects: writes_local ; span: 4:1 concat_reset ; effects: writes_global ; span: 5:1 v4: I64 php=int = load_local slot[0] ; effects: reads_local ; span: 5:10 v5: I64 php=null = runtime_call v4 runtime.var_dump ; effects: reads_local, writes_local, reads_heap, writes_heap, reads_global, reads_fs, writes_fs, reads_process, writes_process, output, alloc_heap, alloc_concat, may_throw, may_fatal, may_warn, may_deopt ; span: 5:1 return",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "75132479c06d23c9212b1211",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:42:03.450Z",
+  "stored_at": "2026-08-18T09:42:03.451Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -c 'stream_wrapper_register(\"w\"' tests/codegen/io/streams.rs; grep -c '\"w://' tests/codegen/io/streams.rs; grep -c \"'w://\" tests/codegen/io/streams.rs 2>/dev/null; grep -c 'w://' tests/codegen/io/streams.rs",
+  "summary": "grep -c 'stream_wrapper_register(\"w\"' tests/codegen/io/streams.rs; grep -c '\"w://' tests/codegen/io/streams.rs; grep -c \"'w://\" tests/codegen/io/streams.rs 2>/dev/null; grep -c 'w://' tests/codegen/io/streams.rs: 1 1 0 72",
+  "text": "grep -c 'stream_wrapper_register(\"w\"' tests/codegen/io/streams.rs; grep -c '\"w://' tests/codegen/io/streams.rs; grep -c \"'w://\" tests/codegen/io/streams.rs 2>/dev/null; grep -c 'w://' tests/codegen/io/streams.rs: 1 1 0 72",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d89c724a2ff0451ab7304f30",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:12:27.891Z",
+  "stored_at": "2026-08-21T09:12:27.892Z"
+}

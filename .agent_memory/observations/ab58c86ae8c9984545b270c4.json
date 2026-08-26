@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '85,115p' src/codegen_support/runtime/arrays/array_set_mixed_key.rs",
+  "summary": "sed -n '85,115p' src/codegen_support/runtime/arrays/array_set_mixed_key.rs: int_boxed\"); // nothing to widen for an already-Mixed destination emitter.instruction(\"bl __rt_array_to_mixed\"); // box every existing typed slot and stamp the array Mixed emitter.instruction(\"str x0, [sp, #0]\"); // republish the possibly copy-",
+  "text": "sed -n '85,115p' src/codegen_support/runtime/arrays/array_set_mixed_key.rs: int_boxed\"); // nothing to widen for an already-Mixed destination emitter.instruction(\"bl __rt_array_to_mixed\"); // box every existing typed slot and stamp the array Mixed emitter.instruction(\"str x0, [sp, #0]\"); // republish the possibly copy-on-write-split array pointer emitter.label(\"__rt_array_set_mixed_key_int_boxed\"); emitter.instruction(\"ldr x0, [sp, #0]\"); // reload the widened indexed-array pointer emitter.instruction(\"ldr x1, [sp, #24]\"); // reload the target index emitter.instruction(\"ldr x2, [sp, #16]\"); // reload the consumed boxed Mixed value emitter.instruction(\"bl __rt_array_set_mixed\"); // store the value into packed indexed storage and return the array emitter.instruction(\"b __rt_array_set_mixed_key_done\"); // finish after an indexed write // -- indexed destination + out-of-range int key: promote to hash then set -- emitter.label(\"__rt_array_set_mixed_key_int_promote\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ab58c86ae8c9984545b270c4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:50:33.074Z",
+  "stored_at": "2026-08-18T12:50:33.075Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dyn_php_read.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dyn_php_read.py: \"\"\"A `php://` URL only the RUN TIME knows still went to `open(2)`.\n\nThe literal spelling routes through the opener now, but `new ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dyn_php_read.py: \"\"\"A `php://` URL only the RUN TIME knows still went to `open(2)`.\n\nThe literal spelling routes through the opener now, but `new SplFileObject(\"php://temp\")` hands the\nconstructor's argument to `file_get_contents()`, and that path never had a `php://` branch:\n\n    file_get_contents(\"php://temp\")     \"\"              (literal, fixed earlier)\n    file_get_contents(u(\"php://temp\"))  false + \"Failed to open stream: No such file or directory\"\n\n`fopen()` has resolved a run-time `php://` URL through `__rt_php_wrapper_open` for a while; the\nbyte readers have routes of exactly this shape for `data:`, `c",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ebbadd10e04edf71501e78d1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:24:57.775Z",
+  "stored_at": "2026-08-23T09:24:57.775Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"ValueError\" src/builtins/io/ | head -20; echo \"=== which stream_ files mention ValueError ===\"; grep -rl \"ValueError\" src/builtins/io/stream_*.rs 2>/dev/null",
+  "summary": "grep -rln \"ValueError\" src/builtins/io/ | head -20; echo \"=== which stream_ files mention ValueError ===\"; grep -rl \"ValueError\" src/builtins/io/stream_*.rs 2>/dev/null: === which stream_ files mention ValueError ===",
+  "text": "grep -rln \"ValueError\" src/builtins/io/ | head -20; echo \"=== which stream_ files mention ValueError ===\"; grep -rl \"ValueError\" src/builtins/io/stream_*.rs 2>/dev/null: === which stream_ files mention ValueError ===",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c6029c52bf31a9f58152b26a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:21:58.807Z",
+  "stored_at": "2026-08-14T14:21:58.808Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxscalar2 && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxscalar2 && printf '%s\\n' '<?php' 'foreach ([\"1\", \"1.5\", \"\\\"x\\\"\", \"true\", \"false\", \"null\"] as $j) {' '    $v = json_decode($j, true);' '    try { stream_context_create($v); echo $j, \" => accepted\\n\"; }' '    catch (Throwable $t) { echo $j… [+378 chars truncated]",
+  "summary": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxscalar2 && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f",
+  "text": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxscalar2 && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxscalar2 && printf '%s\\n' '<?php' 'foreach ([\"1\", \"1.5\", \"\\\"x\\\"\", \"true\", \"false\", \"null\"] as $j) {' '    $v = json_decode($j, true);' '    try { stream_context_create($v); echo $j, \" => accepted\\n\"; }' '    catch (Throwable $t) { echo $j, \" => \", $t->getMessage(), \"\\n\"; }' '}' > p.php && php -n p.php > php.txt 2>&1; rm -rf run && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php 2>&1 | tail -1 && mkdir -p run && cp p run/p && cd run && ./p > ../elephc.txt 2>&1; cd .. && diff php.txt elephc.txt && echo \"IDENTICAL\" || echo \"(differs above)\": Compiled 'p.php' -> 'p' IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "905800d8147ca6fc2b614de5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:04:22.750Z",
+  "stored_at": "2026-08-22T16:04:22.750Z"
+}

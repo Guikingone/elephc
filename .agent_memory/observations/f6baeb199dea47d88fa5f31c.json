@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn slot_is_initialized\" -A10 src/ir_lower/context.rs; grep -n \"pub(crate) fn local_is_initialized\\|fn local_slot_of\" src/ir_lower/context.rs",
+  "summary": "grep -n \"fn slot_is_initialized\" -A10 src/ir_lower/context.rs; grep -n \"pub(crate) fn local_is_initialized\\|fn local_slot_of\" src/ir_lower/context.rs: 777: pub(crate) fn slot_is_initialized(&self, slot: LocalSlotId) -> bool { 778- self.initialized_slots.contains(&slot) 779- } 780- 781- /// Replaces the definitely-initi",
+  "text": "grep -n \"fn slot_is_initialized\" -A10 src/ir_lower/context.rs; grep -n \"pub(crate) fn local_is_initialized\\|fn local_slot_of\" src/ir_lower/context.rs: 777: pub(crate) fn slot_is_initialized(&self, slot: LocalSlotId) -> bool { 778- self.initialized_slots.contains(&slot) 779- } 780- 781- /// Replaces the definitely-initialized local set after branch lowering or merge analysis. 782- pub(crate) fn restore_initialized_slots(&mut self, initialized_slots: HashSet<LocalSlotId>) { 783- self.initialized_slots = initialized_slots; 784- } 785- 786- /// Captures the flow-sensitive local-type facts at a control-flow split. 787- pub(crate) fn local_types_snapshot(&self) -> TypeEnv {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f6baeb199dea47d88fa5f31c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:32:54.154Z",
+  "stored_at": "2026-08-20T19:32:54.155Z"
+}

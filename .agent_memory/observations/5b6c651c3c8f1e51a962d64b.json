@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "./target/debug/deps/codegen_tests-16c45d69d5f633ba codegen::eval:: --list 2>/dev/null | grep \": test\" | sed 's/.*codegen::eval:://' | cut -c1-12 | sort | uniq -c | sort -rn | head -12",
+  "summary": "./target/debug/deps/codegen_tests-16c45d69d5f633ba codegen::eval:: --list 2>/dev/null | grep \": test\" | sed 's/.*codegen::eval:://' | cut -c1-12 | sort | uniq -c | sort -rn | head -12: 210 test_eval_de 176 test_eval_re 135 test_eval_di 118 test_eval_fr 98 test_literal 42 test_eval_dy 16 test_eval_ao 13 test_eval_cl 13 ",
+  "text": "./target/debug/deps/codegen_tests-16c45d69d5f633ba codegen::eval:: --list 2>/dev/null | grep \": test\" | sed 's/.*codegen::eval:://' | cut -c1-12 | sort | uniq -c | sort -rn | head -12: 210 test_eval_de 176 test_eval_re 135 test_eval_di 118 test_eval_fr 98 test_literal 42 test_eval_dy 16 test_eval_ao 13 test_eval_cl 13 test_eval_ca 10 test_eval_fo 8 test_eval_in 8 test_eval_ge",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5b6c651c3c8f1e51a962d64b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T15:40:19.021Z",
+  "stored_at": "2026-08-20T15:40:19.022Z"
+}

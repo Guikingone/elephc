@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='src/types/checker/inference/objects/methods.rs'\ns=open(p).read()\ns=s.replace('.contains(&(format!(\"{}::{}\", class_name, php_symbol_key(method)), i));',\n            '.contains(&(format!(\"{}::{}\", class_name, method_key), i));')\ns=s.replace('.contains(&(format!(\"{}::{}\", direct_impl_class_name, php_symbol_key(method)), i));',\n            '.contains(&(format!(\"{}::{}\", direct_impl_class_name, method_key), i));')\nopen(p,'w').write(s)\nprint('owner keys normalized to method_key')\nPY\ncargo build 2>&1 | rg \"^error|^warning\" -A8 | head -14; cd /private/tmp/claude-501/-Users-guillaum… [+205 chars truncated]",
+  "summary": "python3 - <<'PY'\np='src/types/checker/inference/objects/methods.rs'\ns=open(p).read()\ns=s.replace('.contains(&(format!(\"{}::{}\", class_name, php_symbol_key(method)), i));',\n            '.contains(&(format!(\"{}::{}\", class_name, method_key), i));')\ns=s.replace('.contains(&(format!(\"{}::{}\", direct_impl_class_name, php_sy",
+  "text": "python3 - <<'PY'\np='src/types/checker/inference/objects/methods.rs'\ns=open(p).read()\ns=s.replace('.contains(&(format!(\"{}::{}\", class_name, php_symbol_key(method)), i));',\n            '.contains(&(format!(\"{}::{}\", class_name, method_key), i));')\ns=s.replace('.contains(&(format!(\"{}::{}\", direct_impl_class_name, php_symbol_key(method)), i));',\n            '.contains(&(format!(\"{}::{}\", direct_impl_class_name, method_key), i));')\nopen(p,'w').write(s)\nprint('owner keys normalized to method_key')\nPY\ncargo build 2>&1 | rg \"^error|^warning\" -A8 | head -14; cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh byref_stress blast sortref sortmethod 2>&1 | head -10: owner keys normalized to method_key byref_stress DIFF: 7c7 < 5b: 3,6 --- > 5b: 4337520576,4337520768 blast IDENTICAL sortref IDENTICAL sortmethod IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7a756535a2ea12727649666b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:36:42.365Z",
+  "stored_at": "2026-08-16T20:36:42.366Z"
+}

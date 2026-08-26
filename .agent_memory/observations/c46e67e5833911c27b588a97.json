@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '253,300p' src/types/schema.rs | grep -E 'pub |///' | head -30",
+  "summary": "About to run: sed -n '253,300p' src/types/schema.rs | grep -E 'pub |///' | head -30",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c46e67e5833911c27b588a97",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:30:13.125Z",
+  "stored_at": "2026-08-26T07:30:13.125Z"
+}

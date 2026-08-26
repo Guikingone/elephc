@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probes7.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probes7.py: \"\"\"Extracts every PHP program the round-7 auditors named, replaying the terminal stream first.\n\nStripping the escape sequences left th",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probes7.py: \"\"\"Extracts every PHP program the round-7 auditors named, replaying the terminal stream first.\n\nStripping the escape sequences left the word-wrap debris behind and 109 of 145 programs did not\nparse. Replaying them recovers what the model actually wrote.\n\"\"\"\nimport pathlib\nimport re\nimport subprocess\nimport sys\n\nsys.path.insert(0, str(pathlib.Path(__file__).parent))\nfrom detty import replay\n\nHERE = pathlib.Path(__file__).parent\nOUT = HERE / 'named_probes7'\nOUT.mkdir(exist_ok=True)\nfor stale in OUT.glob('*.php'):\n    stale.unlink()\n\nfor path in sorted((HERE / 'audit').glob('round7-*.md')):\n    m",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "25039860a873e69ab817ee8b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:33:46.867Z",
+  "stored_at": "2026-08-22T19:33:46.868Z"
+}

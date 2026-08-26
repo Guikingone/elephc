@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"emit_type_error(ctx\\|emit_value_error(ctx\" src/codegen/lower_inst/builtins/ | wc -l; grep -rn \"emit_value_error(ctx\" src/codegen/lower_inst/builtins/arrays/ | head -4",
+  "summary": "grep -rn \"emit_type_error(ctx\\|emit_value_error(ctx\" src/codegen/lower_inst/builtins/ | wc -l; grep -rn \"emit_value_error(ctx\" src/codegen/lower_inst/builtins/arrays/ | head -4: 18",
+  "text": "grep -rn \"emit_type_error(ctx\\|emit_value_error(ctx\" src/codegen/lower_inst/builtins/ | wc -l; grep -rn \"emit_value_error(ctx\" src/codegen/lower_inst/builtins/arrays/ | head -4: 18",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d42b489c6c0a082621e29167",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:06:56.174Z",
+  "stored_at": "2026-08-22T15:06:56.175Z"
+}

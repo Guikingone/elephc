@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/loops.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/loops.rs: ctx.builder.position_at_end(cond_block);\n    let cond = lower_expr(ctx, condition);\n    let cond = ctx.truthy_consuming(cond, Some(condition.span)); -> ctx.builder.position_at_end(cond_block);",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/loops.rs: ctx.builder.position_at_end(cond_block);\n    let cond = lower_expr(ctx, condition);\n    let cond = ctx.truthy_consuming(cond, Some(condition.span)); -> ctx.builder.position_at_end(cond_block);\n    ctx.enter_loop_back_edge_expression();\n    let cond = lower_expr(ctx, condition);\n    let cond = ctx.truthy_consuming(cond, Some(condition.span));\n    ctx.leave_loop_back_edge_expression();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b80e1316a081e28104f079a2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:58:01.334Z",
+  "stored_at": "2026-08-23T12:58:01.335Z"
+}

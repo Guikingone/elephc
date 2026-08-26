@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '271,345p' src/ir_lower/expr/array_builtin_args.rs",
+  "summary": "sed -n '271,345p' src/ir_lower/expr/array_builtin_args.rs: , sig, args) } else { lower_args_with_signature(ctx, sig, args) } } crate::builtins::semantics::BuiltinArgumentLowering::ArraySplice if !args.iter().any(is_spread_arg) => { lower_array_splice_args(ctx, sig, args) } _ if !crate::types::call_args::has_named_args(",
+  "text": "sed -n '271,345p' src/ir_lower/expr/array_builtin_args.rs: , sig, args) } else { lower_args_with_signature(ctx, sig, args) } } crate::builtins::semantics::BuiltinArgumentLowering::ArraySplice if !args.iter().any(is_spread_arg) => { lower_array_splice_args(ctx, sig, args) } _ if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) => { let mut values = lower_positional_builtin_args_with_signature(ctx, sig, args); // Named/spread spellings skip the wrap and fail the consumer's own gate loudly at // compile time — an honest refusal, where the wrap's absence at RUN time would // have been a boxed cell read as an array. wrap_array_or_false_args(ctx, &canonical, args, &mut values); values } _ => lower_args_with_signature(ctx, sig, args), } } /// Promotes the OpenSSL encrypt tag target to string-capable storage before lowering its load. fn prepare_openssl_encrypt_tag_local(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "644a16ea7eb7325466aa1a2f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:39:17.074Z",
+  "stored_at": "2026-08-18T10:39:17.074Z"
+}

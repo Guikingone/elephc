@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_rule2.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_rule2.php: <?php\n// The same twelve shapes, without array_map: the two exceptions and the counts, nothing else.\n$s1 = tmpfile();\n$s2 = tmpf",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_rule2.php: <?php\n// The same twelve shapes, without array_map: the two exceptions and the counts, nothing else.\n$s1 = tmpfile();\n$s2 = tmpfile();\n$closed = tmpfile();\nfclose($closed);\n\n$r = [42]; $w = null; $e = null;\ntry { echo \"only a non-stream          int(\", stream_select($r, $w, $e, 0), \")\\n\"; }\ncatch (Throwable $t) { echo \"only a non-stream          \", get_class($t), \": \", $t->getMessage(), \"\\n\"; }\n\n$r = [42, 43]; $w = null; $e = null;\ntry { echo \"two non-streams            int(\", stream_select($r, $w, $e, 0), \")\\n\"; }\ncatch (Throwable $t) { echo \"two non-streams            \", get_class($t), \": \",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9e2f0c25d269813b16e3213e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:16:37.930Z",
+  "stored_at": "2026-08-23T07:16:37.931Z"
+}

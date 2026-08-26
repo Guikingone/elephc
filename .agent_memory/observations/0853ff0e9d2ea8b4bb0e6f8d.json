@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "./target/debug/deps/codegen_tests-16c45d69d5f633ba --list 2>/dev/null | grep -c '^codegen::eval::test_literal'; ./target/debug/deps/codegen_tests-16c45d69d5f633ba --list 2>/dev/null | grep -c '^codegen::eval::'",
+  "summary": "About to run: ./target/debug/deps/codegen_tests-16c45d69d5f633ba --list 2>/dev/null | grep -c '^codegen::eval::test_literal'; ./target/debug/deps/codegen_tests-16c45d69d5f633ba --list 2>/dev/null | grep -c '^codege",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0853ff0e9d2ea8b4bb0e6f8d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T07:18:37.686Z",
+  "stored_at": "2026-08-18T07:18:37.686Z"
+}

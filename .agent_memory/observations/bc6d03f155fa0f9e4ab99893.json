@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build --lib 2>&1 | tail -3; cargo build --bin elephc 2>&1 | tail -2",
+  "summary": "cargo build --lib 2>&1 | tail -3; cargo build --bin elephc 2>&1 | tail -2: warning: `elephc` (lib) generated 1 warning Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.78s warning: `elephc` (bin \"elephc\") generated 1 warning (1 duplicate) Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.2",
+  "text": "cargo build --lib 2>&1 | tail -3; cargo build --bin elephc 2>&1 | tail -2: warning: `elephc` (lib) generated 1 warning Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.78s warning: `elephc` (bin \"elephc\") generated 1 warning (1 duplicate) Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.29s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bc6d03f155fa0f9e4ab99893",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:43:15.179Z",
+  "stored_at": "2026-08-22T11:43:15.179Z"
+}

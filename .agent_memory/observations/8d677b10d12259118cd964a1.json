@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/references-family.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/references-family.php: <?php\n// References: in foreach, in arrays, through parameters, and the aliasing they leave behind.\n$a = [1, 2, 3]",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/references-family.php: <?php\n// References: in foreach, in arrays, through parameters, and the aliasing they leave behind.\n$a = [1, 2, 3];\nforeach ($a as &$v) { $v *= 2; }\nunset($v);\nvar_dump($a);\n\n// The classic trailing-reference trap.\n$b = [1, 2, 3];\nforeach ($b as &$v2) {}\nforeach ($b as $v2) {}\nvar_dump($b);\n\n// A reference into an array element.\n$c = [1, 2];\n$r = &$c[0];\n$r = 99;\nvar_dump($c);\n\n// A reference parameter.\nfunction bump(int &$n): void { $n++; }\n$d = 5;\nbump($d);\nvar_dump($d);\n\n// A reference returned into a variable, then reassigned.\n$e = [1];\n$s = &$e[0];\n$e[0] = 7;\nvar_dump($s);\n$s = 8;\nvar_dum",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8d677b10d12259118cd964a1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T16:58:10.814Z",
+  "stored_at": "2026-08-26T16:58:10.815Z"
+}

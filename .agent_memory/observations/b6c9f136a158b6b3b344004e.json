@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '332,348p' tests/codegen/objects/property_access/nullsafe.rs",
+  "summary": "sed -n '332,348p' tests/codegen/objects/property_access/nullsafe.rs: assert_eq!( out.stderr, \"\", \"`??` must suppress the mid-chain property-on-null warning\" ); } /// Verifies mixed chain ($root?->branch->label(noisy())) skips noisy() argument /// evaluation when base receiver is null. Fixture: noisy() echoes \"noisy|\", ",
+  "text": "sed -n '332,348p' tests/codegen/objects/property_access/nullsafe.rs: assert_eq!( out.stderr, \"\", \"`??` must suppress the mid-chain property-on-null warning\" ); } /// Verifies mixed chain ($root?->branch->label(noisy())) skips noisy() argument /// evaluation when base receiver is null. Fixture: noisy() echoes \"noisy|\", /// Branch->label returns the value; read(null) returns \"fallback\" with no stderr. #[test] fn test_mixed_nullsafe_member_chain_skips_method_arguments() { let out = compile_and_run_capture( r#\"<?php function noisy(): string { echo \"noisy|\"; return \"arg\"; }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b6c9f136a158b6b3b344004e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:09:36.629Z",
+  "stored_at": "2026-08-20T18:09:36.630Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm24.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm24.php: <?php\n// P2: dir()/Directory, readdir without a handle, opendir with a context.\n$d = sys_get_temp_dir() . \"/rm24dir\";\n@mkdir($d);\nfil",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm24.php: <?php\n// P2: dir()/Directory, readdir without a handle, opendir with a context.\n$d = sys_get_temp_dir() . \"/rm24dir\";\n@mkdir($d);\nfile_put_contents($d . \"/one.txt\", \"1\");\nfile_put_contents($d . \"/two.txt\", \"2\");\n$dir = dir($d);\nvar_dump(get_class($dir));\nvar_dump($dir->path);\n$names = [];\nwhile (($e = $dir->read()) !== false) {\n    $names[] = $e;\n}\nsort($names);\nvar_dump($names);\n$dir->rewind();\nvar_dump($dir->read() !== false);\n$dir->close();\n$ctx = stream_context_create([]);\n$h = opendir($d, $ctx);\nvar_dump($h !== false);\nclosedir($h);\nunlink($d . \"/one.txt\");\nunlink($d . \"/two.txt\");\nrmdir(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e6183650b2f89e07bbf609c7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:32:03.006Z",
+  "stored_at": "2026-08-18T09:32:03.007Z"
+}

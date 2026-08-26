@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/codegen_support/runtime/io/stream_select_cast_warning.rs src/codegen_support/runtime/io/stream_select.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/data/mod.rs src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/emitters/platform.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_ssel.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2… [+13 chars truncated]",
+  "summary": "git add src/codegen_support/runtime/io/stream_select_cast_warning.rs src/codegen_support/runtime/io/stream_select.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/data/mod.rs src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/emitters/platform.rs tests/codegen/io/streams.rs && git",
+  "text": "git add src/codegen_support/runtime/io/stream_select_cast_warning.rs src/codegen_support/runtime/io/stream_select.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/data/mod.rs src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/emitters/platform.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_ssel.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2: [worktree-streams-csv-signature d63b3f446] fix(streams): stream_select() threw without saying which stream it could not represent 7 files changed, 239 insertions(+), 2 deletions(-) create mode 100644 src/codegen_support/runtime/io/stream_select_cast_warning.rs To github.com:Guikingone/elephc.git b6abed945..d63b3f446 worktree-streams-csv-signature -> feat/streams-csv-signatures",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "88257bf314a635730bc4649c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:18:56.636Z",
+  "stored_at": "2026-08-17T18:18:56.636Z"
+}

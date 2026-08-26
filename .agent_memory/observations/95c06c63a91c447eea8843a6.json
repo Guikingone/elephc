@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'usage.methods' src/ | head -10; echo '--- prune module ---'; ls src/prelude_prune/",
+  "summary": "grep -rn 'usage.methods' src/ | head -10; echo '--- prune module ---'; ls src/prelude_prune/: src/optimize/reachability/graph.rs:679: for (class, method, is_static) in usage.methods { src/optimize/reachability/tests.rs:76: assert!(usage.methods.contains(&( src/optimize/reachability/tests.rs:81: assert!(usage.methods.co",
+  "text": "grep -rn 'usage.methods' src/ | head -10; echo '--- prune module ---'; ls src/prelude_prune/: src/optimize/reachability/graph.rs:679: for (class, method, is_static) in usage.methods { src/optimize/reachability/tests.rs:76: assert!(usage.methods.contains(&( src/optimize/reachability/tests.rs:81: assert!(usage.methods.contains(&( src/optimize/reachability/tests.rs:97: assert!(usage.methods.contains(&( src/optimize/reachability/tests.rs:112: assert!(usage.methods.contains(&( src/optimize/reachability/tests.rs:210: assert!(usage.methods.contains(&( src/optimize/reachability/tests.rs:495: assert!(usage.methods.contains(&( src/optimize/reachability/usage/expressions.rs:216: self.usage.methods.insert(( src/optimize/reachability/usage/expressions.rs:293: self.usage.methods.insert(( src/optimize/reachability/usage/expressions.rs:433: self.usage.methods.insert((class, php_symbol_key(method), true)); --- prune module --- usage.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "95c06c63a91c447eea8843a6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:50:53.991Z",
+  "stored_at": "2026-08-24T20:50:53.992Z"
+}

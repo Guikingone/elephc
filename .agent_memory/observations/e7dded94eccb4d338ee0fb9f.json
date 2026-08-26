@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_sr_test.py && cargo test --test codegen_tests test_str_replace_accepts_an_array_search 2>&1 | tail -8",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_sr_test.py && cargo test --test codegen_tests test_str_replace_accepts_an_array_search 2>&1 | tail -8: str_replace test appended Finished `test`",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_sr_test.py && cargo test --test codegen_tests test_str_replace_accepts_an_array_search 2>&1 | tail -8: str_replace test appended Finished `test` profile [unoptimized + debuginfo] target(s) in 15.24s Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-16c45d69d5f633ba) running 1 test test codegen::php_tags::test_str_replace_accepts_an_array_search ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8434 filtered out; finished in 1.95s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e7dded94eccb4d338ee0fb9f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:42:51.977Z",
+  "stored_at": "2026-08-17T21:42:51.977Z"
+}

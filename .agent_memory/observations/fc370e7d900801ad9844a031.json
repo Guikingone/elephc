@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn spl_file_object_valid_body' -A 30 src/types/checker/builtin_spl_classes/filesystem.rs | head -34",
+  "summary": "grep -n 'fn spl_file_object_valid_body' -A 30 src/types/checker/builtin_spl_classes/filesystem.rs | head -34: ` drops the FINAL empty line the stream-driven iteration yields after a 1441- // trailing newline: it is an empty line like any other. Measured on `php -n` 8.5.6 with 1442- // `\"a\\n\\nb\\n\"` and `SKIP_EMPTY | REA",
+  "text": "grep -n 'fn spl_file_object_valid_body' -A 30 src/types/checker/builtin_spl_classes/filesystem.rs | head -34: ` drops the FINAL empty line the stream-driven iteration yields after a 1441- // trailing newline: it is an empty line like any other. Measured on `php -n` 8.5.6 with 1442- // `\"a\\n\\nb\\n\"` and `SKIP_EMPTY | READ_AHEAD` — php answers `\"a\\n\"`, `\"\\n\"`, `\"b\\n\"` and 1443- // stops. The middle line stays because without `DROP_NEW_LINE` it is `\"\\n\"`, not empty. 1444- // Tested HERE rather than at load time because `setFlags()` may turn the flag on long 1445- // after the lines were read. 1446- if_stmt( 1447- binary_expr( 1448- binary_expr( 1449- flag_enabled_expr(file_object_flags_expr(), SPL_FILE_SKIP_EMPTY), 1450- BinOp::And, 1451- binary_expr(count_expr(file_lines_expr()), BinOp::Gt, int_expr(0)), 1452- ), 1453- BinOp::And, 1454- binary_expr( 1455- array_access( 1456- file_lines_expr(), 1457- binary_expr(count_expr(file_lines_expr()), BinOp::Sub, int_expr(1)), 1458- ), 1459- BinOp::StrictEq,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fc370e7d900801ad9844a031",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:27:10.816Z",
+  "stored_at": "2026-08-25T09:27:10.816Z"
+}

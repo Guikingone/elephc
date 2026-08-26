@@ -1,0 +1,17 @@
+{
+  "type": "tool_use",
+  "tool": "SendMessage",
+  "path": "",
+  "command": "",
+  "summary": "SendMessage: Agent a36e969ace98e7e68 was stopped by the user and won't be resumed. Treat its work as cancelled; only launch a new agent if the user explicitly asks.",
+  "text": "Agent a36e969ace98e7e68 was stopped by the user and won't be resumed. Treat its work as cancelled; only launch a new agent if the user explicitly asks.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c29ec59c1b9bdd9e575d99dc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T07:04:21.061Z",
+  "stored_at": "2026-08-16T07:04:21.062Z",
+  "low_signal": true
+}

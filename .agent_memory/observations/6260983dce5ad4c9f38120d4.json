@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,80p' src/codegen_support/runtime/exceptions/uncaught_report.rs",
+  "summary": "sed -n '1,80p' src/codegen_support/runtime/exceptions/uncaught_report.rs: 4 `__rt_itoa` body is `push rbp` … `pop rbp` //! with no SSE operand, no `sub rsp`, and no nested call, so nothing there faults on a //! misaligned stack. The AArch64 side is unconditionally safe — `sp` is 16-aligned at every //! memory access by",
+  "text": "sed -n '1,80p' src/codegen_support/runtime/exceptions/uncaught_report.rs: 4 `__rt_itoa` body is `push rbp` … `pop rbp` //! with no SSE operand, no `sub rsp`, and no nested call, so nothing there faults on a //! misaligned stack. The AArch64 side is unconditionally safe — `sp` is 16-aligned at every //! memory access by AAPCS64, and `sub sp, sp, #16` preserves that. use crate::codegen_support::platform::Arch; use crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET; use crate::codegen_support::{abi, emit::Emitter}; /// Byte length of `\"Fatal error: Uncaught \"`. const UNCAUGHT_PREFIX_LEN: i64 = 23; /// Byte length of the `\": \"` separator between class name and message. const UNCAUGHT_SEPARATOR_LEN: i64 = 2; /// Byte length of the `\" in \"` lead-in before the source location. const UNCAUGHT_IN_LEN: i64 = 4; /// Byte length of the `\":\"` between the filename and the line number. const UNCAUGHT_COLON_LEN: i64 = 1; /// Byte length of the trailing newline.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6260983dce5ad4c9f38120d4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:44:20.388Z",
+  "stored_at": "2026-08-24T17:44:20.389Z"
+}

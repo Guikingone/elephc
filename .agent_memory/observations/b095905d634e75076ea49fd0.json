@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'SplFixedArray' src/codegen/lower_inst/ src/ir_lower/ 2>/dev/null | head -15",
+  "summary": "grep -rn 'SplFixedArray' src/codegen/lower_inst/ src/ir_lower/ 2>/dev/null | head -15: codegen/lower_inst/objects/fixed_new.rs:34: if class_name == \"SplFixedArray\" { src/codegen/lower_inst/objects/clone_and_spl.rs:129: || class_name == \"SplFixedArray\" src/codegen/lower_inst/objects/clone_and_spl.rs:160:/// Lowers `new ",
+  "text": "grep -rn 'SplFixedArray' src/codegen/lower_inst/ src/ir_lower/ 2>/dev/null | head -15: codegen/lower_inst/objects/fixed_new.rs:34: if class_name == \"SplFixedArray\" { src/codegen/lower_inst/objects/clone_and_spl.rs:129: || class_name == \"SplFixedArray\" src/codegen/lower_inst/objects/clone_and_spl.rs:160:/// Lowers `new SplFixedArray($size = 0)` through the runtime-backed payload allocator. src/codegen/lower_inst/objects/clone_and_spl.rs:164: \"SplFixedArray constructor with {} EIR operands\", src/codegen/lower_inst/objects/clone_and_spl.rs:171: .get(\"SplFixedArray\") src/codegen/lower_inst/objects/clone_and_spl.rs:173: .ok_or_else(|| CodegenIrError::unsupported(\"unknown class SplFixedArray\"))?; src/codegen/lower_inst/objects/dynamic_factory.rs:216: if class_name == \"SplFixedArray\" || is_spl_doubly_linked_list_family(class_name) { src/codegen/lower_inst/objects/dynamic_factory.rs:241: if class_name == \"SplFixedArray\" { src/codegen/lower_inst/builtins/spl.rs:82: \"SplFixedArray\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b095905d634e75076ea49fd0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:33:57.574Z",
+  "stored_at": "2026-08-25T13:33:57.574Z"
+}

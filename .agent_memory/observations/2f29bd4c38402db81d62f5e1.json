@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"module\" src/codegen/context.rs | head -8; echo \"--- module type ---\"; grep -rn \"pub struct.*Module\\b\" src/ir/*.rs src/codegen/*.rs 2>/dev/null | head -3",
+  "summary": "grep -n \"module\" src/codegen/context.rs | head -8; echo \"--- module type ---\"; grep -rn \"pub struct.*Module\\b\" src/ir/*.rs src/codegen/*.rs 2>/dev/null | head -3: 12://! - Local labels carry a module-unique trailing id from `SharedCodegenState::next_label_id()`. 47: pub(super) module: &'a Module, 76: module: &'a Module",
+  "text": "grep -n \"module\" src/codegen/context.rs | head -8; echo \"--- module type ---\"; grep -rn \"pub struct.*Module\\b\" src/ir/*.rs src/codegen/*.rs 2>/dev/null | head -3: 12://! - Local labels carry a module-unique trailing id from `SharedCodegenState::next_label_id()`. 47: pub(super) module: &'a Module, 76: module: &'a Module, 87: let callable_reachability = CallableReachabilityAnalysis::new(module, function); 103: module, 130: /// Returns a module-unique local label carrying a readable but lossy prefix. 132: /// Uniqueness comes solely from the module-wide trailing id: `label_fragment()` collapses 209: /// Block labels are minted once per block in `new()` from the module-wide label counter --- module type --- src/ir/module.rs:51:pub struct Module {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2f29bd4c38402db81d62f5e1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:08:42.129Z",
+  "stored_at": "2026-08-22T08:08:42.129Z"
+}

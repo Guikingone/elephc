@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_mixed_unbox\" src/codegen_support/runtime/io/*.rs | head -10",
+  "summary": "About to run: grep -rn \"__rt_mixed_unbox\" src/codegen_support/runtime/io/*.rs | head -10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "195ed93f71b2d26104d7a960",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:41:17.961Z",
+  "stored_at": "2026-08-21T09:41:17.961Z"
+}

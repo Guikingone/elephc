@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -c \"^#\\[test\\]\" tests/codegen/io/ | sort -t: -k2 -rn | head -14",
+  "summary": "rg -c \"^#\\[test\\]\" tests/codegen/io/ | sort -t: -k2 -rn | head -14: tests/codegen/io/streams.rs:541 tests/codegen/io/printing.rs:61 tests/codegen/io/output_buffering.rs:45 tests/codegen/io/filesystem.rs:37 tests/codegen/io/paths/realpath_pathinfo.rs:33 tests/codegen/io/modify.rs:30 tests/codegen/io/streams_ext.rs:28 te",
+  "text": "rg -c \"^#\\[test\\]\" tests/codegen/io/ | sort -t: -k2 -rn | head -14: tests/codegen/io/streams.rs:541 tests/codegen/io/printing.rs:61 tests/codegen/io/output_buffering.rs:45 tests/codegen/io/filesystem.rs:37 tests/codegen/io/paths/realpath_pathinfo.rs:33 tests/codegen/io/modify.rs:30 tests/codegen/io/streams_ext.rs:28 tests/codegen/io/files.rs:28 tests/codegen/io/stat_ext.rs:26 tests/codegen/io/paths/fnmatch.rs:24 tests/codegen/io/paths/basename_dirname.rs:19 tests/codegen/io/stream_context_propagation.rs:17 tests/codegen/io/symlinks.rs:9 tests/codegen/io/misc.rs:4",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "293cc72a2e246af14fd38061",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:28:49.333Z",
+  "stored_at": "2026-08-17T06:28:49.333Z"
+}

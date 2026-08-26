@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --lib resource_type_name 2>&1 | rg -A8 \"panicked at\" | head -22",
+  "summary": "cargo test --lib resource_type_name 2>&1 | rg -A8 \"panicked at\" | head -22: ext.__rt_resource_type_name,\"ax\",@progbits .globl __rt_resource_type_name .type __rt_resource_type_name, %function __rt_resource_type_name: test rax, rax -- thread 'codegen_support::runtime::strings::resource_type_name::tests::every_calling_pat",
+  "text": "cargo test --lib resource_type_name 2>&1 | rg -A8 \"panicked at\" | head -22: ext.__rt_resource_type_name,\"ax\",@progbits .globl __rt_resource_type_name .type __rt_resource_type_name, %function __rt_resource_type_name: test rax, rax -- thread 'codegen_support::runtime::strings::resource_type_name::tests::every_calling_path_saves_and_restores_the_link_register' (9046551) panicked at src/codegen_support/runtime/strings/resource_type_name.rs:328:9: assertion `left == right` failed: both post-lookup arms must restore the link register: ; --- runtime: resource_type_name (PHP type label for a resource payload) --- .globl __rt_resource_type_name __rt_resource_type_name: tbnz x0, #63, __rt_resource_type_name_closed sub sp, sp, #16 str x30, [sp, #8] -- thread 'codegen_support::runtime::strings::resource_type_name::tests::aarch64_emits_the_full_open_and_closed_arms' (9046550) panicked at src/codegen_support/runtime/strings/resource_type_name.rs:229:9: expected block missing:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "777da981e05f1c40360a2c00",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:19:37.713Z",
+  "stored_at": "2026-08-17T08:19:37.713Z"
+}

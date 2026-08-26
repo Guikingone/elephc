@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_reach.py 2>&1",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_reach.py 2>&1: n_filesize php='int(14)' SAME data_file_get_contents php='string(14) \"one two three \"' DIFFERS data_file php='int(3)' elep",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_reach.py 2>&1: n_filesize php='int(14)' SAME data_file_get_contents php='string(14) \"one two three \"' DIFFERS data_file php='int(3)' elephc='Warning: file_get_contents(data://text/plain,one%0Atwo%0Athree%0A): Failed to open stream: No such f' DIFFERS data_readfile php='one two three int(14)' elephc='Warning: file_get_contents(data://text/plain,one%0Atwo%0Athree%0A): Failed to open stream: No such f' SAME data_fopen_fread php='string(14) \"one two three \"' SAME data_file_exists php='bool(false)' SAME data_filesize php='Warning: filesize(): stat failed for data://text/plain,one%0' SAME filter_file_get_contents php='string(14) \"ONE TWO THREE \"' SAME filter_file php='int(3)' SAME filter_readfile php='ONE TWO THREE int(14)' SAME filter_fopen_fread php='string(14) \"ONE TWO THREE \"' SAME filter_file_exists php='bool(false)' SAME filter_filesize php='Warning: filesize(): stat failed for php://filter/read=strin'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0b82bfab40b7db5c8f5f48da",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:10:54.565Z",
+  "stored_at": "2026-08-21T10:10:54.565Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1035,1085p' src/codegen/lower_inst/builtins/io/fopen_core.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1035,1085p' src/codegen/lower_inst/builtins/io/fopen_core.rs: may still be refused, but by the run-time opener and in php's other wording. || target .strip_prefix(\"fd/\") .is_some_and(|number| php_fd_number(number).is",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1035,1085p' src/codegen/lower_inst/builtins/io/fopen_core.rs: may still be refused, but by the run-time opener and in php's other wording. || target .strip_prefix(\"fd/\") .is_some_and(|number| php_fd_number(number).is_some()); if known { return None; } if target.starts_with(\"fd/\") { return Some(vec![format!( \"Warning: fopen({path}): Failed to open stream: \\ php://fd/ stream must be specified in the form php://fd/<orig fd>\\n\" )]); } return Some(vec![ \"Warning: fopen(): Invalid php:// URL specified\\n\".to_string(), format!(\"Warning: fopen({path}): Failed to open stream: operation failed\\n\"), ]); } if path.starts_with(\"glob://\") { // php-src registers `glob` with no `stream_opener` at all, so the generic caller reports // the absence rather than any wrapper of its own. `glob://` still opens as a DIRECTORY. return Some(vec![format!( \"Warning: fopen({path}): Failed to open stream: {}\\n\", crate::codegen_support::runtime::io::GLOB_NO_STREAM_OPEN )]); } None",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bbfad0c18598a8da4d7d6d8a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:07:30.378Z",
+  "stored_at": "2026-08-24T13:07:30.379Z"
+}

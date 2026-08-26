@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_tests3.py && CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test uncaught_exception_report_tests 2>&1 | tail -10",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_tests3.py && CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test uncaught_exception_report_tests 2>&1 | tail -10: ",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_tests3.py && CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test uncaught_exception_report_tests 2>&1 | tail -10: chain test added test caught_exception_prints_no_fatal_report ... ok test the_whole_previous_chain_is_reported_oldest_first ... ok test synthesized_error_reports_the_call_site_and_exits_255 ... ok test buffered_output_survives_and_precedes_the_report ... ok test uncaught_reports_the_construction_site_not_the_throw_site ... ok test uncaught_user_subclass_reports_its_own_name ... ok test uncaught_builtin_subclass_reports_class_and_message ... ok test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.10s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4f802268982b98c9f785fb00",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:57:13.802Z",
+  "stored_at": "2026-08-24T17:57:13.802Z"
+}

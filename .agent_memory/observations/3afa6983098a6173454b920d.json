@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"params\" src/codegen/lower_inst/builtins/io/filter_helpers.rs | sed -n '1,40p'",
+  "summary": "grep -n \"params\" src/codegen/lower_inst/builtins/io/filter_helpers.rs | sed -n '1,40p': ; 318: if matches!(params_ty, PhpType::Mixed | PhpType::Union(_)) { 319: if !ctx.value_can_own_mixed_box_source(params)? { 320: abi::emit_incref_if_refcounted(ctx.emitter, &params_ty); 323: emit_box_current_value_as_mixed(ctx.emitte",
+  "text": "grep -n \"params\" src/codegen/lower_inst/builtins/io/filter_helpers.rs | sed -n '1,40p': ; 318: if matches!(params_ty, PhpType::Mixed | PhpType::Union(_)) { 319: if !ctx.value_can_own_mixed_box_source(params)? { 320: abi::emit_incref_if_refcounted(ctx.emitter, &params_ty); 323: emit_box_current_value_as_mixed(ctx.emitter, &params_ty); 448:/// resolves the name, instantiates the class, exposes `$params` and runs `onCreate()` 469: materialize_stream_filter_params(ctx, inst)?; 470: ctx.emitter.instruction(\"mov x4, x0\"); // boxed stream-filter params 484: materialize_stream_filter_params(ctx, inst)?; 485: ctx.emitter.instruction(\"mov r8, rax\"); // boxed stream-filter params 530: materialize_stream_filter_params(ctx, inst)?; 531: ctx.emitter.instruction(\"mov x4, x0\"); // pass the boxed stream-filter params to the attach helper 540: materialize_stream_filter_params(ctx, inst)?; 541: ctx.emitter.instruction(\"mov r8, rax\"); // pass the boxed stream-filter params to the attach helper",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3afa6983098a6173454b920d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:54:46.268Z",
+  "stored_at": "2026-08-17T13:54:46.268Z"
+}

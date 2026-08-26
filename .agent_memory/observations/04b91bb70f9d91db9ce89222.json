@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"test_assoc_key_sorts_bound_decimal_whitespace\" -B12 -A28 tests/codegen/arrays/assoc_helpers.rs | head -50",
+  "summary": "grep -n \"test_assoc_key_sorts_bound_decimal_whitespace\" -B12 -A28 tests/codegen/arrays/assoc_helpers.rs | head -50: ailing whitespace without joining separated digits. 203-#[test] 204:fn test_assoc_key_sorts_bound_decimal_whitespace() { 205- let out = compile_and_run( 206- r#\"<?php 207-$trailing = []; 208-$trailing[\"+9",
+  "text": "grep -n \"test_assoc_key_sorts_bound_decimal_whitespace\" -B12 -A28 tests/codegen/arrays/assoc_helpers.rs | head -50: ailing whitespace without joining separated digits. 203-#[test] 204:fn test_assoc_key_sorts_bound_decimal_whitespace() { 205- let out = compile_and_run( 206- r#\"<?php 207-$trailing = []; 208-$trailing[\"+9007199254740993 \"] = \"string\"; 209-$trailing[9007199254740992] = \"integer\"; 210-ksort($trailing); 211-foreach ($trailing as $key => $value) { 212- echo $key . \":\" . $value . \",\"; 213-} 214-echo \"|\"; 215-$internal = [\"1 2\" => \"string\", 5 => \"integer\"]; 216-ksort($internal); 217-foreach ($internal as $key => $value) { 218- echo $key . \":\" . $value . \",\"; 219-} 220-echo \"|\"; 221-$signOnly = [\"+ \" => \"string\", -1 => \"integer\"]; 222-ksort($signOnly); 223-foreach ($signOnly as $key => $value) { 224- echo $key . \":\" . $value . \",\"; 225-} 226-\"#, 227- ); 228- assert_eq!( 229- out, 230- \"9007199254740992:integer,+9007199254740993 :string,|1 2:string,5:integer,|+ :string,-1:integer,\" 231- ); 232-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "04b91bb70f9d91db9ce89222",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:18:17.498Z",
+  "stored_at": "2026-08-21T07:18:17.499Z"
+}

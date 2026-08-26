@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fstat_test.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fstat_test.py: \"\"\"`fstat()`'s TypeError test still expects the fatal on STDERR.\n\nMEASURED on the same program: `php -n` 8.5.6 writes `Fatal err",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fstat_test.py: \"\"\"`fstat()`'s TypeError test still expects the fatal on STDERR.\n\nMEASURED on the same program: `php -n` 8.5.6 writes `Fatal error: Uncaught TypeError: fstat():\nArgument #1 ($stream) must be of type resource, false given` to STDOUT and leaves stderr empty,\nexiting 255. elephc now does exactly the same — the uncaught report travels through the output\nbuffer rather than around it — so the harness files that line under `diagnostics`, and an assert\non `stderr` reads an empty string.\n\nThe PROPERTY the test exists for is untouched and re-asserted: the call raises an uncaught\nTypeError naming the arg",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8c820d75b2f6f5aaea958c21",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:23:34.124Z",
+  "stored_at": "2026-08-21T11:23:34.125Z"
+}

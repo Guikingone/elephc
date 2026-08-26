@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/mod.rs')\nt = p.read_text()\nold = '''            .any(|function| !function.flags.is_synthetic),'''\nnew = '''            .any(|function| {\n                if !function.flags.is_synthetic {\n                    eprintln!(\"TRACEDEBUG non-synthetic body: {}\", function.name);\n                }\n                !function.flags.is_synthetic\n            }),'''\nassert t.count(old) == 1\np.write_text(t.replace(old, new, 1))\nprint('debug added')\nPYEOF\nca… [+393 chars truncated]",
+  "summary": "About to run: python3 - <<'PYEOF' import pathlib p = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/mod.rs') t = p.read_text() old = ''' .any(|",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f942d5eb49ffa3a6c721a4eb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:33:13.849Z",
+  "stored_at": "2026-08-22T12:33:13.849Z"
+}

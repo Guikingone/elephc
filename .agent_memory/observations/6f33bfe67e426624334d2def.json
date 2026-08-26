@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1140,1160p' src/codegen_support/runtime/io/user_wrapper.rs",
+  "summary": "sed -n '1140,1160p' src/codegen_support/runtime/io/user_wrapper.rs:  jumps to `missing_label`. fn emit_x86_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slot: usize) { emitter.instruction(\"mov r10, QWORD PTR [rdi]\"); // class_id stored at the head of every wrapper object abi::emit_symbol_address(emit",
+  "text": "sed -n '1140,1160p' src/codegen_support/runtime/io/user_wrapper.rs:  jumps to `missing_label`. fn emit_x86_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slot: usize) { emitter.instruction(\"mov r10, QWORD PTR [rdi]\"); // class_id stored at the head of every wrapper object abi::emit_symbol_address(emitter, \"r11\", \"_user_wrapper_vtable_ptrs\"); // base of the per-class user-wrapper vtable pointer table emitter.instruction(\"mov r11, QWORD PTR [r11 + r10 * 8]\"); // per-class user-wrapper vtable for the resolved class emitter.instruction(&format!(\"mov r8, QWORD PTR [r11 + {}]\", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r11 is reused emitter.instruction(&format!(\"mov r11, QWORD PTR [r11 + {}]\", vtable_slot * 8)); // load the requested wrapper method pointer emitter.instruction(\"test r11, r11\"); // is the method missing? emitter.instruction(&format!(\"jz {}\", missing_label)); // method absent: take the fallback }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6f33bfe67e426624334d2def",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:51:29.800Z",
+  "stored_at": "2026-08-20T20:51:29.801Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"by_ref\" -g '*.rs' src/ir/ src/eir/ 2>/dev/null | head -30",
+  "summary": "rg -n \"by_ref\" -g '*.rs' src/ir/ src/eir/ 2>/dev/null | head -30: src/ir/function.rs:168: pub by_ref: bool, src/ir/function.rs:215: pub by_ref_return: bool,",
+  "text": "rg -n \"by_ref\" -g '*.rs' src/ir/ src/eir/ 2>/dev/null | head -30: src/ir/function.rs:168: pub by_ref: bool, src/ir/function.rs:215: pub by_ref_return: bool,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a9b445cf815fb8330d5ed346",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:33:29.596Z",
+  "stored_at": "2026-08-16T15:33:29.597Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"Op::Nop\" src/ir_lower src/ir | head -20",
+  "summary": "grep -rn \"Op::Nop\" src/ir_lower src/ir | head -20: src/ir_lower/stmt/metadata_control.rs:15: Op::Nop, src/ir_lower/stmt/metadata_control.rs:18: Op::Nop.default_effects(), src/ir_lower/expr/pipe.rs:86: Op::Nop, src/ir_lower/expr/pipe.rs:89: Op::Nop.default_effects(), src/ir/builder.rs:193: inst.op = Op::Nop; src/ir/buil",
+  "text": "grep -rn \"Op::Nop\" src/ir_lower src/ir | head -20: src/ir_lower/stmt/metadata_control.rs:15: Op::Nop, src/ir_lower/stmt/metadata_control.rs:18: Op::Nop.default_effects(), src/ir_lower/expr/pipe.rs:86: Op::Nop, src/ir_lower/expr/pipe.rs:89: Op::Nop.default_effects(), src/ir/builder.rs:193: inst.op = Op::Nop; src/ir/builder.rs:195: inst.effects = Op::Nop.default_effects(); src/ir/builder.rs:248: inst.op = Op::Nop; src/ir/builder.rs:251: inst.effects = Op::Nop.default_effects(); src/ir/tests/builder_test.rs:122: assert_eq!(function.instructions[0].op, Op::Nop); src/ir/tests/builder_test.rs:124: assert_eq!(function.instructions[0].effects, Op::Nop.default_effects()); src/ir/tests/builder_test.rs:214: assert_eq!(function.instructions[1].op, Op::Nop);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d90be6ed81cbdd3cdd6125d3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:59:07.809Z",
+  "stored_at": "2026-08-21T10:59:07.809Z"
+}

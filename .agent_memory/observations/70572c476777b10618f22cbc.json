@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_context_quad.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_context_quad.py: \"\"\"Gives `$context`'s property offset its own quad, which the merge had it share with a mask.\n\nBoth branches appended ONE quad",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_context_quad.py: \"\"\"Gives `$context`'s property offset its own quad, which the merge had it share with a mask.\n\nBoth branches appended ONE quad after a user wrapper's method pointers: this branch the byte\noffset of a declared `public $context;`, upstream a bitmask of the slots whose method returns a\nboxed Mixed. The merge resolved toward the mask, correctly — every helper that reads the quad\nreads it as a mask — but `fopen` still reads the SAME address as the context offset.\n\nTwo measured symptoms, one cause. When the mask is zero, `fopen` concludes `$context` is\nundeclared and raises `Deprecated: Creation of ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "70572c476777b10618f22cbc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:32:20.343Z",
+  "stored_at": "2026-08-21T09:32:20.344Z"
+}

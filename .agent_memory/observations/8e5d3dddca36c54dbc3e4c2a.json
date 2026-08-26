@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '2124,2185p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs",
+  "summary": "rtk proxy sed -n '2124,2185p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs: _size(class_name: &str, class_info: &ClassInfo) -> usize { let dyn_props_slot = if class_uses_dynamic_property_tail(class_name, class_info) { 8 } else { 0 }",
+  "text": "rtk proxy sed -n '2124,2185p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs: _size(class_name: &str, class_info: &ClassInfo) -> usize { let dyn_props_slot = if class_uses_dynamic_property_tail(class_name, class_info) { 8 } else { 0 }; 8 + class_info.properties.len() * 16 + dyn_props_slot } /// Returns whether this class layout stores a dynamic-property hash tail. fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) -> bool { class_name == \"stdClass\" || class_info.allow_dynamic_properties } /// The number of fixed-slot stream-wrapper methods recorded per class in /// `_user_wrapper_vtable_<class_id>`. Slot order matches the runtime fopen /// dispatch (Phase 10): 0 stream_open, 1 stream_close, 2 stream_read, /// 3 stream_write, 4 stream_eof, 5 stream_tell, 6 stream_seek, 7 stream_flush, /// 8 stream_stat (fd-based `fstat()` on an open wrapper stream), 9 url_stat /// (path-based `file_exists()`/`is_file()`/`filesize()` on a `scheme://` URL).",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e5d3dddca36c54dbc3e4c2a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:08:26.822Z",
+  "stored_at": "2026-08-17T09:08:26.822Z"
+}

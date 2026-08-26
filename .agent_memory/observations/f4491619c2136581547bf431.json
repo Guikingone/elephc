@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub(crate) fn load_local\\|pub fn load_local\" -A 45 src/ir_lower/context.rs | head -60",
+  "summary": "grep -n \"pub(crate) fn load_local\\|pub fn load_local\" -A 45 src/ir_lower/context.rs | head -60: _type = value_ir_type(&php_type); 1117- let ownership = Ownership::for_php_type(&php_type); 1118- let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal; 1119- let op = match (is_ref_",
+  "text": "grep -n \"pub(crate) fn load_local\\|pub fn load_local\" -A 45 src/ir_lower/context.rs | head -60: _type = value_ir_type(&php_type); 1117- let ownership = Ownership::for_php_type(&php_type); 1118- let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal; 1119- let op = match (is_ref_bound, uses_global, kind) { 1120- (true, _, _) => Op::LoadRefCell, 1121- (false, true, _) => Op::LoadGlobal, 1122- (false, false, LocalKind::StaticLocal) => Op::LoadStaticLocal, 1123- _ => Op::LoadLocal, 1124- }; 1125- let immediate = if uses_global { 1126- Some(Immediate::GlobalName(self.intern_global_name(name))) 1127- } else { 1128- Some(Immediate::LocalSlot(slot)) 1129- }; 1130- let value = self 1131- .builder 1132- .emit_with_effects( 1133- op, 1134- Vec::new(), 1135- immediate, 1136- ir_type, 1137- php_type, 1138- ownership, 1139- op.default_effects(), 1140- span, 1141- ) 1142- .expect(\"load_local produces a value\"); 1143- LoweredValue { value, ir_type } 1144- }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f4491619c2136581547bf431",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T16:11:15.122Z",
+  "stored_at": "2026-08-18T16:11:15.122Z"
+}

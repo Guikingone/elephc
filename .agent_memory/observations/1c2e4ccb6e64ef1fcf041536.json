@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/string/sscanf.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/string/sscanf.rs: effects: BuiltinEffects::Static(Op::Call.default_effects()), -> effects: BuiltinEffects::Shared(engine_call_effects),",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/string/sscanf.rs: effects: BuiltinEffects::Static(Op::Call.default_effects()), -> effects: BuiltinEffects::Shared(engine_call_effects),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1c2e4ccb6e64ef1fcf041536",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:14:17.985Z",
+  "stored_at": "2026-08-16T16:14:17.986Z"
+}

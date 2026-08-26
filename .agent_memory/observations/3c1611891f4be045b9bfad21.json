@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"fn emit_push_reg\" -A14 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/abi/ | head -18",
+  "summary": "rtk proxy grep -rn \"fn emit_push_reg\" -A14 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/abi/ | head -18: sv-signature/src/codegen_support/abi/calls/stack.rs-35-/// Pops a general-purpose register from the temporary stack (post-increment on AArch64, add ",
+  "text": "rtk proxy grep -rn \"fn emit_push_reg\" -A14 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/abi/ | head -18: sv-signature/src/codegen_support/abi/calls/stack.rs-35-/// Pops a general-purpose register from the temporary stack (post-increment on AArch64, add rsp on x86_64). /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/abi/calls/stack.rs-36-/// Complements `emit_push_reg` to restore caller-saved registers after nested calls. /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/abi/calls/stack.rs-37-/// -- /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/abi/calls/stack.rs:88:pub fn emit_push_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) { /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/abi/calls/stack.rs-89- match emitter.target.arch {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3c1611891f4be045b9bfad21",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:25:34.692Z",
+  "stored_at": "2026-08-17T09:25:34.695Z"
+}

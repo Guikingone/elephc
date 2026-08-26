@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_nulltest.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_nulltest.py: import pathlib\n\nroot = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-sig",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_nulltest.py: import pathlib\n\nroot = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\np = root / \"tests/codegen/io/null_stream_argument.rs\"\ns = p.read_text()\n\nold = '''/// Verifies `closedir(null)` keeps php's OTHER rule: a deprecation, not a TypeError.\n#[test]\nfn test_closedir_still_deprecates_a_null_instead_of_throwing() {\n    let out = compile_and_run_capture(\n        r#\"<?php\ntry {\n    closedir(null);\n} catch (TypeError $e) {\n    echo \"unexpected: \", $e->getMessage(), \"\\\\n\";\n} catch (Throwable $t) {\n    echo get_class($t), \": \", $t->getMes",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ff6c91b6b41dfdec31da1cdd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:00:05.215Z",
+  "stored_at": "2026-08-24T13:00:05.216Z"
+}

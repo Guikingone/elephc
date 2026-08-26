@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_diag_notice\\|diag_notice\" src/codegen_support/runtime/diagnostics.rs | head -6; grep -rn \"label_global(\\\"__rt_diag\" src/codegen_support/runtime/diagnostics.rs | head",
+  "summary": "grep -rn \"__rt_diag_notice\\|diag_notice\" src/codegen_support/runtime/diagnostics.rs | head -6; grep -rn \"label_global(\\\"__rt_diag\" src/codegen_support/runtime/diagnostics.rs | head: rc/codegen_support/runtime/diagnostics.rs:45: emitter.label_global(\"__rt_diag_pop_suppression\"); src/codegen_support/runtime/diagnostics.r",
+  "text": "grep -rn \"__rt_diag_notice\\|diag_notice\" src/codegen_support/runtime/diagnostics.rs | head -6; grep -rn \"label_global(\\\"__rt_diag\" src/codegen_support/runtime/diagnostics.rs | head: rc/codegen_support/runtime/diagnostics.rs:45: emitter.label_global(\"__rt_diag_pop_suppression\"); src/codegen_support/runtime/diagnostics.rs:54: emitter.label_global(\"__rt_diag_push_filter_suppression\"); src/codegen_support/runtime/diagnostics.rs:61: emitter.label_global(\"__rt_diag_pop_filter_suppression\"); src/codegen_support/runtime/diagnostics.rs:70: emitter.label_global(\"__rt_diag_warning\"); src/codegen_support/runtime/diagnostics.rs:104: emitter.label_global(\"__rt_diag_push_suppression\"); src/codegen_support/runtime/diagnostics.rs:110: emitter.label_global(\"__rt_diag_pop_suppression\"); src/codegen_support/runtime/diagnostics.rs:119: emitter.label_global(\"__rt_diag_push_filter_suppression\"); src/codegen_support/runtime/diagnostics.rs:125: emitter.label_global(\"__rt_diag_pop_filter_suppression\"); src/codegen_support/runtime/diagnostics.rs:134: emitter.label_global(\"__rt_diag_warning\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "08147d5c46de4bd1e0217bec",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:37:55.740Z",
+  "stored_at": "2026-08-18T13:37:55.741Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub fn inject_if_used\" -A 8 src/version_prelude.rs | head -12",
+  "summary": "About to run: grep -n \"pub fn inject_if_used\" -A 8 src/version_prelude.rs | head -12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3a542b2e724b7dc390d73ff2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:48:44.901Z",
+  "stored_at": "2026-08-21T12:48:44.902Z"
+}

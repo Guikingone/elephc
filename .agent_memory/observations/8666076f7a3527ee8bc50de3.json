@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '135,160p' scripts/docs/audit_builtins.py",
+  "summary": "sed -n '135,160p' scripts/docs/audit_builtins.py: non_registry = [b for b in raw if (b.get(\"aot\") or {}).get(\"kind\") != \"registry\"] route_counts = Counter((b.get(\"aot\") or {}).get(\"kind\") for b in non_registry) expected_counts = { \"language-construct\": 5, \"dedicated-syntax\": 1, <<<<<<< HEAD \"prelude\": 5, \"none\": 4, } i",
+  "text": "sed -n '135,160p' scripts/docs/audit_builtins.py: non_registry = [b for b in raw if (b.get(\"aot\") or {}).get(\"kind\") != \"registry\"] route_counts = Counter((b.get(\"aot\") or {}).get(\"kind\") for b in non_registry) expected_counts = { \"language-construct\": 5, \"dedicated-syntax\": 1, <<<<<<< HEAD \"prelude\": 5, \"none\": 4, } if len(non_registry) != 15: errors.append(f\"expected 15 non-registry contracts, found {len(non_registry)}\") ======= \"prelude\": 4, \"none\": 3, } if len(non_registry) != 13: errors.append(f\"expected 13 non-registry contracts, found {len(non_registry)}\") >>>>>>> origin/main if dict(route_counts) != expected_counts: errors.append( f\"non-registry AOT route counts differ: expected {expected_counts}, \" f\"found {dict(route_counts)}\" ) by_name = {b[\"name\"]: b for b in raw} for name in (\"hash_init\", \"hash_update\", \"hash_final\", \"hash_copy\"):",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8666076f7a3527ee8bc50de3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T16:59:55.016Z",
+  "stored_at": "2026-08-20T16:59:55.017Z",
+  "low_signal": true
+}

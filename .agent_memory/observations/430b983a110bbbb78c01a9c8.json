@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace_intrinsic.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace_intrinsic.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signat",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace_intrinsic.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\np = ROOT / \"src/codegen/lower_inst/method_resolution.rs\"\ns = p.read_text()\n\nold = '''    // A call that cannot THROW contributes no frame to anyone's trace, and recording one would do\n    // worse than waste work: the buffer holds one trace at a time, so `$e->getTraceAsString()` —\n    // itself a call into a builtin class — replaced the frames it was being asked to render with a\n    // frame for the question.\n    if !ctx.is_main || !inst.effects.contains(crat",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "430b983a110bbbb78c01a9c8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:49:12.361Z",
+  "stored_at": "2026-08-26T09:49:12.361Z"
+}

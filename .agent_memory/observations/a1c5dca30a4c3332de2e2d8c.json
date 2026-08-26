@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '578,592p' src/codegen_support/runtime/data/mod.rs; echo ---; grep -rn \"OBJECT_TO_STRING\\|object_to_string_msg\" src/ | head -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '578,592p' src/codegen_support/runtime/data/mod.rs; echo ---; grep -rn \"OBJECT_TO_STRING\\|object_to_string_msg\" src/ | head -8: UFFIX: &str = \" as array\"; /// Prefix for PHP's catchable object-to-string conversion Err",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '578,592p' src/codegen_support/runtime/data/mod.rs; echo ---; grep -rn \"OBJECT_TO_STRING\\|object_to_string_msg\" src/ | head -8: UFFIX: &str = \" as array\"; /// Prefix for PHP's catchable object-to-string conversion Error in an allowed-class list. pub(crate) const UNSER_OBJECT_STRING_ERROR_PREFIX: &str = \"Object of class \"; /// Suffix for PHP's catchable object-to-string conversion Error in an allowed-class list. pub(crate) const UNSER_OBJECT_STRING_ERROR_SUFFIX: &str = \" could not be converted to string\"; /// Suffix shared by PHP's runtime unserialize TypeError diagnostics. pub(crate) const UNSER_TYPE_GIVEN_SUFFIX: &str = \" given\"; /// Fatal error message when a `printf`-family conversion requests a field width outside /// PHP's accepted range. PHP raises `ValueError: Width must be between 0 and 2147483647`; /// elephc has no catchable-error path inside `__rt_sprintf`, so it reports the same text /// as a controlled fatal instead of writing past the conversion buffer. pub(crate) const SPRINTF_WIDTH_MSG: &str = ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a1c5dca30a4c3332de2e2d8c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:55:29.242Z",
+  "stored_at": "2026-08-23T17:55:29.242Z"
+}

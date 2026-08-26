@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc build rmA.php --emit-ir 2>&1 | grep -E \"function untyped|function main\" -A8 | head -25",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc build rmA.php --emit-ir 2>&1 | ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc build rmA.php --emit-ir 2>&1 | grep -E \"function untyped|function main\" -A8 | head -25: function untyped(a: TaggedScalar php=int|null) -> Void { entry: concat_reset ; effects: writes_global ; span: 2:31 v0: I64 php=int = const_i64 5 ; span: 2:36 store_ref_cell v0 slot[0] ; effects: writes_local ; span: 2:31 return } function _class_propinit_2(this: Heap(Object) php=Error) -> Void { -- function main() -> Void flags(main) { entry: concat_reset ; effects: writes_global ; span: 2:1 nop ; span: 2:1 concat_reset ; effects: writes_global ; span: 3:1 v0: I64 php=null = const_null ; span: 3:6 store_local v0 slot[0] ; effects: writes_local ; span: 3:1 concat_reset ; effects: writes_global ; span: 4:1 v1: I64 php=null = load_local slot[0] ; effects: reads_local ; span: 4:9",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a2a73923cf4c301c6392fcd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:09:18.791Z",
+  "stored_at": "2026-08-18T10:09:18.791Z"
+}

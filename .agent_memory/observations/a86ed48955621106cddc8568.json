@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn current_builtin_frame' -A 45 src/codegen/context.rs 2>/dev/null | head -60 || grep -rn 'fn current_builtin_frame' -A 45 src/codegen/ | head -60",
+  "summary": "grep -n 'fn current_builtin_frame' -A 45 src/codegen/context.rs 2>/dev/null | head -60 || grep -rn 'fn current_builtin_frame' -A 45 src/codegen/ | head -60: lot: LocalSlotId) -> Option<usize> { 434- self.ref_cell_state_offsets.get(&slot).copied() 435- } 436- 437- /// Returns the required runtime representation flag off",
+  "text": "grep -n 'fn current_builtin_frame' -A 45 src/codegen/context.rs 2>/dev/null | head -60 || grep -rn 'fn current_builtin_frame' -A 45 src/codegen/ | head -60: lot: LocalSlotId) -> Option<usize> { 434- self.ref_cell_state_offsets.get(&slot).copied() 435- } 436- 437- /// Returns the required runtime representation flag offset for one dynamic local slot. 438- fn dynamic_ref_cell_state_offset(&self, slot: LocalSlotId) -> Result<usize> { 439- self.ref_cell_state_offset(slot).ok_or_else(|| { 440- CodegenIrError::invalid_module(format!( 441- \"dynamic ref-cell slot {} has no representation flag\", 442- slot.as_raw() 443- )) 444- }) 445- } 446- 447- /// Returns whether this slot needs runtime raw-value/ref-cell discrimination at cleanup. 448- pub(super) fn has_dynamic_ref_cell_state(&self, slot: LocalSlotId) -> bool { 449- self.local_analysis.has_dynamic_ref_cell_state(slot) 450- } 451- 452- /// Records at runtime that a path has changed this local slot to ref-cell representation. 453- pub(super) fn mark_promoted_ref_cell(&mut self, slot: LocalSlotId) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a86ed48955621106cddc8568",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:02:34.698Z",
+  "stored_at": "2026-08-24T18:02:34.698Z"
+}

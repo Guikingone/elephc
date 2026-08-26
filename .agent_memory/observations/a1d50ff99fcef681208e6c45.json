@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='src/codegen/lower_inst/builtins/io/filter_helpers.rs'\ns=open(p).read()\nold='''    let stream = expect_operand(inst, 0)?;\n    load_open_stream_handle_to_result(ctx, stream, \"stream_filter_append\")?;\n    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));\n    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);'''\nnew='''    if std::env::var_os(\"ELEPHC_NO_INERT_FILTER\").is_some() { return Ok(()); }\n    let stream = expe… [+426 chars truncated]",
+  "summary": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='src/codegen/lower_inst/builtins/io/filter_helpers.rs'\ns=open(p).read()\nold='''    let stream = expect_operand(inst, 0)?;\n    load_open_stream_handle_to_result(ctx, stream, \"stream_fil",
+  "text": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='src/codegen/lower_inst/builtins/io/filter_helpers.rs'\ns=open(p).read()\nold='''    let stream = expect_operand(inst, 0)?;\n    load_open_stream_handle_to_result(ctx, stream, \"stream_filter_append\")?;\n    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));\n    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);'''\nnew='''    if std::env::var_os(\"ELEPHC_NO_INERT_FILTER\").is_some() { return Ok(()); }\n    let stream = expect_operand(inst, 0)?;\n    load_open_stream_handle_to_result(ctx, stream, \"stream_filter_append\")?;\n    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));\n    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);'''\nassert s.count(old)==1\ns=s.replace(old,new)\nopen(p,'w').write(s)\nprint('temporary bisect switch added')\nPYEOF\ncargo build 2>&1 | rg -i \"^error|-->\" | head -5; echo BUILT: temporary bisect switch added BUILT",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a1d50ff99fcef681208e6c45",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:12:25.850Z",
+  "stored_at": "2026-08-17T15:12:25.851Z"
+}

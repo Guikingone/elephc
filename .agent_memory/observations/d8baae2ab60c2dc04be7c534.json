@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r '$f = get_defined_functions()[\"internal\"]; $s = array_values(array_filter($f, fn($x)=>str_starts_with($x,\"stream_\"))); sort($s); echo count($s),\"\\n\"; echo implode(\"\\n\",$s),\"\\n\"; var_dump(function_exists(\"stream_notification_callback\"), function_exists(\"set_socket_blocking\"), function_exists(\"stream_encoding\"));'",
+  "summary": "php -n -r '$f = get_defined_functions()[\"internal\"]; $s = array_values(array_filter($f, fn($x)=>str_starts_with($x,\"stream_\"))); sort($s); echo count($s),\"\\n\"; echo implode(\"\\n\",$s),\"\\n\"; var_dump(function_exists(\"stream_notification_callback\"), function_exists(\"set_socket_blocking\"), function_exists(\"stream_encoding\")",
+  "text": "php -n -r '$f = get_defined_functions()[\"internal\"]; $s = array_values(array_filter($f, fn($x)=>str_starts_with($x,\"stream_\"))); sort($s); echo count($s),\"\\n\"; echo implode(\"\\n\",$s),\"\\n\"; var_dump(function_exists(\"stream_notification_callback\"), function_exists(\"set_socket_blocking\"), function_exists(\"stream_encoding\"));': options stream_context_get_params stream_context_set_default stream_context_set_option stream_context_set_options stream_context_set_params stream_copy_to_stream stream_filter_append stream_filter_prepend stream_filter_register stream_filter_remove stream_get_contents stream_get_filters stream_get_line stream_get_meta_data stream_get_transports stream_get_wrappers stream_is_local stream_isatty stream_register_wrapper stream_resolve_include_path stream_select stream_set_blocking stream_set_chunk_size stream_set_read_buffer stream_set_timeout stream_set_write_buffer stream_socket_accept stream_socket_client stream_socket_enable_crypto stream_socket_get_name stream_socket_pair stream_socket_recvfrom stream_socket_sendto stream_socket_server stream_socket_shutdown stream_supports_lock stream_wrapper_register stream_wrapper_restore stream_wrapper_unregister bool(false) bool(false) bool(false)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d8baae2ab60c2dc04be7c534",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:22:31.994Z",
+  "stored_at": "2026-08-14T14:22:31.994Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"http_response_header\" src/ | grep -v \"block_emit.rs\" | head -20",
+  "summary": "grep -rn \"http_response_header\" src/ | grep -v \"block_emit.rs\" | head -20: gen/lower_inst/builtins/io/fopen_core.rs:52: publish_http_response_headers(ctx); src/codegen/lower_inst/builtins/io/fopen_core.rs:592: publish_http_response_headers(ctx); src/codegen_support/runtime/emitters.rs:54: io::emit_get_http_response_hea",
+  "text": "grep -rn \"http_response_header\" src/ | grep -v \"block_emit.rs\" | head -20: gen/lower_inst/builtins/io/fopen_core.rs:52: publish_http_response_headers(ctx); src/codegen/lower_inst/builtins/io/fopen_core.rs:592: publish_http_response_headers(ctx); src/codegen_support/runtime/emitters.rs:54: io::emit_get_http_response_headers(emitter); src/codegen_support/runtime/io/http_response_headers.rs:2://! Emits the `__rt_get_http_response_headers` runtime helper, which builds an src/codegen_support/runtime/io/http_response_headers.rs:4://! `$http_response_header` superglobal variable, plus the two helpers behind the src/codegen_support/runtime/io/http_response_headers.rs:9://! - The lowering of `$http_response_header` in the EIR backend. src/codegen_support/runtime/io/http_response_headers.rs:20://! answer from the empty array `$http_response_header` would leave. The src/codegen_support/runtime/io/http_response_headers.rs:26:/// `__rt_get_http_response_headers() -> array`.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d77ff320c2a65fa47c00f117",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:49:43.280Z",
+  "stored_at": "2026-08-18T15:49:43.280Z"
+}

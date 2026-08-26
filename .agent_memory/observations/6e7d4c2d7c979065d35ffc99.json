@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "find \"$TMPDIR\" -maxdepth 1 -name 'elephc_*' -mmin +120 -exec rm -rf {} + 2>/dev/null; df -h / | tail -1",
+  "summary": "About to run: find \"$TMPDIR\" -maxdepth 1 -name 'elephc_*' -mmin +120 -exec rm -rf {} + 2>/dev/null; df -h / | tail -1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6e7d4c2d7c979065d35ffc99",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T09:31:51.275Z",
+  "stored_at": "2026-08-15T09:31:51.276Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_sscw_wire.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_sscw_wire.py: import os\nimport re\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n# --- ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_sscw_wire.py: import os\nimport re\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n# --- the three literals ---\np = 'src/codegen_support/runtime/data/mod.rs'\ns = open(p).read()\nold = '''pub(crate) const WRAPPER_MISSING_HOOK_TAIL_WRITE: &str = \"::stream_write is not implemented!\\\\n\";'''\nnew = '''pub(crate) const WRAPPER_MISSING_HOOK_TAIL_WRITE: &str = \"::stream_write is not implemented!\\\\n\";\n\n/// `stream_select()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].\npub(crate) const WRAPPER_MISSING_HOOK_HEAD_SELECT: &str = \"Warning: stream_select(): \";\n\n/",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8dfa0671fd72c0252f579e1d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T17:58:12.567Z",
+  "stored_at": "2026-08-17T17:58:12.568Z"
+}

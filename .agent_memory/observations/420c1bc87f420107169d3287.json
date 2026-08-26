@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/owner_mixed.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/owner_mixed.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/owner_mixed.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\n\n# ---- the checker only lets through what the lowering can honour ---------------------------\np = ROOT / \"src/builtins/io/mod.rs\"\ns = p.read_text()\nold = '''pub(crate) fn is_owner_or_group_type(ty: &PhpType) -> bool {\n    match ty {\n        PhpType::Int\n        | PhpType::Str\n        | PhpType::Float\n        | PhpType::Bool\n        | PhpType::False\n        | PhpType::Mixed => true,\n        PhpType::Union(members) => members.iter().all(is_owner_or_group_type)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "420c1bc87f420107169d3287",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:10:56.665Z",
+  "stored_at": "2026-08-24T19:10:56.666Z"
+}

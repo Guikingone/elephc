@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_state.py 2>&1",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_state.py 2>&1: eam_set_chunk_size(): Argument #1 ($stream) must be of type resource, false given === pending_then_seek SAME === ftell_aft",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_state.py 2>&1: eam_set_chunk_size(): Argument #1 ($stream) must be of type resource, false given === pending_then_seek SAME === ftell_after_line SAME === dynamic_filter_name SAME === fgets_chunking DIFFERS --- php --- Warning: fopen(w://x): Failed to open stream: No such file or directory in fgets_chunking.php on line 19 | Fatal error: Uncaught TypeError: fgets(): Argument #1 ($stream) must be of type resource, false given in fgets_chunking.php:20 Stack trace: #0 fgets_chunking.php(20): fgets(false) #1 {main} thrown in fgets_chunking.php on line 20 --- elephc --- Warning: fopen(): Unable to find the wrapper \"w\" - did you forget to enable it when you configured PHP? in fgets_chunking.php on line 19 Warning: fopen(w://x): Failed to open stream: No such file or directory in fgets_chunking.php on line 19 | Fatal error: Uncaught TypeError: fgets(): Argument #1 ($stream) must be of type resource, false given",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b24304e70834018b030e09d0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T08:03:19.948Z",
+  "stored_at": "2026-08-21T08:03:19.949Z"
+}

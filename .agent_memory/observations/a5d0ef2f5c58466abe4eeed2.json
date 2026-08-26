@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.label(\"__rt_fread_do_syscall_x86\");\n    emitter.instruction(\"mov rdi, QWORD PTR [rbp - 32]\");                       // pass the file descriptor as the f -> emitter.label(\"",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.label(\"__rt_fread_do_syscall_x86\");\n    emitter.instruction(\"mov rdi, QWORD PTR [rbp - 32]\");                       // pass the file descriptor as the f -> emitter.label(\"__rt_fread_do_syscall_x86\");\n    // See the AArch64 counterpart: php reads a WHOLE CHUNK from a regular file and keeps the\n    // surplus, which is what makes `fgetc()` one syscall per CHUNK instead of one per byte and\n    // what `unread_bytes` reports. Sockets, pipes and ttys keep the unbuffered path.\n    emitter.instruction(\"mov rax, QWORD PTR [rbp - 16]\");                       // the caller's request\n    emitter.instruction(\"cmp rax, 1\");\n    emitter.instr",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a5d0ef2f5c58466abe4eeed2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T19:30:31.925Z",
+  "stored_at": "2026-08-23T19:30:31.926Z"
+}

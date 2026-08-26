@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rl \"stream_copy_to_stream\" crates src tests | head -30",
+  "summary": "grep -rl \"stream_copy_to_stream\" crates src tests | head -30: inst/builtins/io/stream_read_helpers.rs src/codegen/lower_inst/builtins/io/stream_copy_queries.rs src/codegen/lower_inst/runtime_functions/group_05.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/io/stream_copy_to_stream.rs src/codegen_s",
+  "text": "grep -rl \"stream_copy_to_stream\" crates src tests | head -30: inst/builtins/io/stream_read_helpers.rs src/codegen/lower_inst/builtins/io/stream_copy_queries.rs src/codegen/lower_inst/runtime_functions/group_05.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/io/stream_copy_to_stream.rs src/codegen_support/runtime/emitters/platform.rs tests/php_oracle/reachability/streams/php-8.5.6/macos-aarch64/streams-full.json tests/php_oracle/drift/streams/php-8.5.6/linux-aarch64/streams-full.json tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json tests/php_oracle/manifests/streams/php-8.5.6/linux-aarch64/streams-full.json tests/php_oracle/reachability/streams/php-8.5.6/linux-x86_64/streams-full.json tests/php_oracle/manifests/streams/php-8.5.6/macos-aarch64/streams-full.json tests/php_oracle/manifests/streams/php-8.5.6/linux-x86_64/streams-full.json tests/php_oracle/drift/streams/php-8.5.6/linux-x86_64/streams-full.json",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f091c82f4bdef295c62e1aa2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:13:59.103Z",
+  "stored_at": "2026-08-14T14:13:59.104Z"
+}

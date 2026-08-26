@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn visible_property\\b\" -A15 src/types/ | head -20",
+  "summary": "grep -rn \"fn visible_property\\b\" -A15 src/types/ | head -20: t index = self.visible_property_index(property)?; src/types/schema.rs-401- self.properties.get(index).map(|entry| (index, entry)) src/types/schema.rs-402- } src/types/schema.rs-403- src/types/schema.rs-404- /// Returns whether one physical property slot has a",
+  "text": "grep -rn \"fn visible_property\\b\" -A15 src/types/ | head -20: t index = self.visible_property_index(property)?; src/types/schema.rs-401- self.properties.get(index).map(|entry| (index, entry)) src/types/schema.rs-402- } src/types/schema.rs-403- src/types/schema.rs-404- /// Returns whether one physical property slot has a declared PHP type. src/types/schema.rs-405- pub fn property_slot_is_declared(&self, index: usize, property: &str) -> bool { src/types/schema.rs-406- self.property_declared_slots src/types/schema.rs-407- .get(index) src/types/schema.rs-408- .copied() src/types/schema.rs-409- .unwrap_or_else(|| self.declared_properties.contains(property)) src/types/schema.rs-410- } src/types/schema.rs-411- src/types/schema.rs-412- /// Returns whether the property visible by name has a declared PHP type. src/types/schema.rs-413- pub fn visible_property_is_declared(&self, property: &str) -> bool { src/types/schema.rs-414- self.visible_property(property)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "11fc0b2a3a28047906714d54",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T08:10:40.358Z",
+  "stored_at": "2026-08-21T08:10:40.359Z"
+}

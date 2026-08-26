@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy grep -n \"define php_stream_from_zval_no_verify\" -A6 $SRC/main/php_streams.h",
+  "summary": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy grep -n \"define php_stream_from_zval_no_verify\" -A6 $SRC/main/php_streams.h: 289:#define php_stream_from_zval_no_verify(xstr, pzval) ",
+  "text": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy grep -n \"define php_stream_from_zval_no_verify\" -A6 $SRC/main/php_streams.h: 289:#define php_stream_from_zval_no_verify(xstr, pzval) (xstr) = (php_stream*)zend_fetch_resource2_ex((pzval), \"stream\", php_file_le_stream(), php_file_le_pstream()) 290- 291-static zend_always_inline php_stream* php_stream_from_zval_no_verify_no_error(zval *zval) { 292- return (php_stream*)zend_fetch_resource2_ex(zval, NULL, php_file_le_stream(), php_file_le_pstream()); 293-} 294- 295-BEGIN_EXTERN_C()",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "94230da6b0e1c139b5a52b78",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:14:42.073Z",
+  "stored_at": "2026-08-17T07:14:42.074Z"
+}

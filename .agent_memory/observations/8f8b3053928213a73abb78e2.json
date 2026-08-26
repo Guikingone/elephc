@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/io/stream_pending.rs\")\ns = p.read_text()\n\nanchor = \"pub fn emit_stream_pending_held(emitter: &mut Emitter) {\"\ni = s.index(\"/// Emits `__rt_stream_pending_held\")\nhelper = '''/// Emits `__rt_stream_pending_fill(handle) -> n`, which reads ONE CHUNK onto the stream.\n///\n/// php never asks a file for the bytes a caller wanted; it asks for a whole chunk and keeps the\n/// surplus in the stream's own read buffer. `__rt_fread` already does that for a read request.\n/// A LINE reader cannot: it does not know how many bytes it w… [+6705 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path(\"src/codegen_support/runtime/io/stream_pending.rs\") s = p.read_text() anchor = \"pub fn emit_stream_pending_held(emitter: &mut Emitter) {\" i = s.index(\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8f8b3053928213a73abb78e2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:05:15.426Z",
+  "stored_at": "2026-08-24T17:05:15.426Z"
+}

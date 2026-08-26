@@ -1,0 +1,16 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-round8-audit-fixes.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-round8-audit-fixes.md: ---\nname: streams-round8-audit-fixes\ndescription: Round 8 de l'audit (GLM 5.2 / Kimi K2.7 / Kimi K3) — 183 programmes extraits, 139 identiques au départ, 151 après cinq lots de correc",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-round8-audit-fixes.md: ---\nname: streams-round8-audit-fixes\ndescription: Round 8 de l'audit (GLM 5.2 / Kimi K2.7 / Kimi K3) — 183 programmes extraits, 139 identiques au départ, 151 après cinq lots de correctifs; ce qui reste est listé ici.\nmetadata:\n  type: project\n---\n\nLes trois auditeurs ont nommé **183 programmes** exécutables (round 8). 🔴🛠 L'extracteur du round 7\nappariait les clôtures de blocs par REGEX sur tout le transcrit : **une seule clôture manquante\ndécale toutes les paires suivantes** et capture de la prose comme du code — kimi-k3 semblait n'avoir\nrien nommé alors qu'il en avait nommé 74. Un automate li",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "10c10fb776b40cf3f9a7802d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:34:02.786Z",
+  "stored_at": "2026-08-23T08:34:02.787Z",
+  "low_signal": true
+}

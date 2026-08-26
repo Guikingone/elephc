@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/strings.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/strings.rs: PhpType::Void | PhpType::Never => {\n            let len_reg = abi::string_result_regs(ctx.emitter).1;\n            abi::emit_load_int_immediate(ctx.emitter, len_ -> PhpType::Void | PhpTy",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/strings.rs: PhpType::Void | PhpType::Never => {\n            let len_reg = abi::string_result_regs(ctx.emitter).1;\n            abi::emit_load_int_immediate(ctx.emitter, len_ -> PhpType::Void | PhpType::Never => {\n            let len_reg = abi::string_result_regs(ctx.emitter).1;\n            abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);\n            store_if_result(ctx, inst)\n        }\n        // php's first-class callable syntax (`strlen(...)`) builds a Closure, and a Closure in a\n        // string context is a CATCHABLE `Error` at run time — `Object of class Closure could not\n        // be converted to string`, php-src's own wording. Refusin",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cc089319a9b9883fe5ff3744",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:41:16.780Z",
+  "stored_at": "2026-08-23T17:41:16.781Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test -p elephc --lib 2>&1 | tail -4; echo \"=== error_tests ===\"; cargo test --test error_tests 2>&1 | grep -E \"^test result:|^---- \" | cut -c1-200",
+  "summary": "cargo test -p elephc --lib 2>&1 | tail -4; echo \"=== error_tests ===\"; cargo test --test error_tests 2>&1 | grep -E \"^test result:|^---- \" | cut -c1-200: test ir_lower::tests::corpus::lowers_examples_corpus ... ok test result: ok. 1500 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 76.82s === erro",
+  "text": "cargo test -p elephc --lib 2>&1 | tail -4; echo \"=== error_tests ===\"; cargo test --test error_tests 2>&1 | grep -E \"^test result:|^---- \" | cut -c1-200: test ir_lower::tests::corpus::lowers_examples_corpus ... ok test result: ok. 1500 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 76.82s === error_tests === test result: ok. 1294 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.46s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f82b817b0d80f3c9224c5b0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T08:24:17.029Z",
+  "stored_at": "2026-08-21T08:24:17.031Z"
+}

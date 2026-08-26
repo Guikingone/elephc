@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn spl_file_object_valid_body\" -A 25 src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn spl_file_object_valid_body\" -A 25 src/types/checker/builtin_spl_classes/filesystem.rs: 1665:fn spl_file_object_valid_body() -> Vec<Stmt> { 1666- vec![ 1667- if_stmt( 1668- flag_enabled_expr(file_object_flags_expr",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn spl_file_object_valid_body\" -A 25 src/types/checker/builtin_spl_classes/filesystem.rs: 1665:fn spl_file_object_valid_body() -> Vec<Stmt> { 1666- vec![ 1667- if_stmt( 1668- flag_enabled_expr(file_object_flags_expr(), SPL_FILE_READ_CSV), 1669- vec![return_stmt(binary_expr( 1670- file_line_number_expr(), 1671- BinOp::Lt, 1672- count_expr(property_access(this_expr(), \"csvRecords\")), 1673- ))], 1674- None, 1675- ), 1676- return_stmt(file_object_valid_expr()), 1677- ] 1678-} 1679- 1680-/// Builds SplFileObject fgets(). 1681-fn spl_file_object_fgets_body() -> Vec<Stmt> { 1682- let mut body = vec![spl_file_object_read_guard_stmt()]; 1683- body.extend(spl_file_object_read_line_stmts()); 1684- body.push(property_assign_stmt( 1685- this_expr(), 1686- \"lineNumber\", 1687- binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)), 1688- )); 1689- body.push(property_assign_stmt(this_expr(), \"hasReadLine\", bool_expr(true))); 1690- body.push(return_stmt(var_expr(\"line\")));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e0648fb016b792ce493f2a13",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:00:46.687Z",
+  "stored_at": "2026-08-24T08:00:46.687Z"
+}

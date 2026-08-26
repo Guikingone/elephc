@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::arrays) or test(codegen::array_basics) or test(codegen::strings) or test(codegen::scalar_strings) or test(codegen::misc) or test(codegen::json) or test(codegen::serialize) or test(codegen::echo_vars) or test(codegen::casts_and_constants) or test(codegen::type_builtins) or test(codegen::iterators… [+44 chars truncated]",
+  "summary": "About to run: rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=335",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "74d95d8919ea18feca06f43a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:50:31.451Z",
+  "stored_at": "2026-08-23T16:50:31.452Z"
+}

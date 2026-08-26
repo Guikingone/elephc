@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '99,130p' src/codegen_support/runtime/io/stream_supports_lock.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '99,130p' src/codegen_support/runtime/io/stream_supports_lock.rs: // wrapper name emitter.instruction(\"cmp r9d, 0x6D\"); // 'm' as in memory emitter.instruction(\"je __rt_ssl_no_x86\"); emitter.instruction(\"cmp r9d, 0x74",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '99,130p' src/codegen_support/runtime/io/stream_supports_lock.rs: // wrapper name emitter.instruction(\"cmp r9d, 0x6D\"); // 'm' as in memory emitter.instruction(\"je __rt_ssl_no_x86\"); emitter.instruction(\"cmp r9d, 0x74\"); // 't' as in temp emitter.instruction(\"je __rt_ssl_no_x86\"); emitter.instruction(\"cmp r9d, 0x6F\"); // 'o' as in output emitter.instruction(\"je __rt_ssl_no_x86\"); emitter.instruction(\"cmp r9d, 0x69\"); // 'i' as in input emitter.instruction(\"je __rt_ssl_no_x86\"); emitter.label(\"__rt_ssl_yes_x86\"); emitter.instruction(\"mov eax, 1\"); // stdin/stdout/stderr, fd, and every other wrapper lock emitter.instruction(\"jmp __rt_ssl_ret_x86\"); emitter.label(\"__rt_ssl_no_x86\"); emitter.instruction(\"xor eax, eax\"); // the memory and output wrappers do not emitter.label(\"__rt_ssl_ret_x86\"); emitter.instruction(\"mov rsp, rbp\"); // release the frame from rbp emitter.instruction(\"pop rbp\"); // restore the caller frame pointer emitter.instruction(\"ret\"); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "01a4d2fd8dbf15730000286d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:45:12.848Z",
+  "stored_at": "2026-08-23T07:45:12.849Z"
+}

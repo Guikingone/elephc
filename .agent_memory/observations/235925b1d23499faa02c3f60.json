@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/drop_unreachable.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/drop_unreachable.py: import pathlib\n\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/drop_unreachable.py: import pathlib\n\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/strings/split.rs')\nt = p.read_text()\n\n# Both sides wrote the same arm through slightly different helpers, so the merge left two and the\n# second can never be reached. The first is kept: on AArch64 the result register IS x0, so the two\n# load the same place, and it routes through the shared `arrays::values` extractor rather than a\n# local copy of it.\ndupes = [\n    '''        // A hash has no dense payload for the renderers to walk, so its ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "235925b1d23499faa02c3f60",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:57:17.268Z",
+  "stored_at": "2026-08-20T17:57:17.269Z"
+}

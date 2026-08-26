@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls src/ | rg prelude; echo \"---\"; head -40 src/var_export_prelude.rs",
+  "summary": "ls src/ | rg prelude; echo \"---\"; head -40 src/var_export_prelude.rs: ::__set_state(array( … ))`, and an enum case as //! `\\Enum::Case`. PHP's object layout is NOT the array layout — an entry key sits //! at `indent + 3` (arrays use `indent + 2`) while the value and the closing line //! keep the array indents — which i",
+  "text": "ls src/ | rg prelude; echo \"---\"; head -40 src/var_export_prelude.rs: ::__set_state(array( … ))`, and an enum case as //! `\\Enum::Case`. PHP's object layout is NOT the array layout — an entry key sits //! at `indent + 3` (arrays use `indent + 2`) while the value and the closing line //! keep the array indents — which is why the object branch does not reuse the //! array branch's padding. Property visibility is deliberately absent: unlike //! `print_r`, PHP's `var_export` prints the bare property name. //! - Object properties are reached through four `internal: true` helpers //! (`__elephc_object_is_enum`, `__elephc_object_prop_count`, //! `__elephc_object_prop_name`, `__elephc_object_prop_value`) because elephc has //! no `get_object_vars()`, no object-to-array cast, and no `foreach` over a plain //! object — and because `enum_exists()` needs a string literal in AOT mode, so a //! prelude holding a runtime `mixed` cannot ask whether it is an enum any other",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b580c021a7abcddd08192665",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:26:59.252Z",
+  "stored_at": "2026-08-17T21:26:59.253Z"
+}

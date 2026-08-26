@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"resource_popen\\|resource_dir\\|resource_stream\\|cmp x9\\|ResourceCleanupKind\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | head -25",
+  "summary": "grep -n \"resource_popen\\|resource_dir\\|resource_stream\\|cmp x9\\|ResourceCleanupKind\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | head -25:  is this a registry-owned native stream handle? 112: emitter.instruction(\"cmp x9, #2\"); // is the resource a HashContext handle? 116: emitter.instruction(\"cmp x9, #3\"); ",
+  "text": "grep -n \"resource_popen\\|resource_dir\\|resource_stream\\|cmp x9\\|ResourceCleanupKind\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | head -25:  is this a registry-owned native stream handle? 112: emitter.instruction(\"cmp x9, #2\"); // is the resource a HashContext handle? 116: emitter.instruction(\"cmp x9, #3\"); // is this a registry-owned popen stream handle? 120: emitter.instruction(\"cmp x9, #4\"); // is this a registry-owned directory stream handle? 124: emitter.instruction(\"cmp x9, #9\"); // is this a registry-owned stream-context handle? 305: use crate::ir::ResourceCleanupKind; 322: compare: \"cmp x9, #\", 323: popen_branch: \"b.eq __rt_mixed_free_deep_resource_popen\\n\", 324: dir_branch: \"b.eq __rt_mixed_free_deep_resource_dir\\n\", 330: popen_branch: \"je __rt_mixed_free_deep_resource_popen\\n\", 331: dir_branch: \"je __rt_mixed_free_deep_resource_dir\\n\", 414: narrow.contains(\"__rt_mixed_free_deep_resource_stream:\\n\"), 441: (ResourceCleanupKind::PopenPipe, shapes.popen_branch), 442: (ResourceCleanupKind::Directory, shapes.dir_branch),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "59d212007995c2e5accea8ff",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:47:53.030Z",
+  "stored_at": "2026-08-20T20:47:53.031Z"
+}

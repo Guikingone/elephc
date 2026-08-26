@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "find /private/var/folders/*/*/T -maxdepth 1 -name 'elephc_*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null; ls -d /private/var/folders/*/*/T/elephc_* 2>/dev/null | wc -l; df -h / | tail -1",
+  "summary": "find /private/var/folders/*/*/T -maxdepth 1 -name 'elephc_*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null; ls -d /private/var/folders/*/*/T/elephc_* 2>/dev/null | wc -l; df -h / | tail -1: 175 /dev/disk3s1s1 460Gi 12Gi 8.2Gi 59% 459k 86M 1% /",
+  "text": "find /private/var/folders/*/*/T -maxdepth 1 -name 'elephc_*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null; ls -d /private/var/folders/*/*/T/elephc_* 2>/dev/null | wc -l; df -h / | tail -1: 175 /dev/disk3s1s1 460Gi 12Gi 8.2Gi 59% 459k 86M 1% /",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "11bba7b9497e8ecefc26c9ef",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:04:09.028Z",
+  "stored_at": "2026-08-22T15:04:09.028Z"
+}

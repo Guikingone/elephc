@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn emit_static_exception\" -A 12 src/codegen/lower_inst/exceptions.rs | head -16; echo \"--- callers ---\"; grep -rn \"emit_static_exception(\" src/ | grep -v \"fn emit_static_exception\" | wc -l",
+  "summary": "grep -rn \"fn emit_static_exception\" -A 12 src/codegen/lower_inst/exceptions.rs | head -16; echo \"--- callers ---\"; grep -rn \"emit_static_exception(\" src/ | grep -v \"fn emit_static_exception\" | wc -l: s-350-) { src/codegen/lower_inst/exceptions.rs-351- // php names the CALL SITE for a builtin's TypeError/ValueError, so ",
+  "text": "grep -rn \"fn emit_static_exception\" -A 12 src/codegen/lower_inst/exceptions.rs | head -16; echo \"--- callers ---\"; grep -rn \"emit_static_exception(\" src/ | grep -v \"fn emit_static_exception\" | wc -l: s-350-) { src/codegen/lower_inst/exceptions.rs-351- // php names the CALL SITE for a builtin's TypeError/ValueError, so the instruction being src/codegen/lower_inst/exceptions.rs-352- // lowered is the location — see `FunctionContext::current_source_location`. These used to pass src/codegen/lower_inst/exceptions.rs-353- // `None` and the uncaught report came out with no ` in FILE:LINE` at all, while every warning src/codegen/lower_inst/exceptions.rs-354- // beside it carried one. src/codegen/lower_inst/exceptions.rs-355- let location = ctx.current_source_location(); src/codegen/lower_inst/exceptions.rs-356- emit_static_exception_at(ctx, class_name, class_id_symbol, message, location); src/codegen/lower_inst/exceptions.rs-357-} -- src/codegen/lower_inst/exceptions.rs:370:fn emit_static_exception_at( src/codegen/lower_inst/exceptions.rs-371- ctx: &mut FunctionContext<'_>, --- callers --- 5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "39865130c7ede06a61d1eadb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:05:41.253Z",
+  "stored_at": "2026-08-22T12:05:41.254Z"
+}

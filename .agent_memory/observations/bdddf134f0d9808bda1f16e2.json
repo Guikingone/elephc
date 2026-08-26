@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"pub fn emit_wrapper_missing_hook_warning(\\|pub fn emit_wrapper_unbox_int(\\|pub fn emit_user_wrapper_url_stat_readers(\\|pub fn emit_user_wrapper_url_stat_field(\\|pub fn emit_stat_mode_access(\" src/codegen_support/runtime/ | head",
+  "summary": "About to run: grep -rn \"pub fn emit_wrapper_missing_hook_warning(\\|pub fn emit_wrapper_unbox_int(\\|pub fn emit_user_wrapper_url_stat_readers(\\|pub fn emit_user_wrapper_url_stat_field(\\|pub fn emit_stat_mode_access(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bdddf134f0d9808bda1f16e2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:23:42.303Z",
+  "stored_at": "2026-08-20T17:23:42.303Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '418,436p' docs/php/streams.md",
+  "summary": "sed -n '418,436p' docs/php/streams.md: ine-length` and never wraps. A filter name held in a variable resolves against the string, conversion and `consumed` filters, and against user-registered names. `zlib.*`, `bzip2.*` and `convert.iconv.*` are the exception: they are not table entries but per-call-site attach sequenc",
+  "text": "sed -n '418,436p' docs/php/streams.md: ine-length` and never wraps. A filter name held in a variable resolves against the string, conversion and `consumed` filters, and against user-registered names. `zlib.*`, `bzip2.*` and `convert.iconv.*` are the exception: they are not table entries but per-call-site attach sequences that install a per-fd handle (and, for iconv, compile the charset pair into the binary), so a name that only exists at run time cannot reach them. `$n = \"zlib.deflate\"; stream_filter_append($s, $n)` warns `Unable to locate filter \"zlib.deflate\"` and returns `false` where the literal spelling works. `consumed` counts the bytes it passes and forwards every one of them, as PHP's filter does. PHP additionally rewinds the stream when the filter chain closes, which discards the bytes PHP had read ahead into its own buffer — so PHP's `fread($s, 100)` on an 11-byte file returns `\"\"` where elephc returns the 11 bytes.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e10180aec41f782aeb8d3967",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:01:47.197Z",
+  "stored_at": "2026-08-18T10:01:47.198Z"
+}

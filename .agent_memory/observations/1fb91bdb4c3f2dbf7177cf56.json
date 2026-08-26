@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | tail -3; git add -A src tests && git status --short | grep -v codebase-memory | grep -v agent_memory",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | tail -3; git add -A src tests && git status --short | grep -v codebase-memory | grep -v agent_memory: test result: FAILED. 255 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 152.72s error",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | tail -3; git add -A src tests && git status --short | grep -v codebase-memory | grep -v agent_memory: test result: FAILED. 255 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 152.72s error: test failed, to rerun pass `-p elephc --test ir_backend_smoke_test` M src/codegen/lower_inst/builtins/io/phar_write.rs M src/types/checker/builtin_spl_classes/filesystem.rs M tests/codegen/spl.rs A tests/codegen/spl/file_object_bounds.rs M tests/codegen/spl/file_object_lines.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1fb91bdb4c3f2dbf7177cf56",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T10:08:39.017Z",
+  "stored_at": "2026-08-25T10:08:39.018Z"
+}

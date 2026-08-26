@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/expr/indexed_array_literals.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/expr/indexed_array_literals.rs: ExprKind::Variable(name) => ir_array_storage_type(\n            ctx.local_types\n                .get(name)\n                .cloned()\n                .unwrap_or_e -> // A name t",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/expr/indexed_array_literals.rs: ExprKind::Variable(name) => ir_array_storage_type(\n            ctx.local_types\n                .get(name)\n                .cloned()\n                .unwrap_or_e -> // A name the lowering has seen no store for is an UNDEFINED read: php answers null with\n        // a warning, and a null element lives in a Mixed cell — exactly what `[null]` above\n        // produces. The syntactic fallback answers `Int` for any expression it does not\n        // recognise, which stamped `[$undefined]` as `array<int>` and then refused the whole\n        // program with `unsupported EIR backend feature: array_push for PHP type Void`.\n        ExprKind::Variable",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "56d926aacb466c6849d6be67",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:38:20.614Z",
+  "stored_at": "2026-08-23T17:38:20.614Z"
+}

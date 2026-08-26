@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/objstr2.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/objstr2.php: <?php\n// The uncaught shape, and the other three conversion syntaxes.\nclass A\n{\n}\n$o = new A();\ntry {\n    echo \"x\" . $o;\n} catch (Err",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/objstr2.php: <?php\n// The uncaught shape, and the other three conversion syntaxes.\nclass A\n{\n}\n$o = new A();\ntry {\n    echo \"x\" . $o;\n} catch (Error $e) {\n    echo \"concat: \", $e->getMessage(), \"\\n\";\n}\ntry {\n    $s = (string) $o;\n    echo $s;\n} catch (Error $e) {\n    echo \"cast: \", $e->getMessage(), \"\\n\";\n}\ntry {\n    print $o;\n} catch (Error $e) {\n    echo \"print: \", $e->getMessage(), \"\\n\";\n}\ntry {\n    echo \"interp: {$o}\";\n} catch (Error $e) {\n    echo \"interp: \", $e->getMessage(), \"\\n\";\n}\necho \"now uncaught\\n\";\necho $o;\necho \"never reached\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "708742884293c958b8959909",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:54:52.682Z",
+  "stored_at": "2026-08-23T17:54:52.683Z"
+}

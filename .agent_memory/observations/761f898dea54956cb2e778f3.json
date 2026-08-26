@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json,collections\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nprint(list(d.keys()))\nc=collections.Counter((x['category'],x.get('classification')) for x in d['drifts'])\nfor k,v in c.most_common(): print(v,k)\nprint('total',len(d['drifts']))\n\"",
+  "summary": "python3 -c \"\nimport json,collections\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nprint(list(d.keys()))\nc=collections.Counter((x['category'],x.get('classification')) for x in d['drifts'])\nfor k,v in c.most_common(): print(v,k)\nprint('total',len(d['drifts']))\n\": ['drifts'",
+  "text": "python3 -c \"\nimport json,collections\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nprint(list(d.keys()))\nc=collections.Counter((x['category'],x.get('classification')) for x in d['drifts'])\nfor k,v in c.most_common(): print(v,k)\nprint('total',len(d['drifts']))\n\": ['drifts', 'gate', 'generator', 'kind', 'profile', 'schema_version', 'summary'] 125 ('function-signature', 'known-incompatibility') 70 ('missing-function', 'known-incompatibility') 11 ('class-surface', 'known-incompatibility') 8 ('missing-constant', 'known-incompatibility') 5 ('extra-constant', 'known-incompatibility') 3 ('missing-class', 'known-incompatibility') 3 ('constant-value', 'known-incompatibility') 3 ('configured-capability', 'known-incompatibility') total 228",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "761f898dea54956cb2e778f3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:19:39.106Z",
+  "stored_at": "2026-08-14T14:19:39.107Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_gz_catalog.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_gz_catalog.py: \"\"\"Declares the fourteen `gz*` stream functions in the shared catalogue.\n\nA prelude-provided function is still a function the ca",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_gz_catalog.py: \"\"\"Declares the fourteen `gz*` stream functions in the shared catalogue.\n\nA prelude-provided function is still a function the catalogue promises: `dir`, `hash_init` and\ntheir siblings all carry a `PreludeProvided` surface entry, and that entry is what the generated\ndocs, the compatibility table and every \"does elephc support X\" consumer read. Injecting the\nprelude without it would leave fourteen functions that work and that nothing says work.\n\nSignatures follow php 8.2–8.5 exactly. `$stream` is `Mixed` because php spells it `resource`, which\n`TypeSpec` has no case for and which `ensure_stream_",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9d17f2609d22582320678d7b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:19:31.688Z",
+  "stored_at": "2026-08-21T12:19:31.689Z"
+}

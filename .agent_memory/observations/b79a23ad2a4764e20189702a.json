@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"StmtKind::Try\" src/ir_lower/ | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"StmtKind::Try\" src/ir_lower/ | head: src/ir_lower/fibers.rs:113: StmtKind::Try { src/ir_lower/function.rs:194: crate::parser::ast::StmtKind::Try { src/ir_lower/function.rs:2065: StmtKind::Try { src/ir_lower/array_p",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"StmtKind::Try\" src/ir_lower/ | head: src/ir_lower/fibers.rs:113: StmtKind::Try { src/ir_lower/function.rs:194: crate::parser::ast::StmtKind::Try { src/ir_lower/function.rs:2065: StmtKind::Try { src/ir_lower/array_pointer_scan.rs:130: StmtKind::Try { src/ir_lower/stmt/mod.rs:220: StmtKind::Try { src/ir_lower/stmt/repr_fixpoint.rs:505: StmtKind::Try { try_body, catches, finally_body } => { src/ir_lower/expr/closures.rs:331: StmtKind::Try { try_body, catches, finally_body } => { src/ir_lower/expr/closures.rs:631: StmtKind::Try { try_body, catches, finally_body } => { src/ir_lower/tests/exhaustive.rs:444: stmt(StmtKind::Try { src/ir_lower/program/class_methods.rs:169: StmtKind::Try {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b79a23ad2a4764e20189702a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:47:48.179Z",
+  "stored_at": "2026-08-23T17:47:48.180Z"
+}

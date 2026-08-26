@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '235,262p' src/types/checker/builtin_spl_classes/filesystem.rs; echo '=== rewind/next ==='; sed -n '1540,1560p' src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "sed -n '235,262p' src/types/checker/builtin_spl_classes/filesystem.rs; echo '=== rewind/next ==='; sed -n '1540,1560p' src/types/checker/builtin_spl_classes/filesystem.rs: leaves `key()` at 0 while every later one advances it, so on a three-line file the // keys run 0, 1, 2 where `fgets()` gives 1, 2, 3. Mixing the two",
+  "text": "sed -n '235,262p' src/types/checker/builtin_spl_classes/filesystem.rs; echo '=== rewind/next ==='; sed -n '1540,1560p' src/types/checker/builtin_spl_classes/filesystem.rs: leaves `key()` at 0 while every later one advances it, so on a three-line file the // keys run 0, 1, 2 where `fgets()` gives 1, 2, 3. Mixing the two confirms it is the // first READ that is special and not the method: `fgets()` then `fscanf()` gives 1 === rewind/next === ), spl_file_object_csv_skip_blank_stmt(), ] } /// Builds SplFileObject rewind(). fn spl_file_object_rewind_body() -> Vec<Stmt> { vec![ expr_stmt(function_call(\"rewind\", vec![file_stream_expr()])), property_assign_stmt(this_expr(), \"lineNumber\", int_expr(0)), property_assign_stmt(this_expr(), \"seekState\", int_expr(0)), spl_file_object_csv_skip_blank_stmt(), ] } /// Builds the call that steps the cursor over blank CSV records. fn spl_file_object_csv_skip_blank_stmt() -> Stmt { expr_stmt(method_call(this_expr(), \"__elephcCsvSkipBlank\", Vec::new())) } /// Builds the cursor advance that SKIP_EMPTY performs over blank records.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0367ca1abcbdb323483f7984",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:57:18.775Z",
+  "stored_at": "2026-08-25T13:57:18.775Z"
+}

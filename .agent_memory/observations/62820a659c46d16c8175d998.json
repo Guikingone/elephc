@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --test error_tests 2>&1 | tail -20",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --test error_tests 2>&1 | tail -20: | +++++++++++++++++++++++++++++ error[E0061]: this function takes 2 arguments but 1 argument was supplied --> tests/error_tests/image.rs:37:15 | 37 | let ast = elephc::scanf_prelude::inject_if_used(ast); | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^----- ",
+  "text": "RUST_MIN_STACK=33554432 cargo test --test error_tests 2>&1 | tail -20: | +++++++++++++++++++++++++++++ error[E0061]: this function takes 2 arguments but 1 argument was supplied --> tests/error_tests/image.rs:37:15 | 37 | let ast = elephc::scanf_prelude::inject_if_used(ast); | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^----- argument #2 of type `&mut PreludeInventory` is missing | note: function defined here --> src/scanf_prelude.rs:671:8 | 671 | pub fn inject_if_used( | ^^^^^^^^^^^^^^ help: provide the argument | 37 | let ast = elephc::scanf_prelude::inject_if_used(ast, /* &mut PreludeInventory */); | +++++++++++++++++++++++++++++ For more information about this error, try `rustc --explain E0061`. error: could not compile `elephc` (test \"error_tests\") due to 3 previous errors",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "62820a659c46d16c8175d998",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:58:11.222Z",
+  "stored_at": "2026-08-22T12:58:11.222Z"
+}

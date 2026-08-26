@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-php-src-campaign-fixes.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-php-src-campaign-fixes.md: ---\nname: streams-php-src-campaign-fixes\ndescription: \"Campagne streams pilotée par php-src: 5 lots livrés (SEGV stream_select, fwrite $length, append php://memory, registre de fi",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-php-src-campaign-fixes.md: ---\nname: streams-php-src-campaign-fixes\ndescription: \"Campagne streams pilotée par php-src: 5 lots livrés (SEGV stream_select, fwrite $length, append php://memory, registre de filtres) + ce qui reste MESURÉ\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\nCampagne lancée par « va regarder php-src pour voir ce qui manque aux Streams ». Oracle et outillage: [[php-src-own-test-suite-as-the-oracle]]. Surface des fonctions: **46/46 exactement**, donc tous les écarts sont COMPORTEMENTAUX.\n\n**LIVRÉ (chacun mesuré contre `php -n` 8.5.6):**\n1. `3fb364c2a` **`stream_select()` SEGFAULTAIT sur un flux",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "73aee7ef195f446dedb5d489",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:11:03.791Z",
+  "stored_at": "2026-08-17T09:11:03.792Z"
+}

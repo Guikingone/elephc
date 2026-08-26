@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"stream_wrapper_contract_param_types\" -B6 -A18 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/method_pass.rs | rtk proxy grep -v \"^--\" | head -28",
+  "summary": "rtk proxy grep -n \"stream_wrapper_contract_param_types\" -B6 -A18 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/method_pass.rs | rtk proxy grep -v \"^--\" | head -28: 222- return; 223- }; 224- if !declares_stream_wrapper_marker(&ci) { 225- return; 226- } 227-",
+  "text": "rtk proxy grep -n \"stream_wrapper_contract_param_types\" -B6 -A18 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/method_pass.rs | rtk proxy grep -v \"^--\" | head -28: 222- return; 223- }; 224- if !declares_stream_wrapper_marker(&ci) { 225- return; 226- } 227- let key = crate::names::php_symbol_key(&method.name); 228: let Some(contract) = stream_wrapper_contract_param_types(&key) else { 229- return; 230- }; 231- for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() { 232- if type_ann.is_some() { 233- continue; 234- } 235- let Some(ty) = contract.get(i) else { continue }; 236- method_env.insert(pname.clone(), ty.clone()); 237- if let Some(ci_mut) = self.classes.get_mut(&class.name) { 238- if let Some(sig) = ci_mut.methods.get_mut(&key) { 239- if i < sig.params.len() { 240- sig.params[i].1 = ty.clone(); 241- } 242- } 243- } 244- } 245- } 246- 657-/// The parameter types PHP documents for each `streamWrapper` contract method. 658-/// 659-/// Only methods that TAKE parameters appear; the rest need no seeding. `stream_open`'s fourth",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cf51a8eb1dcb576b362f4243",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:04:24.043Z",
+  "stored_at": "2026-08-17T12:04:24.043Z"
+}

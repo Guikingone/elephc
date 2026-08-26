@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '86,102p' src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs",
+  "summary": "sed -n '86,102p' src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs: // release path scratch storage ctx.emitter.instruction(&format!(\"b {}\", done_all)); // -- the filter route's exit: bytes (or a null pointer) in the string registers -- ctx.emitter.label(&filtered); ctx.emitter.instruction(&format!(\"cbz x1, {}_fai",
+  "text": "sed -n '86,102p' src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs: // release path scratch storage ctx.emitter.instruction(&format!(\"b {}\", done_all)); // -- the filter route's exit: bytes (or a null pointer) in the string registers -- ctx.emitter.label(&filtered); ctx.emitter.instruction(&format!(\"cbz x1, {}_failed\", filtered)); // a failed filtered open reads as -2, like any failed open ctx.emitter.instruction(\"sub sp, sp, #16\"); ctx.emitter.instruction(\"str x2, [sp, #0]\"); // readfile() returns the byte count abi::emit_call_label(ctx.emitter, \"__rt_vd_write\"); // stream the filtered bytes through the ob/web-aware sink ctx.emitter.instruction(\"ldr x0, [sp, #0]\"); ctx.emitter.instruction(\"add sp, sp, #16\"); ctx.emitter.instruction(&format!(\"b {}\", done_all)); ctx.emitter.label(&format!(\"{}_failed\", filtered)); ctx.emitter.instruction(\"mov x0, #-2\"); // the open-failure sentinel the boxing reads as false ctx.emitter.label(&done_all); } Arch::X86_64 => {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d12bacf63f0eba051db2645d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:31:23.836Z",
+  "stored_at": "2026-08-21T10:31:23.836Z"
+}

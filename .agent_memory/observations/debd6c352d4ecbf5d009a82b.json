@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/stat_key_order_wrapper.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/stat_key_order_wrapper.py: \"\"\"The user-wrapper stat array has its OWN builder, with the same interleaving.\n\nThe plain-file builder was split into ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/stat_key_order_wrapper.py: \"\"\"The user-wrapper stat array has its OWN builder, with the same interleaving.\n\nThe plain-file builder was split into two passes; this one reads each field from the wrapper's\nanswer and inserts both halves in the same breath. Same wrong order, same reason — and its own\ncomment says so: \"walks it once and inserts both halves of every entry\".\n\nReading the field is a CALL, so the two passes each re-read it rather than holding thirteen values;\nthe read is `__rt_uws_field`, which answers php's zero for an absent field either way.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulie",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "debd6c352d4ecbf5d009a82b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:24:26.894Z",
+  "stored_at": "2026-08-22T20:24:26.895Z"
+}

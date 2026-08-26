@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lower_array_keys\" -A 45 src/codegen/lower_inst/builtins/arrays/keys.rs | head -55",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lower_array_keys\" -A 45 src/codegen/lower_inst/builtins/arrays/keys.rs | head -55:  raised instead 52-/// of reading the payload word as a container pointer. This is the runtime counterpart of the 53-/// checker ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lower_array_keys\" -A 45 src/codegen/lower_inst/builtins/arrays/keys.rs | head -55:  raised instead 52-/// of reading the payload word as a container pointer. This is the runtime counterpart of the 53-/// checker accepting `Mixed`: the acceptance is not a claim that the value IS an array, it defers 54-/// the array check to the point where the runtime tag is observable. 55-fn lower_boxed_mixed_array_keys( 56- ctx: &mut FunctionContext<'_>, 57- inst: &Instruction, 58- array: ValueId, 59- result_elem_ty: &PhpType, 60-) -> Result<()> { 61- require_supported_indexed_result_type(result_elem_ty)?; 62- require_supported_assoc_result_type(&PhpType::Mixed, result_elem_ty)?; 63- ctx.load_value_to_result(array)?; 64- let indexed_label = ctx.next_label(\"akeys_boxed_indexed\"); 65- let assoc_label = ctx.next_label(\"akeys_boxed_assoc\"); 66- let done_label = ctx.next_label(\"akeys_boxed_done\"); 67- let error_labels: Vec<(u64, &'static str, String)> = NON_ARRAY_TAG_TYPE_NAMES 68- .iter()",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5955d81b409556d80abe4850",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:13:38.969Z",
+  "stored_at": "2026-08-23T09:13:38.970Z"
+}

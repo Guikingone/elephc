@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gz_edges.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gz_edges.py: \"\"\"The edges a `gz*`-as-`compress.zlib://` prelude has to get right, measured rather than assumed.\n\nThe happy paths are equal (`gz_equ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gz_edges.py: \"\"\"The edges a `gz*`-as-`compress.zlib://` prelude has to get right, measured rather than assumed.\n\nThe happy paths are equal (`gz_equivalence.py`: 15/15). What decides whether a prelude can be\nwritten as pass-through one-liners is the SIGNATURE detail:\n\n  - `gzopen`'s mode carries a compression LEVEL and STRATEGY (`wb9`, `wb1f`, `rb`) that plain\n    `fopen` never sees. If `fopen(\"compress.zlib://…\", \"wb9\")` rejects or ignores it, the prelude\n    cannot forward the mode untouched.\n  - `gzgets`/`gzwrite` take `?int $length = null`, and `fgets($h, null)` is not `fgets($h)`.\n  - `$use_include_pat",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7fb1762e14fa6bc853730197",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:43:52.307Z",
+  "stored_at": "2026-08-21T10:43:52.307Z"
+}

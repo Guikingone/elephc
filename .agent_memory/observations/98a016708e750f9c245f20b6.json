@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps aux | grep -c \"[c]odegen_tests\"; date +%H:%M",
+  "summary": "ps aux | grep -c \"[c]odegen_tests\"; date +%H:%M: 6 11:43",
+  "text": "ps aux | grep -c \"[c]odegen_tests\"; date +%H:%M: 6 11:43",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "98a016708e750f9c245f20b6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:43:21.593Z",
+  "stored_at": "2026-08-23T09:43:21.593Z"
+}

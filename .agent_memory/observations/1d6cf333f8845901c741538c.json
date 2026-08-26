@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_step1.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_step1.py: \"\"\"glob()'s `$flags`: the constants, the per-platform libc table, the catalogue and the lowering.\n\nphp 8.5 ships its OWN glob,",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_step1.py: \"\"\"glob()'s `$flags`: the constants, the per-platform libc table, the catalogue and the lowering.\n\nphp 8.5 ships its OWN glob, so `GLOB_*` are php's numbers, identical on every target — MEASURED:\nthe three per-target oracle manifests agree on all seven, including `GLOB_ONLYDIR = 1 << 30` on\nLinux, where glibc's own `GLOB_ONLYDIR` is `1 << 13`. They are therefore the bits of NO libc, and\nforwarding them raw would be wrong on BOTH targets: php's `GLOB_NOESCAPE` (4096) is `GLOB_LIMIT`\nin macOS's own glob.h, and every glibc value but `GLOB_NOCHECK` differs.\n\nSo the runtime translates. The bits bel",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1d6cf333f8845901c741538c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:59:12.296Z",
+  "stored_at": "2026-08-22T08:59:12.296Z"
+}

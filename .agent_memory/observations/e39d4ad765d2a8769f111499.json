@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\np='tests/php_oracle/manifests/streams/php-8.5.6/linux-x86_64/streams-full.json'\nd=json.load(open(p))\nprint('build:', json.dumps(d['build'])[:600])\ns=d['surface']\nprint('surface keys:', list(s) if isinstance(s,dict) else type(s))\n\"",
+  "summary": "python3 -c \"\nimport json\np='tests/php_oracle/manifests/streams/php-8.5.6/linux-x86_64/streams-full.json'\nd=json.load(open(p))\nprint('build:', json.dumps(d['build'])[:600])\ns=d['surface']\nprint('surface keys:', list(s) if isinstance(s,dict) else type(s))\n\": build: {\"binary_path\": \"sapi/cli/php\", \"binary_source_attestati",
+  "text": "python3 -c \"\nimport json\np='tests/php_oracle/manifests/streams/php-8.5.6/linux-x86_64/streams-full.json'\nd=json.load(open(p))\nprint('build:', json.dumps(d['build'])[:600])\ns=d['surface']\nprint('surface keys:', list(s) if isinstance(s,dict) else type(s))\n\": build: {\"binary_path\": \"sapi/cli/php\", \"binary_source_attestation\": \"source-build\", \"build_inputs\": [{\"normalized_sha256\": \"07e77bbee85aeba630682a413ecd7be3bba0111aca42bec93ac3016f6f94948e\", \"path\": \"config.nice\", \"sha256\": \"f7a0446b334816f930a4413b167c794a172f1796acfd7647b73d09f74c214a24\"}, {\"normalized_sha256\": \"d1b210a7ef2f48b9782afe4cd9337781628294fb11c10e872f69151dc66fe6bf\", \"path\": \"main/php_config.h\", \"sha256\": \"bd25c16d452de01aad87b222f109969bbb3847cbad8fa3e74c825f74bdee8ae0\"}, {\"normalized_sha256\": \"e1092a13cd38a84a82b1cc652ee53c2f707a701033874de94a6c05012b2237bd\", \"path\": \"Makefile\", \"sha25 surface keys: ['classes', 'constants', 'crypto_methods', 'filters', 'functions', 'transports', 'wrappers']",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e39d4ad765d2a8769f111499",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:51:17.925Z",
+  "stored_at": "2026-08-22T08:51:17.925Z",
+  "low_signal": true
+}

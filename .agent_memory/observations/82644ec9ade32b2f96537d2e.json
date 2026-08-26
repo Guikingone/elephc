@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '455,475p' src/types/checker/method_pass.rs",
+  "summary": "rtk proxy sed -n '455,475p' src/types/checker/method_pass.rs: } } else { self.stream_contract_return_type(class, method, &raw_inferred) .unwrap_or(inferred_return) }; if !method.is_static { if let Some(ci) = self.classes.get_mut(&class.name) { if let Some(sig) = ci.methods.get_mut(&php_symbol_key(&method.name)) { sig.r",
+  "text": "rtk proxy sed -n '455,475p' src/types/checker/method_pass.rs: } } else { self.stream_contract_return_type(class, method, &raw_inferred) .unwrap_or(inferred_return) }; if !method.is_static { if let Some(ci) = self.classes.get_mut(&class.name) { if let Some(sig) = ci.methods.get_mut(&php_symbol_key(&method.name)) { sig.return_type = effective_return.clone(); } } } else if let Some(ci) = self.classes.get_mut(&class.name) { if let Some(sig) = ci.static_methods.get_mut(&php_symbol_key(&method.name)) { sig.return_type = effective_return.clone(); } } self.update_method_callable_return_metadata( &class.name, &php_symbol_key(&method.name), &effective_return, &callable_return_sigs,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "82644ec9ade32b2f96537d2e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:28:17.194Z",
+  "stored_at": "2026-08-16T20:28:17.194Z"
+}

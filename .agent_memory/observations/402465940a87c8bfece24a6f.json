@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json,pathlib\nd=json.loads(pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/php_surface.json').read_text())\nz = d['zlib'] if isinstance(d, dict) and 'zlib' in d else None\nprint(type(d).__name__)\nif z is None:\n    print(list(d)[:5])\nelse:\n    print(len(z), sorted(z))\n\"",
+  "summary": "python3 -c \"\nimport json,pathlib\nd=json.loads(pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/php_surface.json').read_text())\nz = d['zlib'] if isinstance(d, dict) and 'zlib' in d else Non",
+  "text": "python3 -c \"\nimport json,pathlib\nd=json.loads(pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/php_surface.json').read_text())\nz = d['zlib'] if isinstance(d, dict) and 'zlib' in d else None\nprint(type(d).__name__)\nif z is None:\n    print(list(d)[:5])\nelse:\n    print(len(z), sorted(z))\n\": dict ['internal_functions', 'classes', 'interfaces', 'constants', 'extensions']",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "402465940a87c8bfece24a6f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:17:48.917Z",
+  "stored_at": "2026-08-21T12:17:48.917Z"
+}

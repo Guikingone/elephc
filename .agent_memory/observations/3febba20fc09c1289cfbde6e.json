@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Monitor",
+  "path": "",
+  "command": "until grep -qE '^test result:' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b2h0x1z6d.output 2>/dev/null; do sleep 15; done; grep -E '^test result:|^failures:$' -A 30 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b2h0x1z6d.output | head -40",
+  "summary": "until grep -qE '^test result:' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b2h0x1z6d.output 2>/dev/null; do sleep 15; done; grep -E '^test result:|^failures:$' -A 30 /private/tmp/claude-501/-Users-guillaum",
+  "text": "until grep -qE '^test result:' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b2h0x1z6d.output 2>/dev/null; do sleep 15; done; grep -E '^test result:|^failures:$' -A 30 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b2h0x1z6d.output | head -40: bidxy0eys",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3febba20fc09c1289cfbde6e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T16:55:21.469Z",
+  "stored_at": "2026-08-26T16:55:21.469Z"
+}

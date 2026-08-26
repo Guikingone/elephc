@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh api /repos/Guikingone/elephc/actions/jobs/94867694749/logs 2>/dev/null | grep -E \"TRY 1 FAIL|TRY 1 TMT\" | head -8",
+  "summary": "gh api /repos/Guikingone/elephc/actions/jobs/94867694749/logs 2>/dev/null | grep -E \"TRY 1 FAIL|TRY 1 TMT\" | head -8: 2026-08-14T19:25:15.5792870Z \u001b[35;1m TRY 1 FAIL\u001b[0m [ 0.809s] (─────────) \u001b[35;1melephc::ir_backend_smoke_test\u001b[0m \u001b[34;1mir_backend_handles_spl_file_object_csv_current\u001b[0m",
+  "text": "gh api /repos/Guikingone/elephc/actions/jobs/94867694749/logs 2>/dev/null | grep -E \"TRY 1 FAIL|TRY 1 TMT\" | head -8: 2026-08-14T19:25:15.5792870Z \u001b[35;1m TRY 1 FAIL\u001b[0m [ 0.809s] (─────────) \u001b[35;1melephc::ir_backend_smoke_test\u001b[0m \u001b[34;1mir_backend_handles_spl_file_object_csv_current\u001b[0m",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e569e4390189a9dbcd76a22b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T20:21:28.652Z",
+  "stored_at": "2026-08-14T20:21:28.654Z"
+}

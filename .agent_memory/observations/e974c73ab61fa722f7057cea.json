@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff -- docs/internals/builtins/io/gzopen.md | head -20; echo \"=== compatibility.md ===\"; git status --short -- docs/php/compatibility.md",
+  "summary": "git diff -- docs/internals/builtins/io/gzopen.md | head -20; echo \"=== compatibility.md ===\"; git status --short -- docs/php/compatibility.md: diff --git a/docs/internals/builtins/io/gzopen.md b/docs/internals/builtins/io/gzopen.md index 3c91afce8..814179b38 100644 --- a/docs/internals/builtins/io/gzopen.md +++ b/docs/",
+  "text": "git diff -- docs/internals/builtins/io/gzopen.md | head -20; echo \"=== compatibility.md ===\"; git status --short -- docs/php/compatibility.md: diff --git a/docs/internals/builtins/io/gzopen.md b/docs/internals/builtins/io/gzopen.md index 3c91afce8..814179b38 100644 --- a/docs/internals/builtins/io/gzopen.md +++ b/docs/internals/builtins/io/gzopen.md @@ -10,7 +10,7 @@ sidebar: ## Where it lives - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs) -- **Lowering**: [`src/gz_prelude.rs`:85](https://github.com/illegalstudio/elephc/blob/main/src/gz_prelude.rs#L85) (`gzopen`) +- **Lowering**: [`src/gz_prelude.rs`:93](https://github.com/illegalstudio/elephc/blob/main/src/gz_prelude.rs#L93) (`gzopen`) - **Function symbol**: `gzopen()` === compatibility.md ===",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e974c73ab61fa722f7057cea",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:33:04.695Z",
+  "stored_at": "2026-08-22T09:33:04.695Z"
+}

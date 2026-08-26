@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"^use |CastType\" src/types/checker/builtin_spl_classes/filesystem.rs | head -8",
+  "summary": "rtk proxy rg -n \"^use |CastType\" src/types/checker/builtin_spl_classes/filesystem.rs | head -8: 13:use std::collections::HashMap; 15:use crate::parser::ast::{ 18:use crate::types::traits::FlattenedClass; 20:use super::common::*; 1701: CastType::Str,",
+  "text": "rtk proxy rg -n \"^use |CastType\" src/types/checker/builtin_spl_classes/filesystem.rs | head -8: 13:use std::collections::HashMap; 15:use crate::parser::ast::{ 18:use crate::types::traits::FlattenedClass; 20:use super::common::*; 1701: CastType::Str,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "89a57388f52f42e1fd490849",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:40:11.115Z",
+  "stored_at": "2026-08-16T17:40:11.115Z"
+}

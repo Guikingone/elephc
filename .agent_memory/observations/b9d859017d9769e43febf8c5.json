@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"fn const_string_value\" -A26 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/ | head -30",
+  "summary": "rtk proxy grep -rn \"fn const_string_value\" -A26 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/ | head -30: reams-csv-signature/src/codegen/runtime_metadata/dynamic_references.rs-351- /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/wo",
+  "text": "rtk proxy grep -rn \"fn const_string_value\" -A26 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/ | head -30: reams-csv-signature/src/codegen/runtime_metadata/dynamic_references.rs-351- /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/dynamic_references.rs-352-/// Returns class-like receiver names encoded in scoped constant immediates. /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/dynamic_references.rs-353-pub(in crate::codegen) fn referenced_scoped_constant_class_names(module: &Module) -> HashSet<String> { /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/dynamic_references.rs-354- let mut names = HashSet::new(); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/dynamic_references.rs-355- for function in module",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b9d859017d9769e43febf8c5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:50:03.215Z",
+  "stored_at": "2026-08-17T09:50:03.216Z"
+}

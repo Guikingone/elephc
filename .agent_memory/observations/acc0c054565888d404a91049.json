@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '30,62p' src/codegen_support/runtime/arrays/mixed_unbox.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '30,62p' src/codegen_support/runtime/arrays/mixed_unbox.rs: .label(\"__rt_mixed_unbox_done\"); emitter.instruction(\"mov x0, x9\"); // return the concrete runtime tag in x0 emitter.instruction(\"ldr x1, [x10, #8]\"); // ret",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '30,62p' src/codegen_support/runtime/arrays/mixed_unbox.rs: .label(\"__rt_mixed_unbox_done\"); emitter.instruction(\"mov x0, x9\"); // return the concrete runtime tag in x0 emitter.instruction(\"ldr x1, [x10, #8]\"); // return the concrete payload low word in x1 emitter.instruction(\"ldr x2, [x10, #16]\"); // return the concrete payload high word in x2 emitter.instruction(\"cmp x0, #4\"); // only container-shaped tags can encode null in their payload pointer emitter.instruction(\"b.lt __rt_mixed_unbox_return\"); // scalar payloads preserve sentinel-colliding integer bit patterns emitter.instruction(\"cmp x0, #6\"); // indexed arrays, hashes, and objects occupy tags 4 through 6 emitter.instruction(\"b.gt __rt_mixed_unbox_return\"); // other heap tags are not null-container encodings emit_branch_if_null_container(emitter, \"x1\", \"x9\", \"__rt_mixed_unbox_null\"); emitter.label(\"__rt_mixed_unbox_return\"); emitter.instruction(\"ret\"); // return the unboxed payload triple",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "acc0c054565888d404a91049",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T10:31:15.905Z",
+  "stored_at": "2026-08-23T10:31:15.906Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('pufs2.php','w').write('''<?php\nclass Meta extends php_user_filter {\n    public function filter($in, $out, &$consumed, $closing): int {\n        $m = stream_get_meta_data($this->stream);\n        while ($b = stream_bucket_make_writeable($in)) {\n            $b->data = strtoupper($b->data) . \"[\" . $m[\"stream_type\"] . \"]\";\n            $consumed += $b->datalen;\n            stream_bucket_append($out, $b);… [+542 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('pufs2.php','w').write('''<?php\nclass Meta extends php_user_filter {\n    public function filter($in, $out, &$consumed, $c",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('pufs2.php','w').write('''<?php\nclass Meta extends php_user_filter {\n    public function filter($in, $out, &$consumed, $closing): int {\n        $m = stream_get_meta_data($this->stream);\n        while ($b = stream_bucket_make_writeable($in)) {\n            $b->data = strtoupper($b->data) . \"[\" . $m[\"stream_type\"] . \"]\";\n            $consumed += $b->datalen;\n            stream_bucket_append($out, $b);\n        }\n        return PSFS_PASS_ON;\n    }\n}\nstream_filter_register(\"meta\", \"Meta\");\n$h = fopen(\"php://memory\", \"w+\");\nfwrite($h, \"abc\");\nrewind($h);\nstream_filter_append($h, \"meta\", STREAM_FILTER_READ);\nvar_dump(stream_get_contents($h));\nfclose($h);\n// the WRITE direction sees it too\n$h2 = fopen(\"php://memory\", \"w+\");\nstream_filter_append($h2, \"meta\", STREAM_FILTER_WRITE);\nfwrite($h2, \"xyz\");\nrewind($h2);\nvar_dump(stream_get_contents($h2));\nfclose($h2);\n''')\nPY\nzsh difftests.sh pufs2 2>&1 | head -12; echo \"=== php:\"; cat pufs2_p.txt: pufs2 DIFF: 1c1 < string(11) \"ABC[MEMORY]\" --- > string(19) \"ABC[MEMORY][MEMORY]\" === php: string(11) \"ABC[MEMORY]\" string(11) \"XYZ[MEMORY]\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "94404b457a1734ae98e5be8d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:29:43.721Z",
+  "stored_at": "2026-08-17T18:29:43.723Z"
+}

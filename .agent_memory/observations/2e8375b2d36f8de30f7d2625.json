@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,40p' tests/codegen/mod.rs",
+  "summary": "sed -n '1,40p' tests/codegen/mod.rs: //! Purpose: //! Groups the top-level end-to-end codegen test modules into the integration suite. //! //! Called from: //! - `cargo test` through Rust's test harness. //! //! Key details: //! - Submodules group focused fixtures for exceptions, fibers, buffers, preprocessor, namespac",
+  "text": "sed -n '1,40p' tests/codegen/mod.rs: //! Purpose: //! Groups the top-level end-to-end codegen test modules into the integration suite. //! //! Called from: //! - `cargo test` through Rust's test harness. //! //! Key details: //! - Submodules group focused fixtures for exceptions, fibers, buffers, preprocessor, namespaces, and related suites. mod exceptions; mod fibers; mod buffers; mod preprocessor; mod namespaces; mod null_sentinel; mod case_insensitive_symbols; mod cli; mod strict_php; mod lfc; mod benchmarks; mod echo_vars; mod null_receivers; mod undefined_variables; mod php_tags; mod eval; mod eval_builtin_parity; mod eval_callable_ref_errors; mod eval_callables; mod eval_closures; mod eval_constructors; mod eval_reflection_invocation; mod operators; mod control_flow; mod scalar_strings; mod array_basics; mod numeric_scalars; mod type_builtins; mod casts_and_constants; mod include_paths; mod magic_constants;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2e8375b2d36f8de30f7d2625",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:13:59.289Z",
+  "stored_at": "2026-08-21T11:13:59.289Z"
+}

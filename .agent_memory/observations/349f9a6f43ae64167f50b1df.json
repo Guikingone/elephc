@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_probe.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_probe.py: \"\"\"Why does a DECLARED `public $context;` get deprecated as dynamic on some wrappers?\n\n`php -n` 8.5.6 says nothing for any of these. ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_probe.py: \"\"\"Why does a DECLARED `public $context;` get deprecated as dynamic on some wrappers?\n\n`php -n` 8.5.6 says nothing for any of these. elephc raises\n`Deprecated: Creation of dynamic property W::$context` for some — the question is which shape\ntriggers it, since the same declaration on a simpler wrapper does not.\n\"\"\"\nimport pathlib, subprocess, sys\n\nD = pathlib.Path(__file__).parent / 'ctxcases'\nD.mkdir(parents=True, exist_ok=True)\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nELEPHC = ROOT / 'target/debug/elephc'\n\ndef wrapper(e",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "349f9a6f43ae64167f50b1df",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:26:17.135Z",
+  "stored_at": "2026-08-21T09:26:17.135Z"
+}

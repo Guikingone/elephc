@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r '$a = []; $a[] = 10; $a[] = \"banana\"; $a[] = 2; $a[] = \"apple\"; $a[] = true; $a[] = null; $b = $a; sort($a); echo json_encode($a), \"\\n\"; rsort($b); echo json_encode($b), \"\\n\";'",
+  "summary": "php -n -r '$a = []; $a[] = 10; $a[] = \"banana\"; $a[] = 2; $a[] = \"apple\"; $a[] = true; $a[] = null; $b = $a; sort($a); echo json_encode($a), \"\\n\"; rsort($b); echo json_encode($b), \"\\n\";': [null,2,10,\"apple\",\"banana\",true] [\"banana\",\"apple\",10,2,true,null]",
+  "text": "php -n -r '$a = []; $a[] = 10; $a[] = \"banana\"; $a[] = 2; $a[] = \"apple\"; $a[] = true; $a[] = null; $b = $a; sort($a); echo json_encode($a), \"\\n\"; rsort($b); echo json_encode($b), \"\\n\";': [null,2,10,\"apple\",\"banana\",true] [\"banana\",\"apple\",10,2,true,null]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "69c5541c817631ffea5c5621",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:20:57.794Z",
+  "stored_at": "2026-08-22T10:20:57.795Z"
+}

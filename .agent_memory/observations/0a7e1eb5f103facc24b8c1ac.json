@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/conversions.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/conversions.rs: /// Emits PHP's fatal diagnostic for object-to-string casts without `__toString()`.\nfn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_>, class_name: &s -> /// Emits php's `",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/conversions.rs: /// Emits PHP's fatal diagnostic for object-to-string casts without `__toString()`.\nfn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_>, class_name: &s -> /// Emits php's `Error` for an object-to-string cast on a class without `__toString()`.\n///\n/// php raises a CATCHABLE `Error`, not a fatal: `try { echo $o; } catch (Error $e)` runs the\n/// catch and the program continues with exit 0. This used to write `Fatal error: …` straight to\n/// stderr and `exit(1)`, so the catch never ran, the message went to the wrong stream, and the\n/// exit status was 1 where php's uncaught path uses 255.\nfn emit_missing_tostring_fatal(ctx: &mut Fu",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0a7e1eb5f103facc24b8c1ac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:49:16.901Z",
+  "stored_at": "2026-08-23T17:49:16.902Z"
+}

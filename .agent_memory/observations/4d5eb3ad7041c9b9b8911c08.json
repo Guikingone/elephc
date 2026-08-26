@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/compare.py 2>&1 | grep -E \"^===\"",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/compare.py 2>&1 | grep -E \"^===\": === ord_undefined DIFFERS (php rc=0, elephc rc=0) === eval_barrier SAME (php rc=0, elephc rc=0) === list_unpack",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/compare.py 2>&1 | grep -E \"^===\": === ord_undefined DIFFERS (php rc=0, elephc rc=0) === eval_barrier SAME (php rc=0, elephc rc=0) === list_unpack_null DIFFERS (php rc=0, elephc rc=n/a) === list_unpack_scalar DIFFERS (php rc=0, elephc rc=n/a) === two_missing SAME (php rc=0, elephc rc=0) === prop_on_null DIFFERS (php rc=0, elephc rc=n/a) === offset_on_null DIFFERS (php rc=0, elephc rc=n/a) === strlen_undef DIFFERS (php rc=0, elephc rc=n/a) === undef_plus_int SAME (php rc=0, elephc rc=0) === undef_concat SAME (php rc=0, elephc rc=0) === undef_in_fn SAME (php rc=0, elephc rc=0)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4d5eb3ad7041c9b9b8911c08",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:21:04.783Z",
+  "stored_at": "2026-08-20T19:21:04.783Z"
+}

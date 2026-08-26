@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport pathlib\np = pathlib.Path('tools/gen_builtins.rs')\nt = p.read_text()\nold = '''/// Returns the documentation spelling for a neutral PHP type.\nfn type_name(ty: TypeSpec) -> &'static str {\n    match ty {'''\nnew = '''/// Returns the documentation spelling for a neutral PHP type.\nfn type_name(ty: TypeSpec) -> String {\n    match ty {'''\nassert t.count(old) == 1\nt = t.replace(old, new, 1)\nold = '''        TypeSpec::Ptr => \\\"pointer\\\",\n        TypeSpec::Callable => \\\"callable\\\",\n    }\n}'''\nnew = '''        TypeSpec::Ptr => \\\"pointer\\\",\n        TypeSpec::Callable => \\\"callable\\\",… [+564 chars truncated]",
+  "summary": "python3 -c \"\nimport pathlib\np = pathlib.Path('tools/gen_builtins.rs')\nt = p.read_text()\nold = '''/// Returns the documentation spelling for a neutral PHP type.\nfn type_name(ty: TypeSpec) -> &'static str {\n    match ty {'''\nnew = '''/// Returns the documentation spelling for a neutral PHP type.\nfn type_name(ty: TypeSpec",
+  "text": "python3 -c \"\nimport pathlib\np = pathlib.Path('tools/gen_builtins.rs')\nt = p.read_text()\nold = '''/// Returns the documentation spelling for a neutral PHP type.\nfn type_name(ty: TypeSpec) -> &'static str {\n    match ty {'''\nnew = '''/// Returns the documentation spelling for a neutral PHP type.\nfn type_name(ty: TypeSpec) -> String {\n    match ty {'''\nassert t.count(old) == 1\nt = t.replace(old, new, 1)\nold = '''        TypeSpec::Ptr => \\\"pointer\\\",\n        TypeSpec::Callable => \\\"callable\\\",\n    }\n}'''\nnew = '''        TypeSpec::Ptr => \\\"pointer\\\",\n        TypeSpec::Callable => \\\"callable\\\",\n        // php spells an explicit null in a union, and the distinction is load-bearing: a scalar\n        // parameter declared \\`?int \\$x = null\\` accepts an omitted argument AND a written null,\n        // where a plain \\`int\\` accepts only the first.\n        TypeSpec::Nullable(inner) => return format!(\\\"?{}\\\", type_name(*inner)),\n    }\n    .to_string()\n}'''\nassert t.count(old) == 1\nt = t.replace(old, new, 1)\np.write_text(t)\nprint('gen_builtins.rs: Nullable renders as php spells it')\n\"; cargo build --example gen_builtins 2>&1 | grep -E \"^error\" -A 10 | head -20: gen_builtins.rs: Nullable renders as php spells it",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ddf9949de68a335ae78e7581",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:32:29.762Z",
+  "stored_at": "2026-08-22T09:32:29.762Z"
+}

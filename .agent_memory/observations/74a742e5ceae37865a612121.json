@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"php://\" src/ --include=*.rs -l | head -30",
+  "summary": "grep -rn \"php://\" src/ --include=*.rs -l | head -30: (eval):1: no matches found: --include=*.rs",
+  "text": "grep -rn \"php://\" src/ --include=*.rs -l | head -30: (eval):1: no matches found: --include=*.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "74a742e5ceae37865a612121",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:12:32.286Z",
+  "stored_at": "2026-08-14T14:12:32.287Z",
+  "low_signal": true
+}

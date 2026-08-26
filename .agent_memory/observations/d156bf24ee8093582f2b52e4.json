@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/port_type_system_tests.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/port_type_system_tests.py: import pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-sign",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/port_type_system_tests.py: import pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n# --- 1. Drop the four pins whose whole subject was the compile-time refusal -----------------\np = ROOT / 'tests/error_tests/type_system.rs'\nt = p.read_text()\n\ndrops = [\n    ('/// Verifies that referencing an undefined variable produces an \"Undefined variable\" error.\\n#[test]\\nfn test_error_undefined_variable() {\\n    expect_error(\"<?php echo $x;\", \"Undefined variable: $x\");\\n}\\n\\n', 'echo $x'),\n    ('/// Verifies that a plain self-referential assignment is not mi",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d156bf24ee8093582f2b52e4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:59:59.670Z",
+  "stored_at": "2026-08-20T18:59:59.671Z"
+}

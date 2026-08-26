@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"enum PhpVersion\" -A 12 src/web_prelude.rs | head -16; grep -rn \"PhpVersion::default\\|impl Default for PhpVersion\" src/web_prelude.rs | head -3",
+  "summary": "grep -n \"enum PhpVersion\" -A 12 src/web_prelude.rs | head -16; grep -rn \"PhpVersion::default\\|impl Default for PhpVersion\" src/web_prelude.rs | head -3 completed",
+  "text": "grep -n \"enum PhpVersion\" -A 12 src/web_prelude.rs | head -16; grep -rn \"PhpVersion::default\\|impl Default for PhpVersion\" src/web_prelude.rs | head -3 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "032ab014c79fd8305c406e44",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:48:54.840Z",
+  "stored_at": "2026-08-21T12:48:54.840Z"
+}

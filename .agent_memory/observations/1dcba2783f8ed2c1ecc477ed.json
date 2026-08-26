@@ -1,0 +1,16 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/checkpre.sh",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/checkpre.sh: #!/bin/zsh\n# Measures the empty-array by-reference case against the PRISTINE (committed) checker, to tell\n# a regression from a pr",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/checkpre.sh: #!/bin/zsh\n# Measures the empty-array by-reference case against the PRISTINE (committed) checker, to tell\n# a regression from a pre-existing bug, then restores the working tree.\nset -e\nREPO=/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\nSAVE=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/wip\nFILES=(\n  src/types/checker/functions/resolution/signature.rs\n  src/types/checker/functions/resolution/specialization.rs\n  src/types/checker/infe",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1dcba2783f8ed2c1ecc477ed",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:09:03.354Z",
+  "stored_at": "2026-08-16T20:09:03.354Z",
+  "low_signal": true
+}

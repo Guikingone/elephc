@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sr.php','w').write('''<?php\nvar_dump(str_replace([\"a\",\"b\"], [\"1\",\"2\"], \"abc\"));\nvar_dump(str_replace([\"a\",\"b\"], \"X\", \"abc\"));\nvar_dump(str_replace(\"a\", \"X\", [\"abc\",\"aaa\"]));\n$n = 0;\nvar_dump(str_replace([\"a\"], [\"X\"], \"aaa\", $n), $n);\n''')\nopen('dynp.php','w').write('''<?php\nclass P { public int $known = 1; }\n$p = new P();\n$p->extra = 5;\nvar_dump($p->extra, $p->known);\n''')\nopen('closetag.php','w')… [+166 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sr.php','w').write('''<?php\nvar_dump(str_replace([\"a\",\"b\"], [\"1\",\"2\"], \"abc\"));\nvar_dump(str_replace([\"a\",\"b\"], \"X\", \"ab",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sr.php','w').write('''<?php\nvar_dump(str_replace([\"a\",\"b\"], [\"1\",\"2\"], \"abc\"));\nvar_dump(str_replace([\"a\",\"b\"], \"X\", \"abc\"));\nvar_dump(str_replace(\"a\", \"X\", [\"abc\",\"aaa\"]));\n$n = 0;\nvar_dump(str_replace([\"a\"], [\"X\"], \"aaa\", $n), $n);\n''')\nopen('dynp.php','w').write('''<?php\nclass P { public int $known = 1; }\n$p = new P();\n$p->extra = 5;\nvar_dump($p->extra, $p->known);\n''')\nopen('closetag.php','w').write('''<?php\necho \"before\\\\n\";\n?>\nliteral text\n<?php\necho \"after\\\\n\";\n''')\nPY\nfor t in sr dynp closetag; do echo \"=== $t\"; zsh difftests.sh $t 2>&1 | head -6; done failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree; break it into plain, separate commands. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Run the equivalent from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature without the redirect.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7349dd4b5877e4afac6efdb5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T20:41:36.408Z",
+  "stored_at": "2026-08-17T20:41:36.409Z"
+}

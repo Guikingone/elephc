@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/array-filter-renumbered-its-survivors.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/array-filter-renumbered-its-survivors.md: ---\nname: array-filter-renumbered-its-survivors\ndescription: array_filter() dropped php's keys in every callback form and refused associative sources — and json_encode's li",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/array-filter-renumbered-its-survivors.md: ---\nname: array-filter-renumbered-its-survivors\ndescription: array_filter() dropped php's keys in every callback form and refused associative sources — and json_encode's list rendering hid half the cases\nmetadata:\n  type: project\n---\n\n`array_filter([0,1,2])` rendait `[0=>1, 1=>2]` là où php rend `[1=>1, 2=>2]`. Les clés étaient\nfausses **en tant que clés** : `isset($r[0])` répondait `true` quand php dit `false`, et `foreach`\ndonnait 0 et 1 au lieu de 1 et 2. Mesuré un programme par cas : **3/13 identiques**, dont 7\nréponses fausses SILENCIEUSES et 3 refus de compilation (« first argument must ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ebfe997593d38756a1dd17d5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:07:45.062Z",
+  "stored_at": "2026-08-22T12:07:45.063Z"
+}

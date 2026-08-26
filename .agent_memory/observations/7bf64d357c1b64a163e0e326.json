@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '480,600p' src/ir_lower/expr/mod.rs",
+  "summary": "sed -n '480,600p' src/ir_lower/expr/mod.rs:  and needed for the same /// reason: an uninitialized typed slot IS empty in PHP, and the ordinary read that would find /// that out raises instead. `empty($o->p)` on `class C { public int $p; }` died with /// `Typed property C::$p must not be accessed before initialization` ",
+  "text": "sed -n '480,600p' src/ir_lower/expr/mod.rs:  and needed for the same /// reason: an uninitialized typed slot IS empty in PHP, and the ordinary read that would find /// that out raises instead. `empty($o->p)` on `class C { public int $p; }` died with /// `Typed property C::$p must not be accessed before initialization` where PHP answers /// `bool(true)`. Only the static path probed; this dispatch had no arm for the instance one. /// /// The uninitialized arm releases an OWNING receiver for the same reason the isset twin does — /// it answers without the read that would have consumed it — and gates that release on /// `value_is_owning_temporary`, because a borrowed `?C` receiver represents as a boxed Mixed and /// a type-gated release frees what the next statement still needs. fn lower_initialized_property_empty( ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, construct: &str, arg: &Expr, ) -> LoweredValue {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7bf64d357c1b64a163e0e326",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:17:46.914Z",
+  "stored_at": "2026-08-20T19:17:46.915Z"
+}

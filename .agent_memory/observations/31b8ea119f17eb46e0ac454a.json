@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_eval_diff.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_eval_diff.py: \"\"\"The same glob flag surface, but every call made from inside eval().\n\nThe eval interpreter matches paths with its own walker r",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_eval_diff.py: \"\"\"The same glob flag surface, but every call made from inside eval().\n\nThe eval interpreter matches paths with its own walker rather than libc, so it is a genuinely\nsecond implementation of the same php behaviour — the place where this repo has repeatedly found\nthe compiled and interpreted surfaces disagreeing.\n\"\"\"\nimport pathlib\nimport shutil\nimport subprocess\nimport sys\n\nHERE = pathlib.Path(__file__).parent\nD = HERE / 'globevaldiff'\nELEPHC = ('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n          'streams-csv-signature/target/debug/elephc')\n\nSETUP = '''\n@mkdir(\"d",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "31b8ea119f17eb46e0ac454a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:18:50.739Z",
+  "stored_at": "2026-08-22T09:18:50.739Z"
+}

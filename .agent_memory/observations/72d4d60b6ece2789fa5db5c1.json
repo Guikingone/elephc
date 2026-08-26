@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"pub(crate) struct ProgramOutput\" -A 20 tests/codegen/ | head -30",
+  "summary": "grep -rn \"pub(crate) struct ProgramOutput\" -A 20 tests/codegen/ | head -30: are split back out tests/codegen/support/runner.rs-1031- // here. A test that cares about them asserts on this; one that cares about what the program tests/codegen/support/runner.rs-1032- // itself printed reads `stdout`, which has them removed",
+  "text": "grep -rn \"pub(crate) struct ProgramOutput\" -A 20 tests/codegen/ | head -30: are split back out tests/codegen/support/runner.rs-1031- // here. A test that cares about them asserts on this; one that cares about what the program tests/codegen/support/runner.rs-1032- // itself printed reads `stdout`, which has them removed. tests/codegen/support/runner.rs-1033- pub(crate) diagnostics: String, tests/codegen/support/runner.rs-1034- // The same diagnostics with php's ` in <file> on line <n>` suffix intact, the script path tests/codegen/support/runner.rs-1035- // folded to its basename. The location comes from a mechanism of its own — the line the tests/codegen/support/runner.rs-1036- // lowering publishes per instruction — so it needs assertions of its own; `diagnostics` tests/codegen/support/runner.rs-1037- // above deliberately drops it so the common wording assertions carry no line number. tests/codegen/support/runner.rs-1038- pub(crate) located_diagnostics: String,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "72d4d60b6ece2789fa5db5c1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:09:41.240Z",
+  "stored_at": "2026-08-22T09:09:41.240Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 360,385p tests/codegen/objects/gc_aliasing.rs",
+  "summary": "sed -n 360,385p tests/codegen/objects/gc_aliasing.rs: e original. /// Fixture: rows contain inner array among other elements, filter by a callback that keeps 2-element arrays, unset rows and inner, read filtered result. /// Regression: ensures array_filter output preserves GC alias for nested inner arrays. #[test] fn t",
+  "text": "sed -n 360,385p tests/codegen/objects/gc_aliasing.rs: e original. /// Fixture: rows contain inner array among other elements, filter by a callback that keeps 2-element arrays, unset rows and inner, read filtered result. /// Regression: ensures array_filter output preserves GC alias for nested inner arrays. #[test] fn test_gc_array_filter_borrowed_array_survives_unset() { let out = compile_and_run( r#\"<?php function keep_pair($x) { return count($x) == 2; } $inner = [10, 11]; $rows = [[1], $inner, [2, 3]]; $filtered = array_filter($rows, \"keep_pair\"); unset($rows); unset($inner); echo $filtered[0][1] . \"|\" . $filtered[1][0]; \"#, ); assert_eq!(out, \"11|2\"); } /// Verifies that an inner array used as array_fill fill value survives unset of the original. /// Fixture: create inner array, fill an array of length 2 with inner as fill value, unset inner, read both fill positions. /// Regression: ensures array_fill fill-value path preserves GC alias.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0a80bffd53e4876e4cae4f5f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:24:26.740Z",
+  "stored_at": "2026-08-22T13:24:26.740Z"
+}

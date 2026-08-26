@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"fn test_fscanf_float_via_shared_sscanf_engine\" -A16 tests/codegen/io/streams.rs | head -20",
+  "summary": "rtk proxy rg -n \"fn test_fscanf_float_via_shared_sscanf_engine\" -A16 tests/codegen/io/streams.rs | head -20: 2501:fn test_fscanf_float_via_shared_sscanf_engine() { 2502- // fscanf shares the injected scanf prelude, so %f must work through it too. 2503- let out = compile_and_run( 2504- r#\"<?php 2505-$g = fopen(\"php://te",
+  "text": "rtk proxy rg -n \"fn test_fscanf_float_via_shared_sscanf_engine\" -A16 tests/codegen/io/streams.rs | head -20: 2501:fn test_fscanf_float_via_shared_sscanf_engine() { 2502- // fscanf shares the injected scanf prelude, so %f must work through it too. 2503- let out = compile_and_run( 2504- r#\"<?php 2505-$g = fopen(\"php://temp\", \"r+\"); 2506-fwrite($g, \"9.99\\n\"); 2507-rewind($g); 2508-$row = fscanf($g, \"%f\"); 2509-echo $row[0]; 2510-fclose($g); 2511-\"#, 2512- ); 2513- assert_eq!(out, \"9.99\"); 2514-} 2515- 2516-/// Verifies compiled PHP output for fscanf reads and parses line by line. 2517-#[test]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6afddde8a284238735998b4d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:51:27.769Z",
+  "stored_at": "2026-08-16T17:51:27.770Z"
+}

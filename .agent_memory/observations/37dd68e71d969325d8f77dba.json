@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -rn \"struct FunctionSig\" -A22 -g '*.rs' src/types/ | head -28; echo \"=== construction sites ===\"; rtk proxy rg -rn \"FunctionSig \\{\" -g '*.rs' src/ | wc -l",
+  "summary": "rtk proxy rg -rn \"struct FunctionSig\" -A22 -g '*.rs' src/types/ | head -28; echo \"=== construction sites ===\"; rtk proxy rg -rn \"FunctionSig \\{\" -g '*.rs' src/ | wc -l: _ref_return: bool, src/types/signatures.rs- pub ref_params: Vec<bool>, src/types/signatures.rs- pub declared_params: Vec<bool>, src/types/signatures.rs",
+  "text": "rtk proxy rg -rn \"struct FunctionSig\" -A22 -g '*.rs' src/types/ | head -28; echo \"=== construction sites ===\"; rtk proxy rg -rn \"FunctionSig \\{\" -g '*.rs' src/ | wc -l: _ref_return: bool, src/types/signatures.rs- pub ref_params: Vec<bool>, src/types/signatures.rs- pub declared_params: Vec<bool>, src/types/signatures.rs- pub variadic: Option<String>, src/types/signatures.rs- /// `Some(message)` if the declaration carried PHP 8.4 `#[\\Deprecated]`. src/types/signatures.rs- /// `Some(\"\")` indicates the attribute was present without an explicit src/types/signatures.rs- /// reason. `None` means the function/method is not deprecated. src/types/signatures.rs- pub deprecation: Option<String>, src/types/signatures.rs-} src/types/signatures.rs- src/types/signatures.rs-impl FunctionSig { src/types/signatures.rs- /// Returns whether the CALLEE's frame owns a reference to by-value parameter `index`. src/types/signatures.rs- /// src/types/signatures.rs- /// True exactly when the parameter is by-value and its CODEGEN REPR is an array or an === construction sites === 71",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "37dd68e71d969325d8f77dba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:37:02.540Z",
+  "stored_at": "2026-08-16T20:37:02.540Z"
+}

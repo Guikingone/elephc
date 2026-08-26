@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log -1 --format=\"%H%n%s\" ; git log -1 --format=\"%b\" | grep -ci \"co-authored-by\" || echo \"0 co-authored-by (bon)\"",
+  "summary": "About to run: git log -1 --format=\"%H%n%s\" ; git log -1 --format=\"%b\" | grep -ci \"co-authored-by\" || echo \"0 co-authored-by (bon)\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "97ac74364c8e8ea0cb633ea3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T17:17:40.167Z",
+  "stored_at": "2026-08-19T17:17:40.168Z",
+  "low_signal": true
+}

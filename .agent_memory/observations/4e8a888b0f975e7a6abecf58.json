@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test -p elephc --lib lowers_examples_corpus -- --nocapture 2>&1 | grep -B3 -A8 \"checked builtin\" | head -30",
+  "summary": "cargo test -p elephc --lib lowers_examples_corpus -- --nocapture 2>&1 | grep -B3 -A8 \"checked builtin\" | head -30: running 1 test thread 'ir_lower::tests::corpus::lowers_examples_corpus' (30513280) panicked at src/ir_lower/expr/function_calls.rs:195:17: checked builtin strlen failed backend-neutral EIR lowering at 0:0:",
+  "text": "cargo test -p elephc --lib lowers_examples_corpus -- --nocapture 2>&1 | grep -B3 -A8 \"checked builtin\" | head -30: running 1 test thread 'ir_lower::tests::corpus::lowers_examples_corpus' (30513280) panicked at src/ir_lower/expr/function_calls.rs:195:17: checked builtin strlen failed backend-neutral EIR lowering at 0:0: strlen cannot lower checked operand type Void note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace test ir_lower::tests::corpus::lowers_examples_corpus ... FAILED failures: failures: ir_lower::tests::corpus::lowers_examples_corpus",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4e8a888b0f975e7a6abecf58",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:32:38.878Z",
+  "stored_at": "2026-08-20T20:32:38.878Z"
+}

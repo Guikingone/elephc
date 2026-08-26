@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_lowering_gate.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_lowering_gate.py: import pathlib\n\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_lowering_gate.py: import pathlib\n\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/expr/array_builtin_args.rs')\nt = p.read_text()\n\ngate = '''\n#[cfg(test)]\nmod tests {\n    /// Every `BuiltinArgumentLowering` variant a builtin can declare has an arm that runs it.\n    ///\n    /// A variant is a four-sided contract: the enum declares it, a builtin selects it, the docs\n    /// generator names it, and this file does the work. The origin/main merge resolved the\n    /// conflict in this file toward the branch's own copy, which predates upstream's",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "88f48b9596fd4bdd0fe03ec9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:36:08.920Z",
+  "stored_at": "2026-08-21T07:36:08.921Z"
+}

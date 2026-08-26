@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/watch_ci.sh",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/watch_ci.sh: #!/bin/zsh\n# Watch the CI workflow on Guikingone/elephc for the current ci/streams-csv-fullci head.\nHEAD_PREFIX=\"${1:-262f2aec22}\"\nrid=\"\"",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/watch_ci.sh: #!/bin/zsh\n# Watch the CI workflow on Guikingone/elephc for the current ci/streams-csv-fullci head.\nHEAD_PREFIX=\"${1:-262f2aec22}\"\nrid=\"\"\nprev=\"\"\nprevfails=\"\"\ntries=0\nwhile [ -z \"$rid\" ] && [ $tries -lt 20 ]; do\n  rid=$(gh run list -R Guikingone/elephc --branch ci/streams-csv-fullci -L 10 --json databaseId,workflowName,headSha --jq \".[] | select(.workflowName == \\\"CI\\\") | select(.headSha | startswith(\\\"$HEAD_PREFIX\\\")) | .databaseId\" 2>/dev/null | head -1)\n  [ -z \"$rid\" ] && { tries=$((tries+1)); sleep 30; }\ndone\nif [ -z \"$rid\" ]; then\n  echo \"NO CI RUN FOUND for head $HEAD_PREFIX\"\n  exit 0\nfi",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4732e2e74ce03250863226c2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T12:52:07.536Z",
+  "stored_at": "2026-08-16T12:52:07.536Z"
+}

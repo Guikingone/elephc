@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/exactte && ./p >out.txt 2>err.txt; echo \"rc=$?\"; echo \"stdout bytes: $(wc -c < out.txt)\"; echo \"stderr bytes: $(wc -c < err.txt)\"; echo \"--- stdout ---\"; cat out.txt; echo \"--- stderr ---\"; cat err.txt",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/exactte && ./p >out.txt 2>err.txt; echo \"rc=$?\"; echo \"stdout bytes: $(wc -c < out.txt)\"; echo \"stderr bytes: $(wc -c < err.txt)\"; echo \"--- stdout --",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/exactte && ./p >out.txt 2>err.txt; echo \"rc=$?\"; echo \"stdout bytes: $(wc -c < out.txt)\"; echo \"stderr bytes: $(wc -c < err.txt)\"; echo \"--- stdout ---\"; cat out.txt; echo \"--- stderr ---\"; cat err.txt: rc=255 stdout bytes: 104 stderr bytes: 0 --- stdout --- Fatal error: Uncaught TypeError: fgets(): Argument #1 ($stream) must be of type resource, string given --- stderr ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5feafc1f47bd7d4dc40e5bf8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:47:42.511Z",
+  "stored_at": "2026-08-21T16:47:42.511Z"
+}

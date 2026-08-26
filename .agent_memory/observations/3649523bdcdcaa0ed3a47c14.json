@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '17005,17025p' crates/elephc-builtin-contract/src/catalog_data.rs",
+  "summary": "sed -n '17005,17025p' crates/elephc-builtin-contract/src/catalog_data.rs: writes: None, }, ], variadic: None, variadic_writes: None, min_args: None, max_args: None, arity_error: None, returns: TypeSpec::Mixed, by_ref_return: false, summary: \"Creates a pair of connected, indistinguishable socket streams.\", examples: &[ ",
+  "text": "sed -n '17005,17025p' crates/elephc-builtin-contract/src/catalog_data.rs: writes: None, }, ], variadic: None, variadic_writes: None, min_args: None, max_args: None, arity_error: None, returns: TypeSpec::Mixed, by_ref_return: false, summary: \"Creates a pair of connected, indistinguishable socket streams.\", examples: &[ ], php_manual: Some(\"function.stream-socket-pair\"), deprecation: None, extension: false, internal: false, requirements: &[], }, BuiltinContract { id: BuiltinId::from_canonical_name(\"stream_socket_recvfrom\"),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3649523bdcdcaa0ed3a47c14",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:03:32.515Z",
+  "stored_at": "2026-08-26T08:03:32.516Z"
+}

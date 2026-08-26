@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo fmt --all 2>&1 | head -3; cargo fmt --check 2>&1 | head -5; echo \"FMT_OK\"; python3 scripts/check_asm_comments.py 2>&1 | tail -5",
+  "summary": "cargo fmt --all 2>&1 | head -3; cargo fmt --check 2>&1 | head -5; echo \"FMT_OK\"; python3 scripts/check_asm_comments.py 2>&1 | tail -5: FMT_OK usage: check_asm_comments.py [-h] files [files ...] check_asm_comments.py: error: the following arguments are required: files",
+  "text": "cargo fmt --all 2>&1 | head -3; cargo fmt --check 2>&1 | head -5; echo \"FMT_OK\"; python3 scripts/check_asm_comments.py 2>&1 | tail -5: FMT_OK usage: check_asm_comments.py [-h] files [files ...] check_asm_comments.py: error: the following arguments are required: files",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca577eea7d9d7382bed9a91c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:36:12.618Z",
+  "stored_at": "2026-08-25T13:36:12.619Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'pub(crate) fn emit_type_error' -A 40 src/codegen/lower_inst/builtins/exceptions.rs | head -60",
+  "summary": "grep -n 'pub(crate) fn emit_type_error' -A 40 src/codegen/lower_inst/builtins/exceptions.rs | head -60: ugrep: warning: src/codegen/lower_inst/builtins/exceptions.rs: No such file or directory",
+  "text": "grep -n 'pub(crate) fn emit_type_error' -A 40 src/codegen/lower_inst/builtins/exceptions.rs | head -60: ugrep: warning: src/codegen/lower_inst/builtins/exceptions.rs: No such file or directory",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0372a4a22218be0ced6a08d6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:43:21.860Z",
+  "stored_at": "2026-08-24T17:43:21.860Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_contradictory_test.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_contradictory_test.py: \"\"\"A test that could never pass, and had not for as long as it has had two try blocks.\n\nIt asserts `out.stdout` equals o",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_contradictory_test.py: \"\"\"A test that could never pass, and had not for as long as it has had two try blocks.\n\nIt asserts `out.stdout` equals one string, then asserts the SAME `out.stdout` equals a different\none two lines later. The first expectation describes the program as it was when it had a single\n`try`; the second block was added later and the old assertion was left behind rather than merged.\n\nThe program's real output is the two of them joined, and MEASURED on `php -n` 8.5.6 it is exactly\nwhat php prints — warning, `count-raises`, the TypeError message, and the rest — so the fix is to\nassert the whole thing o",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c79e9e7b57078dd2f5b62da8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:25:59.425Z",
+  "stored_at": "2026-08-22T10:25:59.425Z"
+}

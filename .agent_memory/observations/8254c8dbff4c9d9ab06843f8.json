@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/conversions.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/conversions.rs: /// Materializes PHP's array-to-string placeholder in the active string result registers.\npub(super) fn emit_array_like_string_result(ctx: &mut FunctionContext< -> /// Materializes ",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/conversions.rs: /// Materializes PHP's array-to-string placeholder in the active string result registers.\npub(super) fn emit_array_like_string_result(ctx: &mut FunctionContext< -> /// Materializes PHP's array-to-string placeholder in the active string result registers.\n///\n/// The placeholder never travels alone: php raises `Array to string conversion` at EVERY site\n/// that produces it — `echo`, `print`, `.`, `.=`, interpolation, a heredoc, `(string)`,\n/// `strval()` — and answers `Array` regardless. The only array-meets-string case php leaves\n/// silent is a loose COMPARISON, which never converts and never reaches here.\npub(super) fn emit_array_like_",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8254c8dbff4c9d9ab06843f8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:29:02.278Z",
+  "stored_at": "2026-08-23T16:29:02.279Z"
+}

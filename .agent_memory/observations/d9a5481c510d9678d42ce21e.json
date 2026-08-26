@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn emit_throw_exception_aarch64' -A 45 src/codegen_support/runtime/ | head -55",
+  "summary": "grep -rn 'fn emit_throw_exception_aarch64' -A 45 src/codegen_support/runtime/ | head -55: _support/runtime/spl/doubly_linked_list.rs:2490:fn emit_throw_exception_aarch64( src/codegen_support/runtime/spl/doubly_linked_list.rs-2491- emitter: &mut Emitter, src/codegen_support/runtime/spl/doubly_linked_list.rs-2492- class_",
+  "text": "grep -rn 'fn emit_throw_exception_aarch64' -A 45 src/codegen_support/runtime/ | head -55: _support/runtime/spl/doubly_linked_list.rs:2490:fn emit_throw_exception_aarch64( src/codegen_support/runtime/spl/doubly_linked_list.rs-2491- emitter: &mut Emitter, src/codegen_support/runtime/spl/doubly_linked_list.rs-2492- class_id_symbol: &str, src/codegen_support/runtime/spl/doubly_linked_list.rs-2493- message_symbol: &str, src/codegen_support/runtime/spl/doubly_linked_list.rs-2494- message_len: usize, src/codegen_support/runtime/spl/doubly_linked_list.rs-2495-) { src/codegen_support/runtime/spl/doubly_linked_list.rs-2496- emitter.instruction(\"mov x0, #56\"); // request Throwable payload storage (message/code/previous) src/codegen_support/runtime/spl/doubly_linked_list.rs-2497- emitter.instruction(\"bl __rt_heap_alloc\"); // allocate the exception object payload src/codegen_support/runtime/spl/doubly_linked_list.rs-2498- emitter.instruction(\"mov x9, #6\"); // heap kind 6 = object instance",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d9a5481c510d9678d42ce21e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:36:01.078Z",
+  "stored_at": "2026-08-25T13:36:01.079Z"
+}

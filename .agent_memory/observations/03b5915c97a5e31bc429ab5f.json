@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '240,300p' src/types/checker/mod.rs",
+  "summary": "sed -n '240,300p' src/types/checker/mod.rs:  detection. pub attributes: Vec<crate::parser::ast::AttributeGroup>, } /// Runs the type checker on `program` for the given `target_platform`, returning /// a `CheckResult` on success or a `CompileError` on failure. The checker validates /// types, resolves declarations, infe",
+  "text": "sed -n '240,300p' src/types/checker/mod.rs:  detection. pub attributes: Vec<crate::parser::ast::AttributeGroup>, } /// Runs the type checker on `program` for the given `target_platform`, returning /// a `CheckResult` on success or a `CompileError` on failure. The checker validates /// types, resolves declarations, infers return types, and collects warnings. Abstract /// return types are propagated from concrete implementations before returning. pub fn check_types( program: &Program, target_platform: Platform, ) -> Result<CheckResult, CompileError> { let (mut checker, global_env) = driver::check_types_impl(program, target_platform)?; propagate_abstract_return_types(&mut checker); apply_reference_property_promotions(&mut checker); validate_magic_method_contracts(&checker)?; let mut warnings = crate::types::warnings::collect_warnings(program); warnings.extend(checker.warnings); let function_attribute_names = checker .fn_decls .iter()",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "03b5915c97a5e31bc429ab5f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:42:22.285Z",
+  "stored_at": "2026-08-18T09:42:22.285Z"
+}

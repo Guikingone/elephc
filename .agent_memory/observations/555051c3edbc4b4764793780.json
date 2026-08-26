@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn emit_single_path_libc_bool_helper' -A 30 src/codegen_support/runtime/io/fs.rs",
+  "summary": "grep -n 'fn emit_single_path_libc_bool_helper' -A 30 src/codegen_support/runtime/io/fs.rs: n rax/rdx into a null-terminated C string in rax 534- emitter.instruction(\"mov rdi, rax\"); // pass the C path pointer as the first libc argument 535- if let Some(setup) = extra_setup { 536- emitter.instruction(setup); // populate",
+  "text": "grep -n 'fn emit_single_path_libc_bool_helper' -A 30 src/codegen_support/runtime/io/fs.rs: n rax/rdx into a null-terminated C string in rax 534- emitter.instruction(\"mov rdi, rax\"); // pass the C path pointer as the first libc argument 535- if let Some(setup) = extra_setup { 536- emitter.instruction(setup); // populate any additional libc arguments required by this helper 537- } 538- emitter.instruction(&format!(\"call {}\", symbol)); // invoke the matching libc file-system helper on Linux x86_64 539- emitter.instruction(\"cmp eax, 0\"); // libc path helpers return zero as a C int on success 540- emitter.instruction(\"sete al\"); // convert the success code into a boolean byte 541- emitter.instruction(\"movzx rax, al\"); // widen the boolean byte into the canonical integer result register 542- emitter.instruction(\"pop rbp\"); // restore the caller frame pointer after the libc helper returns 543- emitter.instruction(\"ret\"); // return the file-system success predicate to the caller 544-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "555051c3edbc4b4764793780",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:16:14.728Z",
+  "stored_at": "2026-08-24T18:16:14.729Z"
+}

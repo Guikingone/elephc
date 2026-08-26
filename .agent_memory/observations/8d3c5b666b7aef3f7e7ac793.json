@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h /Users/guillaumeloulier 2>&1 | tail -1; echo \"--- my target ---\"; du -sh target 2>/dev/null; echo \"--- superseded artifacts ---\"; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/prune_stale_deps.py 2>&1 | head -2",
+  "summary": "df -h /Users/guillaumeloulier 2>&1 | tail -1; echo \"--- my target ---\"; du -sh target 2>/dev/null; echo \"--- superseded artifacts ---\"; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/prune_sta",
+  "text": "df -h /Users/guillaumeloulier 2>&1 | tail -1; echo \"--- my target ---\"; du -sh target 2>/dev/null; echo \"--- superseded artifacts ---\"; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/prune_stale_deps.py 2>&1 | head -2: /dev/disk3s5 460Gi 421Gi 10Gi 98% 5.6M 107M 5% /System/Volumes/Data --- my target --- 14G target --- superseded artifacts --- 646 superseded artifacts, 1.63 GB 191.6 MB libelephc-800b855514d35c59.rlib",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8d3c5b666b7aef3f7e7ac793",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T21:11:59.190Z",
+  "stored_at": "2026-08-21T21:11:59.191Z"
+}

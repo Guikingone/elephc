@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '\"stream_socket_pair\"' -A 30 crates/elephc-builtin-contract/src/catalog_data.rs | grep -E 'name:|returns:' | head -6",
+  "summary": "grep -n '\"stream_socket_pair\"' -A 30 crates/elephc-builtin-contract/src/catalog_data.rs | grep -E 'name:|returns:' | head -6: 16982: name: \"stream_socket_pair\", 16987- name: \"domain\", 16994- name: \"type\", 17001- name: \"protocol\",",
+  "text": "grep -n '\"stream_socket_pair\"' -A 30 crates/elephc-builtin-contract/src/catalog_data.rs | grep -E 'name:|returns:' | head -6: 16982: name: \"stream_socket_pair\", 16987- name: \"domain\", 16994- name: \"type\", 17001- name: \"protocol\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f5991ae9675c29345fefcc81",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:03:28.442Z",
+  "stored_at": "2026-08-26T08:03:28.442Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '660,680p' src/types/checker/inference/expr/effects.rs",
+  "summary": "rtk proxy sed -n '660,680p' src/types/checker/inference/expr/effects.rs: let Some(PhpType::Array(elem_ty)) = env.get(name).cloned() else { return; }; if !crate::types::key_preserving_sort_promotes(builtin_name, &elem_ty) { return; } env.insert( name.clone(), PhpType::AssocArray { key: Box::new(PhpType::Int), value: ele",
+  "text": "rtk proxy sed -n '660,680p' src/types/checker/inference/expr/effects.rs: let Some(PhpType::Array(elem_ty)) = env.get(name).cloned() else { return; }; if !crate::types::key_preserving_sort_promotes(builtin_name, &elem_ty) { return; } env.insert( name.clone(), PhpType::AssocArray { key: Box::new(PhpType::Int), value: elem_ty, }, ); } /// Promotes a packed indexed-array local to an associative array when one of its elements is /// removed via `unset($arr[$key])`. /// /// PHP's `unset()` removes a key without renumbering the remaining elements, so the array can no /// longer be a contiguous packed list (e.g. `unset([1,2,3][1])` leaves keys `0` and `2`). Re-typing /// the local as `AssocArray<Int, T>` makes its literal build as a hash, so the element removal",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "13f47ce4832b91f8df0d4b03",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:54:34.631Z",
+  "stored_at": "2026-08-16T19:54:34.632Z"
+}

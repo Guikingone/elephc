@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn emit_runtime_builtin_wrapper_inline\" -A 35 src/codegen/ | head -40",
+  "summary": "grep -rn \"fn emit_runtime_builtin_wrapper_inline\" -A 35 src/codegen/ | head -40: runtime_wrappers.rs-60- } src/codegen/lower_inst/runtime_wrappers.rs-61- sig src/codegen/lower_inst/runtime_wrappers.rs-62-} src/codegen/lower_inst/runtime_wrappers.rs-63- src/codegen/lower_inst/runtime_wrappers.rs-64-/// Emits an EIR exte",
+  "text": "grep -rn \"fn emit_runtime_builtin_wrapper_inline\" -A 35 src/codegen/ | head -40: runtime_wrappers.rs-60- } src/codegen/lower_inst/runtime_wrappers.rs-61- sig src/codegen/lower_inst/runtime_wrappers.rs-62-} src/codegen/lower_inst/runtime_wrappers.rs-63- src/codegen/lower_inst/runtime_wrappers.rs-64-/// Emits an EIR extern wrapper inline so descriptors can point at PHP-ABI code. src/codegen/lower_inst/runtime_wrappers.rs-65-pub(in crate::codegen) fn emit_runtime_extern_wrapper_inline( src/codegen/lower_inst/runtime_wrappers.rs-66- ctx: &mut FunctionContext<'_>, src/codegen/lower_inst/runtime_wrappers.rs-67- name: &str, src/codegen/lower_inst/runtime_wrappers.rs-68- sig: &FunctionSig, src/codegen/lower_inst/runtime_wrappers.rs-69-) -> Result<String> { src/codegen/lower_inst/runtime_wrappers.rs-70- emit_runtime_call_wrapper_inline(ctx, name, sig, RuntimeCallWrapperKind::Extern) src/codegen/lower_inst/runtime_wrappers.rs-71-} src/codegen/lower_inst/runtime_wrappers.rs-72-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "38f897cb9aac8f7aa61f222c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:03:46.520Z",
+  "stored_at": "2026-08-22T11:03:46.521Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace_callsite.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace_callsite.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signatu",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace_callsite.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\n\n# ---- 1. expose the frame pieces exceptions.rs already has --------------------------------------\np = ROOT / \"src/codegen/lower_inst/exceptions.rs\"\ns = p.read_text()\nold = \"fn emit_trace_argument(ctx: &mut FunctionContext<'_>, operand: crate::ir::ValueId) -> Result<()> {\"\nnew = \"pub(super) fn emit_trace_argument(\\n    ctx: &mut FunctionContext<'_>,\\n    operand: crate::ir::ValueId,\\n) -> Result<()> {\"\nassert s.count(old) == 1, \"arg fn\"\ns = s.replace(old, ne",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6e94e0084299ddd870749356",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:25:14.189Z",
+  "stored_at": "2026-08-26T09:25:14.189Z"
+}

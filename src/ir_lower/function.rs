@@ -84,10 +84,14 @@ pub(crate) fn lower_main(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.widened_scalar_locals,
+        &check_result.local_bind_kill_sites,
+        &check_result.local_retype_sites,
+        &check_result.mixed_storage_store_sites,
         "main".to_string(),
         constants,
         None,
         PhpType::Void,
+        false,
         &[],
         None,
         true,
@@ -122,98 +126,21 @@ fn web_gated_global_env(global_env: &TypeEnv, web: bool) -> TypeEnv {
     env
 }
 
-/// Collects PHP variable names that any function-like body declares with `global`.
+/// Collects PHP variable names that any function-like STATEMENT body declares with `global`.
+///
+/// Shared with the CHECKER (`crate::global_decls`), which vetoes ending a top-level binding of one
+/// of these names for the same reason lowering refuses to abandon its slot: `global $x;` in some
+/// other body reaches the very storage the top-level name uses. One walk keeps the two sides
+/// identical, blind spots included — and the blind spots are load-bearing here. This set decides
+/// STORAGE CLASS: a name in it moves out of main's frame slot into the `_eir_global_*` symbol,
+/// which types it `Mixed`, and the array builtins have pre-existing `Mixed`-array backend gaps, so
+/// widening the walk to closure bodies or enum methods broke programs that compile and print PHP's
+/// output today (`implode` crashed, `array_sum`/`sort`/`in_array` and friends became a hard backend
+/// error). `crate::global_decls`' preamble carries those measurements, the matching reason the
+/// checker's veto must not be widened on its own either, and the pre-existing closure-`global`
+/// write loss both sides preserve.
 fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<String> {
-    let mut names = std::collections::HashSet::new();
-    collect_global_var_names_in_body(statements, &mut names);
-    names
-}
-
-/// Recursively scans statement bodies for `global` declarations.
-fn collect_global_var_names_in_body(
-    statements: &[Stmt],
-    names: &mut std::collections::HashSet<String>,
-) {
-    for stmt in statements {
-        match &stmt.kind {
-            crate::parser::ast::StmtKind::Global { vars } => {
-                names.extend(vars.iter().cloned());
-            }
-            crate::parser::ast::StmtKind::If {
-                then_body,
-                elseif_clauses,
-                else_body,
-                ..
-            } => {
-                collect_global_var_names_in_body(then_body, names);
-                for (_, body) in elseif_clauses {
-                    collect_global_var_names_in_body(body, names);
-                }
-                if let Some(body) = else_body {
-                    collect_global_var_names_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::IfDef {
-                then_body,
-                else_body,
-                ..
-            } => {
-                collect_global_var_names_in_body(then_body, names);
-                if let Some(body) = else_body {
-                    collect_global_var_names_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::While { body, .. }
-            | crate::parser::ast::StmtKind::DoWhile { body, .. }
-            | crate::parser::ast::StmtKind::Foreach { body, .. }
-            | crate::parser::ast::StmtKind::FunctionDecl { body, .. }
-            | crate::parser::ast::StmtKind::NamespaceBlock { body, .. }
-            | crate::parser::ast::StmtKind::IncludeOnceGuard { body, .. }
-            | crate::parser::ast::StmtKind::Synthetic(body) => {
-                collect_global_var_names_in_body(body, names);
-            }
-            crate::parser::ast::StmtKind::For {
-                init, update, body, ..
-            } => {
-                if let Some(init) = init {
-                    collect_global_var_names_in_body(std::slice::from_ref(init.as_ref()), names);
-                }
-                if let Some(update) = update {
-                    collect_global_var_names_in_body(std::slice::from_ref(update.as_ref()), names);
-                }
-                collect_global_var_names_in_body(body, names);
-            }
-            crate::parser::ast::StmtKind::Switch { cases, default, .. } => {
-                for (_, body) in cases {
-                    collect_global_var_names_in_body(body, names);
-                }
-                if let Some(body) = default {
-                    collect_global_var_names_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::Try {
-                try_body,
-                catches,
-                finally_body,
-            } => {
-                collect_global_var_names_in_body(try_body, names);
-                for catch in catches {
-                    collect_global_var_names_in_body(&catch.body, names);
-                }
-                if let Some(body) = finally_body {
-                    collect_global_var_names_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::ClassDecl { methods, .. }
-            | crate::parser::ast::StmtKind::InterfaceDecl { methods, .. }
-            | crate::parser::ast::StmtKind::TraitDecl { methods, .. } => {
-                for method in methods {
-                    collect_global_var_names_in_body(&method.body, names);
-                }
-            }
-            _ => {}
-        }
-    }
+    crate::global_decls::collect_global_var_names(statements)
 }
 
 /// Lowers one user-defined function declaration into an EIR function.
@@ -280,10 +207,14 @@ pub(crate) fn lower_user_function(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.widened_scalar_locals,
+        &check_result.local_bind_kill_sites,
+        &check_result.local_retype_sites,
+        &check_result.mixed_storage_store_sites,
         name.to_string(),
         constants,
         None,
         body_return_type.clone(),
+        signature.declared_return,
         &eir_signature.params,
         None,
         false,
@@ -383,10 +314,14 @@ pub(crate) fn lower_class_method(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.widened_scalar_locals,
+        &check_result.local_bind_kill_sites,
+        &check_result.local_retype_sites,
+        &check_result.mixed_storage_store_sites,
         name.clone(),
         constants,
         Some(class_name.to_string()),
         method_body_return_type.clone(),
+        signature.declared_return,
         &body_params,
         None,
         false,
@@ -397,6 +332,31 @@ pub(crate) fn lower_class_method(
     );
     add_closures(module, closures);
     module.class_methods.push(function);
+}
+
+/// Returns the local-binding decision maps an eval-AOT fragment lowers against: all three EMPTY.
+///
+/// A fragment is parsed from a string literal, so every span in it is measured from line 1 of
+/// THAT string. Those spans live in a space of their own that no pass over the program ever
+/// visits: the ambiguity tally (`checker::binding_decision_ambiguity`) counts the nodes of
+/// `program` only, so it cannot see a fragment node and cannot report a collision with one.
+///
+/// A key that matched anyway would therefore be an ACCIDENT — two unrelated nodes at the same line
+/// and column — and acting on it is never right: the fragment's code was never CHECKED, so no
+/// decision in these maps was ever made about it. Handing over empty maps is the structural
+/// statement of that, and it is observable: the outer program's marked `$b` recorded a store site
+/// at 2:1, an eval string's own `$b = 9;` sat at 2:1 of that string, and the mixed pre-declare gave
+/// the fragment's unrelated local boxed storage nothing had asked for.
+fn eval_aot_decision_maps() -> (
+    std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    std::collections::HashMap<Span, std::collections::HashSet<String>>,
+) {
+    (
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
+    )
 }
 
 /// Lowers one no-scope literal eval fragment as an internal EIR function.
@@ -429,6 +389,7 @@ pub(crate) fn lower_eval_aot_function(
     );
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
+    let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
@@ -450,10 +411,14 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.widened_scalar_locals,
+        &bind_kill_sites,
+        &retype_sites,
+        &mixed_storage_store_sites,
         "main".to_string(),
         constants,
         None,
         return_type,
+        signature.declared_return,
         &[],
         None,
         false,
@@ -536,6 +501,7 @@ pub(crate) fn lower_eval_aot_scope_function(
             scope_flush_writes.clone(),
         )
     });
+    let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
@@ -557,10 +523,14 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.widened_scalar_locals,
+        &bind_kill_sites,
+        &retype_sites,
+        &mixed_storage_store_sites,
         "main".to_string(),
         constants,
         None,
         return_type,
+        signature.declared_return,
         &signature.params,
         None,
         false,
@@ -658,10 +628,14 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.widened_scalar_locals,
+        &check_result.local_bind_kill_sites,
+        &check_result.local_retype_sites,
+        &check_result.mixed_storage_store_sites,
         function_name.clone(),
         constants,
         Some(class_name.to_string()),
         PhpType::Void,
+        false,
         &params,
         None,
         false,
@@ -775,6 +749,11 @@ fn coercible_or_throw_stmt(
     )
 }
 
+/// Lowers the thunk that `new $class(...)` calls when the class is only known
+/// at run time.
+///
+/// The thunk pads the call with the constructor's declared defaults for the
+/// arguments the site did not provide, which a dynamic call site cannot know.
 pub(crate) fn lower_dynamic_constructor_thunk(
     class_name: &str,
     class_info: &ClassInfo,
@@ -1005,10 +984,14 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.widened_scalar_locals,
+        &check_result.local_bind_kill_sites,
+        &check_result.local_retype_sites,
+        &check_result.mixed_storage_store_sites,
         function_name.clone(),
         constants,
         Some(class_name.to_string()),
         PhpType::Void,
+        false,
         &params,
         None,
         false,
@@ -1208,10 +1191,14 @@ fn lower_closure_function_with_signature(
         parent.loop_storage_types,
         parent.string_incdec_locals,
         parent.widened_scalar_locals,
+        parent.bind_kill_sites,
+        parent.retype_sites,
+        parent.mixed_storage_store_sites,
         loop_storage_scope,
         &parent.constants,
         parent.current_class.clone(),
         closure_body_return_type.clone(),
+        signature.declared_return,
         &lowered_params,
         recursive_binding,
         false,
@@ -1246,10 +1233,17 @@ fn lower_body_into_function(
     loop_storage_types: &crate::types::LoopStorageTypes,
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
     widened_scalar_locals: &std::collections::HashSet<(String, String)>,
+    bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    retype_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    mixed_storage_store_sites: &std::collections::HashMap<
+        Span,
+        std::collections::HashSet<String>,
+    >,
     loop_storage_scope: String,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
     return_php_type: PhpType,
+    return_type_is_declared: bool,
     params: &[(String, PhpType)],
     recursive_closure_binding: Option<RecursiveClosureBinding>,
     in_main: bool,
@@ -1293,6 +1287,9 @@ fn lower_body_into_function(
         loop_storage_types,
         string_incdec_locals,
         widened_scalar_locals,
+        bind_kill_sites,
+        retype_sites,
+        mixed_storage_store_sites,
         loop_storage_scope,
         constants,
         top_level_env,
@@ -1305,6 +1302,7 @@ fn lower_body_into_function(
         web,
     );
     ctx.by_ref_return = function_by_ref_return;
+    ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);
     }

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/debug_probe.py 2>&1 | head -20",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/debug_probe.py 2>&1 | head -20: rc = 1 --- stdout --- --- stderr --- error[2:1]: Undefined function: Dom\\import_simplexml error[3:1]: Undefined f",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/debug_probe.py 2>&1 | head -20: rc = 1 --- stdout --- --- stderr --- error[2:1]: Undefined function: Dom\\import_simplexml error[3:1]: Undefined function: _ error[4:1]: abs() takes exactly 1 argument error[5:1]: acos() takes exactly 1 argument error[6:1]: Undefined function: acosh error[7:1]: Undefined function: addcslashes error[8:1]: addslashes() takes exactly 1 argument error[9:1]: array_all() takes exactly 2 arguments error[10:1]: array_any() takes exactly 2 arguments error[11:1]: Undefined function: array_change_key_case error[12:1]: array_chunk() takes 2 or 3 arguments error[13:1]: array_column() takes exactly 2 arguments error[14:1]: array_combine() takes exactly 2 arguments error[15:1]: array_count_values() takes exactly 1 argument error[16:1]: array_diff() takes exactly 2 arguments error[17:1]: array_diff_assoc() takes exactly 2 arguments",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "348a66572cddc06d0b9cd86b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:06:08.910Z",
+  "stored_at": "2026-08-21T10:06:08.911Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n copywrap.php 2>&1 | sed 's| in /private.*||' > cwp.txt; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o copywrap copywrap.php 2>&1|tail -1; ./copywrap 2>&1 | sed 's| in /private.*||' > cwe.txt; diff cwp.txt cwe.txt; echo \"--- elephc ---\"; cat cwe.txt",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n copywrap.php 2>&1 | s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1aeb38202571e6f5a4dbfe6e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:13:57.613Z",
+  "stored_at": "2026-08-22T20:13:57.614Z"
+}

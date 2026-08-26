@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/Research/php-src && grep -rhoE '\"(http|ssl|socket|ftp|phar|zlib)\", *\"[A-Za-z_0-9]+\"' ext/standard/*.c main/streams/*.c ext/openssl/*.c ext/phar/*.c ext/zlib/*.c ext/curl/*.c 2>/dev/null | tr -d '\"' | sed 's/, */\\./' | sort -u; echo \"=== GET_VER_OPT ===\"; grep -rhoE 'GET_VER_OPT\\(\"[a-z_0-9]+\"\\)|GET_VER_OPT_STRING\\(\"[a-z_0-9]+\"|GET_VER_OPT_LONG\\(\"[a-z_0-9]+\"' ext/openssl/xp_ssl.c | grep -oE '\"[a-z_0-9]+\"' | tr -d '\"' | sort -u | sed 's/^/ssl./'",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/Research/php-src && grep -rhoE '\"(http|ssl|socket|ftp|phar|zlib)\", *\"[A-Za-z_0-9]+\"' ext/standard/*.c main/streams/*.c ext/openssl/*.c ext/phar/*.c ext/zlib/*.c ext/curl/*.c 2>/dev/null | tr -d '\"' | sed 's/, */\\./' | sort -u; echo \"=== GET_VER_OPT ===\"; grep -rhoE 'GET_VER_O",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/Research/php-src && grep -rhoE '\"(http|ssl|socket|ftp|phar|zlib)\", *\"[A-Za-z_0-9]+\"' ext/standard/*.c main/streams/*.c ext/openssl/*.c ext/phar/*.c ext/zlib/*.c ext/curl/*.c 2>/dev/null | tr -d '\"' | sed 's/, */\\./' | sort -u; echo \"=== GET_VER_OPT ===\"; grep -rhoE 'GET_VER_OPT\\(\"[a-z_0-9]+\"\\)|GET_VER_OPT_STRING\\(\"[a-z_0-9]+\"|GET_VER_OPT_LONG\\(\"[a-z_0-9]+\"' ext/openssl/xp_ssl.c | grep -oE '\"[a-z_0-9]+\"' | tr -d '\"' | sort -u | sed 's/^/ssl./': p.overwrite ftp.proxy ftp.resume_pos http.auto_decode http.content http.follow_location http.header http.ignore_errors http.max_redirects http.method http.protocol_version http.request_fulluri http.user_agent socket.backlog socket.bindto socket.ipv6_v6only socket.so_broadcast socket.so_reuseport socket.tcp_nodelay ssl.capture_peer_cert ssl.capture_peer_cert_chain ssl.crypto_method ssl.dh_param ssl.ecdh_curve ssl.honor_cipher_order ssl.peer_certificate ssl.peer_certificate_chain ssl.peer_name ssl.reneg_limit ssl.reneg_limit_callback ssl.reneg_window ssl.rsa_key_size ssl.single_dh_use zlib.level === GET_VER_OPT === ssl.allow_self_signed ssl.alpn_protocols ssl.cafile ssl.capath ssl.ciphers ssl.disable_compression ssl.max_proto_version ssl.min_proto_version ssl.no_ticket ssl.passphrase ssl.peer_fingerprint ssl.peer_name ssl.security_level ssl.verify_depth ssl.verify_peer ssl.verify_peer_name",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eb09aee0ce6e516532269dd5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:18:16.174Z",
+  "stored_at": "2026-08-14T14:18:16.175Z"
+}

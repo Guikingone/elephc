@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1,60p' tests/fresh_result_ownership_leak_tests.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1,60p' tests/fresh_result_ownership_leak_tests.rs: marking them Fresh on the strength of //! that report. //! - The aliasing test is the safety half. Marking a result `Fresh` asserts it aliases no //! argument; if th",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1,60p' tests/fresh_result_ownership_leak_tests.rs: marking them Fresh on the strength of //! that report. //! - The aliasing test is the safety half. Marking a result `Fresh` asserts it aliases no //! argument; if that were wrong the release would free an argument's storage, so each //! builtin is called with a heap-string argument that is READ AFTER the call. //! - Host-target only: this is an IR-classification change with no architecture-specific //! assembly. Reference values captured from PHP 8.5.6 with `php -d xdebug.mode=off`. use std::fs; use std::path::{Path, PathBuf}; use std::process::Command; use std::sync::atomic::{AtomicUsize, Ordering}; static TEST_ID: AtomicUsize = AtomicUsize::new(0); /// Creates an isolated temp dir unique across parallel test threads/processes. fn make_test_dir(prefix: &str) -> PathBuf { let id = TEST_ID.fetch_add(1, Ordering::SeqCst); let tid = std::thread::current().id(); let pid = std::process::id();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "72e08f5372a81460707b65b2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:13:12.561Z",
+  "stored_at": "2026-08-23T13:13:12.563Z"
+}

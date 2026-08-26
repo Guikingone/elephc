@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && diff qp_p.txt qp_e.txt; echo \"=== fwlen:\"; diff fwlen_p.txt fwlen_e.txt && echo \"fwlen IDENTICAL\"",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && diff qp_p.txt qp_e.txt; echo \"=== fwlen:\"; diff fwlen_p.txt fwlen_e.txt && echo \"fwlen IDENTICAL\" failed: Exit code 1 14,17c14,15 < binary opt ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && diff qp_p.txt qp_e.txt; echo \"=== fwlen:\"; diff fwlen_p.txt fwlen_e.txt && echo \"fwlen IDENTICAL\" failed: Exit code 1 14,17c14,15 < binary opt 'a=20b=0Ac' < line-length 10 'yyyyyyyyy= < yyyyyyyyy= < yyyyyyy' --- > binary opt 'a b=0Ac' > line-length 10 'yyyyyyyyyyyyyyyyyyyyyyyyy' 29,31c27 < < Warning: fwrite(): Stream filter (convert.quoted-printable-decode): invalid byte sequence in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/qp.php on line 18 < bad escape '' --- > bad escape 'aZb' === fwlen: 6c6 < f null: len null n=5 file='hello' --- > f null: len null n=0 file=''",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d97f4aa22310bc2653140b4f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:08:22.726Z",
+  "stored_at": "2026-08-17T07:08:22.728Z"
+}

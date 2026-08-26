@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn object_property_type' -A 12 src/ir_lower/ | head -16; sed -n '1,15p' src/ir_lower/expr/unset.rs",
+  "summary": "grep -rn 'fn object_property_type' -A 12 src/ir_lower/ | head -16; sed -n '1,15p' src/ir_lower/expr/unset.rs: static_property_helpers.rs-111- return None; src/ir_lower/stmt/static_property_helpers.rs-112- }; src/ir_lower/stmt/static_property_helpers.rs-113- ctx.classes src/ir_lower/stmt/static_property_helpers.rs-114- ",
+  "text": "grep -rn 'fn object_property_type' -A 12 src/ir_lower/ | head -16; sed -n '1,15p' src/ir_lower/expr/unset.rs: static_property_helpers.rs-111- return None; src/ir_lower/stmt/static_property_helpers.rs-112- }; src/ir_lower/stmt/static_property_helpers.rs-113- ctx.classes src/ir_lower/stmt/static_property_helpers.rs-114- .get(class_name.trim_start_matches('\\\\'))? src/ir_lower/stmt/static_property_helpers.rs-115- .visible_property(property) src/ir_lower/stmt/static_property_helpers.rs-116- .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.codegen_repr())) //! Purpose: //! Direct unset lowering for locals, arrays, properties, and magic methods. //! //! Called from: //! - `crate::ir_lower::expr`. //! //! Key details: //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts. use super::*; /// Lowers supported `unset(...)` targets without evaluating them as ordinary call args. pub(super) fn lower_unset_locals( ctx: &mut LoweringContext<'_, '_>, args: &[Expr],",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bbeeb5d2cf8eba397056d979",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:27:08.859Z",
+  "stored_at": "2026-08-26T08:27:08.859Z"
+}

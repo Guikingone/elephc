@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"elephc_zip_entry_names|entry_names\" -g '*.rs' src/ | head -10",
+  "summary": "rg -rn \"elephc_zip_entry_names|entry_names\" -g '*.rs' src/ | head -10 completed",
+  "text": "rg -rn \"elephc_zip_entry_names|entry_names\" -g '*.rs' src/ | head -10 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "209f97faaa7e046dc6a359d5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:35:47.756Z",
+  "stored_at": "2026-08-16T15:35:47.756Z"
+}

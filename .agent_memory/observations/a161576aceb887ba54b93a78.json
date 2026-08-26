@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_ops.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_ops.rs: emit_csv_control_bytes(ctx, inst, \"fgetcsv\", &STREAM_CSV_CONTROLS)?;\n\n    // -- pack csv_opts = (esc << 16) | (enc << 8) | sep -- -> emit_csv_control_bytes(ctx, inst",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_ops.rs: emit_csv_control_bytes(ctx, inst, \"fgetcsv\", &STREAM_CSV_CONTROLS)?;\n\n    // -- pack csv_opts = (esc << 16) | (enc << 8) | sep -- -> emit_csv_control_bytes(ctx, inst, \"fgetcsv\", &STREAM_CSV_CONTROLS)?;\n    emit_csv_escape_deprecation(ctx, inst, \"fgetcsv\", 4);\n\n    // -- pack csv_opts = (esc << 16) | (enc << 8) | sep --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a161576aceb887ba54b93a78",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:26:30.089Z",
+  "stored_at": "2026-08-18T09:26:30.089Z"
+}

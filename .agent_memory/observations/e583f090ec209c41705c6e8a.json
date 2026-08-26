@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_closed_stream_type_error\" -A 22 src/codegen/lower_inst/builtins/io/resource_handles.rs | head -26",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_closed_stream_type_error\" -A 22 src/codegen/lower_inst/builtins/io/resource_handles.rs | head -26:  not a second copy of it. This used to hand-roll the same allocation, src/codegen/lower_inst/builtins/io/re",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_closed_stream_type_error\" -A 22 src/codegen/lower_inst/builtins/io/resource_handles.rs | head -26:  not a second copy of it. This used to hand-roll the same allocation, src/codegen/lower_inst/builtins/io/resource_handles.rs-294- // class id, message pair, code and `__rt_throw_current` jump — and the one thing it left out src/codegen/lower_inst/builtins/io/resource_handles.rs-295- // was the creation line, so php reported ` in FILE:LINE` for this TypeError and elephc src/codegen/lower_inst/builtins/io/resource_handles.rs-296- // reported nothing. A duplicate of the throw machinery could only ever drift from it. src/codegen/lower_inst/builtins/io/resource_handles.rs-297- super::super::exceptions::emit_type_error(ctx, &message); src/codegen/lower_inst/builtins/io/resource_handles.rs-298-} src/codegen/lower_inst/builtins/io/resource_handles.rs-299- src/codegen/lower_inst/builtins/io/resource_handles.rs-300-/// Dispatches a stream TypeError to the concrete PHP type name from the Mixed tag.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e583f090ec209c41705c6e8a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T12:43:25.643Z",
+  "stored_at": "2026-08-24T12:43:25.643Z"
+}

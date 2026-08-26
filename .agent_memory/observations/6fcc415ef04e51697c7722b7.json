@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"NormalizedBuiltinCall\" src/builtins/*.rs | grep -v \"pub struct\\|impl \\|pub type\" | head",
+  "summary": "grep -rn \"NormalizedBuiltinCall\" src/builtins/*.rs | grep -v \"pub struct\\|impl \\|pub type\" | head: src/builtins/semantics.rs:327: &NormalizedBuiltinCall<'a>, src/builtins/semantics.rs:575: let normalized = NormalizedBuiltinCall { src/builtins/semantics.rs:641: call: &NormalizedBuiltinCall<'_>,",
+  "text": "grep -rn \"NormalizedBuiltinCall\" src/builtins/*.rs | grep -v \"pub struct\\|impl \\|pub type\" | head: src/builtins/semantics.rs:327: &NormalizedBuiltinCall<'a>, src/builtins/semantics.rs:575: let normalized = NormalizedBuiltinCall { src/builtins/semantics.rs:641: call: &NormalizedBuiltinCall<'_>,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6fcc415ef04e51697c7722b7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:38:53.304Z",
+  "stored_at": "2026-08-18T10:38:53.305Z"
+}

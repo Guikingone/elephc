@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy sed -n '520,575p' $SRC/ext/standard/streamsfuncs.c",
+  "summary": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy sed -n '520,575p' $SRC/ext/standard/streamsfuncs.c: value, \"mode\", stream->mode); #if 0 /* TODO: needs updating for new filter API */",
+  "text": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy sed -n '520,575p' $SRC/ext/standard/streamsfuncs.c: value, \"mode\", stream->mode); #if 0 /* TODO: needs updating for new filter API */ if (stream->filterhead) { php_stream_filter *filter; MAKE_STD_ZVAL(newval); array_init(newval); for (filter = stream->filterhead; filter != NULL; filter = filter->next) { add_next_index_string(newval, filter->fops->label); } add_assoc_zval(return_value, \"filters\", newval); } #endif add_assoc_long(return_value, \"unread_bytes\", stream->writepos - stream->readpos); add_assoc_bool(return_value, \"seekable\", (stream->ops->seek) && (stream->flags & PHP_STREAM_FLAG_NO_SEEK) == 0); if (stream->orig_path) { add_assoc_string(return_value, \"uri\", stream->orig_path); } } /* }}} */ /* {{{ Retrieves list of registered socket transports */ PHP_FUNCTION(stream_get_transports) { ZEND_PARSE_PARAMETERS_NONE(); array_init(return_value); const HashTable *stream_xport_hash = php_stream_xport_get_hash(); zend_string *stream_xport;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4967adeb4a59c98e39f6f285",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:00:26.608Z",
+  "stored_at": "2026-08-17T07:00:26.609Z"
+}

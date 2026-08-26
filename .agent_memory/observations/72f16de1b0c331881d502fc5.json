@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/guard_stat_family.py; export CARGO_INCREMENTAL=0; cargo build -p elephc 2>&1 | grep -E \"^(error|warning)\" -A 6 | head -20; echo \"--- build done ---\"",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/guard_stat_family.py; export CARGO_INCREMENTAL=0; cargo build -p elephc 2>&1 | grep -E \"^(error|warning)\" -A 6 | head -20; echo \"--- build done -",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/guard_stat_family.py; export CARGO_INCREMENTAL=0; cargo build -p elephc 2>&1 | grep -E \"^(error|warning)\" -A 6 | head -20; echo \"--- build done ---\": stat.rs: 14 entry point(s) guarded across both arches --- build done ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "72f16de1b0c331881d502fc5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:27:30.818Z",
+  "stored_at": "2026-08-22T08:27:30.818Z"
+}

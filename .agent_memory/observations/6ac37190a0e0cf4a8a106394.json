@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '_cstr_buf\\|Failed to open stream\\|warn' src/codegen_support/runtime/io/file_get_contents.rs | head -20",
+  "summary": "grep -n '_cstr_buf\\|Failed to open stream\\|warn' src/codegen_support/runtime/io/file_get_contents.rs | head -20: ion(\"bl __rt_diag_warning\"); 136: emitter.instruction(\"bl __rt_diag_warning\"); 139: emitter.instruction(\"bl __rt_diag_warning\"); 144: emitter.instruction(\"bl __rt_diag_warning\"); 147: emitter.instruction(\"bl",
+  "text": "grep -n '_cstr_buf\\|Failed to open stream\\|warn' src/codegen_support/runtime/io/file_get_contents.rs | head -20: ion(\"bl __rt_diag_warning\"); 136: emitter.instruction(\"bl __rt_diag_warning\"); 139: emitter.instruction(\"bl __rt_diag_warning\"); 144: emitter.instruction(\"bl __rt_diag_warning\"); 147: emitter.instruction(\"bl __rt_diag_warning\"); 173: // php-src warns TWICE when the scheme names no wrapper, the missing-wrapper line first 175: emitter.instruction(\"str x3, [sp, #-16]!\"); // the errno survives the extra warning 187: emitter.instruction(\"bl __rt_unknown_wrapper_warning\"); 200: emitter.instruction(\"bl __rt_open_failed_warning\"); 212:/// Calls `__rt_diag_warning` on failure before returning (rax=0, rdx=0). 275: emitter.instruction(\"call __rt_diag_warning\"); // honours @ and the filter scope 280: emitter.instruction(\"call __rt_diag_warning\"); 283: emitter.instruction(\"call __rt_diag_warning\"); 288: emitter.instruction(\"call __rt_diag_warning\"); 291: emitter.instruction(\"call __rt_diag_warning\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6ac37190a0e0cf4a8a106394",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:19:09.853Z",
+  "stored_at": "2026-08-24T18:19:09.853Z"
+}

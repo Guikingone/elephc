@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '180,215p' src/codegen_support/prescan.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '180,215p' src/codegen_support/prescan.rs: ); constants.insert( \"STDOUT\".to_string(), (ExprKind::IntLiteral(0x1_0000_0002), PhpType::stream_resource()), ); constants.insert( \"STDERR\".to_string(), (ExprKind::IntLiteral",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '180,215p' src/codegen_support/prescan.rs: ); constants.insert( \"STDOUT\".to_string(), (ExprKind::IntLiteral(0x1_0000_0002), PhpType::stream_resource()), ); constants.insert( \"STDERR\".to_string(), (ExprKind::IntLiteral(0x1_0000_0003), PhpType::stream_resource()), ); constants.insert( \"LOCK_SH\".to_string(), (ExprKind::IntLiteral(1), PhpType::Int), ); constants.insert( \"LOCK_EX\".to_string(), (ExprKind::IntLiteral(2), PhpType::Int), ); constants.insert( \"LOCK_UN\".to_string(), (ExprKind::IntLiteral(3), PhpType::Int), ); constants.insert( \"LOCK_NB\".to_string(), (ExprKind::IntLiteral(4), PhpType::Int), ); for (name, value) in ARRAY_INT_CONSTANTS { constants.insert( (*name).to_string(), (ExprKind::IntLiteral(*value), PhpType::Int), ); } for (name, value) in crate::types::zlib_constants::ZLIB_INT_CONSTANTS { constants.insert( (*name).to_string(), (ExprKind::IntLiteral(*value), PhpType::Int), );",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cbb5b5eeaff2f00791c60b36",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:19:45.665Z",
+  "stored_at": "2026-08-23T09:19:45.666Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'OFFSET: i64 = 1[0-4][0-9]\\|OFFSET: i64 = 10[4-9]' src/codegen_support/runtime/resources/layout.rs | head -10; grep -n 'STREAM_STATE_SIZE\\|const STREAM_.*SIZE' src/codegen_support/runtime/resources/layout.rs | head -5",
+  "summary": "grep -n 'OFFSET: i64 = 1[0-4][0-9]\\|OFFSET: i64 = 10[4-9]' src/codegen_support/runtime/resources/layout.rs | head -10; grep -n 'STREAM_STATE_SIZE\\|const STREAM_.*SIZE' src/codegen_support/runtime/resources/layout.rs | head -5: 143:pub(crate) const STREAM_TLS_SESSION_OFFSET: i64 = 104; 146:pub(crate) const STREAM_CHUNK_",
+  "text": "grep -n 'OFFSET: i64 = 1[0-4][0-9]\\|OFFSET: i64 = 10[4-9]' src/codegen_support/runtime/resources/layout.rs | head -10; grep -n 'STREAM_STATE_SIZE\\|const STREAM_.*SIZE' src/codegen_support/runtime/resources/layout.rs | head -5: 143:pub(crate) const STREAM_TLS_SESSION_OFFSET: i64 = 104; 146:pub(crate) const STREAM_CHUNK_SIZE_OFFSET: i64 = 144; 93:pub(crate) const STREAM_STATE_SIZE: u64 = 320; 146:pub(crate) const STREAM_CHUNK_SIZE_OFFSET: i64 = 144; 218:pub(crate) const STREAM_DEFAULT_CHUNK_SIZE: i64 = 8192;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6a113237622b71494105e0cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T16:02:29.983Z",
+  "stored_at": "2026-08-26T16:02:29.983Z"
+}

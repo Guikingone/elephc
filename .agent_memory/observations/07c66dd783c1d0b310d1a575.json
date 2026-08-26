@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '225,255p' src/builtins/registry.rs",
+  "summary": "About to run: sed -n '225,255p' src/builtins/registry.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "07c66dd783c1d0b310d1a575",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:24:07.354Z",
+  "stored_at": "2026-08-18T11:24:07.354Z"
+}

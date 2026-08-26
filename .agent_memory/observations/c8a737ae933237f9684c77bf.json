@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'CallableDescriptorInvoke\\|CallableInvoke\\|Op::Callable' src/ir/instr.rs | head -8; echo '--- ir for the probe ---'; S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cd $S/work/dynamic-method-builtin/elephc && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q --emit-ir p.php >/dev/null 2>&1; ls",
+  "summary": "grep -n 'CallableDescriptorInvoke\\|CallableInvoke\\|Op::Callable' src/ir/instr.rs | head -8; echo '--- ir for the probe ---'; S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cd $S/work/dynamic-met",
+  "text": "grep -n 'CallableDescriptorInvoke\\|CallableInvoke\\|Op::Callable' src/ir/instr.rs | head -8; echo '--- ir for the probe ---'; S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cd $S/work/dynamic-method-builtin/elephc && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q --emit-ir p.php >/dev/null 2>&1; ls failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Split it into plain, separate commands and run them from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c8a737ae933237f9684c77bf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:11:27.775Z",
+  "stored_at": "2026-08-25T12:11:27.775Z"
+}

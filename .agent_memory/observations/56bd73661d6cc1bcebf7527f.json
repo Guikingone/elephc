@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '95,140p' src/codegen_support/runtime/io/stream_get_line.rs",
+  "summary": "sed -n '95,140p' src/codegen_support/runtime/io/stream_get_line.rs: mitter.instruction(\"cbnz x9, __rt_sgl_filtered_byte\"); // filtered: take the byte from the chain emitter.instruction(\"ldr x1, [sp, #48]\"); // reserved result start pointer emitter.instruction(\"ldr x10, [sp, #56]\"); // running total emitter.instruction(",
+  "text": "sed -n '95,140p' src/codegen_support/runtime/io/stream_get_line.rs: mitter.instruction(\"cbnz x9, __rt_sgl_filtered_byte\"); // filtered: take the byte from the chain emitter.instruction(\"ldr x1, [sp, #48]\"); // reserved result start pointer emitter.instruction(\"ldr x10, [sp, #56]\"); // running total emitter.instruction(\"add x1, x1, x10\"); // single-byte write pointer inside the reservation emitter.instruction(\"ldr x0, [sp, #64]\"); // reload the resolved backend descriptor emitter.instruction(\"mov x2, #1\"); // read exactly one byte emitter.syscall(3); if plat.needs_cmp_before_error_branch() { emitter.instruction(\"cmp x0, #0\"); // Linux: a negative result means failure } emitter.instruction(&plat.branch_on_syscall_success(\"__rt_stream_get_line_read_ok\")); // continue when the read succeeded if plat.needs_cmp_before_error_branch() { emitter.instruction(&format!(\"cmn x0, #{}\", plat.would_block_errno())); // Linux: compare read result with -EAGAIN/-EWOULDBLOCK",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "56bd73661d6cc1bcebf7527f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:38:43.758Z",
+  "stored_at": "2026-08-21T13:38:43.759Z"
+}

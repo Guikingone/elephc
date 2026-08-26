@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '250,266p' tests/codegen/support/projects.rs; grep -n \"pub(crate) fn \" tests/codegen/support/projects.rs | rg -i \"stderr|fail\" | head -4",
+  "summary": "sed -n '250,266p' tests/codegen/support/projects.rs; grep -n \"pub(crate) fn \" tests/codegen/support/projects.rs | rg -i \"stderr|fail\" | head -4: pipeline (lexer, parser, resolver, optimizer, type checker, codegen), // links with the runtime, and captures stderr from the failed process. // Used for error/regression fixt",
+  "text": "sed -n '250,266p' tests/codegen/support/projects.rs; grep -n \"pub(crate) fn \" tests/codegen/support/projects.rs | rg -i \"stderr|fail\" | head -4: pipeline (lexer, parser, resolver, optimizer, type checker, codegen), // links with the runtime, and captures stderr from the failed process. // Used for error/regression fixtures that verify runtime failures (e.g., type mismatches, // missing properties, undefined behavior that only surfaces at execution time). /// Provides the Compile and run files expect failure helper used by the projects module. pub(crate) fn compile_and_run_files_expect_failure( files: &[(&str, &str)], main_file: &str, ) -> String { let id = TEST_ID.fetch_add(1, Ordering::SeqCst); let tid = std::thread::current().id(); let pid = std::process::id(); 187:pub(crate) fn compile_and_run_expect_failure(source: &str) -> String { 260:pub(crate) fn compile_and_run_files_expect_failure( 410:pub(crate) fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bool { 418:pub(crate) fn compile_files_fails_with_defines(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b48144b3934d63cc1afa2116",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:12:21.642Z",
+  "stored_at": "2026-08-17T18:12:21.643Z"
+}

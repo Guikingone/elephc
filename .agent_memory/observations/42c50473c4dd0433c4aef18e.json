@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"label_global(\\\"__rt_diag_warning\\\")\" src/codegen_support/runtime/diagnostics.rs",
+  "summary": "grep -n \"label_global(\\\"__rt_diag_warning\\\")\" src/codegen_support/runtime/diagnostics.rs: 80: emitter.label_global(\"__rt_diag_warning\"); 214: emitter.label_global(\"__rt_diag_warning\");",
+  "text": "grep -n \"label_global(\\\"__rt_diag_warning\\\")\" src/codegen_support/runtime/diagnostics.rs: 80: emitter.label_global(\"__rt_diag_warning\"); 214: emitter.label_global(\"__rt_diag_warning\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "42c50473c4dd0433c4aef18e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T17:05:13.737Z",
+  "stored_at": "2026-08-19T17:05:13.738Z"
+}

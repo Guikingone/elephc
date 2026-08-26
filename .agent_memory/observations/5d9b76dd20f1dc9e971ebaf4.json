@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/requirements.rs",
+  "command": "",
+  "summary": "About to run: Edit",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5d9b76dd20f1dc9e971ebaf4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:49:00.252Z",
+  "stored_at": "2026-08-18T09:49:00.252Z",
+  "low_signal": true
+}

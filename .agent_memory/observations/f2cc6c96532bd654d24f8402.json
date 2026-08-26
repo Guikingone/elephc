@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -rln \"fscanf\" --glob '*.rs' src/builtins/ | head; echo \"=== catalog sscanf ===\"; rtk proxy sed -n '14470,14510p' crates/elephc-builtin-contract/src/catalog_data.rs; echo \"=== catalog fscanf ===\"; rtk proxy sed -n '6935,6975p' crates/elephc-builtin-contract/src/catalog_data.rs",
+  "summary": "rtk proxy rg -rln \"fscanf\" --glob '*.rs' src/builtins/ | head; echo \"=== catalog sscanf ===\"; rtk proxy sed -n '14470,14510p' crates/elephc-builtin-contract/src/catalog_data.rs; echo \"=== catalog fscanf ===\"; rtk proxy sed -n '6935,6975p' crates/elephc-builtin-contract/src/catalog_data.rs: , ], variadic: Some(\"vars\"), ",
+  "text": "rtk proxy rg -rln \"fscanf\" --glob '*.rs' src/builtins/ | head; echo \"=== catalog sscanf ===\"; rtk proxy sed -n '14470,14510p' crates/elephc-builtin-contract/src/catalog_data.rs; echo \"=== catalog fscanf ===\"; rtk proxy sed -n '6935,6975p' crates/elephc-builtin-contract/src/catalog_data.rs: , ], variadic: Some(\"vars\"), min_args: None, max_args: None, arity_error: None, returns: TypeSpec::Mixed, by_ref_return: false, === catalog fscanf === by_ref_return: false, summary: \"Binary-safe file read.\", examples: &[ ], php_manual: Some(\"function.fread\"), deprecation: None, extension: false, internal: false, requirements: &[], }, BuiltinContract { id: BuiltinId::from_canonical_name(\"fscanf\"), name: \"fscanf\", area: Area::Io, kind: BuiltinKind::Function, params: &[ ParamSpec { name: \"stream\", ty: TypeSpec::Mixed, default: None, by_ref: false, writes: None, }, ParamSpec { name: \"format\", ty: TypeSpec::Str, default: None, by_ref: false, writes: None, }, ], variadic: Some(\"vars\"), min_args: None, max_args: None, arity_error: None, returns: TypeSpec::Mixed, by_ref_return: false, summary: \"Parses input from a file according to a format.\", examples: &[ ], php_manual: Some(\"function.fscanf\"),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f2cc6c96532bd654d24f8402",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:04:53.226Z",
+  "stored_at": "2026-08-16T16:04:53.226Z"
+}

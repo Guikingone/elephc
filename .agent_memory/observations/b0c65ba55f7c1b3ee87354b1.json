@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff src/codegen/lower_inst/builtins/io/stream_filters.rs docs/php/streams.md",
+  "summary": "git diff src/codegen/lower_inst/builtins/io/stream_filters.rs docs/php/streams.md: @ pub(super) fn emit_literal_compress_wrapper_fopen_result( } let writing = direction == CompressWrapperDirection::Write; let staged = matches!(underlying, CompressUnderlying::Staged { .. }); - if writing { + if writing && matches!(kind,",
+  "text": "git diff src/codegen/lower_inst/builtins/io/stream_filters.rs docs/php/streams.md: @ pub(super) fn emit_literal_compress_wrapper_fopen_result( } let writing = direction == CompressWrapperDirection::Write; let staged = matches!(underlying, CompressUnderlying::Staged { .. }); - if writing { + if writing && matches!(kind, CompressWrapper::Zlib) { // The level has to be read BEFORE the open: `__rt_fopen` returns the descriptor in the // very register the option walk would clobber, and the context scope is live either way. // @@ -754,7 +778,11 @@ pub(super) fn emit_literal_compress_wrapper_fopen_result( emit_record_stream_meta_after_boxed_literal(ctx, 8, full_uri); } CompressWrapper::Bzip2 => { - emit_bzip2_decompress_attach_in_place(ctx); + if writing { + emit_bzip2_compress_wrapper_attach_in_place(ctx); + } else { + emit_bzip2_decompress_attach_in_place(ctx); + } emit_adopt_attached_compress_descriptor(ctx); emit_record_stream_meta_after_boxed_literal(ctx, 9, full_uri); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b0c65ba55f7c1b3ee87354b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:30:12.982Z",
+  "stored_at": "2026-08-18T15:30:12.983Z"
+}

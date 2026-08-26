@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"PHP_VERSION\\b\" /Users/guillaumeloulier/PhpstormProjects/Research/php-src/main/php_version.h 2>/dev/null; cd /Users/guillaumeloulier/PhpstormProjects/Research/php-src && git branch -a 2>/dev/null | head -20",
+  "summary": "About to run: grep -n \"PHP_VERSION\\b\" /Users/guillaumeloulier/PhpstormProjects/Research/php-src/main/php_version.h 2>/dev/null; cd /Users/guillaumeloulier/PhpstormProjects/Research/php-src && git branch -a 2>/dev/n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "39bbbfaf54bc56d0c5c5a2b9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:42:34.372Z",
+  "stored_at": "2026-08-18T15:42:34.373Z"
+}

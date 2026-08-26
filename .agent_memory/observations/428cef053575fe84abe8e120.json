@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/assoc_builtin_type.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/assoc_builtin_type.py: \"\"\"The same fix for a STRING-KEYED literal, whose value walk is a separate function.\n\nThe indexed walk was taught to ask th",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/assoc_builtin_type.py: \"\"\"The same fix for a STRING-KEYED literal, whose value walk is a separate function.\n\nThe indexed walk was taught to ask the checker for a builtin call's type. The associative walk has\nits own copy of the same ladder — user functions, extern functions, syntactic guess — and it typed\n\n    [\"scalar\" => json_decode(\"1\"), \"map\" => json_decode('{\"a\":1}', true)]\n\nas `array<string, string>`, so every value read back as a declared string. Two of the tests written\nminutes earlier caught it, which is what they are for.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProject",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "428cef053575fe84abe8e120",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:22:16.989Z",
+  "stored_at": "2026-08-22T19:22:16.990Z"
+}

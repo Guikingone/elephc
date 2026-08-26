@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/gapsmsg.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/gapsmsg.txt: fix(checker): an EMPTY array by reference lost everything the callee put in it, and a PROPERTY could not be passed by reference at all\n\nT",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/gapsmsg.txt: fix(checker): an EMPTY array by reference lost everything the callee put in it, and a PROPERTY could not be passed by reference at all\n\nTwo gaps at the same boundary, both measured against `php -n` 8.5.6.\n\nAN EMPTY ARRAY PASSED BY REFERENCE.\n\n```php\nfunction fill(array &$a): void { $a[] = 1; $a[] = 2; }\n$e = []; fill($e); echo count($e), \":\", implode(\",\", $e);\n```\n\nphp prints `2:1,2`. This backend SEGFAULTED before the by-reference widening\nlanded, and answered `2:` after it — the count was right and every element read\nback as nothing, because the caller kept reading `array<never>` storage the",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "092bdb42c48d6260aef07bf1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T21:33:33.794Z",
+  "stored_at": "2026-08-16T21:33:33.794Z"
+}

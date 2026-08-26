@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"emit_static_exception_at\\|emit_value_error_at\\|emit_type_error_at\" src/ | grep -v \"fn emit\" | head -8",
+  "summary": "About to run: grep -rn \"emit_static_exception_at\\|emit_value_error_at\\|emit_type_error_at\" src/ | grep -v \"fn emit\" | head -8",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "68f129da18d835c5ee50bf9f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:55:05.184Z",
+  "stored_at": "2026-08-21T18:55:05.184Z"
+}

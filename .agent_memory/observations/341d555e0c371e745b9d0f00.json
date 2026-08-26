@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs: emitter.instruction(\"str x12, [sp, #2096]\");                                   // save total nfds\n    emitter.instruction(\"cbz x12, __rt_stream_select_return_ze -> emitter",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs: emitter.instruction(\"str x12, [sp, #2096]\");                                   // save total nfds\n    emitter.instruction(\"cbz x12, __rt_stream_select_return_ze -> emitter.instruction(\"str x12, [sp, #2096]\");                                   // save total nfds\n    emitter.instruction(\"cbz x12, __rt_stream_select_no_castable\");               // no entries at all → php's ValueError\n    emitter.instruction(\"mov x13, #256\");                                         // pollfd capacity ceiling\n    emitter.instruction(\"cmp x12, x13\");                                         // exceeds the stack-allocated capacity?\n    emitter.instruction(\"b.gt",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "341d555e0c371e745b9d0f00",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:46:02.695Z",
+  "stored_at": "2026-08-17T06:46:02.696Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd ~/.cache/elephc; objdump -d --start-address=0x36b40 --stop-address=0x36bb0 runtime-v0.26.5-macos-aarch64-rta9a52f5f50e36c45-heap8388608.o 2>/dev/null | head -30",
+  "summary": "About to run: cd ~/.cache/elephc; objdump -d --start-address=0x36b40 --stop-address=0x36bb0 runtime-v0.26.5-macos-aarch64-rta9a52f5f50e36c45-heap8388608.o 2>/dev/null | head -30",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "af5a95524f431358746b01a6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:12:12.183Z",
+  "stored_at": "2026-08-23T08:12:12.184Z"
+}

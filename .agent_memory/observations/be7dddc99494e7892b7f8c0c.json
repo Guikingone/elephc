@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_INCREMENTAL=0 cargo build 2>&1 | grep -i \"warning\" -A 5 | head -20",
+  "summary": "CARGO_INCREMENTAL=0 cargo build 2>&1 | grep -i \"warning\" -A 5 | head -20 completed",
+  "text": "CARGO_INCREMENTAL=0 cargo build 2>&1 | grep -i \"warning\" -A 5 | head -20 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "be7dddc99494e7892b7f8c0c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:39:10.533Z",
+  "stored_at": "2026-08-21T12:39:10.534Z",
+  "low_signal": true
+}

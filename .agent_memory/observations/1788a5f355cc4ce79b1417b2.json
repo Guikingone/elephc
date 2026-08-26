@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '265,345p' crates/elephc-builtin-contract/src/support.rs",
+  "summary": "sed -n '265,345p' crates/elephc-builtin-contract/src/support.rs: te() { let mut shared_runtime = 0; let mut hybrid_adapter = 0; let mut interpreter_adapter = 0; let mut unsupported = 0; for contract in contracts() { match eval_execution(contract) { Some(EvalExecution::SharedRuntime(_)) => shared_runtime += 1, Some(Eval",
+  "text": "sed -n '265,345p' crates/elephc-builtin-contract/src/support.rs: te() { let mut shared_runtime = 0; let mut hybrid_adapter = 0; let mut interpreter_adapter = 0; let mut unsupported = 0; for contract in contracts() { match eval_execution(contract) { Some(EvalExecution::SharedRuntime(_)) => shared_runtime += 1, Some(EvalExecution::Adapter { runtime_builtin: Some(_), reason: EvalAdapterReason::AdditionalSignatureSemantics, }) => hybrid_adapter += 1, Some(EvalExecution::Adapter { runtime_builtin: None, .. }) => interpreter_adapter += 1, Some(other) => panic!(\"invalid eval execution for {}: {other:?}\", contract.name), None => unsupported += 1, } } assert_eq!(shared_runtime, 19); assert_eq!(hybrid_adapter, 2); assert_eq!(interpreter_adapter, 453); assert_eq!(unsupported, 70); assert_eq!( eval_execution(lookup(\"strval\").expect(\"strval contract\")), Some(EvalExecution::Adapter { runtime_builtin: None, reason: EvalAdapterReason::DynamicObjectCoercion, }) ); } }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1788a5f355cc4ce79b1417b2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:58:55.582Z",
+  "stored_at": "2026-08-14T14:58:55.584Z"
+}

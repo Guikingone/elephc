@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '<?php\\n$p = tempnam(sys_get_temp_dir(), \"cr\");\\nfile_put_contents($p, \"a\\\\rb\\\\nc\\\\r\\\\n\\\\nd\");\\n$o = new SplFileObject($p);\\n$o->setFlags(SplFileObject::DROP_NEW_LINE);\\nforeach ($o as $l) { echo bin2hex($l), \"|\"; }\\necho \"\\\\n\";\\nunlink($p);\\n' > crdrop.php; php -n crdrop.php",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '<?php\\n$p = tempnam(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "29c03606af2d6028433afec7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:29:23.460Z",
+  "stored_at": "2026-08-23T09:29:23.461Z"
+}

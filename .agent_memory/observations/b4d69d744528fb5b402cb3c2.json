@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"label_global\\|URI_PTR\" src/codegen_support/runtime/resources/stream/aarch64.rs | head -30",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"label_global\\|URI_PTR\" src/codegen_support/runtime/resources/stream/aarch64.rs | head -30: 27: STREAM_URI_PTR_OFFSET, 52: emitter.label_global(\"__rt_stream_attach_context\"); 90: emitter.label_global(\"__rt_stream_ado",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"label_global\\|URI_PTR\" src/codegen_support/runtime/resources/stream/aarch64.rs | head -30: 27: STREAM_URI_PTR_OFFSET, 52: emitter.label_global(\"__rt_stream_attach_context\"); 90: emitter.label_global(\"__rt_stream_adopt_fd\"); 208: emitter.label_global(\"__rt_stream_state\"); 248: emitter.label_global(\"__rt_stream_fd\"); 279: emitter.label_global(\"__rt_stream_eof_get\"); 331: emitter.label_global(\"__rt_stream_tls_session\"); 352: emitter.label_global(\"__rt_stream_set_tls_session\"); 377: emitter.label_global(\"__rt_stream_eof_set\"); 418: emitter.label_global(\"__rt_stream_chunk_size\"); 439: emitter.label_global(\"__rt_stream_set_chunk_size\"); 472: emitter.label_global(\"__rt_stream_close_backend\"); 577: emitter.label_global(\"__rt_stream_destroy_state\"); 589: \"ldr x0, [x0, #{}]\", STREAM_URI_PTR_OFFSET 593: \"str xzr, [x9, #{}]\", STREAM_URI_PTR_OFFSET",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b4d69d744528fb5b402cb3c2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:59:13.183Z",
+  "stored_at": "2026-08-23T07:59:13.184Z"
+}

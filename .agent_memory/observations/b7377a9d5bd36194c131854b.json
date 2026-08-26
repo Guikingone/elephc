@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_ops.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_ops.rs: /// It is also VERSION-GATED, which the rest of the diagnostic surface already is and this was\n/// not: PHP 8.2 and 8.3 print nothing here, so `--php-version 8. -> /",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_ops.rs: /// It is also VERSION-GATED, which the rest of the diagnostic surface already is and this was\n/// not: PHP 8.2 and 8.3 print nothing here, so `--php-version 8. -> /// It is also VERSION-GATED, which the rest of the diagnostic surface already is and this was\n/// not: PHP 8.2 and 8.3 print nothing here, so `--php-version 8.3` printing the notice made\n/// elephc noisier than the interpreter it is asked to imitate.\n///\n/// And it comes LAST, after the control characters are validated. php checks the separator, the\n/// enclosure and the escape for being a single character before it reaches the notice, so a call\n/// that throws `ValueError` ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b7377a9d5bd36194c131854b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:27:01.574Z",
+  "stored_at": "2026-08-18T09:27:01.574Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '<?php\\necho \"a\\\\n\";\\nif (is_dir(\".\")) { echo \"yes\\\\n\"; } else { echo \"no\\\\n\"; }\\nif (is_file(\"nope3\")) { echo \"f\\\\n\"; } else { echo \"nf\\\\n\"; }\\nif (file_exists(\"nope3\")) { echo \"e\\\\n\"; } else { echo \"ne\\\\n\"; }\\necho \"b\\\\n\";\\n' > isdir5.php; python3 diff1.py isdir5.php",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '<?php\\necho \"a\\\\n\";\\",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9faa3a290200d9b43715f367",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:18:50.897Z",
+  "stored_at": "2026-08-23T12:18:50.897Z"
+}

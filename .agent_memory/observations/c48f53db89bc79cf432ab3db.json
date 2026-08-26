@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_fgcnotice2.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_fgcnotice2.py: import pathlib\n\nroot = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-s",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_fgcnotice2.py: import pathlib\n\nroot = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\np = root / \"src/codegen_support/runtime/io/file_get_contents.rs\"\ns = p.read_text()\n\n# ------------------------------------------------------------------ aarch64\nold = '''    if plat.needs_cmp_before_error_branch() {\n        emitter.instruction(\"cmp x0, #0\");                                      // Linux answers -errno\n    }\n    emitter.instruction(&plat.branch_on_syscall_success(\"__rt_fgc_read_ok\"));\n    emitter.instruction(\"mov x0, #0\");                     ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c48f53db89bc79cf432ab3db",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:44:08.849Z",
+  "stored_at": "2026-08-24T13:44:08.850Z"
+}

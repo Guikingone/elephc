@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'assert_eq!(out\\.stderr, \"\")\\|assert!(out\\.stderr\\.is_empty())' tests/codegen/ | sed 's/^tests\\/codegen\\///' | awk -F: '{print $1}' | sort | uniq -c | sort -rn",
+  "summary": "grep -rn 'assert_eq!(out\\.stderr, \"\")\\|assert!(out\\.stderr\\.is_empty())' tests/codegen/ | sed 's/^tests\\/codegen\\///' | awk -F: '{print $1}' | sort | uniq -c | sort -rn: 10 regressions/arrays.rs 6 objects/property_access/nullsafe.rs 5 io/streams.rs 3 arrays/indexed/oob_reads.rs 2 io/printing.rs 2 io/misc.rs 2 callables",
+  "text": "grep -rn 'assert_eq!(out\\.stderr, \"\")\\|assert!(out\\.stderr\\.is_empty())' tests/codegen/ | sed 's/^tests\\/codegen\\///' | awk -F: '{print $1}' | sort | uniq -c | sort -rn: 10 regressions/arrays.rs 6 objects/property_access/nullsafe.rs 5 io/streams.rs 3 arrays/indexed/oob_reads.rs 2 io/printing.rs 2 io/misc.rs 2 callables/constants_and_system.rs 1 objects/nullable_dispatch.rs 1 io/files.rs 1 eval.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6a44cc5e528b532c443162a3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:14:32.134Z",
+  "stored_at": "2026-08-18T15:14:32.137Z"
+}

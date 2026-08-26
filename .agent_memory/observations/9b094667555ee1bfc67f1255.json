@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_exact_flag.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_exact_flag.py: \"\"\"The completeness flag reads the EIR module, not the checker's maps.\n\nMEASURED: for `throw new RuntimeException(\"boom\");` — ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_exact_flag.py: \"\"\"The completeness flag reads the EIR module, not the checker's maps.\n\nMEASURED: for `throw new RuntimeException(\"boom\");` — a program that declares neither — the\nchecker hands the data emitter `functions=1 classes=11`. Those maps carry the built-in Throwable\nhierarchy and a synthetic entry, so they cannot answer \"can this module put a user frame on the\nstack\". The EIR module can: it holds the function BODIES that would become frames.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n\ndef patch(rel, old, new",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9b094667555ee1bfc67f1255",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:29:10.967Z",
+  "stored_at": "2026-08-22T12:29:10.968Z"
+}

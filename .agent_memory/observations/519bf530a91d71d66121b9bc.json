@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c '\nimport subprocess,os,glob\nD=\"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs/probes/\"\nE=\"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/target/debug/elephc\"\nos.chdir(D)\nfor f in sorted(glob.glob(\"p*.php\"), key=lambda x:int(x[1:].split(\"_\")[0])):\n    base=f[:-4]\n    php=subprocess.run([\"php\",\"-n\",f],capture_output=True,text=True,timeout=60)\n    c=subprocess.run([E,\"-q\",f],capture_output=True,text=True,timeout=30… [+846 chars truncated]",
+  "summary": "About to run: python3 -c ' import subprocess,os,glob D=\"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scrat",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "519bf530a91d71d66121b9bc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:18:13.606Z",
+  "stored_at": "2026-08-14T14:18:13.607Z"
+}

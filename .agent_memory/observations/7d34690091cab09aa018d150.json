@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'cannot reassign' src/ | head -5",
+  "summary": "grep -rn 'cannot reassign' src/ | head -5: src/types/checker/stmt_check/assignments/locals.rs:771: \"Type error: cannot reassign ${} from {} to {}\",",
+  "text": "grep -rn 'cannot reassign' src/ | head -5: src/types/checker/stmt_check/assignments/locals.rs:771: \"Type error: cannot reassign ${} from {} to {}\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7d34690091cab09aa018d150",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T10:14:59.960Z",
+  "stored_at": "2026-08-26T10:14:59.960Z"
+}

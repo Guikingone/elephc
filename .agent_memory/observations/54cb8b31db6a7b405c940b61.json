@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>bh7afu4eo</task-id>\n<summary>Monitor event: \"CI Guikingone/elephc head 0133cceeed (tree 88844601fe: url_stat/dir + compat counter)\"</summary>\n<event>failing so far: Non-Codegen Tests (linux-aarch64),Non-Codegen Tests (linux-x86_64),Non-Codegen Tests (macos-aarch64)</event>\n</task-notification>",
+  "summary": "<task-notification> <task-id>bh7afu4eo</task-id> <summary>Monitor event: \"CI Guikingone/elephc head 0133cceeed (tree 88844601fe: url_stat/dir + compat counter)\"</summary> <event>failing so far: Non-Codegen Tests (linux-aarch64),Non-Codegen ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "54cb8b31db6a7b405c940b61",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T13:33:31.263Z",
+  "stored_at": "2026-08-15T13:33:31.263Z",
+  "low_signal": true
+}

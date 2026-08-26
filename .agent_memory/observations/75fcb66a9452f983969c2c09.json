@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test error_tests 2>&1 | grep -E \"^test result|FAILED$\" | head -20",
+  "summary": "cargo test --test error_tests 2>&1 | grep -E \"^test result|FAILED$\" | head -20: overy::test_failed_assignment_preserves_later_real_undefined ... FAILED test recovery::test_method_cannot_read_top_level_local_without_global ... FAILED test recovery::test_failed_list_unpack_inference_targets_no_undefined_cascade ... FAILE",
+  "text": "cargo test --test error_tests 2>&1 | grep -E \"^test result|FAILED$\" | head -20: overy::test_failed_assignment_preserves_later_real_undefined ... FAILED test recovery::test_method_cannot_read_top_level_local_without_global ... FAILED test recovery::test_failed_list_unpack_inference_targets_no_undefined_cascade ... FAILED test recovery::test_type_checker_recovery_collects_multiple_errors ... FAILED test string_builtins::test_error_ord_undefined_variable_arg ... FAILED test type_system::test_error_plain_self_read_assignment_remains_undefined ... FAILED test type_system::test_error_short_circuit_assignment_effect_is_not_definite ... FAILED test type_system::test_error_undefined_variable ... FAILED test type_system::test_null_probe_index_subexpression_still_requires_a_defined_variable ... FAILED test type_system::test_undefined_variable_read_is_still_rejected ... FAILED test result: FAILED. 1290 passed; 16 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.32s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "75fcb66a9452f983969c2c09",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:57:16.464Z",
+  "stored_at": "2026-08-20T18:57:16.464Z"
+}

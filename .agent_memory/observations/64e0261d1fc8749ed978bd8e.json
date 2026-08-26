@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"_rt_resource_id_of_registry\" src/codegen_support/ | grep label_global | head -2; grep -rn \"next_id\\|_id_counter\\|RESOURCE_NEXT\" src/codegen_support/runtime/resources/registry*.rs src/codegen_support/runtime/resources/*.rs 2>/dev/null | head -8",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"_rt_resource_id_of_registry\" src/codegen_support/ | grep label_global | head -2; grep -rn \"nex",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "64e0261d1fc8749ed978bd8e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:03:10.553Z",
+  "stored_at": "2026-08-24T13:03:10.553Z"
+}

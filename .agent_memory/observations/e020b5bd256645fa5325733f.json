@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls src/builtins/ | head -20; grep -rn \"pub(crate) fn\\|pub fn\" src/builtins/array/mod.rs 2>/dev/null | head -10",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls src/builtins/ | head -20; grep -rn \"pub(crate) fn\\|pub fn\" src/builtins/array/mod.rs 2>/dev/null | head -10: array array_or_false.rs callables convert.rs docs.rs io macros.rs math mod.rs parity_tests.rs pointers registry.",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls src/builtins/ | head -20; grep -rn \"pub(crate) fn\\|pub fn\" src/builtins/array/mod.rs 2>/dev/null | head -10: array array_or_false.rs callables convert.rs docs.rs io macros.rs math mod.rs parity_tests.rs pointers registry.rs requirements.rs semantics.rs spec.rs spl string system types",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e020b5bd256645fa5325733f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:14:16.060Z",
+  "stored_at": "2026-08-23T09:14:16.060Z"
+}

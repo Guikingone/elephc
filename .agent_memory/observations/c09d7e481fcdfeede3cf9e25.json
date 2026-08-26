@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fatal_line_numbers.py 2>&1 | head -10",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fatal_line_numbers.py 2>&1 | head -10: TypeError from stream_filter_remove php=['6', '6'] elephc=['6'] (file has 6 lines) same ValueError from an",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fatal_line_numbers.py 2>&1 | head -10: TypeError from stream_filter_remove php=['6', '6'] elephc=['6'] (file has 6 lines) same ValueError from an empty path php=['4', '4'] elephc=['4'] (file has 4 lines) same TypeError from fgets on a string php=['4', '4'] elephc=['4'] (file has 4 lines) same a plain warning php=['5'] elephc=['5'] (file has 5 lines) same a division by zero php=['4', '4'] elephc=['4'] (file has 4 lines) same a thrown user exception php=['4', '4'] elephc=['4'] (file has 4 lines) same",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c09d7e481fcdfeede3cf9e25",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:00:07.277Z",
+  "stored_at": "2026-08-21T19:00:07.278Z"
+}

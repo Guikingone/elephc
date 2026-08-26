@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_context_set_options\" src --include='*.rs' | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_context_set_options\" src --include='*.rs' | head -20: src/ir/runtime_fn.rs:1759: RuntimeFnId::StreamContextSetOptions => \"stream_context_set_options\", src/builtins/io/stream_context_set_options.rs:2://! Home",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_context_set_options\" src --include='*.rs' | head -20: src/ir/runtime_fn.rs:1759: RuntimeFnId::StreamContextSetOptions => \"stream_context_set_options\", src/builtins/io/stream_context_set_options.rs:2://! Home of the PHP `stream_context_set_options` builtin: its declaration and semantic metadata. src/builtins/io/stream_context_set_options.rs:14: contract: \"stream_context_set_options\", src/builtins/io/mod.rs:167:pub mod stream_context_set_options; src/codegen/lower_inst/builtins/io/stream_context.rs:419: use stream_context_set_options() instead\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ad551138fbc3630102722638",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:52:08.806Z",
+  "stored_at": "2026-08-22T16:52:08.806Z"
+}

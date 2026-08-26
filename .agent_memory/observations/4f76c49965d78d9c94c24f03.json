@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/file_url_scheme.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/file_url_scheme.rs: //! Purpose:\n//! Integration tests for php's `file://` URL scheme: the wrapper `stream_get_wrappers()` has\n//! always advertised, and which nothing honoured.\n//!\n//! Called from:\n//! - ",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/file_url_scheme.rs: //! Purpose:\n//! Integration tests for php's `file://` URL scheme: the wrapper `stream_get_wrappers()` has\n//! always advertised, and which nothing honoured.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - MEASURED before the fix: twelve operations in a row — `file_get_contents`, `fopen`,\n//!   `file_exists`, `filesize`, `is_file`, `file`, `copy`, `file_put_contents`, `is_dir`,\n//!   `mkdir`, `unlink`, `rename` — every one answered `false` for a URL php reads without\n//!   complaint, while `stream_get_wrappers()` listed `file` among the wrappers ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4f76c49965d78d9c94c24f03",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:32:54.139Z",
+  "stored_at": "2026-08-24T18:32:54.140Z"
+}

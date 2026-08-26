@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '575,670p' src/codegen_support/runtime/exceptions/trace_buffer.rs",
+  "summary": "sed -n '575,670p' src/codegen_support/runtime/exceptions/trace_buffer.rs: instruction(\"mov x0, #1\"); emitter.syscall(4); abi::emit_symbol_address(emitter, \"x1\", \"_rt_trace_on_line\"); emitter.instruction(&format!(\"mov x2, #{}\", trace_literal_len(\"_rt_trace_on_line\"))); emitter.instruction(\"mov x0, #1\"); emitter.syscall(",
+  "text": "sed -n '575,670p' src/codegen_support/runtime/exceptions/trace_buffer.rs: instruction(\"mov x0, #1\"); emitter.syscall(4); abi::emit_symbol_address(emitter, \"x1\", \"_rt_trace_on_line\"); emitter.instruction(&format!(\"mov x2, #{}\", trace_literal_len(\"_rt_trace_on_line\"))); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); emitter.instruction(\"ldr x0, [sp, #16]\"); emitter.instruction(\"bl __rt_itoa\"); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); abi::emit_symbol_address(emitter, \"x1\", \"_rt_trace_nl\"); emitter.instruction(&format!(\"mov x2, #{}\", trace_literal_len(\"_rt_trace_nl\"))); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); emitter.label(\"__rt_uncaught_trace_done\"); emitter.instruction(\"ldp x29, x30, [sp], #32\"); emitter.instruction(\"ret\"); } /// Emits php's `Stack trace:` block, x86_64. Mirrors the AArch64 arm exactly. fn emit_write_block_x86_64(emitter: &mut Emitter) { emitter.blank(); emitter.comment(\"--- runtime: trace_write_block ---\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d19c6c28e6013149201a6ad8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:44:53.056Z",
+  "stored_at": "2026-08-24T17:44:53.056Z"
+}

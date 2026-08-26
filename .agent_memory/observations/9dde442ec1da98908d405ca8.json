@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn test_compress_bzip2\\|bzip2.*write\\|fn test_.*bzip2\" tests/codegen/io/streams.rs | head",
+  "summary": "grep -n \"fn test_compress_bzip2\\|bzip2.*write\\|fn test_.*bzip2\" tests/codegen/io/streams.rs | head: 2848:fn test_compress_bzip2_wrapper_decompresses_file() { 2868:fn test_stream_filter_bzip2_compress_then_decompress_roundtrip() { 2869: // bzip2.compress (write) streams the payload through libbz2's BZ2_bzCompress 2967:f",
+  "text": "grep -n \"fn test_compress_bzip2\\|bzip2.*write\\|fn test_.*bzip2\" tests/codegen/io/streams.rs | head: 2848:fn test_compress_bzip2_wrapper_decompresses_file() { 2868:fn test_stream_filter_bzip2_compress_then_decompress_roundtrip() { 2869: // bzip2.compress (write) streams the payload through libbz2's BZ2_bzCompress 2967:fn test_stream_filter_bzip2_decompress_reads_real_bzip2() { 2987:fn test_compress_bzip2_wrapper_missing_file_returns_false() { 7124:fn test_fopen_phar_reads_bzip2_entry() { 7157:fn test_file_get_contents_phar_runtime_path_reads_bzip2_entry() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9dde442ec1da98908d405ca8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:33:53.681Z",
+  "stored_at": "2026-08-18T15:33:53.681Z"
+}

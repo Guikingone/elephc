@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && php -n surface.php > php_surface.json 2>&1 && python3 -c \"\nimport json\nd = json.load(open('php_surface.json'))\nprint('php', d['version'])\nfor k in ('internal_functions','classes','interfaces','constants','extensions'):\n    print(f'{k:20} {len(d[k])}')\nprint('exts:', ' '.join(sorted(d['extensions'])))\n\"",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && php -n surface.php > php_surface.json 2>&1 && python3 -c \"\nimport json\nd = json.load(open('php_surface.json'))\nprint('php', d['version'])\nfor k in ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && php -n surface.php > php_surface.json 2>&1 && python3 -c \"\nimport json\nd = json.load(open('php_surface.json'))\nprint('php', d['version'])\nfor k in ('internal_functions','classes','interfaces','constants','extensions'):\n    print(f'{k:20} {len(d[k])}')\nprint('exts:', ' '.join(sorted(d['extensions'])))\n\": php 8.5.6 internal_functions 2143 classes 300 interfaces 27 constants 3025 extensions 66 exts: Core FFI PDO PDO_ODBC Phar Reflection SPL SimpleXML Zend OPcache bcmath bz2 calendar ctype curl date dba dom exif fileinfo filter ftp gd gettext gmp hash iconv intl json ldap lexbor libxml mbstring mysqli mysqlnd odbc openssl pcntl pcre pdo_dblib pdo_mysql pdo_pgsql pdo_sqlite pgsql posix random readline session shmop snmp soap sockets sodium sqlite3 standard sysvmsg sysvsem sysvshm tidy tokenizer uri xml xmlreader xmlwriter xsl zip zlib",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "be40a58bf422cd0051bbc13a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:02:22.468Z",
+  "stored_at": "2026-08-21T10:02:22.468Z"
+}

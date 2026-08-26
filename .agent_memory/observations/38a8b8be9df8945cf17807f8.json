@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '705,740p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/debug.rs",
+  "summary": "rtk proxy sed -n '705,740p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/debug.rs: e array, hash and /// object walkers — so a top-level dump and a dump at depth cannot drift apart. /// That branch owns the whole rendering: the `object(C) (n",
+  "text": "rtk proxy sed -n '705,740p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/debug.rs: e array, hash and /// object walkers — so a top-level dump and a dump at depth cannot drift apart. /// That branch owns the whole rendering: the `object(C) (n) {` header, the /// per-property body, the closing `}`, and the `*RECURSION*` guard. /// /// `_vd_indent` is reset to 0 first so the header sits at column 0. The runtime /// walkers restore the indent themselves around every nested container, but a /// preceding dump that aborted mid-walk would otherwise leak its indent into /// this one. fn emit_var_dump_dynamic_object(ctx: &mut FunctionContext<'_>) -> Result<()> { let result_reg = abi::int_result_reg(ctx.emitter); abi::emit_push_reg(ctx.emitter, result_reg); abi::emit_load_int_immediate(ctx.emitter, result_reg, 0); abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, \"_vd_indent\", 0); abi::emit_pop_reg(ctx.emitter, result_reg); match ctx.emitter.target.arch { Arch::AArch64 => {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "38a8b8be9df8945cf17807f8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:37:50.919Z",
+  "stored_at": "2026-08-17T12:37:50.919Z"
+}

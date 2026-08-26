@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,\n    STREAM_WRAPPER_ID_OFFSET,\n}; -> STREAM_MODE_PTR_OFFSET, STREAM_TRANSPORT_OFFSET, STREAM_UR",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,\n    STREAM_WRAPPER_ID_OFFSET,\n}; -> STREAM_MODE_PTR_OFFSET, STREAM_TRANSPORT_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,\n    STREAM_WRAPPER_ID_OFFSET,\n};",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7371d8f7e19f4b5bec1c21af",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:17:21.909Z",
+  "stored_at": "2026-08-17T13:17:21.909Z"
+}

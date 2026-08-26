@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_options.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_options.rs: abi::emit_call_label(ctx.emitter, \"__rt_stream_select\");\n    // php-src answers `int|false`: the ready-descriptor count, or `false` when the underlying\n    // ` -> ab",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_options.rs: abi::emit_call_label(ctx.emitter, \"__rt_stream_select\");\n    // php-src answers `int|false`: the ready-descriptor count, or `false` when the underlying\n    // ` -> abi::emit_call_label(ctx.emitter, \"__rt_stream_select\");\n    // php-src answers `int|false`: the ready-descriptor count, or `false` when the underlying\n    // `poll`/`select` itself failed. `__rt_stream_select` reports that failure as a negative\n    // count, so the sign picks the branch.\n    //\n    // -2 is its separate report that NOTHING in the three arrays could be cast to a selectable\n    // descriptor, which php answers with a throw rather than a value — an empty array,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "58bdf35a5fc520e02c823c3f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:05:44.532Z",
+  "stored_at": "2026-08-17T07:05:44.533Z"
+}

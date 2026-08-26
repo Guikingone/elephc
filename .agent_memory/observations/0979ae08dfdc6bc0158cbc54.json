@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests arrays:: 2>&1 | grep -E \"^test result:|^failures:\" -A 6 | tail -12",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests arrays:: 2>&1 | grep -E \"^test result:|^failures:\" -A 6 | tail -12: ---- codegen::regressions::arrays::test_ternary_missed_read_structural_mixed_consumers_observe_null stdout ---- thread 'codegen::regressions::arrays::test_ternary_missed_read_structural_mixed_cons",
+  "text": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests arrays:: 2>&1 | grep -E \"^test result:|^failures:\" -A 6 | tail -12: ---- codegen::regressions::arrays::test_ternary_missed_read_structural_mixed_consumers_observe_null stdout ---- thread 'codegen::regressions::arrays::test_ternary_missed_read_structural_mixed_consumers_observe_null' (39921036) panicked at tests/codegen/regressions/arrays.rs:3408:5: assertion `left == right` failed left: \"count-raises\\ncount(): Argument #1 ($value) must be of type Countable|array, null given\\nempty\\n0\\nnull\\nN;\\n1\\n\" -- failures: codegen::regressions::arrays::test_ternary_missed_read_structural_mixed_consumers_observe_null test result: FAILED. 755 passed; 1 failed; 1 ignored; 0 measured; 8086 filtered out; finished in 195.48s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0979ae08dfdc6bc0158cbc54",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:25:14.185Z",
+  "stored_at": "2026-08-22T10:25:14.185Z"
+}

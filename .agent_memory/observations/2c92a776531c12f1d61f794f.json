@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; python3 - \"$S/q.php\" <<'PY'\nimport sys, pathlib\np = pathlib.Path(sys.argv[1])\ns = p.read_text()\ns = s.split('$t = microtime(true);\\n$h = fopen($path, \"r\");\\n$n = 0;\\nwhile (($l = fgetcsv')[0]\np.write_text(s)\nprint(s[-200:])\nPY",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; python3 - \"$S/q.php\" <<'PY'\nimport sys, pathlib\np = pathlib.Path(sys.argv[1])\ns = p.read_text()\ns = s.split('$t = microtime(true);\\n$h = fopen(",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; python3 - \"$S/q.php\" <<'PY'\nimport sys, pathlib\np = pathlib.Path(sys.argv[1])\ns = p.read_text()\ns = s.split('$t = microtime(true);\\n$h = fopen($path, \"r\");\\n$n = 0;\\nwhile (($l = fgetcsv')[0]\np.write_text(s)\nprint(s[-200:])\nPY: $n, \"\\n\"; $t = microtime(true); $h = fopen($path, \"r\"); $n = 0; while (($l = fgets($h)) !== false) { $n++; } fclose($h); echo \"fgets \", (int)((microtime(true) - $t) * 1000), \"ms \", $n, \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2c92a776531c12f1d61f794f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T16:57:19.937Z",
+  "stored_at": "2026-08-24T16:57:19.937Z"
+}

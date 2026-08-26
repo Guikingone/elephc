@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; df -h /System/Volumes/Data",
+  "summary": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; df -h /System/Volumes/Data: Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 419Gi 13Gi 98% 5.5M 133M 4% /System/Volumes/Data",
+  "text": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; df -h /System/Volumes/Data: Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 419Gi 13Gi 98% 5.5M 133M 4% /System/Volumes/Data",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "766178515a94678f35798762",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T14:30:40.313Z",
+  "stored_at": "2026-08-23T14:30:40.313Z"
+}

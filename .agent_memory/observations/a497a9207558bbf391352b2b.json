@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/clean_warnings.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/clean_warnings.py: import pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/clean_warnings.py: import pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n\ndef edit(rel, old, new, note):\n    p = ROOT / rel\n    t = p.read_text()\n    assert t.count(old) == 1, f'{rel}: {t.count(old)} matches'\n    p.write_text(t.replace(old, new))\n    print(f'{rel}: {note}')\n\n\n# `parse_zip_archive` is reached only by the phar tests; upstream gated it accordingly and the\n# graft dropped the attribute.\nedit('crates/elephc-phar/src/zip_read.rs',\n     'pub(super) fn parse_zip_archive(data: &[u8]) -> Option<Archive> {',\n     '#[cfg(test)]\\np",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a497a9207558bbf391352b2b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:50:30.070Z",
+  "stored_at": "2026-08-20T17:50:30.071Z"
+}

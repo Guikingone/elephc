@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"StreamContextSetOptions\\|StreamContextSetOption\\b\" src --include='*.rs' | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"StreamContextSetOptions\\|StreamContextSetOption\\b\" src --include='*.rs' | head -20: src/ir/runtime_fn.rs:301: StreamContextSetOption, src/ir/runtime_fn.rs:302: StreamContextSetOptions, src/ir/runtime_fn.rs:1758: Ru",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"StreamContextSetOptions\\|StreamContextSetOption\\b\" src --include='*.rs' | head -20: src/ir/runtime_fn.rs:301: StreamContextSetOption, src/ir/runtime_fn.rs:302: StreamContextSetOptions, src/ir/runtime_fn.rs:1758: RuntimeFnId::StreamContextSetOption => \"stream_context_set_option\", src/ir/runtime_fn.rs:1759: RuntimeFnId::StreamContextSetOptions => \"stream_context_set_options\", src/builtins/io/stream_context_set_options.rs:16: crate::ir::RuntimeFnId::StreamContextSetOptions, src/builtins/io/stream_context_set_option.rs:16: crate::ir::RuntimeFnId::StreamContextSetOption, src/codegen/lower_inst/runtime_functions/group_05.rs:115: RuntimeFnId::StreamContextSetOption => Some({ src/codegen/lower_inst/runtime_functions/group_05.rs:120: RuntimeFnId::StreamContextSetOptions => Some({",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d9e1d65fcdad82add4bbb14f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:52:23.483Z",
+  "stored_at": "2026-08-22T16:52:23.483Z"
+}

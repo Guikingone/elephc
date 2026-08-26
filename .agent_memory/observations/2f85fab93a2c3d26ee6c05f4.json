@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn dispatch\" -A15 crates/elephc-magician/src/interpreter/builtins/hooks/values.rs | head -25",
+  "summary": "About to run: grep -n \"fn dispatch\" -A15 crates/elephc-magician/src/interpreter/builtins/hooks/values.rs | head -25",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2f85fab93a2c3d26ee6c05f4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:29:54.112Z",
+  "stored_at": "2026-08-16T16:29:54.113Z"
+}

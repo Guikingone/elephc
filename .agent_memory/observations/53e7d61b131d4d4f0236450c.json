@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '/^fn emit_static_exception_at/,/^}/p' src/codegen/lower_inst/exceptions.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '/^fn emit_static_exception_at/,/^}/p' src/codegen/lower_inst/exceptions.rs: handle abi::emit_load_symbol_to_reg(ctx.emitter, \"r10\", class_id_symbol, 0); ctx.emitter.instruction(\"mov QWORD PTR [rax], r10\"); // store t",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '/^fn emit_static_exception_at/,/^}/p' src/codegen/lower_inst/exceptions.rs: handle abi::emit_load_symbol_to_reg(ctx.emitter, \"r10\", class_id_symbol, 0); ctx.emitter.instruction(\"mov QWORD PTR [rax], r10\"); // store the built-in throwable class id abi::emit_symbol_address(ctx.emitter, \"r10\", &message_label); ctx.emitter.instruction(\"mov QWORD PTR [rax + 8], r10\"); // store the static exception message pointer abi::emit_load_int_immediate(ctx.emitter, \"r10\", message_len as i64); ctx.emitter.instruction(\"mov QWORD PTR [rax + 16], r10\"); // store the exception message length ctx.emitter.instruction(\"mov QWORD PTR [rax + 24], 0\"); // exception code defaults to zero super::objects::throwable_new::emit_throwable_creation_line_x86_64( ctx, \"rax\", creation_line, ); ctx.emitter.instruction(\"mov QWORD PTR [rax + 40], 0\"); // previous defaults to null abi::emit_store_reg_to_symbol(ctx.emitter, \"rax\", \"_exc_value\", 0); abi::emit_jump(ctx.emitter, \"__rt_throw_current\"); } } }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "53e7d61b131d4d4f0236450c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:22:39.905Z",
+  "stored_at": "2026-08-22T16:22:39.905Z"
+}

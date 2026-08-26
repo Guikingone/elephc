@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/show.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/show.py: import json, pathlib, sys\n\nD = pathlib.Path(__file__).parent\nwanted = set(sys.argv[1:])\nfor r in json.loads((D / 'sweep_result.json').read",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/show.py: import json, pathlib, sys\n\nD = pathlib.Path(__file__).parent\nwanted = set(sys.argv[1:])\nfor r in json.loads((D / 'sweep_result.json').read_text()):\n    if r['example'] not in wanted:\n        continue\n    print('=== ' + r['example'] + ' [' + r['status'] + ']')\n    if r['status'] == 'refused':\n        print(r['detail'])\n    else:\n        print('--- php ---'); print(r.get('php', '').rstrip('\\n'))\n        print('--- elephc ---'); print(r.get('elephc', '').rstrip('\\n'))\n    print()",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7cfcf72a5867281d9a779fda",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:29:48.419Z",
+  "stored_at": "2026-08-20T20:29:48.420Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/data/fixed.rs\")\ns = p.read_text()\na = '    out.push_str(\".globl _uncaught_exc_nl\\\\n_uncaught_exc_nl:\\\\n    .ascii \\\\\"\\\\\\\\n\\\\\"\\\\n\");\\n'\nassert s.count(a) == 1, s.count(a)\nb = a + '''    // php reports an exception CHAIN oldest first, and introduces every later link with a blank\n    // line and this word. The blank line belongs to the introducer, not to the block before it:\n    // the LAST block is followed by `  thrown in ...`, with no blank line at all.\n    out.push_str(\".globl _uncaught_exc_next\\\\n_uncaught_exc_next… [+102 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/data/fixed.rs\")\ns = p.read_text()\na = '    out.push_str(\".globl _uncaught_exc_nl\\\\n_uncaught_exc_nl:\\\\n    .ascii \\\\\"\\\\\\\\n\\\\\"\\\\n\");\\n'\nassert s.count(a) == 1, s.count(a)\nb = a + '''    // php reports an exception CHAIN oldest first, and intro",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/data/fixed.rs\")\ns = p.read_text()\na = '    out.push_str(\".globl _uncaught_exc_nl\\\\n_uncaught_exc_nl:\\\\n    .ascii \\\\\"\\\\\\\\n\\\\\"\\\\n\");\\n'\nassert s.count(a) == 1, s.count(a)\nb = a + '''    // php reports an exception CHAIN oldest first, and introduces every later link with a blank\n    // line and this word. The blank line belongs to the introducer, not to the block before it:\n    // the LAST block is followed by `  thrown in ...`, with no blank line at all.\n    out.push_str(\".globl _uncaught_exc_next\\\\n_uncaught_exc_next:\\\\n    .ascii \\\\\"\\\\\\\\nNext \\\\\"\\\\n\");\n'''\np.write_text(s.replace(a, b))\nprint(\"Next literal added\")\nPY: Next literal added",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6bfc8b1bb7da68f5d0930367",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:45:42.055Z",
+  "stored_at": "2026-08-24T17:45:42.055Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/drop_unreachable.py; sed -n '750,765p' src/codegen/lower_inst/builtins/strings/split.rs",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/drop_unreachable.py; sed -n '750,765p' src/codegen/lower_inst/builtins/strings/split.rs: split.rs: 1 unreachable duplicate arm(s) removed PhpType::A",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/drop_unreachable.py; sed -n '750,765p' src/codegen/lower_inst/builtins/strings/split.rs: split.rs: 1 unreachable duplicate arm(s) removed PhpType::AssocArray { value, .. } => { ctx.load_value_to_result(array)?; super::super::arrays::values::emit_loaded_assoc_array_values( ctx, &value.codegen_repr(), ) } // See the AArch64 loader: a hash operand is copied into an indexed array first. PhpType::AssocArray { value, .. } => { ctx.load_value_to_reg(array, \"rax\")?; emit_loaded_assoc_array_values(ctx, &value.codegen_repr()) } _ => { ctx.load_value_to_reg(array, \"rax\")?; Ok(()) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bf6c115a3c6e7ebc6248f54f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:57:25.705Z",
+  "stored_at": "2026-08-20T17:57:25.705Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs/probes && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/target/debug/elephc -q p1_get_contents.php 2>&1 | head -20; echo \"EXIT=$?\"; ls -la",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs/probes && /Users/guil",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "19d759c87876dfcb9b42f2d1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:18:00.519Z",
+  "stored_at": "2026-08-14T14:18:00.519Z"
+}

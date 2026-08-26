@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"stream_get_meta_data\" tests/codegen/io/streams.rs | head -20",
+  "summary": "grep -n \"stream_get_meta_data\" tests/codegen/io/streams.rs | head -20: ]; 9263:fn test_stream_get_meta_data_reports_eof_consistently_with_feof() { 9270:$m = stream_get_meta_data($f); 10158:/// Verifies `stream_get_meta_data()` reports the mode string the caller passed, not one derived 10165:fn test_stream_get_meta_data",
+  "text": "grep -n \"stream_get_meta_data\" tests/codegen/io/streams.rs | head -20: ]; 9263:fn test_stream_get_meta_data_reports_eof_consistently_with_feof() { 9270:$m = stream_get_meta_data($f); 10158:/// Verifies `stream_get_meta_data()` reports the mode string the caller passed, not one derived 10165:fn test_stream_get_meta_data_reports_the_mode_the_caller_passed() { 10171: echo stream_get_meta_data($h)[\"mode\"], \" \"; 10186:fn test_stream_get_meta_data_maps_the_memory_wrapper_modes() { 10191: echo stream_get_meta_data($h)[\"mode\"], \" \"; 10195:echo stream_get_meta_data($t)[\"mode\"], \" \"; 10198:echo stream_get_meta_data($o)[\"mode\"]; 10204:/// Verifies repeated `stream_get_meta_data()` calls keep reporting the same URI. 10211:fn test_stream_get_meta_data_uri_survives_repeated_reads() { 10216:echo stream_get_meta_data($h)[\"uri\"], \"|\"; 10217:echo stream_get_meta_data($h)[\"uri\"], \"|\"; 10218:echo stream_get_meta_data($h)[\"uri\"], \"|\"; 10219:echo stream_get_meta_data($h)[\"uri\"];",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8fce50260b026ad9eb8f9e2b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:30.173Z",
+  "stored_at": "2026-08-14T14:15:30.174Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_ctx_scalar_options.py",
+  "summary": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_ctx_scalar_options.py: print('context_result_helpers.rs: a scalar options value raises php\\\\'s TypeError') -> print('context_result_helpers.r",
+  "text": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_ctx_scalar_options.py: print('context_result_helpers.rs: a scalar options value raises php\\\\'s TypeError') -> print('context_result_helpers.rs: a scalar options value raises the TypeError php raises')",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d669e43b18f13c61ca6a9e86",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:03:13.180Z",
+  "stored_at": "2026-08-22T16:03:13.181Z"
+}

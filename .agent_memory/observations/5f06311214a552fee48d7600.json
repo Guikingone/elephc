@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/gaptests.rs",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/gaptests.rs: /// Verifies an EMPTY array passed by reference receives what the callee fills it with.\n///\n/// `$e = []; fill($e);` SEGFAULTED before th",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/gaptests.rs: /// Verifies an EMPTY array passed by reference receives what the callee fills it with.\n///\n/// `$e = []; fill($e);` SEGFAULTED before the by-reference widening landed, and answered an\n/// empty array after it: the caller kept reading `array<never>` storage the callee had already\n/// appended to. An empty array has no element slots to convert, so the caller only needs its\n/// local re-typed — which is why this case emits no conversion op, unlike the boxed-slot one.\n///\n/// The keyed fill is the same defect one layer out: writing a string key turns the empty list\n/// into a HASH, so the caller ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f06311214a552fee48d7600",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T21:21:01.572Z",
+  "stored_at": "2026-08-16T21:21:01.573Z"
+}

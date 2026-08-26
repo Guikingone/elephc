@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '22,45p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/cases/set_file_buffer.php; echo \"=== diff:\"; cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/set_file_buffer && php -n set_file_buffer.php > /tmp/sfb_p.txt 2>&1; ./set_file_buffer > /tmp/sfb_e.txt 2>&1; diff /tmp/sfb_p.txt /tmp/sfb_e.txt | head -14",
+  "summary": "rtk proxy sed -n '22,45p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/cases/set_file_buffer.php; echo \"=== diff:\"; cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--",
+  "text": "rtk proxy sed -n '22,45p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/cases/set_file_buffer.php; echo \"=== diff:\"; cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/set_file_buffer && php -n set_file_buffer.php > /tmp/sfb_p.txt 2>&1; ./set_file_buffer > /tmp/sfb_e.txt 2>&1; diff /tmp/sfb_p.txt /tmp/sfb_e.txt | head -14: } } var_dump(stream_wrapper_register('test', 'test_wrapper')); $fd = fopen(\"test://foo\",\"r\"); var_dump(set_file_buffer($fd, 50)); var_dump(stream_set_chunk_size($fd, 42)); var_dump(fwrite($fd, str_repeat('0', 70))); === diff: 5,6c5 < size: 42 < size: 28 --- > size: 70",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e0b13ce22adf85bb6b4f8966",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:22:09.595Z",
+  "stored_at": "2026-08-17T09:22:09.596Z"
+}

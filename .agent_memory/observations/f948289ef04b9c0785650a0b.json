@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('residcost.php','w').write('''<?php\n// How many resource ids does each operation consume?\n$p = sys_get_temp_dir().\"/residcost.txt\";\nfunction probe(): int {\n    $h = fopen(\"php://memory\", \"r+\");\n    $id = (int) $h;\n    fclose($h);\n    return $id;\n}\n$base = probe();\nfile_put_contents($p, \"x\");\necho \"file_put_contents: \", probe() - $base - 1, \"\\\\n\"; $base = probe();\nfile_get_contents($p);\necho \"file_g… [+424 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('residcost.php','w').write('''<?php\n// How many resource ids does each operation consume?\n$p = sys_get_temp_dir().\"/resid",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('residcost.php','w').write('''<?php\n// How many resource ids does each operation consume?\n$p = sys_get_temp_dir().\"/residcost.txt\";\nfunction probe(): int {\n    $h = fopen(\"php://memory\", \"r+\");\n    $id = (int) $h;\n    fclose($h);\n    return $id;\n}\n$base = probe();\nfile_put_contents($p, \"x\");\necho \"file_put_contents: \", probe() - $base - 1, \"\\\\n\"; $base = probe();\nfile_get_contents($p);\necho \"file_get_contents: \", probe() - $base - 1, \"\\\\n\"; $base = probe();\n$c = fopen($p, \"r\"); fclose($c);\necho \"fopen+fclose:      \", probe() - $base - 1, \"\\\\n\"; $base = probe();\nfile_exists($p);\necho \"file_exists:       \", probe() - $base - 1, \"\\\\n\"; $base = probe();\nfilesize($p);\necho \"filesize:          \", probe() - $base - 1, \"\\\\n\"; $base = probe();\n@unlink($p);\n''')\nprint(\"written\")\nPY\nzsh difftests.sh residcost 2>&1 | head -16: written residcost DIFF: 1,2c1,2 < file_put_contents: 1 < file_get_contents: 1 --- > file_put_contents: 0 > file_get_contents: 0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f948289ef04b9c0785650a0b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:47:45.412Z",
+  "stored_at": "2026-08-17T12:47:45.412Z"
+}

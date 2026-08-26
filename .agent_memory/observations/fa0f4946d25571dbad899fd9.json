@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '300,345p' src/ir_lower/expr/array_builtin_args.rs",
+  "summary": "sed -n '300,345p' src/ir_lower/expr/array_builtin_args.rs: N ... is deprecated` notice. USER functions do NOT get this — /// `function f(int $v) {} f(null);` is an uncaught `TypeError` — which is why this is keyed to /// the builtin registry and not to the shared argument coercion. /// /// Without it a null operand rea",
+  "text": "sed -n '300,345p' src/ir_lower/expr/array_builtin_args.rs: N ... is deprecated` notice. USER functions do NOT get this — /// `function f(int $v) {} f(null);` is an uncaught `TypeError` — which is why this is keyed to /// the builtin registry and not to the shared argument coercion. /// /// Without it a null operand reached the builtin's own EIR lowering, which has no null case /// and PANICKED the compiler: `if ($c) { $x = \"a\"; } strlen($x);` — a program `php -n` 8.5.6 /// runs to `int(0)` — died with `strlen cannot lower checked operand type Void`. Adopting PHP's /// semantics for undefined variables is what made that reachable; a conditionally assigned /// variable is null on the path that skips the assignment, exactly as PHP says. /// /// The operand it replaces is left in place and still runs: it is the `warned_null` /// that raises `Warning: Undefined variable $x`, which PHP raises here too. Only the VALUE /// handed to the builtin changes.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fa0f4946d25571dbad899fd9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:08:02.227Z",
+  "stored_at": "2026-08-21T11:08:02.228Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests -- dirname pathinfo basename 2>&1 | tail -6",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests -- dirname pathinfo basename 2>&1 | tail -6: test codegen::spl::autoload::test_register_with_dirname_in_closure ... ok test codegen::eval::test_eval_dispatches_basename_dirname_builtin_calls ... ok test codegen::eval::test_e",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests -- dirname pathinfo basename 2>&1 | tail -6: test codegen::spl::autoload::test_register_with_dirname_in_closure ... ok test codegen::eval::test_eval_dispatches_basename_dirname_builtin_calls ... ok test codegen::eval::test_eval_dispatches_pathinfo_builtin_call ... ok test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 8926 filtered out; finished in 25.51s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e1ed30b982f3aa2c908786cb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:59:18.191Z",
+  "stored_at": "2026-08-26T08:59:18.192Z"
+}

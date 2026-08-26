@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 370,430p src/codegen/lower_inst/exceptions.rs",
+  "summary": "sed -n 370,430p src/codegen/lower_inst/exceptions.rs:  word (magic + kind 6 throwable) ctx.emitter.instruction(\"mov QWORD PTR [rax - 8], r10\"); // stamp the allocation as a runtime object ctx.emitter.instruction(\"call __rt_object_handle_acquire\"); // bind the new object to its PHP object handle abi::emit_load_symbol_to",
+  "text": "sed -n 370,430p src/codegen/lower_inst/exceptions.rs:  word (magic + kind 6 throwable) ctx.emitter.instruction(\"mov QWORD PTR [rax - 8], r10\"); // stamp the allocation as a runtime object ctx.emitter.instruction(\"call __rt_object_handle_acquire\"); // bind the new object to its PHP object handle abi::emit_load_symbol_to_reg(ctx.emitter, \"r10\", class_id_symbol, 0); ctx.emitter.instruction(\"mov QWORD PTR [rax], r10\"); // store the built-in throwable class id abi::emit_symbol_address(ctx.emitter, \"r10\", &message_label); ctx.emitter.instruction(\"mov QWORD PTR [rax + 8], r10\"); // store the static exception message pointer abi::emit_load_int_immediate(ctx.emitter, \"r10\", message_len as i64); ctx.emitter.instruction(\"mov QWORD PTR [rax + 16], r10\"); // store the exception message length ctx.emitter.instruction(\"mov QWORD PTR [rax + 24], 0\"); // exception code defaults to zero super::objects::throwable_new::emit_throwable_creation_line_x86_64( ctx,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b4c7a01bdf1f9230de94c214",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:22:56.818Z",
+  "stored_at": "2026-08-22T12:22:56.818Z"
+}

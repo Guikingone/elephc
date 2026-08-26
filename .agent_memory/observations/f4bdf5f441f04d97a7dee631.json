@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/stream_get_meta_data_dir_basic && rtk proxy grep -c \"sgmd_seek_done\" stream_get_meta_data_dir_basic.s; rtk proxy grep -c \"__rt_stream_get_meta_data\" stream_get_meta_data_dir_basic.s",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/stream_get_meta_data_dir_basic && rtk proxy grep -c \"sgmd_seek_done\" stream_get_meta_data_dir_basic.s; rtk proxy grep -c \"__rt_stream_get_meta_",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/stream_get_meta_data_dir_basic && rtk proxy grep -c \"sgmd_seek_done\" stream_get_meta_data_dir_basic.s; rtk proxy grep -c \"__rt_stream_get_meta_data\" stream_get_meta_data_dir_basic.s: 0 2",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f4bdf5f441f04d97a7dee631",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:30:33.900Z",
+  "stored_at": "2026-08-17T07:30:33.902Z"
+}

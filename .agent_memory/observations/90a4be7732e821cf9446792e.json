@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Read",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_line.rs",
+  "command": "",
+  "summary": "About to run: Read",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "90a4be7732e821cf9446792e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:48:42.794Z",
+  "stored_at": "2026-08-17T15:48:42.794Z",
+  "low_signal": true
+}

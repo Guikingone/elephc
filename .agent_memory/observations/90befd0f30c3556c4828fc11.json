@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('tests/error_tests/recovery.rs')\nt = p.read_text()\n\nold = '''/// Regression for #597: recovering a failed-assignment target must not suppress a genuinely\n/// undefined variable used later. The spread error and the real `$undefined_for_real` error\n/// are both reported, while the assigned `$s` produces no `Undefined variable` noise.\n#[test]\nfn test_failed_assignment_preserves_later_real_undefined() {\n    let messages = checker_error_messages(\n        \"<?php $x = 5; $s = [...$x]; echo count($s); echo $undefined_for_real;\",\n    );\n    assert_eq!(… [+3429 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path('tests/error_tests/recovery.rs') t = p.read_text() old = '''/// Regression for #597: recovering a failed-assignment target must not suppress a genuinel",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "90befd0f30c3556c4828fc11",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:24:56.646Z",
+  "stored_at": "2026-08-20T19:24:56.647Z"
+}

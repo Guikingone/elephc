@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_sfr.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_sfr.txt: fix(streams): stream_filter_remove() reported success for a resource that is not a filter\n\n`stream_filter_remove($stream)` on an ordinary",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_sfr.txt: fix(streams): stream_filter_remove() reported success for a resource that is not a filter\n\n`stream_filter_remove($stream)` on an ordinary stream answered `true`. The chain\nlookup rejected the handle, the call fell through to the legacy per-descriptor\npath, cleared four already-empty table slots and reported that it had removed a\nfilter. php throws there — and again for a filter that was already removed, which\ntook the same route.\n\nIts wording is not a variation on the generic one: php says `supplied resource is\nnot a valid stream filter resource`, with no argument name, for EVERY resource it\nw",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fb705193e18cc6e732f933ff",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:03:00.328Z",
+  "stored_at": "2026-08-17T15:03:00.328Z"
+}

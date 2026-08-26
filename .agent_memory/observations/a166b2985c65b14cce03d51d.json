@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cp $S/probes2/skip-empty-rule.php $S/probes/skip-empty-rule.php; cd $S && timeout 4000 python3 run.py skip-empty 2>&1 | head -18",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cp $S/probes2/skip-empty-rule.php $S/probes/skip-empty-rule.php; cd $S && timeout 4000 python3 run.py skip-empty 2>&1 | head -18: IDENTICAL 1 DIFFE",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cp $S/probes2/skip-empty-rule.php $S/probes/skip-empty-rule.php; cd $S && timeout 4000 python3 run.py skip-empty 2>&1 | head -18: IDENTICAL 1 DIFFERS 0 REFUSED 0 php parse 0 --- REFUSED --- --- DIFFERS ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a166b2985c65b14cce03d51d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:28:46.343Z",
+  "stored_at": "2026-08-25T09:28:46.343Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps -p 35207 -o lstart=,command= 2>/dev/null | cut -c1-120; ls -d /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_* 2>/dev/null | wc -l",
+  "summary": "About to run: ps -p 35207 -o lstart=,command= 2>/dev/null | cut -c1-120; ls -d /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_* 2>/dev/null | wc -l",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c1b73d52f1d37433463cd8e0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:01:27.700Z",
+  "stored_at": "2026-08-26T17:01:27.700Z"
+}

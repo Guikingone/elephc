@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"test_type_checker_recovery_collects_multiple_errors stdout\" -A15 /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tool-results/ba3frd5dj.txt",
+  "summary": "grep -n \"test_type_checker_recovery_collects_multiple_errors stdout\" -A15 /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tool-results/ba3frd5dj.txt:  declaration_span: Span { line: 0, col: 0, end_l",
+  "text": "grep -n \"test_type_checker_recovery_collects_multiple_errors stdout\" -A15 /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tool-results/ba3frd5dj.txt:  declaration_span: Span { line: 0, col: 0, end_line: 0, end_col: 0 }, parents: [], properties: {}, property_order: [], method_decls: [ClassMethod { name: \"__toString\", visibility: Public, is_static: false, is_abstract: true, is_final: false, has_body: false, params: [], param_attributes: [], variadic: None, variadic_by_ref: false, variadic_type: None, return_type: Some(Str), by_ref_return: false, body: [], span: Span { line: 0, col: 0, end_line: 0, end_col: 0 }, attributes: [] }], methods: {\"__tostring\": FunctionSig { params: [], param_type_exprs: [], param_attributes: [], defaults: [], return_type: Str, declared_return: true, by_ref_return: false, ref_params: [], declared_params: [], variadic: None, deprecation: None }}, late_static_method_returns: {}, method_declaring_interfaces: {\"__tostring\": \"Stringable\"}, method_order: [\"__tostring\"], method_slots: {\"__tostring\": 0}, static_methods",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "569ead4423a43215b5ec79c3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:11:16.021Z",
+  "stored_at": "2026-08-20T19:11:16.021Z",
+  "low_signal": true
+}

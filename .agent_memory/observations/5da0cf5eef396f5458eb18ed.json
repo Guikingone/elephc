@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | grep -A 10 '^failures:$' | head -9",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | grep -A 10 '^failures:$' | head -9: failures: ---- ir_backend_handles_filetype stdout ---- thread 'ir_backend_handles_filetype' (62964022) panicked at tests/ir_backend_smoke_test.rs:6284:5: assertion `left == ",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | grep -A 10 '^failures:$' | head -9: failures: ---- ir_backend_handles_filetype stdout ---- thread 'ir_backend_handles_filetype' (62964022) panicked at tests/ir_backend_smoke_test.rs:6284:5: assertion `left == right` failed left: \"file:dir:\\nfalse\" right: \"file:dir:false\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5da0cf5eef396f5458eb18ed",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:55:04.060Z",
+  "stored_at": "2026-08-25T08:55:04.060Z"
+}

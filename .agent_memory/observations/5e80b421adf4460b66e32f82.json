@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs src/codegen_support/runtime/emitters/platform.rs src/codegen_support/runtime/io/fread.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/io/stream_pending.rs tests/codegen/io.rs tests/codegen/io/wrapper_chunk_reads.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg18.txt 2>&1 | tail -3",
+  "summary": "git add src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs src/codegen_support/runtime/emitters/platform.rs src/codegen_support/runtime/io/fread.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/io/stream_pending.rs tests/codegen/io.rs tests/codegen/io/wrapper_chunk_reads.rs tests/codegen/io/",
+  "text": "git add src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs src/codegen_support/runtime/emitters/platform.rs src/codegen_support/runtime/io/fread.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/io/stream_pending.rs tests/codegen/io.rs tests/codegen/io/wrapper_chunk_reads.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg18.txt 2>&1 | tail -3: [worktree-streams-csv-signature 32d71d954] feat(streams): a wrapper is asked for a whole chunk, as php asks its own sources 8 files changed, 399 insertions(+), 2 deletions(-) create mode 100644 tests/codegen/io/wrapper_chunk_reads.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5e80b421adf4460b66e32f82",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:44:44.286Z",
+  "stored_at": "2026-08-21T14:44:44.286Z"
+}

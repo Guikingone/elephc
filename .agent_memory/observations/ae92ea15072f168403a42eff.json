@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git cherry-pick 46f5a7bddd eeecfa25c0 457ad66c14 2>&1 | tail -2; git log --format=\"%h %s\" -4 | head -4",
+  "summary": "git cherry-pick 46f5a7bddd eeecfa25c0 457ad66c14 2>&1 | tail -2; git log --format=\"%h %s\" -4 | head -4: Date: Sun Aug 16 17:12:54 2026 +0200 4 files changed, 451 insertions(+), 4 deletions(-) 0c0777c9ef feat(zip): ZipArchive could read an entry but not unpack an archive, and php's unpacker cannot be guessed 4349931870 ",
+  "text": "git cherry-pick 46f5a7bddd eeecfa25c0 457ad66c14 2>&1 | tail -2; git log --format=\"%h %s\" -4 | head -4: Date: Sun Aug 16 17:12:54 2026 +0200 4 files changed, 451 insertions(+), 4 deletions(-) 0c0777c9ef feat(zip): ZipArchive could read an entry but not unpack an archive, and php's unpacker cannot be guessed 4349931870 feat(zip): ZipArchive did not exist, so no program could read an archive by index 4fcaec85b0 feat(streams): zip:// was the twelfth wrapper php publishes and elephc had none 42a4b0f3bd test(streams): pin how often the stat family re-asks a wrapper's url_stat(), and why php asks less",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ae92ea15072f168403a42eff",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:14:23.053Z",
+  "stored_at": "2026-08-16T15:14:23.054Z"
+}

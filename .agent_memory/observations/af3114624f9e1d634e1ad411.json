@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '110,132p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/resolution/resolved.rs; echo \"=== call.rs:\"; rtk proxy sed -n '318,336p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/resolution/call.rs",
+  "summary": "rtk proxy sed -n '110,132p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/resolution/resolved.rs; echo \"=== call.rs:\"; rtk proxy sed -n '318,336p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/typ",
+  "text": "rtk proxy sed -n '110,132p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/resolution/resolved.rs; echo \"=== call.rs:\"; rtk proxy sed -n '318,336p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/resolution/call.rs: _ => None, }) }); let mut param_idx = 0usize; for arg in args { let actual_ty = self.infer_type(arg, caller_env)?; if matches!(arg.kind, ExprKind::Spread(_)) { continue; } if param_idx < regular_param_count { if effective_sig .ref_params .get(param_idx) .copied() .unwrap_or(false) && !self.is_by_ref_argument_lvalue(arg, caller_env)? { let param_name = effective_sig .params .get(param_idx) .map(|(name, _)| name.as_str()) .unwrap_or(\"arg\"); return Err(CompileError::new( === call.rs: ); } } if is_callable_array_type(&ty) { if let Some(sig) = self.resolve_expr_callable_array_sig(arg, caller_env)? { self.callable_param_sigs.insert( (name.to_string(), decl.params[arg_idx].clone()), sig, ); } } if decl.ref_params.get(arg_idx).copied().unwrap_or(false) && !self.is_by_ref_argument_lvalue(arg, caller_env)? { let param_name = decl .params .get(arg_idx) .map(String::as_str) .unwrap_or(\"arg\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "af3114624f9e1d634e1ad411",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:19:54.165Z",
+  "stored_at": "2026-08-17T09:19:54.165Z"
+}

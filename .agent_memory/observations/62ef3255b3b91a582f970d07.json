@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_fparams.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2",
+  "summary": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_fparams.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2: [worktree-streams-c",
+  "text": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_fparams.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2: [worktree-streams-csv-signature 91953ff57] fix(streams): the built-in filters ignored $params, so line-length, line-break-chars and binary did nothing 9 files changed, 729 insertions(+), 34 deletions(-) create mode 100644 src/codegen_support/runtime/io/filter_params.rs To github.com:Guikingone/elephc.git 7f2bd78ad..91953ff57 worktree-streams-csv-signature -> feat/streams-csv-signatures",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "62ef3255b3b91a582f970d07",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:35:46.596Z",
+  "stored_at": "2026-08-17T14:35:46.596Z"
+}

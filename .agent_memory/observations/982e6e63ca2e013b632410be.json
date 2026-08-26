@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo build 2>&1 | tail -6",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo build 2>&1 | tail -6: Compiling elephc v0.26.5 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `dev` profile [unoptimiz",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo build 2>&1 | tail -6: Compiling elephc v0.26.5 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 37s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "982e6e63ca2e013b632410be",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T19:21:12.247Z",
+  "stored_at": "2026-08-23T19:21:12.248Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,80p' src/ir_lower/expr/ref_place_args.rs",
+  "summary": "sed -n '1,80p' src/ir_lower/expr/ref_place_args.rs:  is read into a hidden temporary, the call is re-lowered against that temporary, and /// the temporary is written back to the place so the caller's storage observes the mutation. pub(super) fn lower_builtin_ref_place_call( ctx: &mut LoweringContext<'_, '_>, name: &Nam",
+  "text": "sed -n '1,80p' src/ir_lower/expr/ref_place_args.rs:  is read into a hidden temporary, the call is re-lowered against that temporary, and /// the temporary is written back to the place so the caller's storage observes the mutation. pub(super) fn lower_builtin_ref_place_call( ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr, ) -> Option<LoweredValue> { let canonical = name.as_str(); let prefer_extension = source_prefers_extension_builtin(canonical); if !prefer_extension && ctx.extern_functions.contains_key(canonical) { // An EXTERN (C ABI) callee takes a raw pointer, not a php reference cell, so the // read/call/write-back rewrite has nothing to write back through. return None; } let user_callee = !prefer_extension && ctx.functions.contains_key(canonical); let sig = call_signature(ctx, canonical, prefer_extension)?; if !sig.ref_params.iter().any(|is_ref| *is_ref) { return None; } if args.iter().any(is_spread_arg) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a48717e4fd062d0ed298f322",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:39:49.706Z",
+  "stored_at": "2026-08-18T10:39:49.707Z"
+}

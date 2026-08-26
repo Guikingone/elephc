@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'label_global(\"__rt_cstr\")' -B 20 src/codegen_support/runtime/ | head -40",
+  "summary": "grep -rn 'label_global(\"__rt_cstr\")' -B 20 src/codegen_support/runtime/ | head -40: r.rs-73- src/codegen_support/runtime/io/cstr.rs-74-/// Emits `__rt_cstr` and `__rt_cstr2` runtime helpers for the x86_64 Linux target. src/codegen_support/runtime/io/cstr.rs-75-/// Uses `_cstr_buf` (4096 bytes) as scratch space for the ",
+  "text": "grep -rn 'label_global(\"__rt_cstr\")' -B 20 src/codegen_support/runtime/ | head -40: r.rs-73- src/codegen_support/runtime/io/cstr.rs-74-/// Emits `__rt_cstr` and `__rt_cstr2` runtime helpers for the x86_64 Linux target. src/codegen_support/runtime/io/cstr.rs-75-/// Uses `_cstr_buf` (4096 bytes) as scratch space for the primary helper and src/codegen_support/runtime/io/cstr.rs-76-/// `_cstr_buf2` (4096 bytes) for the secondary helper. src/codegen_support/runtime/io/cstr.rs-77-/// Input: rdi=ignored, rsi=ignored, rdx=source length (caller passes in rdx), src/codegen_support/runtime/io/cstr.rs-78-/// rax=source pointer (caller passes in rax) src/codegen_support/runtime/io/cstr.rs-79-/// Output: rax=pointer to null-terminated string in _cstr_buf (or _cstr_buf2 for cstr2) src/codegen_support/runtime/io/cstr.rs-80-/// ABI: System V AMD64 (caller-saved registers r8-r11 used as scratch). src/codegen_support/runtime/io/cstr.rs-81-fn emit_cstr_linux_x86_64(emitter: &mut Emitter) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c16d584a3d18feab77750e4b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:09:07.237Z",
+  "stored_at": "2026-08-24T18:09:07.238Z"
+}

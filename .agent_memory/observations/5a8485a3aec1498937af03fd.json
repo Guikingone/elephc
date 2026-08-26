@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>bvrw8toul</task-id>\n<tool-use-id>toolu_01XgexYDon5wdwmHRxdNhvnQ</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bvrw8toul.output</output-file>\n<status>completed</status>\n<summary>Background command \"Run the full suite in CI's configuration\" completed (exit code 0)</summary>\n</task-notification>",
+  "summary": "<task-notification> <task-id>bvrw8toul</task-id> <tool-use-id>toolu_01XgexYDon5wdwmHRxdNhvnQ</tool-use-id> <output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8db",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5a8485a3aec1498937af03fd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T21:10:31.076Z",
+  "stored_at": "2026-08-21T21:10:31.076Z",
+  "low_signal": true
+}

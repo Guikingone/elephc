@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/restore_ladder.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/restore_ladder.py: \"\"\"My restructure dropped the type ladder, and an integer reached the shape guard: SIGSEGV.\n\nThe shape guard reads a container ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/restore_ladder.py: \"\"\"My restructure dropped the type ladder, and an integer reached the shape guard: SIGSEGV.\n\nThe shape guard reads a container HEADER. Only tags 4 and 5 are containers; everything else is\nphp's refusal, and the ladder is what raises it. The rewrite branched on tag 4 alone and let the\nrest fall straight through.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\np = ROOT / 'src/codegen/lower_inst/builtins/io/context_result_helpers.rs'\nt = p.read_text()\n\nOLD = '''/// Replaces a boxed two-argument options va",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "48c7b40280e99ff5a6272931",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:10:05.900Z",
+  "stored_at": "2026-08-22T19:10:05.900Z"
+}

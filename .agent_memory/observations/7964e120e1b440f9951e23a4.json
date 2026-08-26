@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rl \"GLOB_NOESCAPE\" . --exclude-dir=target --exclude-dir=.git --exclude-dir=node_modules 2>/dev/null | head -20",
+  "summary": "grep -rl \"GLOB_NOESCAPE\" . --exclude-dir=target --exclude-dir=.git --exclude-dir=node_modules 2>/dev/null | head -20: treams/php-8.5.6/macos-aarch64/streams-full.json tests/php_oracle/manifests/streams/php-8.5.6/macos-aarch64/homebrew-no-ini.json tests/php_oracle/manifests/streams/php-8.5.6/linux-aarch64/streams-full.j",
+  "text": "grep -rl \"GLOB_NOESCAPE\" . --exclude-dir=target --exclude-dir=.git --exclude-dir=node_modules 2>/dev/null | head -20: treams/php-8.5.6/macos-aarch64/streams-full.json tests/php_oracle/manifests/streams/php-8.5.6/macos-aarch64/homebrew-no-ini.json tests/php_oracle/manifests/streams/php-8.5.6/linux-aarch64/streams-full.json .agent_memory/observations/70e9481eaf7afcefda9e4ed4.json .agent_memory/observations/ab053c0a2c0dabbcc396b758.json .agent_memory/observations/2cb943efc72f8baf4cbeebf5.json .agent_memory/observations/74955e124b6c8c657257bdc5.json .agent_memory/observations/d2597dec08a656935f2cad05.json .agent_memory/observations/08fb841f3253168090873c61.json .agent_memory/observations/93cbd2d7c6234a6f7fe4a373.json .agent_memory/observations/e7d779e8c28ea29d68776df5.json .agent_memory/observations/20e78b6057f9e10b17456db7.json .agent_memory/observations/d3c4e12cac59fbfa3a078c07.json .agent_memory/observations/029f2587555fc937275479e3.json .agent_memory/indexes/docs-index.json src/types/stream_constants.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7964e120e1b440f9951e23a4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:50:40.586Z",
+  "stored_at": "2026-08-22T08:50:40.586Z"
+}

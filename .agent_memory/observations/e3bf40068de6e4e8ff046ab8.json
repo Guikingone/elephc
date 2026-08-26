@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg37.txt 2>&1 | tail -5",
+  "summary": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg37.txt 2>&1 | tail -5: [worktree-streams-csv-signature a38e51fc9] fix(io): glob() had no $flags, and php's flag values are the bits of n",
+  "text": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg37.txt 2>&1 | tail -5: [worktree-streams-csv-signature a38e51fc9] fix(io): glob() had no $flags, and php's flag values are the bits of no libc 44 files changed, 787 insertions(+), 83 deletions(-) create mode 100644 crates/elephc-builtin-contract/src/glob_flags.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e3bf40068de6e4e8ff046ab8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:41:01.593Z",
+  "stored_at": "2026-08-22T09:41:01.593Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t2.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t2.php: <?php\n$cases = [\"\\\"ab\\\"cd\\n\", \"\\\"ab\\\"cd,e\\n\", \"\\\"ab\\\"c\\\"d\\\"\\n\", \"\\\"ab\\\" cd\\n\", \"\\\"ab\\\"\\\"cd\\\"\\n\"];\nforeach ($cases as $text) {\n    $h = ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t2.php: <?php\n$cases = [\"\\\"ab\\\"cd\\n\", \"\\\"ab\\\"cd,e\\n\", \"\\\"ab\\\"c\\\"d\\\"\\n\", \"\\\"ab\\\" cd\\n\", \"\\\"ab\\\"\\\"cd\\\"\\n\"];\nforeach ($cases as $text) {\n    $h = fopen(\"php://memory\", \"r+\");\n    fwrite($h, $text);\n    rewind($h);\n    echo json_encode(fgetcsv($h, 0, \",\", \"\\\"\", \"\\\\\")), \"\\n\";\n    fclose($h);\n}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ba8bfe89e6d4420e3eff4533",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:27:44.108Z",
+  "stored_at": "2026-08-18T09:27:44.109Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat named_probes/kimi-k2.7-code-21.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat named_probes/kimi-k2.7-code-21.php: <?php function ob($s){ echo $s; } ob_start(); echo 'A'; ob_start('ob'); echo 'B'; ob_flush(); echo 'C'; ob_e",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat named_probes/kimi-k2.7-code-21.php: <?php function ob($s){ echo $s; } ob_start(); echo 'A'; ob_start('ob'); echo 'B'; ob_flush(); echo 'C'; ob_end_clean(); echo 'D'; ob_end_flush();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "76316b6c8fb74e028c7cfcf3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:43:50.557Z",
+  "stored_at": "2026-08-22T18:43:50.558Z"
+}

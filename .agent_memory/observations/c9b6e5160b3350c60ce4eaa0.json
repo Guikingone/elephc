@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "Ok bah go sur ce qui reste",
+  "summary": "Ok bah go sur ce qui reste",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c9b6e5160b3350c60ce4eaa0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:53:04.175Z",
+  "stored_at": "2026-08-22T18:53:04.176Z",
+  "low_signal": true
+}

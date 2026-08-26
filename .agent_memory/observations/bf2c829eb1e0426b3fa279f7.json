@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fscanf_header.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fscanf_header.py: p = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/fscanf.rs'\ns = ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fscanf_header.py: p = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/fscanf.rs'\ns = open(p).read()\n\nold = \"\"\"//! - The by-ref `$vars` output form is REFUSED rather than mis-executed, mirroring `sscanf()`.\n//!   php assigns each field through the reference and returns the field COUNT; this backend\n//!   cannot express that (`variadic: Some(\"vars\")` is a bare NAME with no by-ref marker), and\n//!   left accepted the call silently returned the ARRAY and assigned nothing.\"\"\"\nnew = \"\"\"//! - The by-ref `$vars` output form answers an `int|false` instead: php",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bf2c829eb1e0426b3fa279f7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:32:53.505Z",
+  "stored_at": "2026-08-18T10:32:53.505Z"
+}

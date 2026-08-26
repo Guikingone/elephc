@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn store_int_output_to_local\" -A 40 src/ | head -45",
+  "summary": "grep -rn \"fn store_int_output_to_local\" -A 40 src/ | head -45: string nor a boxed value, for the reason spelled out on src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs-377-/// [`store_int_output_to_local`]: the raw store writes a pointer and a length into two adjacent src/codegen/lower_inst/builtins/io/str",
+  "text": "grep -rn \"fn store_int_output_to_local\" -A 40 src/ | head -45: string nor a boxed value, for the reason spelled out on src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs-377-/// [`store_int_output_to_local`]: the raw store writes a pointer and a length into two adjacent src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs-378-/// words, which in a scalar slot would overwrite the neighbouring local. src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs-379-pub(super) fn store_string_output_to_local( src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs-380- ctx: &mut FunctionContext<'_>, src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs-381- slot: LocalSlotId, src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs-382- ptr_reg: &str, src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs-383- len_reg: &str, src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs-384-) -> Result<()> {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a59937dcd1492f29b8f9c62",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:20:21.023Z",
+  "stored_at": "2026-08-21T16:20:21.023Z"
+}

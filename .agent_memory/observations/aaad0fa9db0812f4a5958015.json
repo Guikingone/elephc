@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 85,100p src/codegen_support/runtime/io/fopen.rs",
+  "summary": "sed -n 85,100p src/codegen_support/runtime/io/fopen.rs: emitter.instruction(\"b __rt_fopen_uw_slot\"); // continue scanning slots emitter.label(\"__rt_fopen_uw_done\"); // -- refuse plain paths while the file:// wrapper is unregistered -- // stream_wrapper_unregister(\"file\") must actually stop opens, otherwise the // call ",
+  "text": "sed -n 85,100p src/codegen_support/runtime/io/fopen.rs: emitter.instruction(\"b __rt_fopen_uw_slot\"); // continue scanning slots emitter.label(\"__rt_fopen_uw_done\"); // -- refuse plain paths while the file:// wrapper is unregistered -- // stream_wrapper_unregister(\"file\") must actually stop opens, otherwise the // call reports success and changes nothing. Index 0 is \"file\" in the built-in // wrapper list. abi::emit_symbol_address(emitter, \"x9\", \"_disabled_builtin_wrappers\"); emitter.instruction(\"ldr x10, [x9]\"); // disabled built-in mask emitter.instruction(\"tst x10, #1\"); // is file:// unregistered? emitter.instruction(\"b.ne __rt_fopen_fail\"); // report PHP false while it is // -- save mode string for later parsing -- emitter.instruction(\"stp x3, x4, [sp, #16]\"); // save mode ptr and len on stack // -- null-terminate the filename via __rt_cstr --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aaad0fa9db0812f4a5958015",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:08:02.523Z",
+  "stored_at": "2026-08-22T08:08:02.523Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_filters.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_filters.rs: let stream = expect_operand(inst, 0)?;\n    load_stream_fd_to_result(ctx, stream, \"stream_filter_append\")?;\n    emit_iconv_transform_for_current_fd(ctx, inst, &f -> //",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_filters.rs: let stream = expect_operand(inst, 0)?;\n    load_stream_fd_to_result(ctx, stream, \"stream_filter_append\")?;\n    emit_iconv_transform_for_current_fd(ctx, inst, &f -> // The charset pair is validated here exactly as on the literal path: php creates the filter\n    // at attach time, so an unopenable conversion answers `false` rather than attaching a\n    // transform that silently passes bytes through.\n    let refused_label = ctx.next_label(\"iconv_dyn_refused\");\n    let stream = expect_operand(inst, 0)?;\n    load_stream_fd_to_result(ctx, stream, \"stream_filter_append\")?;\n    emit_iconv_open_probe(ctx, &from_symbol, &to_symbol, &refused_label",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cdbf99ee4386db48c2d2983a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:58:52.172Z",
+  "stored_at": "2026-08-18T09:58:52.172Z"
+}

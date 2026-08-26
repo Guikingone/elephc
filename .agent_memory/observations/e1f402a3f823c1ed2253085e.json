@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1040,1080p' src/ir_lower/context.rs",
+  "summary": "sed -n '1040,1080p' src/ir_lower/context.rs: elf) { self.eval_executed = true; } /// Returns true when any `eval()` call was lowered in this function. /// Unlike `has_eval_barrier`, this also covers barrier-free AOT evals: /// dynamic constant probes must consult the eval registry either way. pub(crate) const fn eval_e",
+  "text": "sed -n '1040,1080p' src/ir_lower/context.rs: elf) { self.eval_executed = true; } /// Returns true when any `eval()` call was lowered in this function. /// Unlike `has_eval_barrier`, this also covers barrier-free AOT evals: /// dynamic constant probes must consult the eval registry either way. pub(crate) const fn eval_executed(&self) -> bool { self.eval_executed } /// Returns the reusable hidden owner slot for a promoted local, declaring it if needed. fn declare_ref_cell_owner(&mut self, variable: &str, php_type: PhpType) -> LocalSlotId { if let Some(slot) = self.ref_cell_owner_locals.get(variable).copied() { self.builder.widen_local_storage_type(slot, php_type); return slot; } let name = format!(\"__eir_ref_owner{}_{}\", self.hidden_temp_counter, variable); self.hidden_temp_counter += 1; let slot = self.declare_local_with_kind(&name, php_type, LocalKind::RefCell); self.ref_cell_owner_locals .insert(variable.to_string(), slot); slot }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e1f402a3f823c1ed2253085e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:14:54.866Z",
+  "stored_at": "2026-08-20T19:14:54.867Z"
+}

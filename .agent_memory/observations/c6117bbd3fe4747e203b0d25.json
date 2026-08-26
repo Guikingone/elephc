@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo nextest list -E 'binary(codegen_tests)' 2>/dev/null | rg \"^\\s+codegen::\" | sed 's/::.*//' | sort -u | head -20",
+  "summary": "cargo nextest list -E 'binary(codegen_tests)' 2>/dev/null | rg \"^\\s+codegen::\" | sed 's/::.*//' | sort -u | head -20 completed",
+  "text": "cargo nextest list -E 'binary(codegen_tests)' 2>/dev/null | rg \"^\\s+codegen::\" | sed 's/::.*//' | sort -u | head -20 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c6117bbd3fe4747e203b0d25",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:24:23.020Z",
+  "stored_at": "2026-08-16T20:24:23.021Z"
+}

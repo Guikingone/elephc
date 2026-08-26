@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1,60p' src/codegen_support/runtime/io/stdout_write.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1,60p' src/codegen_support/runtime/io/stdout_write.rs: re: when _print_r_mode is set, append the // bytes to the capture buffer instead of writing to stdout. The flag is // only ever non-zero during an active print_r",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1,60p' src/codegen_support/runtime/io/stdout_write.rs: re: when _print_r_mode is set, append the // bytes to the capture buffer instead of writing to stdout. The flag is // only ever non-zero during an active print_r($value, true) rendering, // so non-print_r output is unaffected. -- crate::codegen::abi::emit_symbol_address(emitter, \"x9\", \"_print_r_mode\"); // materialize the address of the print_r capture-mode flag emitter.instruction(\"ldr x9, [x9]\"); // load the print_r capture-mode flag emitter.instruction(\"cbz x9, __rt_stdout_write_pr_inactive\"); // capture disabled — fall through to the web/syscall path emitter.instruction(\"bl __rt_pr_append\"); // capture enabled — append the bytes (ptr=x0, len=x1) to the capture buffer emitter.instruction(\"b __rt_stdout_write_done\"); // capture handled the bytes — skip the syscall path emitter.label(\"__rt_stdout_write_pr_inactive\"); // -- user output-handler guard: PHP discards output produced inside an",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a4ac79a6bd68de3e1e2275dc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:18:45.699Z",
+  "stored_at": "2026-08-22T21:18:45.699Z"
+}

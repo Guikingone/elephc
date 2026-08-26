@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn branch_to\" src/ir_lower/ | head -3; grep -rn \"fn emit_null_literal\\|fn lower_null_literal\\|ConstNull\" src/ir_lower/ | head -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn branch_to\" src/ir_lower/ | head -3; grep -rn \"fn emit_null_literal\\|fn lower_null_literal\\|ConstNull\" src/ir_lower/ | head -5: src/ir_lower/stmt/metadata_control.rs:60:pub(super) fn branch_to(ctx: &mut LoweringC",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn branch_to\" src/ir_lower/ | head -3; grep -rn \"fn emit_null_literal\\|fn lower_null_literal\\|ConstNull\" src/ir_lower/ | head -5: src/ir_lower/stmt/metadata_control.rs:60:pub(super) fn branch_to(ctx: &mut LoweringContext<'_, '_>, target: BlockId) { src/ir_lower/expr/merge_temps.rs:299:pub(super) fn branch_to(ctx: &mut LoweringContext<'_, '_>, target: BlockId) { src/ir_lower/function.rs:1460: Op::ConstNull, src/ir_lower/function.rs:1466: Op::ConstNull.default_effects(), src/ir_lower/function.rs:1501: Op::ConstNull, src/ir_lower/function.rs:1507: Op::ConstNull.default_effects(), src/ir_lower/function.rs:1519: Op::ConstNull,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9ffac003ca4b873bb361552d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:40:43.196Z",
+  "stored_at": "2026-08-24T07:40:43.197Z"
+}

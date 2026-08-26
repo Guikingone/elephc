@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"vsprintf\" src/codegen_support/runtime/ | head -5",
+  "summary": "grep -rln \"vsprintf\" src/codegen_support/runtime/ | head -5: src/codegen_support/runtime/emitters.rs src/codegen_support/runtime/strings/mod.rs src/codegen_support/runtime/strings/sprintf.rs src/codegen_support/runtime/strings/vsprintf.rs",
+  "text": "grep -rln \"vsprintf\" src/codegen_support/runtime/ | head -5: src/codegen_support/runtime/emitters.rs src/codegen_support/runtime/strings/mod.rs src/codegen_support/runtime/strings/sprintf.rs src/codegen_support/runtime/strings/vsprintf.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "32c359ccc0b23ff4c0faec32",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:59:00.888Z",
+  "stored_at": "2026-08-21T15:59:00.888Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh v1 rm16 v9 v2 v3 v6 v8 2>&1 | head -16",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh v1 rm16 v9 v2 v3 v6 v8 2>&1 | head -16: v1 IDENTICAL rm16 DIFF: 2,4c2,4 < int(10) < int(11) < int(12) --- > NULL > NULL > NULL v9 ID",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh v1 rm16 v9 v2 v3 v6 v8 2>&1 | head -16: v1 IDENTICAL rm16 DIFF: 2,4c2,4 < int(10) < int(11) < int(12) --- > NULL > NULL > NULL v9 IDENTICAL v2 IDENTICAL v3 IDENTICAL v6 IDENTICAL v8 IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "658914bde335773281529696",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:53:47.050Z",
+  "stored_at": "2026-08-18T12:53:47.050Z"
+}

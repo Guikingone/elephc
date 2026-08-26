@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls ~/Library/Caches/elephc 2>/dev/null; ls ~/.cache/elephc 2>/dev/null; find /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T -maxdepth 1 -name 'elephc_test_pcre2*' 2>/dev/null | head",
+  "summary": "About to run: ls ~/Library/Caches/elephc 2>/dev/null; ls ~/.cache/elephc 2>/dev/null; find /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T -maxdepth 1 -name 'elephc_test_pcre2*' 2>/dev/null | head",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "27db8d1500535aa5b12aae15",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:02:41.645Z",
+  "stored_at": "2026-08-25T13:02:41.645Z"
+}

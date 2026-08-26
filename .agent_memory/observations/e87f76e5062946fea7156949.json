@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/lines; mkdir -p $D/e; cp $D/a.php $D/b.php $D/c.php $D/e/; cd $D/e && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q a.php >/dev/null 2>&1 && ./a; echo '--- B ---'; cd $D/e && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q b.php >/dev/null 2>&1 && ./b; echo '--- C ---'; cd $D/e && /Users/guillaume… [+127 chars truncated]",
+  "summary": "About to run: D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/lines; mkdir -p $D/e; cp $D/a.php ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e87f76e5062946fea7156949",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:34:06.438Z",
+  "stored_at": "2026-08-24T17:34:06.439Z"
+}

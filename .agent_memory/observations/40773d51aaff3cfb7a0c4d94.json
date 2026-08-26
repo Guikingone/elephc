@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"can_throw\\|may_throw\" src/ir_lower/stmt/exceptions.rs 2>/dev/null | head -10; ls src/ir_lower/stmt/ | head -30",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"can_throw\\|may_throw\" src/ir_lower/stmt/exceptions.rs 2>/dev/null | head -10; ls src/ir_lower/stmt/ | head -30: array_write_core.rs array_write_storage.rs conditionals.rs control_exit.rs declarations.rs exceptions.",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"can_throw\\|may_throw\" src/ir_lower/stmt/exceptions.rs 2>/dev/null | head -10; ls src/ir_lower/stmt/ | head -30: array_write_core.rs array_write_storage.rs conditionals.rs control_exit.rs declarations.rs exceptions.rs includes.rs instance_property_writes.rs local_assignments.rs loops.rs metadata_control.rs mod.rs nested_append.rs nested_array_writes.rs property_array_writes.rs repr_fixpoint.rs return_coercions.rs statement_basics.rs static_property_helpers.rs static_property_writes.rs switches.rs typed_foreach.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "40773d51aaff3cfb7a0c4d94",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:47:07.003Z",
+  "stored_at": "2026-08-23T17:47:07.004Z"
+}

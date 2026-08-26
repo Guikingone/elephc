@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 38,70p src/synthetic_class/transcribe.rs",
+  "summary": "sed -n 38,70p src/synthetic_class/transcribe.rs: std::collections::HashMap::new(); // A prelude's top level is not necessarily all declarations: the web prelude's bootstrap // (superglobal population, session auto-start) is executable, and it must keep its POSITION // relative to the declarations around it. Such a stat",
+  "text": "sed -n 38,70p src/synthetic_class/transcribe.rs: std::collections::HashMap::new(); // A prelude's top level is not necessarily all declarations: the web prelude's bootstrap // (superglobal population, session auto-start) is executable, and it must keep its POSITION // relative to the declarations around it. Such a statement gets a positional helper name. let mut executable = 0; for stmt in program { let (kind, raw_name) = match &stmt.kind { StmtKind::FunctionDecl { name, .. } => (\"fn\", name.clone()), StmtKind::ClassDecl { name, .. } => (\"class\", name.clone()), StmtKind::ExternFunctionDecl { name, .. } => (\"extern\", name.clone()), StmtKind::ConstDecl { name, .. } => (\"const\", name.clone()), _ => { executable += 1; (\"stmt\", format!(\"bootstrap {executable}\")) } }; let mut base = format!(\"decl_{}_{}\", kind, sanitize(&raw_name)); let seen = used.entry(base.clone()).or_insert(0); *seen += 1; if *seen > 1 { base = format!(\"{base}_{}\", *seen);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "646dca909cf474e0934e34a0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:27:45.725Z",
+  "stored_at": "2026-08-22T07:27:45.726Z"
+}

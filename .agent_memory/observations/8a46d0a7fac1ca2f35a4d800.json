@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 60,98p src/types/checker/builtins/mod.rs",
+  "summary": "sed -n 60,98p src/types/checker/builtins/mod.rs: rmalization. Their handlers inspect the // raw operands directly. let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\\\')); // `--strict-php` hides extension builtins entirely: the call must fall // through to user-function resolution and the standar",
+  "text": "sed -n 60,98p src/types/checker/builtins/mod.rs: rmalization. Their handlers inspect the // raw operands directly. let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\\\')); // `--strict-php` hides extension builtins entirely: the call must fall // through to user-function resolution and the standard undefined-function // diagnostics, mirroring PHP where these names do not exist. This must // run before argument normalization so the hidden builtin's signature is // never applied to the call. if catalog::strict_php_hidden_builtin(&builtin_key) { return Ok(None); } let is_lazy_construct = matches!(builtin_key.as_str(), \"isset\" | \"unset\"); let normalized_args; let args = if let Some(sig) = (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten() { normalized_args = self.normalize_builtin_call_args( &sig, args, span, &format!(\"Builtin '{}'\", name), env, )?; normalized_args.as_slice() } else { args };",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8a46d0a7fac1ca2f35a4d800",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:11:46.226Z",
+  "stored_at": "2026-08-21T16:11:46.226Z"
+}

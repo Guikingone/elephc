@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"Unable to locate filter\\|Unable to create or locate\" src | head",
+  "summary": "grep -rn \"Unable to locate filter\\|Unable to create or locate\" src | head: ilter`. src/codegen/lower_inst/builtins/io/filter_helpers.rs:455: \"Warning: stream_filter_prepend(): Unable to locate filter \\\"\", src/codegen/lower_inst/builtins/io/filter_helpers.rs:460: \"Warning: stream_filter_append(): Unable to locate filter",
+  "text": "grep -rn \"Unable to locate filter\\|Unable to create or locate\" src | head: ilter`. src/codegen/lower_inst/builtins/io/filter_helpers.rs:455: \"Warning: stream_filter_prepend(): Unable to locate filter \\\"\", src/codegen/lower_inst/builtins/io/filter_helpers.rs:460: \"Warning: stream_filter_append(): Unable to locate filter \\\"\", src/codegen_support/runtime/io/stream_filter.rs:17://! must miss and report `Unable to locate filter` instead. src/codegen_support/runtime/io/filter_param_warning.rs:68: // -- \"Warning: stream_filter_append(): Unable to create or locate filter \\\"\" -- src/codegen_support/runtime/io/filter_missing_warning.rs:9://! - php-src names the FILTER in the text — `Unable to locate filter \"no.such.filter\"` — so src/codegen_support/runtime/io/php_filter_dynamic.rs:775: // -- `Warning: <callee>(): Unable to locate filter \"<name>\"` -- src/codegen_support/runtime/io/php_filter_dynamic.rs:1417: // -- `Warning: <callee>(): Unable to locate filter \"<name>\"` --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3dd45723fa8856b1071a31b5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:55:52.618Z",
+  "stored_at": "2026-08-18T09:55:52.618Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/mod.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/mod.rs: pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr}; -> pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr};\npub(crate) use ",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/mod.rs: pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr}; -> pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr};\npub(crate) use statement_basics::output_value_can_warn;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "730a9f5166f456cafadd582a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:37:45.515Z",
+  "stored_at": "2026-08-23T16:37:45.516Z"
+}

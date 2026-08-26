@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"exceptions::\" src/codegen/lower_inst/builtins/io/context_result_helpers.rs | head; echo \"--- use block ---\"; sed -n '1,40p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"exceptions::\" src/codegen/lower_inst/builtins/io/context_result_helpers.rs | head; echo \"--- use block ---\"; sed -n '1,40p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs: args, got {}\", name, min, max",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"exceptions::\" src/codegen/lower_inst/builtins/io/context_result_helpers.rs | head; echo \"--- use block ---\"; sed -n '1,40p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs: args, got {}\", name, min, max, actual ))) } /// Loads the four-argument `stream_context_set_option` form into the runtime helper ABI. pub(super) fn lower_stream_context_set_option_4( ctx: &mut FunctionContext<'_>, inst: &Instruction, ) -> Result<()> { let wrapper = expect_operand(inst, 1)?; let option = expect_operand(inst, 2)?; let value = expect_operand(inst, 3)?; match ctx.emitter.target.arch { Arch::AArch64 => { load_string_to_result(ctx, wrapper, \"stream_context_set_option wrapper\")?; abi::emit_push_reg_pair(ctx.emitter, \"x1\", \"x2\"); load_string_to_result(ctx, option, \"stream_context_set_option option\")?; abi::emit_push_reg_pair(ctx.emitter, \"x1\", \"x2\"); materialize_owned_stream_context_option_mixed(ctx, value)?; ctx.emitter.instruction(\"mov x4, x0\"); // transfer the owned boxed Mixed option value ctx.emitter.instruction(\"mov x5, xzr\"); // boxed Mixed values use no high payload word",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "54ef3e9783a18f63a41cd721",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:16:41.371Z",
+  "stored_at": "2026-08-22T16:16:41.372Z"
+}

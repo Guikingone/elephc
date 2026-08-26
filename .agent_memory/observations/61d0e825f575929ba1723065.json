@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '120,140p;624,650p;660,685p' tests/codegen/io/output_buffering.rs",
+  "summary": "sed -n '120,140p;624,650p;660,685p' tests/codegen/io/output_buffering.rs: , \"Notice: ob_clean(): Failed to delete buffer of default output handler (0)\\n\", \"bool(false)\\n\", \"Notice: ob_end_flush(): Failed to send buffer of default output handler (0)\\n\", \"bool(false)\\n\", ) ); } /// Verifies partial flags: CLEANABLE admit",
+  "text": "sed -n '120,140p;624,650p;660,685p' tests/codegen/io/output_buffering.rs: , \"Notice: ob_clean(): Failed to delete buffer of default output handler (0)\\n\", \"bool(false)\\n\", \"Notice: ob_end_flush(): Failed to send buffer of default output handler (0)\\n\", \"bool(false)\\n\", ) ); } /// Verifies partial flags: CLEANABLE admits ob_clean, REMOVABLE alone admits /// every end/get variant, matching PHP. #[test] \"#, ); assert_eq!(out, \"bool(true)\\nstring(1) \\\"b\\\"\\n\"); } /// Verifies an unknown function-name callback raises PHP's warning + notice and /// leaves the stack unchanged. #[test] fn test_ob_start_unknown_function_name_rejected() { let out = compile_and_run( r#\"<?php $r = ob_start('no_such_handler_fn'); echo $r === false ? \"rejected\" : \"started\"; echo \"|\", ob_get_level(); \"#, ); assert_eq!( out, concat!( \"Warning: ob_start(): function \\\"no_such_handler_fn\\\" not found or invalid function name\\n\", \"Notice: ob_start(): Failed to create buffer\\n\", \"rejected|0\", ) ); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "61d0e825f575929ba1723065",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T17:07:59.319Z",
+  "stored_at": "2026-08-19T17:07:59.320Z"
+}

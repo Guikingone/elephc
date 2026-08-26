@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/tmpclean.sh",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/tmpclean.sh: #!/bin/zsh\n# Reports (and optionally purges) the elephc temp-dir leak, a documented hazard on this machine:\n# interrupted suites leave `$",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/tmpclean.sh: #!/bin/zsh\n# Reports (and optionally purges) the elephc temp-dir leak, a documented hazard on this machine:\n# interrupted suites leave `$TMPDIR/elephc_*` behind and they accumulate until the disk fills.\n# Only directories older than 60 minutes are removed, so a live run is never touched.\nn=$(find \"$TMPDIR\" -maxdepth 1 -name 'elephc_*' -type d 2>/dev/null | wc -l | tr -d ' ')\necho \"leaked elephc temp dirs: $n\"\ndu -sh \"$TMPDIR\" 2>/dev/null | tail -1\nif [[ \"$1\" == \"purge\" ]]; then\n  find \"$TMPDIR\" -maxdepth 1 -name 'elephc_*' -type d -mmin +60 -print0 2>/dev/null | xargs -0 rm -rf\n  echo \"purged;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fe81cf0338c34188db4c5128",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:43:26.947Z",
+  "stored_at": "2026-08-17T12:43:26.948Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat > filtcopy.php <<'PHPEOF'\n<?php\nfile_put_contents(\"raw.txt\", \"uryyb\");\n// 1. LITERAL php://filter source\ncopy(\"php://filter/read=string.rot13/resource=raw.txt\", \"d1.txt\");\necho \"literal: \", file_get_contents(\"d1.txt\"), \"\\n\";\n// 2. COMPUTED php://filter source\n$src = \"php://filter/read=string.rot13/resource=\" . \"raw.txt\";\ncopy($src, \"d2.txt\");\necho \"computed: \", file_get_contents(\"d2.txt\"), \"\\n\";\n// 3. the same computed U… [+271 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat > filtcopy.php <<'PHPEOF'\n<?php\nfile_put_contents(\"raw.txt\", \"uryyb\");\n// 1. LITERAL php://filter source\ncopy(\"php://filter/read=string.rot13/re",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat > filtcopy.php <<'PHPEOF'\n<?php\nfile_put_contents(\"raw.txt\", \"uryyb\");\n// 1. LITERAL php://filter source\ncopy(\"php://filter/read=string.rot13/resource=raw.txt\", \"d1.txt\");\necho \"literal: \", file_get_contents(\"d1.txt\"), \"\\n\";\n// 2. COMPUTED php://filter source\n$src = \"php://filter/read=string.rot13/resource=\" . \"raw.txt\";\ncopy($src, \"d2.txt\");\necho \"computed: \", file_get_contents(\"d2.txt\"), \"\\n\";\n// 3. the same computed URL through fopen\n$h = fopen($src, \"r\");\necho \"fopen: \", stream_get_contents($h), \"\\n\";\nfclose($h);\n// 4. and through file_get_contents\necho \"fgc: \", file_get_contents($src), \"\\n\";\nunlink(\"raw.txt\"); unlink(\"d1.txt\"); unlink(\"d2.txt\");\nPHPEOF\npython3 diff1.py filtcopy.php: === php === literal: hello computed: hello fopen: hello fgc: hello === elephc === literal: hello Warning: copy(php://filter/read=string.rot13/resource=raw.txt): Failed to open stream: No such file or directory in <dir>/p.php on line 8 computed: Warning: file_get_contents(d2.txt): Failed to open stream: No such file or directory in <dir>/p.php on line 9 fopen: hello fgc: hello --- exit 0 (php 0) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "81b849b40082a24684b3f18c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:28:55.535Z",
+  "stored_at": "2026-08-24T07:28:55.536Z"
+}

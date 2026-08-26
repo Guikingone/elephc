@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '95,120p' src/types/checker/functions/resolution/call.rs",
+  "summary": "rtk proxy sed -n '95,120p' src/types/checker/functions/resolution/call.rs: xterns, declared functions, variants, /// builtins, call-argument normalization, and return-type inference. pub fn check_function_call( &mut self, name: &str, args: &[Expr], span: crate::span::Span, caller_env: &TypeEnv, ) -> Result<PhpType, Com",
+  "text": "rtk proxy sed -n '95,120p' src/types/checker/functions/resolution/call.rs: xterns, declared functions, variants, /// builtins, call-argument normalization, and return-type inference. pub fn check_function_call( &mut self, name: &str, args: &[Expr], span: crate::span::Span, caller_env: &TypeEnv, ) -> Result<PhpType, CompileError> { if let Some(extern_name) = self.canonical_extern_function_name_folded(name) { return self.check_extern_function_call(&extern_name, args, span, caller_env); } let canonical_name = self .canonical_function_name_folded(name) .unwrap_or_else(|| name.to_string()); let name = canonical_name.as_str(); if let Some(mut sig) = self.functions.get(name).cloned() { if let Some(reason) = sig.deprecation.as_deref() { let message = if reason.is_empty() { format!(\"Call to deprecated function: {}()\", name) } else { format!(\"Call to deprecated function: {}() — {}\", name, reason) }; self.warnings .push(crate::errors::CompileWarning::new(span, &message));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1525d41c2a851ce298e91886",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:54:19.438Z",
+  "stored_at": "2026-08-16T19:54:19.439Z"
+}

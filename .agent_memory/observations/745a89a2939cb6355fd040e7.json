@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"^use \\|__rt_uncaught_newline_x\" src/codegen_support/runtime/exceptions/uncaught_report.rs | head -8",
+  "summary": "About to run: grep -n \"^use \\|__rt_uncaught_newline_x\" src/codegen_support/runtime/exceptions/uncaught_report.rs | head -8",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "745a89a2939cb6355fd040e7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:20:04.626Z",
+  "stored_at": "2026-08-22T12:20:04.627Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - 🛠️★★★ [.phpt comme ORACLE](php-src-own-test-suite-as-the-oracle.md) (`?>` N'EXISTE PAS) · [campagne php-src](streams-php-src-campaign-fixes.md) · [AUDIT de su -> - 🛠️★★★ [.phpt comme ORACLE](php-src-",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - 🛠️★★★ [.phpt comme ORACLE](php-src-own-test-suite-as-the-oracle.md) (`?>` N'EXISTE PAS) · [campagne php-src](streams-php-src-campaign-fixes.md) · [AUDIT de su -> - 🛠️★★★ [.phpt comme ORACLE](php-src-own-test-suite-as-the-oracle.md) (`?>` N'EXISTE PAS) · [campagne php-src](streams-php-src-campaign-fixes.md) · [AUDIT de surface](streams-audit-full-surface-2026-08-14.md) · [SONDE DIFFÉRENTIELLE](sweep-streams-surface-differential.md) · [un BALAYAGE bat une suite verte](streams-surface-sweep-beats-a-green-suite.md) · [`--emit-asm` ne montre PAS le runtime](emit-asm-shows-the-call-not-the-runtime.md) · [DEUX voies, UNE arche câblée](two-di",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fad04766a4ab52273e849273",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:39:05.363Z",
+  "stored_at": "2026-08-23T13:39:05.365Z"
+}

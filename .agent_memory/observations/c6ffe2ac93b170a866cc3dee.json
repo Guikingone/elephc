@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w51; mkdir -p $S/w51; cp $S/probes/file-object-seek-bounds.php $S/w51/p.php; cd $S/w51 && php -n p.php 2>&1",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w51; mkdir -p $S/w51; cp $S/probes/file-object-seek-bounds.php $S/w51/p.php; cd $S/w51 && php -n p.php 2>&1: over key 4 valid false cur f",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w51; mkdir -p $S/w51; cp $S/probes/file-object-seek-bounds.php $S/w51/p.php; cd $S/w51 && php -n p.php 2>&1: over key 4 valid false cur false zero key 0 cur 'l0 ' last key 4 cur '' valid false neg ValueError: SplFileObject::seek(): Argument #1 ($line) must be greater than or equal to 0 empty key 0 valid false",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c6ffe2ac93b170a866cc3dee",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:29:27.939Z",
+  "stored_at": "2026-08-25T09:29:27.939Z"
+}

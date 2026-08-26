@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rnoiE \"\\\"(verify_peer|verify_peer_name|allow_self_signed|cafile|capath|local_cert|local_pk|passphrase|CN_match|peer_name|verify_depth|ciphers|SNI_enabled|SNI_server_name|disable_compression|peer_fingerprint|security_level|capture_peer_cert|capture_peer_cert_chain|crypto_method|alpn_protocols|min_proto_version|max_proto_version|reneg_limit)\\\"\" src 2>/dev/null | awk -F: '{print $3}' | sort | uniq -c | sort -rn",
+  "summary": "About to run: grep -rnoiE \"\\\"(verify_peer|verify_peer_name|allow_self_signed|cafile|capath|local_cert|local_pk|passphrase|CN_match|peer_name|verify_depth|ciphers|SNI_enabled|SNI_server_name|disable_compression|peer",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1e40d128886c4f2c857c3220",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:14:10.034Z",
+  "stored_at": "2026-08-14T14:14:10.034Z"
+}

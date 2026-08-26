@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:034ac0793606439d8aa746a800a1323674793d0a 2>&1 | tail -1; git log --format=\"%h %s\" -1",
+  "summary": "git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:034ac0793606439d8aa746a800a1323674793d0a 2>&1 | tail -1; git log --format=\"%h %s\" -1: 034ac07936..d9a39e961b HEAD -> feat/streams-csv-signatures d9a39e961b test(contract): the three surface-count assertio",
+  "text": "git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:034ac0793606439d8aa746a800a1323674793d0a 2>&1 | tail -1; git log --format=\"%h %s\" -1: 034ac07936..d9a39e961b HEAD -> feat/streams-csv-signatures d9a39e961b test(contract): the three surface-count assertions learn the ten builtins this branch adds",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "779ad1a733037bb6c0c533d0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T15:00:09.992Z",
+  "stored_at": "2026-08-14T15:00:09.992Z"
+}

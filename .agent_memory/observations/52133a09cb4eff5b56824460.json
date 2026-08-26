@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs/probes && echo \"----- PHP p4 -----\" && php -n p4_meta.php && echo \"----- ELE p4 -----\" && ./p4_meta",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs/probes && echo \"----- PHP p4 -----\" && php -n p4_meta.php && echo \"----- ELE p4 -----\" && ./p4_meta: ----- PHP p4 ----- array(9) { [\"blocked\"",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs/probes && echo \"----- PHP p4 -----\" && php -n p4_meta.php && echo \"----- ELE p4 -----\" && ./p4_meta: ----- PHP p4 ----- array(9) { [\"blocked\"]=> bool(true) [\"eof\"]=> bool(false) [\"mode\"]=> string(3) \"w+b\" [\"seekable\"]=> bool(true) [\"stream_type\"]=> string(6) \"MEMORY\" [\"timed_out\"]=> bool(false) [\"unread_bytes\"]=> int(0) [\"uri\"]=> string(12) \"php://memory\" [\"wrapper_type\"]=> string(3) \"PHP\" } ----- ELE p4 ----- array(9) { [\"blocked\"]=> bool(true) [\"eof\"]=> bool(false) [\"mode\"]=> string(2) \"r+\" [\"seekable\"]=> bool(true) [\"stream_type\"]=> string(5) \"STDIO\" [\"timed_out\"]=> bool(false) [\"unread_bytes\"]=> int(0) [\"uri\"]=> string(0) \"\" [\"wrapper_type\"]=> string(9) \"plainfile\" }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "52133a09cb4eff5b56824460",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:19:02.256Z",
+  "stored_at": "2026-08-14T14:19:02.257Z"
+}

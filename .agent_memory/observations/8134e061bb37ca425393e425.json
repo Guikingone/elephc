@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'php://temp\\|temp_file_object_construct\\|SplTempFileObject' src/types/checker/builtin_spl_classes/filesystem.rs | head -20",
+  "summary": "grep -n 'php://temp\\|temp_file_object_construct\\|SplTempFileObject' src/types/checker/builtin_spl_classes/filesystem.rs | head -20: pFileObject` gets a NULL vtable slot for every 1037:/// has no name to re-open — `php://memory`, `php://temp`, everything `SplTempFileObject` is built 1039:/// SplTempFileObject(); $t->fwr",
+  "text": "grep -n 'php://temp\\|temp_file_object_construct\\|SplTempFileObject' src/types/checker/builtin_spl_classes/filesystem.rs | head -20: pFileObject` gets a NULL vtable slot for every 1037:/// has no name to re-open — `php://memory`, `php://temp`, everything `SplTempFileObject` is built 1039:/// SplTempFileObject(); $t->fwrite(\"temp\\n\"); $t->rewind();`, php's `current()` answers 1161:/// Builds the SplTempFileObject constructor body. 1163:/// php's `SplTempFileObject` IS an `SplFileObject` on `php://temp`, and elephc modelled it with a 1167:/// $t = new SplTempFileObject(); 1175:/// The LOGICAL path is what php reports — `php://temp`, or `php://memory` for a negative 1178:fn spl_temp_file_object_construct_body() -> Vec<Stmt> { 1180: // `php://temp`, an explicit one names `php://temp/maxmemory:N`, and a negative one names 1182: // for \"no argument\" — the two disagree only for an explicit `new SplTempFileObject(2097152)`, 1194: string_expr(\"php://temp/maxmemory:\"), 1201: vec![assign_stmt(\"path\", string_expr(\"php://temp\"))],",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8134e061bb37ca425393e425",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:52:53.279Z",
+  "stored_at": "2026-08-25T13:52:53.280Z"
+}

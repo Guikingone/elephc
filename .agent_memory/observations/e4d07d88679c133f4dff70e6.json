@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '5850,5866p' tests/ir_backend_smoke_test.rs",
+  "summary": "sed -n '5850,5866p' tests/ir_backend_smoke_test.rs: assert_eq!( compile_and_run_ir_backend(\"file_get_contents\", source), \"hello:after\" ); let missing = compile_ir_backend_and_run( \"file_get_contents_warning\", \"<?php echo file_get_contents(\\\"missing.txt\\\"); echo \\\"after\\\";\", &[], ); assert!(missing.status.success(), \"IR",
+  "text": "sed -n '5850,5866p' tests/ir_backend_smoke_test.rs: assert_eq!( compile_and_run_ir_backend(\"file_get_contents\", source), \"hello:after\" ); let missing = compile_ir_backend_and_run( \"file_get_contents_warning\", \"<?php echo file_get_contents(\\\"missing.txt\\\"); echo \\\"after\\\";\", &[], ); assert!(missing.status.success(), \"IR backend missing-file fixture failed\"); assert_eq!( String::from_utf8(missing.stdout).expect(\"stdout should be utf8\"), \"after\" ); let stderr = String::from_utf8(missing.stderr).expect(\"stderr should be utf8\"); // php-src names the path and the reason: `file_get_contents(missing.txt): Failed to",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e4d07d88679c133f4dff70e6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:40:32.079Z",
+  "stored_at": "2026-08-25T08:40:32.080Z"
+}

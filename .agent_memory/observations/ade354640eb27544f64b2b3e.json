@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '230,282p' src/types/checker/functions/resolution/call.rs | head -30; echo \"=== enclosing fn ===\"; rtk proxy rg -n \"fn resolve_user_function_call|caller_env: &mut TypeEnv|caller_env: &TypeEnv\" src/types/checker/functions/resolution/call.rs | head -6",
+  "summary": "rtk proxy sed -n '230,282p' src/types/checker/functions/resolution/call.rs | head -30; echo \"=== enclosing fn ===\"; rtk proxy rg -n \"fn resolve_user_function_call|caller_env: &mut TypeEnv|caller_env: &TypeEnv\" src/types/checker/functions/resolution/call.rs | head -6: deprecation: None, }; let normalized_args = self.nor",
+  "text": "rtk proxy sed -n '230,282p' src/types/checker/functions/resolution/call.rs | head -30; echo \"=== enclosing fn ===\"; rtk proxy rg -n \"fn resolve_user_function_call|caller_env: &mut TypeEnv|caller_env: &TypeEnv\" src/types/checker/functions/resolution/call.rs | head -6: deprecation: None, }; let normalized_args = self.normalize_named_call_args( &normalization_sig, args, span, &format!(\"Function '{}'\", name), caller_env, )?; let args = normalized_args.as_slice(); let effective_arg_count = args .iter() .filter(|a| !matches!(a.kind, ExprKind::Spread(_))) .count(); let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_))); let required = decl.defaults.iter().filter(|d| d.is_none()).count(); if decl.ref_params.iter().any(|is_ref| *is_ref) && has_spread { return Err(CompileError::new( span, &format!( \"Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters\", name ), )); } if !has_spread { if decl.variadic.is_some() { if effective_arg_count < required { return Err(CompileError::new( span, === enclosing fn === 102: caller_env: &TypeEnv,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ade354640eb27544f64b2b3e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:53:33.480Z",
+  "stored_at": "2026-08-16T19:53:33.480Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '955,1000p' src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "sed -n '955,1000p' src/types/checker/builtin_spl_classes/filesystem.rs: \", vec![temp_buffer_arg_expr()]), ), vec![ assign_stmt( \"ch\", function_call(\"substr\", vec![temp_buffer_arg_expr(), temp_position_expr(), int_expr(1)]), ), property_assign_stmt( this_expr(), \"tempPosition\", binary_expr(temp_position_expr(), BinOp::A",
+  "text": "sed -n '955,1000p' src/types/checker/builtin_spl_classes/filesystem.rs: \", vec![temp_buffer_arg_expr()]), ), vec![ assign_stmt( \"ch\", function_call(\"substr\", vec![temp_buffer_arg_expr(), temp_position_expr(), int_expr(1)]), ), property_assign_stmt( this_expr(), \"tempPosition\", binary_expr(temp_position_expr(), BinOp::Add, int_expr(1)), ), assign_stmt(\"line\", binary_expr(var_expr(\"line\"), BinOp::Concat, var_expr(\"ch\"))), if_stmt( binary_expr(var_expr(\"ch\"), BinOp::StrictEq, string_expr(\"\\n\")), spl_temp_file_object_return_line_body(), None, ), ], ), if_stmt( binary_expr(function_call(\"strlen\", vec![var_expr(\"line\")]), BinOp::Gt, int_expr(0)), vec![property_assign_stmt( this_expr(), \"lineNumber\", binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)), )], None, ), return_stmt(var_expr(\"line\")), ] } /// Builds statements that increment the line number and return `$line`. fn spl_temp_file_object_return_line_body() -> Vec<Stmt> { vec![ property_assign_stmt(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e80f50c09f77e1119c4b7934",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:36:45.866Z",
+  "stored_at": "2026-08-20T20:36:45.866Z"
+}

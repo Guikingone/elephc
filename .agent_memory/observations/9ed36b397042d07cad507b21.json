@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"mixed_tag\\|MixedTag\" src crates --include='*.rs' | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"mixed_tag\\|MixedTag\" src crates --include='*.rs' | head -20: (super) fn emit_mixed_tag_eq( src/codegen/lower_inst/predicates.rs:275:pub(super) fn emit_mixed_tag_membership( src/codegen/lower_inst/enums.rs:584: emit",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"mixed_tag\\|MixedTag\" src crates --include='*.rs' | head -20: (super) fn emit_mixed_tag_eq( src/codegen/lower_inst/predicates.rs:275:pub(super) fn emit_mixed_tag_membership( src/codegen/lower_inst/enums.rs:584: emit_mixed_tag_branch(ctx, tag_reg, 0, &l_scalar); src/codegen/lower_inst/enums.rs:585: emit_mixed_tag_branch(ctx, tag_reg, 3, &l_scalar); src/codegen/lower_inst/enums.rs:586: emit_mixed_tag_branch(ctx, tag_reg, 8, &l_null); src/codegen/lower_inst/enums.rs:587: emit_mixed_tag_branch(ctx, tag_reg, 2, &l_float); src/codegen/lower_inst/enums.rs:588: emit_mixed_tag_branch(ctx, tag_reg, 1, &l_string); src/codegen/lower_inst/enums.rs:589: emit_mixed_tag_branch(ctx, tag_reg, 4, &l_array); src/codegen/lower_inst/enums.rs:590: emit_mixed_tag_branch(ctx, tag_reg, 5, &l_array); src/codegen/lower_inst/enums.rs:591: emit_mixed_tag_branch(ctx, tag_reg, 6, &l_object); src/codegen/lower_inst/enums.rs:592: emit_mixed_tag_branch(ctx, tag_reg, 9, &l_resource);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9ed36b397042d07cad507b21",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:17:44.459Z",
+  "stored_at": "2026-08-22T16:17:44.460Z"
+}

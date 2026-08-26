@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('fp7.php','w').write('''<?php\n$names = [\"string.toupper\", \"dechunk\", \"convert.base64-encode\", \"convert.base64-decode\",\n          \"convert.quoted-printable-encode\", \"convert.quoted-printable-decode\"];\nforeach ($names as $n) {\n    $h = fopen(\"php://memory\", \"w+\");\n    $r = @stream_filter_append($h, $n, STREAM_FILTER_WRITE, null);\n    printf(\"%-34s null -> %s\\\\n\", $n, var_export(is_resource($r), true)… [+481 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('fp7.php','w').write('''<?php\n$names = [\"string.toupper\", \"dechunk\", \"convert.base64-encode\", \"convert.base64-decode\",\n  ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('fp7.php','w').write('''<?php\n$names = [\"string.toupper\", \"dechunk\", \"convert.base64-encode\", \"convert.base64-decode\",\n          \"convert.quoted-printable-encode\", \"convert.quoted-printable-decode\"];\nforeach ($names as $n) {\n    $h = fopen(\"php://memory\", \"w+\");\n    $r = @stream_filter_append($h, $n, STREAM_FILTER_WRITE, null);\n    printf(\"%-34s null -> %s\\\\n\", $n, var_export(is_resource($r), true));\n    $r2 = @stream_filter_append($h, $n, STREAM_FILTER_WRITE, 7);\n    printf(\"%-34s int  -> %s\\\\n\", $n, var_export(is_resource($r2), true));\n    $r3 = stream_filter_append($h, $n, STREAM_FILTER_WRITE);\n    printf(\"%-34s none -> %s\\\\n\", $n, var_export(is_resource($r3), true));\n    $r4 = stream_filter_append($h, $n, STREAM_FILTER_WRITE, []);\n    printf(\"%-34s arr  -> %s\\\\n\", $n, var_export(is_resource($r4), true));\n    fclose($h);\n}\n''')\nPY\nzsh difftests.sh fp7 2>&1 | head -25: fp7 IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a324ce88dabfe0fd2a06c63",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:44:40.887Z",
+  "stored_at": "2026-08-17T14:44:40.887Z"
+}

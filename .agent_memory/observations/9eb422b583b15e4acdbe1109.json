@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"^    Colon,|^    OpenTag\" src/lexer/token.rs | head -3",
+  "summary": "About to run: rg -n \"^ Colon,|^ OpenTag\" src/lexer/token.rs | head -3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9eb422b583b15e4acdbe1109",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T20:51:38.469Z",
+  "stored_at": "2026-08-17T20:51:38.470Z"
+}

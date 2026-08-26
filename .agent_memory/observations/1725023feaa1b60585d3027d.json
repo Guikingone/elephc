@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn test_method_cannot_read_top_level_local_without_global\" -A 14 tests/error_tests/recovery.rs",
+  "summary": "About to run: grep -n \"fn test_method_cannot_read_top_level_local_without_global\" -A 14 tests/error_tests/recovery.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1725023feaa1b60585d3027d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:59:16.437Z",
+  "stored_at": "2026-08-20T18:59:16.437Z"
+}

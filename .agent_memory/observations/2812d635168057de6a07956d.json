@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b5xkw3k9n.output | head -20",
+  "summary": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b5xkw3k9n.output | head -20: failures: ---- codegen::io::files::test_file_get_contents_missing_emits_runtime_warning stdout ---- -- failures: codegen::io::fi",
+  "text": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b5xkw3k9n.output | head -20: failures: ---- codegen::io::files::test_file_get_contents_missing_emits_runtime_warning stdout ---- -- failures: codegen::io::files::test_disk_space_failure_names_itself_and_the_reason [exited with code 0]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2812d635168057de6a07956d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T14:04:57.525Z",
+  "stored_at": "2026-08-18T14:04:57.526Z"
+}

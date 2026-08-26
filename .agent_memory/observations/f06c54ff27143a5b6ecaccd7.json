@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_rule.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_rule.php: <?php\n// What decides between the TypeError and the ValueError? Every shape, one line each.\nfunction try_select(string $label, $r",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_rule.php: <?php\n// What decides between the TypeError and the ValueError? Every shape, one line each.\nfunction try_select(string $label, $r, $w = null, $e = null): void\n{\n    $rr = $r; $ww = $w; $ee = $e;\n    try {\n        $n = stream_select($rr, $ww, $ee, 0);\n        echo str_pad($label, 34), \"int($n) r=\", json_encode(array_map('gettype', (array) $rr)), \"\\n\";\n    } catch (Throwable $t) {\n        echo str_pad($label, 34), get_class($t), \": \", $t->getMessage(), \"\\n\";\n    }\n}\n\n$s1 = tmpfile();\n$s2 = tmpfile();\n$closed = tmpfile();\nfclose($closed);\n\ntry_select(\"only a non-stream\", [42]);\ntry_select(\"two no",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f06c54ff27143a5b6ecaccd7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:16:03.574Z",
+  "stored_at": "2026-08-23T07:16:03.574Z"
+}

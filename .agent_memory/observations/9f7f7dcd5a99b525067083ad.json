@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_filtered_eof.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_filtered_eof.py: \"\"\"`feof()` jumped to the backend the moment a read filter was removed.\n\nThird helper with the same defect. `__rt_fread`, `__r",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_filtered_eof.py: \"\"\"`feof()` jumped to the backend the moment a read filter was removed.\n\nThird helper with the same defect. `__rt_fread`, `__rt_stream_filtered_pos` and now\n`__rt_stream_eof_get` each asked \"is a filter chain ATTACHED?\" where the question is \"did this\nstream go through the filtered buffer?\" — and `stream_filter_remove()` answers the first no while\nleaving the second yes.\n\nphp's rule, MEASURED end to end:\n\n    fread($h, 3)            \"ABC\"   feof false     the filter pulled the WHOLE file\n    stream_filter_remove()  true\n    fread($h, 3)            \"DEF\"   feof false     the remainder php kept\n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9f7f7dcd5a99b525067083ad",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:39:18.297Z",
+  "stored_at": "2026-08-21T18:39:18.298Z"
+}

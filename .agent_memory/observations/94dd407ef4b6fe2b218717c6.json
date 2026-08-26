@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '580,612p' src/types/checker/inference/expr/effects.rs",
+  "summary": "sed -n '580,612p' src/types/checker/inference/expr/effects.rs: .get(owner) .and_then(|info| info.static_methods.get(&key)) .cloned() else { return; }; Self::apply_by_ref_array_arg_types(&sig, args, env); } /// Re-types a by-reference ARRAY argument of an INSTANCE method call. fn widen_by_ref_array_method_arg_types( &mu",
+  "text": "sed -n '580,612p' src/types/checker/inference/expr/effects.rs: .get(owner) .and_then(|info| info.static_methods.get(&key)) .cloned() else { return; }; Self::apply_by_ref_array_arg_types(&sig, args, env); } /// Re-types a by-reference ARRAY argument of an INSTANCE method call. fn widen_by_ref_array_method_arg_types( &mut self, receiver_ty: &PhpType, method: &str, args: &[Expr], env: &mut TypeEnv, ) { let PhpType::Object(class_name) = receiver_ty else { return; }; let key = php_symbol_key(method); let Some(sig) = self .classes .get(class_name) .and_then(|info| info.methods.get(&key)) .cloned() else { return; }; Self::apply_by_ref_array_arg_types(&sig, args, env); } /// Writes each by-reference array parameter's type back onto the argument variable.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "94dd407ef4b6fe2b218717c6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:10:02.354Z",
+  "stored_at": "2026-08-18T10:10:02.354Z"
+}

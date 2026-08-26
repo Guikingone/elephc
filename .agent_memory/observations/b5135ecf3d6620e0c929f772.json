@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"lower_subscript_receiver_silently\" -r src/ | head",
+  "summary": "grep -n \"lower_subscript_receiver_silently\" -r src/ | head: src/ir_lower/expr/native_isset.rs:19: let array_value = lower_subscript_receiver_silently(ctx, array); src/ir_lower/expr/array_access.rs:184: lower_subscript_receiver_silently(ctx, array) src/ir_lower/expr/array_access.rs:194:pub(super) fn lower_subscript_rece",
+  "text": "grep -n \"lower_subscript_receiver_silently\" -r src/ | head: src/ir_lower/expr/native_isset.rs:19: let array_value = lower_subscript_receiver_silently(ctx, array); src/ir_lower/expr/array_access.rs:184: lower_subscript_receiver_silently(ctx, array) src/ir_lower/expr/array_access.rs:194:pub(super) fn lower_subscript_receiver_silently(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b5135ecf3d6620e0c929f772",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:18:23.683Z",
+  "stored_at": "2026-08-20T19:18:23.684Z"
+}

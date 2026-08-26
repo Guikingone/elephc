@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "for m in objects optimizer regressions runtime_gc; do echo \"=== $m ===\"; grep -A 20 \"^failures:$\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/chunks2/$m.log 2>/dev/null | grep \"^    codegen::\" | head -5; done",
+  "summary": "for m in objects optimizer regressions runtime_gc; do echo \"=== $m ===\"; grep -A 20 \"^failures:$\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/chunks2/$m.log 2>/dev/null | grep \"^    codegen::\" | he",
+  "text": "for m in objects optimizer regressions runtime_gc; do echo \"=== $m ===\"; grep -A 20 \"^failures:$\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/chunks2/$m.log 2>/dev/null | grep \"^    codegen::\" | head -5; done failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Split it into plain, separate commands and run them from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18ea9cabc1cab2d53d7ff14c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:19:15.918Z",
+  "stored_at": "2026-08-22T07:19:15.918Z"
+}

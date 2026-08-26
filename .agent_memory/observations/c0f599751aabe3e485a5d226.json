@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fgets()\" tests/codegen/spl/filesystem.rs | head -12; echo \"--- false pins ---\"; grep -n \"fgets\" -A2 tests/codegen/spl/filesystem.rs | grep -i \"false\" | head -5",
+  "summary": "grep -n \"fgets()\" tests/codegen/spl/filesystem.rs | head -12; echo \"--- false pins ---\"; grep -n \"fgets\" -A2 tests/codegen/spl/filesystem.rs | grep -i \"false\" | head -5: 132:echo trim($file->fgets()); 151:echo trim($tmp->fgets()); 153:echo trim($tmp->fgets()); 193:echo trim($file->fgets()); 324:echo trim($tmp->fgets())",
+  "text": "grep -n \"fgets()\" tests/codegen/spl/filesystem.rs | head -12; echo \"--- false pins ---\"; grep -n \"fgets\" -A2 tests/codegen/spl/filesystem.rs | grep -i \"false\" | head -5: 132:echo trim($file->fgets()); 151:echo trim($tmp->fgets()); 153:echo trim($tmp->fgets()); 193:echo trim($file->fgets()); 324:echo trim($tmp->fgets()); 326:echo trim($tmp->fgets()); 401:echo trim($tmp->fgets()); 403:echo trim($tmp->fgets()); --- false pins ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c0f599751aabe3e485a5d226",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:33:00.395Z",
+  "stored_at": "2026-08-16T17:33:00.396Z"
+}

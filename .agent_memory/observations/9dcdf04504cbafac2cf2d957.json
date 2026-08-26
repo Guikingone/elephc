@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"label_global(\\\"__rt_glob\\\")\" -A 20 src/codegen_support/runtime/ | grep -E \"bl_c|call |glob|flags|mov x1|mov esi\" | head -10",
+  "summary": "About to run: grep -rn \"label_global(\\\"__rt_glob\\\")\" -A 20 src/codegen_support/runtime/ | grep -E \"bl_c|call |glob|flags|mov x1|mov esi\" | head -10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9dcdf04504cbafac2cf2d957",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:08:01.416Z",
+  "stored_at": "2026-08-21T20:08:01.416Z"
+}

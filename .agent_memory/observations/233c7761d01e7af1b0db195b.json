@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/str_replace_subject.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/str_replace_subject.rs: //! Purpose:\n//! Emits `__rt_str_replace_subject_array`, php's `str_replace()` with an ARRAY `$subject`.\n//!\n//! Called from:\n//! - `crate::codegen::lower_inst::b",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/str_replace_subject.rs: //! Purpose:\n//! Emits `__rt_str_replace_subject_array`, php's `str_replace()` with an ARRAY `$subject`.\n//!\n//! Called from:\n//! - `crate::codegen::lower_inst::builtins::strings`, when the subject operand is an array.\n//!\n//! Key details:\n//! - php replaces inside EVERY element and answers an array: `str_replace(\"a\", \"X\", [\"abc\",\"aaa\"])`\n//!   answers `[\"Xbc\",\"XXX\"]`. elephc refused the call outright, so a list could not be cleaned in\n//!   one step.\n//! - `$search` may itself be an array, and then each element goes through the same cascading pass\n//!   `__rt_str_replace_search_array` perform",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "233c7761d01e7af1b0db195b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T08:32:56.168Z",
+  "stored_at": "2026-08-18T08:32:56.169Z"
+}

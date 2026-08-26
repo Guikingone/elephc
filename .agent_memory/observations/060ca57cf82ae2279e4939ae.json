@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/output-diff-sweep-against-php.md 2>/dev/null | head -40",
+  "summary": "cat /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/output-diff-sweep-against-php.md 2>/dev/null | head -40: ORRIGÉ** (`=` et `??=`) — [[array-assign-index-variable-is-read-at-store-time]]. Le tri a en outre sorti DEUX défauts indépendants: `+=` lit encore l'élément t",
+  "text": "cat /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/output-diff-sweep-against-php.md 2>/dev/null | head -40: ORRIGÉ** (`=` et `??=`) — [[array-assign-index-variable-is-read-at-store-time]]. Le tri a en outre sorti DEUX défauts indépendants: `+=` lit encore l'élément trop tôt (même fiche) et [[expression-position-compound-array-write-corrupts]] | | `json-flags` | ⚠️ `\\uXXXX` en MAJUSCULES — **corrigé sur la branche streams (`8ca4702527`), ABSENT ici** | | `json-basic`, `json-exception` | ⚖️ elephc AJOUTE « near location L:C » à `json_last_error_msg()`; php dit exactement « Syntax error ». **Extension DÉLIBÉRÉE** (concat sur 2 arches) ⇒ arbitrage produit, pas un bug | | `type-ops`, `spl-containers`, `eval` | ⚪ php émet des `Warning`/`Deprecated` qu'elephc n'émet pas — écart de DIAGNOSTICS, aucune valeur fausse | | `hashing` | ⚪ `count: 28` vs `60` = nombre d'algos supportés, CAPACITÉ | | `eval_regex` | ⚪ demande `--with-regex` + paquet natif `pcre2` — CAPACITÉ, le compilateur l'indique lui-même |",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "060ca57cf82ae2279e4939ae",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T21:09:56.298Z",
+  "stored_at": "2026-08-20T21:09:56.299Z"
+}

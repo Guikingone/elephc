@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log --format=\"%h %s\" 9f91d6c32e..worktree-agent-ad831c47db6c55775; echo \"--- my counter commit ---\"; git log --format=\"%h %s\" -2",
+  "summary": "git log --format=\"%h %s\" 9f91d6c32e..worktree-agent-ad831c47db6c55775; echo \"--- my counter commit ---\"; git log --format=\"%h %s\" -2: 67af69fbab test(contract): five pinned catalog counters never learned dir() 3ab77ad2a1 fix(streams): stream_context_set_option() accepted six shapes php refuses, and never deprecated 7fd",
+  "text": "git log --format=\"%h %s\" 9f91d6c32e..worktree-agent-ad831c47db6c55775; echo \"--- my counter commit ---\"; git log --format=\"%h %s\" -2: 67af69fbab test(contract): five pinned catalog counters never learned dir() 3ab77ad2a1 fix(streams): stream_context_set_option() accepted six shapes php refuses, and never deprecated 7fdd53c5d9 fix(streams): five stream_* argument errors answered a VALUE where php throws --- my counter commit --- 29fd43115c test(contract): the surface counters and the prelude set learn dir() 88844601fe docs(compat): dir() moves the standard-module coverage counter to 484",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d575ed26cfa951911bb89977",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T13:53:44.267Z",
+  "stored_at": "2026-08-15T13:53:44.268Z"
+}

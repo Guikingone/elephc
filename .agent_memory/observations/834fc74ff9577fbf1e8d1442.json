@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"class_name_entries\" src --include='*.rs' | head -40",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"class_name_entries\" src --include='*.rs' | head -40: s\"); src/codegen_support/runtime/exceptions/uncaught_report.rs:220: abi::emit_symbol_address(emitter, \"r10\", \"_class_name_entries\"); src/codegen_support/runtime/",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"class_name_entries\" src --include='*.rs' | head -40: s\"); src/codegen_support/runtime/exceptions/uncaught_report.rs:220: abi::emit_symbol_address(emitter, \"r10\", \"_class_name_entries\"); src/codegen_support/runtime/eval_bridge/aarch64_values_classes.rs:253: abi::emit_symbol_address(emitter, \"x11\", \"_class_name_entries\"); src/codegen_support/runtime/eval_bridge/aarch64_values_classes.rs:329: abi::emit_symbol_address(emitter, \"x11\", \"_class_name_entries\"); src/codegen_support/runtime/eval_bridge/x86_64_values_classes.rs:248: abi::emit_symbol_address(emitter, \"rdx\", \"_class_name_entries\"); src/codegen_support/runtime/eval_bridge/x86_64_values_classes.rs:324: abi::emit_symbol_address(emitter, \"rdx\", \"_class_name_entries\"); src/codegen_support/runtime/system/serialize.rs:566: emit_symbol_address(emitter, \"x9\", \"_class_name_entries\"); src/codegen_support/runtime/system/serialize.rs:1434: emit_symbol_address(emitter, \"r10\", \"_class_name_entries\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "834fc74ff9577fbf1e8d1442",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:15:35.227Z",
+  "stored_at": "2026-08-22T16:15:35.227Z"
+}

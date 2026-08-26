@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '180,260p' src/ir/builder.rs",
+  "summary": "sed -n '180,260p' src/ir/builder.rs: st.op, Op::LoadLocal | Op::LoadStaticLocal) { continue; } let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else { continue; }; let Some(local) = self.func.locals.get(slot.as_raw() as usize) else { continue; }; if !matches!(local.kind, LocalKind::PhpLocal | LocalKind::Sta",
+  "text": "sed -n '180,260p' src/ir/builder.rs: st.op, Op::LoadLocal | Op::LoadStaticLocal) { continue; } let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else { continue; }; let Some(local) = self.func.locals.get(slot.as_raw() as usize) else { continue; }; if !matches!(local.kind, LocalKind::PhpLocal | LocalKind::StaticLocal) { continue; } if !local_load_release_is_deferred_candidate(&value.php_type) { continue; } if local_load_requires_owned_mixed_unbox(&local.php_type, &value.php_type) { continue; } prune.push(index); } for index in prune { let inst = &mut self.func.instructions[index]; inst.op = Op::Nop; inst.operands.clear(); inst.immediate = None; inst.effects = Op::Nop.default_effects(); } } /// Returns the semantic role of a local slot. pub fn local_kind(&self, slot: LocalSlotId) -> LocalKind { self.func.locals[slot.as_raw() as usize].kind } /// Returns the storage type for a value already emitted in this function.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4b6cb7a536fa7c82c06f8280",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:59:13.135Z",
+  "stored_at": "2026-08-21T10:59:13.136Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"\\\"ValueError\\\"\" src/types/checker/builtin_spl_exceptions.rs src/types/checker/builtin_class_gate.rs 2>/dev/null | head -3; grep -n \"fn string_copy_expr\\|fn new_object_expr\\|fn throw_stmt\" src/types/checker/builtin_spl_classes/filesystem.rs | head -3",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"\\\"ValueError\\\"\" src/types/checker/builtin_spl_exceptions.rs src/types/checker/builtin_class_gate.rs 2>/dev/null | head -3; grep -n \"fn string_copy_expr\\|fn new_object_expr\\|fn throw_stmt\" src/types/checker/builtin_",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"\\\"ValueError\\\"\" src/types/checker/builtin_spl_exceptions.rs src/types/checker/builtin_class_gate.rs 2>/dev/null | head -3; grep -n \"fn string_copy_expr\\|fn new_object_expr\\|fn throw_stmt\" src/types/checker/builtin_spl_classes/filesystem.rs | head -3: src/types/checker/builtin_class_gate.rs:40: \"ValueError\", src/types/checker/builtin_class_gate.rs:379: \"ValueError\", 707:fn string_copy_expr(value: Expr) -> Expr {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "08beb75e2bf4c8ffd17cb04d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:35:10.471Z",
+  "stored_at": "2026-08-23T09:35:10.472Z"
+}

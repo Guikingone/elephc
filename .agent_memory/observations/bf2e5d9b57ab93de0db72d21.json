@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h /System/Volumes/Data; du -sh /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T 2>/dev/null",
+  "summary": "df -h /System/Volumes/Data; du -sh /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T 2>/dev/null failed: Exit code 1 Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 428Gi 130Mi 100% 5.6M 1.3M 81% /System/Volumes/Data 4.2G /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T",
+  "text": "df -h /System/Volumes/Data; du -sh /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T 2>/dev/null failed: Exit code 1 Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 428Gi 130Mi 100% 5.6M 1.3M 81% /System/Volumes/Data 4.2G /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bf2e5d9b57ab93de0db72d21",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:56:05.141Z",
+  "stored_at": "2026-08-24T08:56:05.142Z"
+}

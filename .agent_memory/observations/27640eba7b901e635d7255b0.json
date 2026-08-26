@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(preg): preg_match() wrote `true` into $matches, or filled an array nothing could read\n\nTwo failures, and between them all three ways of writing the idiom were wrong.\n\nAn UNDECLARED `$matches` was created the way every out-parameter is — a boxed\nnull cell — and handed to a callee that does not replace the caller's slot at\nall: `preg_match` FILLS the array it is given, in place. The runtime wrote\nthrough that cell as though it were an array, and `var_dump($matches)` answered\n`bool(true)` where php answers a three-element array. `count($match… [+1169 chars truncated]",
+  "summary": "About to run: git -c commit.gpgsign=false commit -q -F - <<'MSG' fix(preg): preg_match() wrote `true` into $matches, or filled an array nothing could read Two failures, and between them all three ways of writing th",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "27640eba7b901e635d7255b0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:39:58.442Z",
+  "stored_at": "2026-08-25T13:39:58.443Z"
+}

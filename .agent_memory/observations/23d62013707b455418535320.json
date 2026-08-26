@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "until ! pgrep -f cargo-nextest >/dev/null 2>&1; do sleep 20; done; echo \"=== SUITE FINISHED ===\"; cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bkw5vh94j.output\" 2>/dev/null | tail -20",
+  "summary": "until ! pgrep -f cargo-nextest >/dev/null 2>&1; do sleep 20; done; echo \"=== SUITE FINISHED ===\"; cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bkw5vh94j.output\" 2>/dev/null | tail -20: buwz9t16w",
+  "text": "until ! pgrep -f cargo-nextest >/dev/null 2>&1; do sleep 20; done; echo \"=== SUITE FINISHED ===\"; cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bkw5vh94j.output\" 2>/dev/null | tail -20: buwz9t16w",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "23d62013707b455418535320",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:52:09.763Z",
+  "stored_at": "2026-08-17T09:52:09.764Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -la .cargo/ 2>/dev/null; echo \"--- content ---\"; cat .cargo/config.toml 2>/dev/null | head -20",
+  "summary": "ls -la .cargo/ 2>/dev/null; echo \"--- content ---\"; cat .cargo/config.toml 2>/dev/null | head -20: --- content ---",
+  "text": "ls -la .cargo/ 2>/dev/null; echo \"--- content ---\"; cat .cargo/config.toml 2>/dev/null | head -20: --- content ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "49d94f98a8bb5a2b2fbd3f6e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:58:18.212Z",
+  "stored_at": "2026-08-21T19:58:18.212Z"
+}

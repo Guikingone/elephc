@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '13,44p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_copy_queries.rs",
+  "summary": "rtk proxy sed -n '13,44p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_copy_queries.rs: .emitter, abi::int_result_reg(ctx.emitter)); load_stream_fd_to_result(ctx, dest, \"stream_copy_to_stream\")?; emit_stream_copy_frame_enter(ctx); ",
+  "text": "rtk proxy sed -n '13,44p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_copy_queries.rs: .emitter, abi::int_result_reg(ctx.emitter)); load_stream_fd_to_result(ctx, dest, \"stream_copy_to_stream\")?; emit_stream_copy_frame_enter(ctx); materialize_stream_copy_length(ctx, inst)?; if inst.operands.len() >= 4 { let offset = expect_operand(inst, 3)?; require_int( ctx.load_value_to_result(offset)?.codegen_repr(), \"stream_copy_to_stream offset\", )?; let skip_seek = ctx.next_label(\"scs_skip_seek\"); let wrap_seek = ctx.next_label(\"scs_wrap_seek\"); let seek_failed = ctx.next_label(\"scs_seek_failed\"); let boxed_done = ctx.next_label(\"scs_boxed_done\"); lower_stream_copy_seek(ctx, &skip_seek, &wrap_seek, &seek_failed); lower_stream_copy_loop_and_box(ctx, &seek_failed, &boxed_done); } else { let seek_failed = ctx.next_label(\"scs_seek_unreachable\"); let boxed_done = ctx.next_label(\"scs_boxed_done\"); lower_stream_copy_loop_and_box(ctx, &seek_failed, &boxed_done); } store_if_result(ctx, inst) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3de5cf8063e2a5aedcfd32c4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:22:55.812Z",
+  "stored_at": "2026-08-17T12:22:55.813Z"
+}

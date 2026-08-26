@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gz_vs_wrapper.py 2>&1",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gz_vs_wrapper.py 2>&1: ee int(14)' elephc='REFUSED: error[1:12]: Undefined function: gzopen' DIFFERS gz_seek php='string(3) \"two\"' elephc='REFUSE",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gz_vs_wrapper.py 2>&1: ee int(14)' elephc='REFUSED: error[1:12]: Undefined function: gzopen' DIFFERS gz_seek php='string(3) \"two\"' elephc='REFUSED: error[1:12]: Undefined function: gzopen' DIFFERS gz_encode php='int(34)' elephc='REFUSED: error[1:23]: Undefined function: gzencode' DIFFERS gz_decode php='string(14) \"one two three \"' elephc='REFUSED: error[1:16]: Undefined function: gzdecode' SAME wrapper_read php='string(14) \"one two three \"' SAME wrapper_gets php='string(4) \"one \" int(4)' SAME wrapper_eof php='bool(true)' DIFFERS wrapper_file php='array(3) { [0]=> string(4) \"one \" [1]=> string(4) \"two \" [2]=> string(' elephc='Warning: file_get_contents(compress.zlib://sample.gz): Failed to open stream: No such file or directory in /pr' DIFFERS wrapper_contents php='string(14) \"one two three \"' elephc='Warning: file_get_contents(compress.zlib://sample.gz): Failed to open stream: No such file or directory in /pr'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b7d2133b344cdf0f9edcf7d9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:10:06.482Z",
+  "stored_at": "2026-08-21T10:10:06.483Z"
+}

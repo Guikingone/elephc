@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; head -8 named_probes8/kimi-k3-31.php; echo \"--- what elephc says about line 2 ---\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o /tmp/x_k331 named_probes8/kimi-k3-31.php 2>&1 | head -5",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; head -8 named_probes8/kimi-k3-31.php; echo \"--- what elephc says about line 2 ---\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/work",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; head -8 named_probes8/kimi-k3-31.php; echo \"--- what elephc says about line 2 ---\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o /tmp/x_k331 named_probes8/kimi-k3-31.php 2>&1 | head -5: <?php ob_start(null, 0, PHP_OUTPUT_HANDLER_REMOVABLE); $s = ob_get_status(true); var_dump(count($s), $s[0][\"flags\"] ?? null); ob_end_clean(); ob_start(null, 0, PHP_OUTPUT_HANDLER_STDFLAGS); try { ob_end_clean(); } catch (\\Throwable $e) { echo \"caught\\n\"; } --- what elephc says about line 2 --- error[2:19]: Undefined constant: PHP_OUTPUT_HANDLER_REMOVABLE error[6:19]: Undefined constant: PHP_OUTPUT_HANDLER_STDFLAGS",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "48ef7669202ad83ef3401d3f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:20:14.381Z",
+  "stored_at": "2026-08-23T09:20:14.382Z"
+}

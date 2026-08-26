@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_filters.txt 2>&1 | tail -4",
+  "summary": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_filters.txt 2>&1 | tail -4: [worktree-streams-csv-signature a3622c7a7] fix(streams): a filter name in a VARIABLE could not reach the five ",
+  "text": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_filters.txt 2>&1 | tail -4: [worktree-streams-csv-signature a3622c7a7] fix(streams): a filter name in a VARIABLE could not reach the five inline-shape filters 9 files changed, 733 insertions(+), 27 deletions(-) create mode 100644 src/codegen_support/runtime/io/filter_create_warning.rs create mode 100644 src/codegen_support/runtime/io/iconv_spec_split.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f6f82928a329a4e1dac4afc6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:06:49.664Z",
+  "stored_at": "2026-08-18T10:06:49.665Z"
+}

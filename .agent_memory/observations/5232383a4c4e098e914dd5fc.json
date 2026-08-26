@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_path_is_wrapper\" src/codegen/lower_inst/builtins/io/*.rs src/codegen_support/runtime/io/*.rs | wc -l; echo \"--- dispatchers ---\"; grep -rn \"pub(super) fn emit_.*_wrapper_dispatch\\|fn lower_.*_with_wrapper\" src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs | head -12",
+  "summary": "About to run: grep -rn \"__rt_path_is_wrapper\" src/codegen/lower_inst/builtins/io/*.rs src/codegen_support/runtime/io/*.rs | wc -l; echo \"--- dispatchers ---\"; grep -rn \"pub(super) fn emit_.*_wrapper_dispatch\\|fn lo",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5232383a4c4e098e914dd5fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:23:27.906Z",
+  "stored_at": "2026-08-22T08:23:27.906Z"
+}

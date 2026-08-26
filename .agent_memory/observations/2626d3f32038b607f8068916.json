@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/builtin_spl_classes/filesystem.rs: fn spl_file_object_read_line_stmts() -> Vec<Stmt> {\n    vec![\n        assign_stmt(\"line\", function_call(\"fgets\", vec![file_stream_expr()])),\n        if_stmt(\n   -> ///",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/builtin_spl_classes/filesystem.rs: fn spl_file_object_read_line_stmts() -> Vec<Stmt> {\n    vec![\n        assign_stmt(\"line\", function_call(\"fgets\", vec![file_stream_expr()])),\n        if_stmt(\n   -> /// The `(string)` cast is what makes `$line` a STRING rather than `string|false`, and it is\n/// also php's own answer: `(string) false` is `\"\"`. Keeping the union instead left `fscanf()`\n/// handing a boxed Mixed to `sscanf()`'s declared `string` parameter.\nfn spl_file_object_read_line_stmts() -> Vec<Stmt> {\n    vec![assign_stmt(\n        \"line\",\n        cast_expr(\n            CastType::Str,\n            function_call(\"fgets\", vec![file_stream_expr()]),\n        ),\n    )]\n}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2626d3f32038b607f8068916",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:40:05.682Z",
+  "stored_at": "2026-08-16T17:40:05.683Z"
+}

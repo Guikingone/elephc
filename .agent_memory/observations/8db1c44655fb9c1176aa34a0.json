@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/update_index.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/update_index.py: import pathlib\n\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/mem",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/update_index.py: import pathlib\n\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md')\nt = p.read_text()\n\nold = '- 🔴🔴🔴 [SIGSEGV: `return \"a\" . $nope;`](undefined-variable-read-segfaults-in-a-function.md) + [SPEC/PLAN parité php](undefined-variable-php-semantics-spec.md) — cause: `local_type()` rend **Mixed par défaut**; lier `Void` suffit.'\nnew = '- ✅✅✅🔑★★★ [**Variable indéfinie = AVERTIR + null, LIVRÉ**](undefined-variable-semantics-landed.md) `710b4ae54` — clôt le SIGSEGV. 🔑 le dur n\\'est pas d\\'émettre, c\\'est d\\'énumérer les **NON-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8db1c44655fb9c1176aa34a0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T21:10:53.180Z",
+  "stored_at": "2026-08-20T21:10:53.181Z"
+}

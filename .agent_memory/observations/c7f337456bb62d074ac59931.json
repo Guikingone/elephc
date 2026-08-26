@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"STREAM_TRANSPORT_OFFSET|STREAM_TRANSPORT_TCP|STREAM_TRANSPORT_GENERIC|STREAM_TRANSPORT_UDP|STREAM_TRANSPORT_UNIX|STREAM_WRAPPER_ID_OFFSET\" src/codegen_support/runtime/io/stream_layout.rs src/codegen_support/runtime/io/*.rs 2>/dev/null | rg \"pub|const\" | head -12",
+  "summary": "rg -n \"STREAM_TRANSPORT_OFFSET|STREAM_TRANSPORT_TCP|STREAM_TRANSPORT_GENERIC|STREAM_TRANSPORT_UDP|STREAM_TRANSPORT_UNIX|STREAM_WRAPPER_ID_OFFSET\" src/codegen_support/runtime/io/stream_layout.rs src/codegen_support/runtime/io/*.rs 2>/dev/null | rg \"pub|const\" | head -12: src/codegen_support/runtime/io/stream_transport.r",
+  "text": "rg -n \"STREAM_TRANSPORT_OFFSET|STREAM_TRANSPORT_TCP|STREAM_TRANSPORT_GENERIC|STREAM_TRANSPORT_UDP|STREAM_TRANSPORT_UNIX|STREAM_WRAPPER_ID_OFFSET\" src/codegen_support/runtime/io/stream_layout.rs src/codegen_support/runtime/io/*.rs 2>/dev/null | rg \"pub|const\" | head -12: src/codegen_support/runtime/io/stream_transport.rs:105: emitter.instruction(&format!(\"str x11, [x0, #{STREAM_TRANSPORT_OFFSET}]\")); // publish it for the metadata namer",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c7f337456bb62d074ac59931",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:16:05.558Z",
+  "stored_at": "2026-08-17T13:16:05.559Z"
+}

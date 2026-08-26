@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '855,905p' src/types/checker/stmt_check/assignments/locals.rs",
+  "summary": "sed -n '855,905p' src/types/checker/stmt_check/assignments/locals.rs: lem_ty.clone(), // Associative arrays can contain integer keys used by positional destructuring. Their // element type stays adaptive because hash values may be heterogeneous or absent. PhpType::AssocArray { .. } => PhpType::Mixed, _ => { for var in ",
+  "text": "sed -n '855,905p' src/types/checker/stmt_check/assignments/locals.rs: lem_ty.clone(), // Associative arrays can contain integer keys used by positional destructuring. Their // element type stays adaptive because hash values may be heterogeneous or absent. PhpType::AssocArray { .. } => PhpType::Mixed, _ => { for var in vars { poison_unbound_local(env, var); } return Err(CompileError::new( span, \"List unpacking requires an array on the right-hand side\", )); } }; for var in vars { env.insert(var.clone(), unpack_ty.clone()); update_list_unpack_callable_metadata(checker, var, value, &unpack_ty); checker.reflection_class_targets.remove(var); } Ok(()) } /// Updates callable metadata for a variable assigned by list unpacking. /// /// List unpacking copies an array element into a local without constructing an /// explicit `ArrayAccess` assignment node. When the homogeneous element type is /// callable and the source array has known callable metadata, propagate that",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b231e03174ddef2ac2c40f4b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:03:43.655Z",
+  "stored_at": "2026-08-26T08:03:43.656Z"
+}

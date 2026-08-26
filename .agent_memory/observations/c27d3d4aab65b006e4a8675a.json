@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh sgl sgl2 sgl3 sgl4 ssel ssel2 sselb2 frm2 frm3 zres2 2>&1 | head -14",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh sgl sgl2 sgl3 sgl4 ssel ssel2 sselb2 frm2 frm3 zres2 2>&1 | head -14: orktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-6",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh sgl sgl2 sgl3 sgl4 ssel ssel2 sselb2 frm2 frm3 zres2 2>&1 | head -14: orktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ssel.php on line 18 < < Warning: stream_select(): Cannot represent a stream of type user-space as a select()able descriptor in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ssel.php on line 18 < < Fatal error: Uncaught ValueError: No stream arrays were passed in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ssel.php:18 < Stack trace: < #0 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ssel.php(18): stream_select(Array, NULL, NULL, 0, 0)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c27d3d4aab65b006e4a8675a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T20:12:01.199Z",
+  "stored_at": "2026-08-17T20:12:01.199Z"
+}

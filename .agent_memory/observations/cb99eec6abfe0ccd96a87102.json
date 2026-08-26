@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/phar_read.rs')\nt = p.read_text()\nanchor = '''    abi::emit_call_label(ctx.emitter, \"__rt_resource_id_burn\");\n    let range = FileReadRange::from_operands(ctx, inst, 3, 4)?;'''\nnew = '''    abi::emit_call_label(ctx.emitter, \"__rt_resource_id_burn\");\n    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.\n    if let Some(path) = inst.operands.first().copied() {\n        super::emit_… [+321 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/phar_read.rs')\nt = p.read_text()\nanchor = '''    abi::emit_call_label(ctx.emitter, \"__rt_resource_id_burn\");\n    let range = FileReadRange::fro",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/phar_read.rs')\nt = p.read_text()\nanchor = '''    abi::emit_call_label(ctx.emitter, \"__rt_resource_id_burn\");\n    let range = FileReadRange::from_operands(ctx, inst, 3, 4)?;'''\nnew = '''    abi::emit_call_label(ctx.emitter, \"__rt_resource_id_burn\");\n    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.\n    if let Some(path) = inst.operands.first().copied() {\n        super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;\n    }\n    let range = FileReadRange::from_operands(ctx, inst, 3, 4)?;'''\nassert t.count(anchor) == 1\np.write_text(t.replace(anchor, new, 1))\nprint('phar_read.rs: file_get_contents guarded')\nPY\nps -o pid,etime,%cpu,comm -ax 2>/dev/null | grep -c codegen_tests: phar_read.rs: file_get_contents guarded 1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cb99eec6abfe0ccd96a87102",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:00:38.895Z",
+  "stored_at": "2026-08-21T18:00:38.896Z"
+}

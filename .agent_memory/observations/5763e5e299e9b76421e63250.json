@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests -E 'test(test_zip_wrapper_stream_reads_and_refuses_to_seek)' --no-capture 2>&1 | sed -n '6,18p'",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests -E 'test(test_zip_wrapper_stream_reads_and_refuses_to_seek)' --no-capture 2>&1 | sed -n '6,18p': to_seek' (54426922) panicked at tests/codege",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests -E 'test(test_zip_wrapper_stream_reads_and_refuses_to_seek)' --no-capture 2>&1 | sed -n '6,18p': to_seek' (54426922) panicked at tests/codegen/io/streams.rs:6478:5: assertion `left == right` failed left: \"string(5) \\\"hello\\\"\\nstring(7) \\\" world\\n\\\"\\nbool(false)\\nstring(11) \\\"zip wrapper\\\"\\nstring(3) \\\"zip\\\"\\nbool(false)\\nstring(84) \\\"zip:///var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_zip_w2_39883.zip#f.txt\\\"\\nstring(3) \\\"hel\\\"\\nbool(false)\\nint(3)\\nint(-1)\\nstring(12) \\\"hello world\\n\\\"\\n\" right: \"string(5) \\\"hello\\\"\\nstring(7) \\\" world\\n\\\"\\nbool(true)\\nstring(11) \\\"zip wrapper\\\"\\nstring(3) \\\"zip\\\"\\nbool(false)\\nstring(84) \\\"zip:///var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_zip_w2_39883.zip#f.txt\\\"\\nstring(3) \\\"hel\\\"\\nbool(false)\\nint(3)\\nint(-1)\\nstring(12) \\\"hello world\\n\\\"\\n\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace test codegen::io::streams::test_zip_wrapper_stream_reads_and_refuses_to_seek ... FAILED failures: failures:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5763e5e299e9b76421e63250",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:18:01.505Z",
+  "stored_at": "2026-08-23T20:18:01.505Z"
+}

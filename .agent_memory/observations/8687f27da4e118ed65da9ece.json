@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git grep -l 'emit_record_stream_meta_after_boxed_literal' origin/main -- src | head -5; echo \"--- ours ---\"; git grep -l 'emit_record_stream_meta_after_boxed_literal' HEAD -- src | head -5",
+  "summary": "git grep -l 'emit_record_stream_meta_after_boxed_literal' origin/main -- src | head -5; echo \"--- ours ---\"; git grep -l 'emit_record_stream_meta_after_boxed_literal' HEAD -- src | head -5: --- ours --- HEAD:src/codegen/lower_inst/builtins/io/boxing_helpers.rs HEAD:src/codegen/lower_inst/builtins/io/fopen_core.rs HEAD:",
+  "text": "git grep -l 'emit_record_stream_meta_after_boxed_literal' origin/main -- src | head -5; echo \"--- ours ---\"; git grep -l 'emit_record_stream_meta_after_boxed_literal' HEAD -- src | head -5: --- ours --- HEAD:src/codegen/lower_inst/builtins/io/boxing_helpers.rs HEAD:src/codegen/lower_inst/builtins/io/fopen_core.rs HEAD:src/codegen/lower_inst/builtins/io/fopen_data.rs HEAD:src/codegen/lower_inst/builtins/io/fopen_network.rs HEAD:src/codegen/lower_inst/builtins/io/fopen_phar.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8687f27da4e118ed65da9ece",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:12:59.330Z",
+  "stored_at": "2026-08-26T17:12:59.330Z"
+}

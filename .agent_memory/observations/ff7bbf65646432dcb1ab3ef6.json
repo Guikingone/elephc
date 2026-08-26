@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/wrapper_write_pos.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/wrapper_write_pos.py: \"\"\"A WRITE through a user wrapper never moved the position `ftell()` reports.\n\nMEASURED on `php -n` 8.5.6, a wrapper with no",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/wrapper_write_pos.py: \"\"\"A WRITE through a user wrapper never moved the position `ftell()` reports.\n\nMEASURED on `php -n` 8.5.6, a wrapper with no `stream_tell` and no `stream_seek`:\n\n    fopen(\"wt://x\", \"w\");  ftell => 0\n    fwrite($h, \"AB\");      ftell => php 2, elephc 0\n    fwrite($h, \"C\");       ftell => php 3, elephc 0\n\nphp-src keeps the position for a userspace stream ITSELF and advances it by what each read and\nwrite moved — `stream_tell` is consulted only from inside the seek op, which is why elephc keeps\nits own field too. Every READ path already advanced it; no write path did.\n\nThe read helper beside this",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ff7bbf65646432dcb1ab3ef6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:54:44.316Z",
+  "stored_at": "2026-08-22T17:54:44.317Z"
+}

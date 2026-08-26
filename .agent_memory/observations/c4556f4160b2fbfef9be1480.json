@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target/debug/ 2>/dev/null | head -20; echo \"=== popcorn ===\"; ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/target/debug/elephc /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/target/debug/elephc 2>&1",
+  "summary": "ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target/debug/ 2>/dev/null | head -20; echo \"=== popcorn ===\"; ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/target/debug/elephc /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-explor",
+  "text": "ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target/debug/ 2>/dev/null | head -20; echo \"=== popcorn ===\"; ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/target/debug/elephc /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/target/debug/elephc 2>&1:  staff 288 Aug 10 15:08 . drwxr-xr-x@ 7 guillaumeloulier staff 224 Aug 11 12:17 .. -rw-r--r--@ 1 guillaumeloulier staff 0 Aug 10 15:08 .cargo-build-lock -rw-r--r--@ 1 guillaumeloulier staff 0 Aug 10 15:08 .cargo-lock drwxr-xr-x@ 412 guillaumeloulier staff 13184 Aug 11 12:17 .fingerprint drwxr-xr-x@ 74 guillaumeloulier staff 2368 Aug 10 15:08 build drwxr-xr-x@ 712 guillaumeloulier staff 22784 Aug 11 12:20 deps drwxr-xr-x@ 4 guillaumeloulier staff 128 Aug 11 12:20 examples drwxr-xr-x@ 60 guillaumeloulier staff 1920 Aug 11 12:20 incremental === popcorn === -rwxr-xr-x@ 1 guillaumeloulier staff 64836856 Aug 14 16:06 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/target/debug/elephc -rwxr-xr-x@ 1 guillaumeloulier staff 60608040 Aug 14 16:06 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/target/debug/elephc",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c4556f4160b2fbfef9be1480",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:19.115Z",
+  "stored_at": "2026-08-14T14:11:19.115Z"
+}

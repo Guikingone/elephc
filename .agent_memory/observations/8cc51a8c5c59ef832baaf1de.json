@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sgl2.php','w').write('''<?php\n// blocking file, last line without a delimiter: php hands it back\n$p = \"sgl2.txt\";\nfile_put_contents($p, \"one\\\\ntwo\\\\nthree\");\n$h = fopen($p, \"rb\");\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nfclose($h);\nunlink($p);\n// the length cap wins o… [+667 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY' open('",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8cc51a8c5c59ef832baaf1de",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:46:40.444Z",
+  "stored_at": "2026-08-17T15:46:40.445Z"
+}

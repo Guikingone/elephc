@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 185,265p src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs",
+  "summary": "sed -n 185,265p src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs: .instruction(\"xor r9d, r9d\"); // a successful call reports error code 0 ctx.emitter.instruction(\"cmp rax, 0\"); // did the socket call fail? ctx.emitter.instruction(&format!(\"jge {}\", done_label)); // it succeeded: keep error code 0 abi::emit",
+  "text": "sed -n 185,265p src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs: .instruction(\"xor r9d, r9d\"); // a successful call reports error code 0 ctx.emitter.instruction(\"cmp rax, 0\"); // did the socket call fail? ctx.emitter.instruction(&format!(\"jge {}\", done_label)); // it succeeded: keep error code 0 abi::emit_symbol_address(ctx.emitter, \"r10\", SOCKET_ERRNO_SYMBOL); ctx.emitter.instruction(\"mov r9, QWORD PTR [r10]\"); // load the failure reason the helper published ctx.emitter.label(&done_label); abi::emit_push_reg(ctx.emitter, \"r9\"); // preserve the error code across the message lookup ctx.emitter.instruction(\"mov rdi, r9\"); // pass the error number to the message helper abi::emit_call_label(ctx.emitter, \"__rt_socket_strerror\"); ctx.emitter.instruction(\"mov r10, rax\"); // hold the message pointer ctx.emitter.instruction(\"mov r11, rdx\"); // hold the message byte length if let Some(slot) = errstr_slot { store_string_output_to_local(ctx, slot, \"r10\", \"r11\")?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1ef8ac1ef48c2277a96874a2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:20:15.855Z",
+  "stored_at": "2026-08-21T16:20:15.855Z"
+}

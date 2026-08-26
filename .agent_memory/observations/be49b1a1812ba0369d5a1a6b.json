@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git -C /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle log -1 --format=\"%h %ad %s\" --date=short 2>/dev/null; grep -n \"STREAM_CLIENT_CONNECT\\\", \" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/src/types/stream_constants.rs 2>/dev/null; echo \"=== our head ===\"; git log -1 --format=\"%h %ad %s\" --date=short; git status --short | head",
+  "summary": "About to run: git -C /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle log -1 --format=\"%h %ad %s\" --date=short 2>/dev/null; grep -n \"STREAM_CLIENT_CONNECT\\\", \" /Users/guil",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "be49b1a1812ba0369d5a1a6b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:17:02.942Z",
+  "stored_at": "2026-08-14T14:17:02.943Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-100-percent-campaign-state.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-100-percent-campaign-state.md: ---\nname: streams-100-percent-campaign-state\ndescription: \"ÉTAT de la campagne « streams à 100 % » — ce qui est LIVRÉ, ce qui est MESURÉ-mais-ouvert, et les repros; à relire a",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-100-percent-campaign-state.md: ---\nname: streams-100-percent-campaign-state\ndescription: \"ÉTAT de la campagne « streams à 100 % » — ce qui est LIVRÉ, ce qui est MESURÉ-mais-ouvert, et les repros; à relire après compaction ou purge du scratchpad\"\nmetadata: \n  node_type: memory\n  type: project\n---\n\nObjectif actif: **100 % de conformité streams**. Oracle: `php -n` 8.5.6 + la suite `.phpt` de php-src ([[php-src-own-test-suite-as-the-oracle]]). Branche `feat/streams-csv-signatures`, poussée sur le fork.\n\n⚠️ **le scratchpad a été PURGÉ une fois** et **`target/debug` a été supprimé DEUX FOIS par macOS sous pression disque (97 %, 1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e615d50dd9b22f43822f0274",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:36:19.436Z",
+  "stored_at": "2026-08-17T14:36:19.436Z"
+}

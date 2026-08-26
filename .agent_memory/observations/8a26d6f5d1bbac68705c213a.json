@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rln \"prelude\" src/ --glob '*.rs' | head -6; rg -rn \"fn.*prelude|PRELUDE\" src/builtins/mod.rs 2>/dev/null | head -5",
+  "summary": "rg -rln \"prelude\" src/ --glob '*.rs' | head -6; rg -rn \"fn.*prelude|PRELUDE\" src/builtins/mod.rs 2>/dev/null | head -5: src/tz_prelude/detect.rs://! `tz_ln` is injected only for programs that use it. src/tz_prelude/detect.rs://! - `crate::tz_ln::inject_if_used`. src/tz_prelude/detect.rs://! over-injects the ln and over",
+  "text": "rg -rln \"prelude\" src/ --glob '*.rs' | head -6; rg -rn \"fn.*prelude|PRELUDE\" src/builtins/mod.rs 2>/dev/null | head -5: src/tz_prelude/detect.rs://! `tz_ln` is injected only for programs that use it. src/tz_prelude/detect.rs://! - `crate::tz_ln::inject_if_used`. src/tz_prelude/detect.rs://! over-injects the ln and over-links the bridge harmlessly; soundness src/tz_prelude/detect.rs:/// so the ln must be injected ahead of user code. src/tz_prelude/detect.rs:/// ln detector cannot inspect statically, so an `eval(...)` call is treated src/tz_prelude/detect.rs: ln,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8a26d6f5d1bbac68705c213a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:26:43.538Z",
+  "stored_at": "2026-08-17T21:26:43.539Z"
+}

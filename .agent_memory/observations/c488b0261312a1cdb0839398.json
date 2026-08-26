@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/undef_why.sh",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/undef_why.sh: never-called REFUSED error[2:21]: Undefined variable: $nope called-after-decl COMPILES exit=0 called-before-decl COMPILES exit=0 called-in",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/undef_why.sh: never-called REFUSED error[2:21]: Undefined variable: $nope called-after-decl COMPILES exit=0 called-before-decl COMPILES exit=0 called-in-dead-branch REFUSED error[2:21]: Undefined variable: $nope called-indirectly REFUSED error[2:21]: Undefined variable: $nope two-fns-one-called REFUSED error[3:21]: Undefined variable: $alsonope",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c488b0261312a1cdb0839398",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T16:04:00.741Z",
+  "stored_at": "2026-08-18T16:04:00.741Z"
+}

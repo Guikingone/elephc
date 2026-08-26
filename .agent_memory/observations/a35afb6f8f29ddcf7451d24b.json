@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg36.txt <<'EOF'\nfix(streams): unregistering file:// now stops the whole bare-path surface, not just fopen\n\nphp locates a wrapper for EVERY path, and a bare one resolves to the plain-files wrapper — so\n`stream_wrapper_unregister(\"file\")` stops eighteen operations. elephc stopped one, and only after\nthe previous commit fixed the bit it tested.\n\nMEASURED, twenty-two operations one by one on `php -n` 8.5.6: `fopen`, `file_get… [+1882 chars truncated]",
+  "summary": "About to run: cat > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg36.txt <<'EOF' fix(strea",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a35afb6f8f29ddcf7451d24b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:44:04.698Z",
+  "stored_at": "2026-08-22T08:44:04.699Z"
+}

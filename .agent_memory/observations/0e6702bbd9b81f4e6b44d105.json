@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fd_set_append.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fd_set_append.rs: //! Purpose:\n//! Emits `__rt_fd_set_append`, which turns an already-open descriptor into an appending one.\n//!\n//! Called from:\n//! - `crate::codegen::lower_inst::builtins::",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fd_set_append.rs: //! Purpose:\n//! Emits `__rt_fd_set_append`, which turns an already-open descriptor into an appending one.\n//!\n//! Called from:\n//! - `crate::codegen::lower_inst::builtins::io::fopen_core`, for a `php://memory` or\n//!   `php://temp` stream opened with an `a` mode.\n//!\n//! Key details:\n//! - php's `a` modes send every write to the END of the stream, whatever `fseek()` did:\n//!   `fopen(\"php://temp\",\"a+\")`, write `hello`, `fseek(0)`, write `world` answers `helloworld`,\n//!   not `world`. A real file gets that from `O_APPEND` at `open()`; the in-memory backend is a\n//!   `tmpfile()` descriptor cr",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0e6702bbd9b81f4e6b44d105",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:55:43.689Z",
+  "stored_at": "2026-08-17T07:55:43.690Z"
+}

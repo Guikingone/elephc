@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_probe_test.py\ncargo test --test codegen_tests -- codegen::undefined_variables::test_a_null_probe_tolerates_its_spine_but_not_its_index --exact 2>&1 | grep -E \"^test |test result|left|right\" | head -8",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_probe_test.py\ncargo test --test codegen_tests -- codegen::undefined_variables::test_a_null_probe_tolerates_its_spine_but_not_its_index --exact 2",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_probe_test.py\ncargo test --test codegen_tests -- codegen::undefined_variables::test_a_null_probe_tolerates_its_spine_but_not_its_index --exact 2>&1 | grep -E \"^test |test result|left|right\" | head -8: probe-spine property ported to an output test test codegen::undefined_variables::test_a_null_probe_tolerates_its_spine_but_not_its_index ... FAILED assertion `left == right` failed left: \"Warning: Undefined variable $a\\n\" right: \"Warning: Undefined variable $b\\n\" test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8705 filtered out; finished in 0.91s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "42db0e85594b8c3e391f6cc7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:00:43.743Z",
+  "stored_at": "2026-08-20T19:00:43.744Z"
+}

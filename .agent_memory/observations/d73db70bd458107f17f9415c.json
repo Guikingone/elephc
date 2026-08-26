@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cp named_probes8/kimi-k3-59.php k59.php; cp named_probes8/kimi-k3-74.php k74.php; python3 diff1.py k59.php; python3 diff1.py k74.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cp named_probes8/kimi-k3-59.php k59.php; cp named_probes8/kimi-k3-74.php k74.php; python3 diff1.py k59.php; python3 diff1.py k74.php: === php === st",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cp named_probes8/kimi-k3-59.php k59.php; cp named_probes8/kimi-k3-74.php k74.php; python3 diff1.py k59.php; python3 diff1.py k74.php: === php === string(2) \"ab\" string(2) \"ef\" string(0) \"\" === elephc === string(2) \"ab\" string(2) \"ef\" string(0) \"\" --- exit 0 (php 0) --- === php === string(2) \"ab\" string(2) \"ef\" string(0) \"\" ValueError === elephc === string(2) \"ab\" string(2) \"ef\" string(0) \"\" ValueError --- exit 0 (php 0) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d73db70bd458107f17f9415c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:39:59.018Z",
+  "stored_at": "2026-08-23T20:39:59.019Z"
+}

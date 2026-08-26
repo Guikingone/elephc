@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_ctx_indexed_options.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_ctx_indexed_options.py: \"\"\"`stream_context_create([])` published an INDEXED array where a hash was expected, and the next\n`stream_context_set_o",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_ctx_indexed_options.py: \"\"\"`stream_context_create([])` published an INDEXED array where a hash was expected, and the next\n`stream_context_set_option()` segfaulted hashing into it.\n\nMEASURED, three lines of ordinary php:\n\n    $c = stream_context_create([]);\n    stream_context_set_option($c, \"http\", \"method\", \"POST\");   // SIGSEGV\n\n`stream_context_create()` with NO argument survives, which is what isolates it: `[]` is an empty\nINDEXED array, not a hash, and the options slot is read as a hash by everything downstream —\n`__rt_hash_ensure_unique`, then `__rt_hash_get`, which walked it and hashed a null key pointer.\nVerifi",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5612a7e879e65a95f6f349bf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:22:08.729Z",
+  "stored_at": "2026-08-22T15:22:08.730Z"
+}

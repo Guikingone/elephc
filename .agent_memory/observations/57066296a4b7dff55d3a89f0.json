@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rln \"Warning: Undefined variable\" tests/codegen/ | head -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rln \"Warning: Undefined variable\" tests/codegen/ | head -5: tests/codegen/null_receivers.rs tests/codegen/undefined_variables.rs tests/codegen/io/streams.rs",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rln \"Warning: Undefined variable\" tests/codegen/ | head -5: tests/codegen/null_receivers.rs tests/codegen/undefined_variables.rs tests/codegen/io/streams.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "57066296a4b7dff55d3a89f0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:47:56.110Z",
+  "stored_at": "2026-08-23T16:47:56.111Z"
+}

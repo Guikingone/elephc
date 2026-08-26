@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_tests.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_tests.py: \"\"\"Pins glob()'s flags: the seven behaviours, the refusal, and the two properties behind them.\n\nEvery expectation here was rea",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_tests.py: \"\"\"Pins glob()'s flags: the seven behaviours, the refusal, and the two properties behind them.\n\nEvery expectation here was read off `php -n` 8.5.6 before any of it was written, and the whole set\nruns green against php through the differential probe. The two that matter most are not the happy\npaths: the refusal of a flag php does not expose (which is how glibc's own GLOB_BRACE value must\nbehave), and glob surviving `stream_wrapper_unregister(\"file\")`, which is what forced the ONLYDIR\nfilter to enter `__rt_is_dir` BELOW its wrapper guard.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaume",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b5edcac98e3e88a108d13c69",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:10:18.142Z",
+  "stored_at": "2026-08-22T09:10:18.143Z"
+}

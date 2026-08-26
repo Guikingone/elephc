@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 1,60p src/builtins/io/stream_select.rs",
+  "summary": "sed -n 1,60p src/builtins/io/stream_select.rs: //! Purpose: //! Home of the PHP `stream_select` builtin: its declaration and semantic metadata. //! //! Called from: //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`. //! //! Key details: //! - No check hook: the common ",
+  "text": "sed -n 1,60p src/builtins/io/stream_select.rs: //! Purpose: //! Home of the PHP `stream_select` builtin: its declaration and semantic metadata. //! //! Called from: //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`. //! //! Key details: //! - No check hook: the common registry path infers all arguments and returns the contract's //! `Mixed`, which is php's `int|false` — the ready-descriptor count, or `false` when the //! underlying `poll`/`select` failed. //! - `read`, `write`, and `except` are by-reference parameters (`ref` marker) for parity //! with PHP's mutating select semantics and EIR by-ref lowering. builtin! { contract: \"stream_select\", semantics: crate::builtins::semantics::runtime_fn_semantics( crate::ir::RuntimeFnId::StreamSelect, ), }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4074fde13af0d2cd6ce97c33",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:58:46.026Z",
+  "stored_at": "2026-08-21T16:58:46.027Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests -- codegen::strings::transform::test_str_replace 2>&1 | tail -12",
+  "summary": "cargo test --test codegen_tests -- codegen::strings::transform::test_str_replace 2>&1 | tail -12: Finished `test` profile [unoptimized + debuginfo] target(s) in 27.14s Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-16c45d69d5f633ba) running 5 tests test codegen::strings::transform::test_str_replace_mul",
+  "text": "cargo test --test codegen_tests -- codegen::strings::transform::test_str_replace 2>&1 | tail -12: Finished `test` profile [unoptimized + debuginfo] target(s) in 27.14s Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-16c45d69d5f633ba) running 5 tests test codegen::strings::transform::test_str_replace_multiple ... ok test codegen::strings::transform::test_str_replace_expansion_larger_than_concat_scratch ... ok test codegen::strings::transform::test_str_replace_accepts_an_array_subject ... ok test codegen::strings::transform::test_str_replace ... ok test codegen::strings::transform::test_str_replace_accepts_an_array_search ... ok test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 8432 filtered out; finished in 2.89s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "35dbbbf2ba376596cb4ad0ae",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T08:53:40.242Z",
+  "stored_at": "2026-08-18T08:53:40.242Z"
+}

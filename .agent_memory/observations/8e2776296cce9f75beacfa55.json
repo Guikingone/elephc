@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg31.txt <<'EOF'\nMerge origin/main (0.26.5) into feat/streams-csv-signatures\n\n32 upstream commits, mostly the mysqli-over-PDO bridge, the 0.26.5 release, and a sweep adding\nintent comments to the runtime emitters. Four conflicts, each resolved by deciding what is TRUE\nrather than by picking a side.\n\n`stream_wrapper_register` — OURS, and this one had to be looked at rather than taken. Upstream\nvalidates the scheme alphabet… [+3178 chars truncated]",
+  "summary": "About to run: cat > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg31.txt <<'EOF' Merge ori",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e2776296cce9f75beacfa55",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:52:01.378Z",
+  "stored_at": "2026-08-22T06:52:01.378Z"
+}

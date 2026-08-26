@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --lib 2>&1 | tail -3; echo \"=== docs sync:\"; git diff --exit-code -- docs/php/builtins.md docs/php/builtins docs/internals/builtins scripts/docs/builtin_registry.json >/dev/null 2>&1 && echo \"docs in sync\" || echo \"DOCS DRIFT\"",
+  "summary": "cargo test --lib 2>&1 | tail -3; echo \"=== docs sync:\"; git diff --exit-code -- docs/php/builtins.md docs/php/builtins docs/internals/builtins scripts/docs/builtin_registry.json >/dev/null 2>&1 && echo \"docs in sync\" || echo \"DOCS DRIFT\": test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini",
+  "text": "cargo test --lib 2>&1 | tail -3; echo \"=== docs sync:\"; git diff --exit-code -- docs/php/builtins.md docs/php/builtins docs/internals/builtins scripts/docs/builtin_registry.json >/dev/null 2>&1 && echo \"docs in sync\" || echo \"DOCS DRIFT\": test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s === docs sync: docs in sync",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "005b0ba881c5ae22b975b2c4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T20:00:18.921Z",
+  "stored_at": "2026-08-17T20:00:18.921Z"
+}

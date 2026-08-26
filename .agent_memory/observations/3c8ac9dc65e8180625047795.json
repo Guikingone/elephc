@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-branch-into-another-symbol-dies-with-it.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-branch-into-another-symbol-dies-with-it.md: ---\nname: a-branch-into-another-symbol-dies-with-it\ndescription: Un saut vers un label LOCAL situé dans le corps d'un AUTRE symbole global est correct dans le .o et dev",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-branch-into-another-symbol-dies-with-it.md: ---\nname: a-branch-into-another-symbol-dies-with-it\ndescription: Un saut vers un label LOCAL situé dans le corps d'un AUTRE symbole global est correct dans le .o et devient pendant après élagage du linker — reproduit sur __rt_tmpfile_named, outil de balayage écrit.\nmetadata:\n  type: project\n---\n\nÉcrire un helper runtime comme « le même que X, entré APRÈS telle étape » — en tombant dans\nl'épilogue de X par un label local, ou en partageant son chemin d'échec — **ne survit pas au\nlinker**. macOS élague par SYMBOLE (`.subsections_via_symbols`) ; un branchement intra-section vers\n`X+N` est résolu p",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3c8ac9dc65e8180625047795",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:33:36.323Z",
+  "stored_at": "2026-08-23T08:33:36.324Z"
+}

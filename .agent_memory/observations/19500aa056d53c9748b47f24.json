@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | grep -A 20 '^failures:$' | head -22",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | grep -A 20 '^failures:$' | head -22: rtion `left == right` failed left: \"\\nWarning: Undefined array key \\\"missing\\\" in /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_hash_get_miss_8",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | grep -A 20 '^failures:$' | head -22: rtion `left == right` failed left: \"\\nWarning: Undefined array key \\\"missing\\\" in /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_hash_get_miss_89014_1787605464437689000/main.php on line 1\\n\" right: \"\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace ---- ir_backend_handles_basic_indexed_arrays stdout ---- thread 'ir_backend_handles_basic_indexed_arrays' (61742859) panicked at tests/ir_backend_smoke_test.rs:4305:9: assertion `left == right` failed left: \"\\nWarning: Undefined array key 9 in /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_array_get_oob_null_89014_1787605469760823000/main.php on line 1\\n\" right: \"\" ---- ir_backend_handles_file_get_contents stdout ---- thread 'ir_backend_handles_file_get_contents' (61752048) panicked at tests/ir_backend_smoke_test.rs:5858:5: assertion `left == right` failed --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "19500aa056d53c9748b47f24",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T21:07:13.065Z",
+  "stored_at": "2026-08-24T21:07:13.066Z"
+}

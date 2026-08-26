@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_chunk2.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_chunk2.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen_sup",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_chunk2.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen_support/runtime/io/fwrite.rs'\ns = open(p).read()\n\n# --- the chunk size: php's wrapper default is 8192, not the read-loop's 4096 ---\nold = '''    emitter.instruction(\"ldr x0, [sp, #24]\");                                   // the opaque stream handle\n    emitter.instruction(\"bl __rt_stream_chunk_size\");                           // x0 = the configured size, or the default\n    emitter.instruction(\"str x0, [sp, #32]\");                                   // the TLS slot",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a470a911cb4e0a4f6f1d3c3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T16:52:47.423Z",
+  "stored_at": "2026-08-17T16:52:47.424Z"
+}

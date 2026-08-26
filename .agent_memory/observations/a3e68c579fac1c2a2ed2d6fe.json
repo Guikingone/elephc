@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 105,135p docs/internals/the-type-checker.md",
+  "summary": "sed -n 105,135p docs/internals/the-type-checker.md: This is intentional — it lets the compiler know exactly what `$x` is at every point, without needing runtime type tags. ## Statement checks Statement checking validates control-flow constraints that are not expression types. `foreach` accepts indexed arrays, associati",
+  "text": "sed -n 105,135p docs/internals/the-type-checker.md: This is intentional — it lets the compiler know exactly what `$x` is at every point, without needing runtime type tags. ## Statement checks Statement checking validates control-flow constraints that are not expression types. `foreach` accepts indexed arrays, associative arrays, values typed `Iterable`, and objects/interfaces that implement `Iterator` or `IteratorAggregate`. Indexed and associative array loops bind key/value variables to inferred element/key types; `Iterable` and object-backed iterator loops bind them as `Mixed` because concrete payload tags are discovered at runtime. `break` and `continue` track the active loop/switch target depth, so `break 2;` is accepted only when two enclosing break/continue targets exist in the current function or closure body. Function, method, and closure bodies reset that depth so an inner declaration cannot target an outer loop. `finally` bodies",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a3e68c579fac1c2a2ed2d6fe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:12:24.245Z",
+  "stored_at": "2026-08-22T10:12:24.246Z"
+}

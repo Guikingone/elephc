@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/top_level.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/top_level.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signat",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/top_level.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\np = ROOT / \"src/types/checker/driver/top_level.rs\"\ns = p.read_text()\n\n# main restores the scopes it entered; ours pads and returns the null-probe flags beside the\n# errors. Both are the function's exit, and neither replaces the other.\nold = '''<<<<<<< HEAD\n        // `resolve_null_probe_roots` can append to `all_errors` for statements the loop already\n        // visited, so the two vectors are aligned by padding rather than by construction.\n        through_nu",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a9021c15e527ceb2da3c1991",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:14:24.101Z",
+  "stored_at": "2026-08-26T17:14:24.101Z"
+}

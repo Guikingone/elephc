@@ -1,0 +1,309 @@
+[
+  {
+    "id": "command:generated-from-files-present-in-the-repository",
+    "type": "command",
+    "name": "Generated from files present in the repository",
+    "summary": "Verification command from structured memory context.",
+    "first_seen_at": "2026-08-14T14:10:22.895Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:757b126822696877"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "command:generated-from-git-diff-and-refreshed-by-kage-pr-summarize-or-kage-propose-from-",
+    "type": "command",
+    "name": "Generated from git diff and refreshed by kage pr summarize or kage propose --from-diff",
+    "summary": "Verification command from structured memory context.",
+    "first_seen_at": "2026-08-14T14:10:50.557Z",
+    "last_seen_at": "2026-08-14T14:10:50.557Z",
+    "evidence": [
+      "episode:058122d569e8e088"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "command:generated-from-package-json-and-readme-md-when-present",
+    "type": "command",
+    "name": "Generated from package.json and README.md when present",
+    "summary": "Verification command from structured memory context.",
+    "first_seen_at": "2026-08-14T14:10:22.798Z",
+    "last_seen_at": "2026-08-26T06:37:54.668Z",
+    "evidence": [
+      "episode:649cee4c35487bf8"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "memory_type:repo-map",
+    "type": "memory_type",
+    "name": "repo_map",
+    "summary": "Kage memory type repo_map.",
+    "first_seen_at": "2026-08-14T14:10:22.798Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:649cee4c35487bf8",
+      "episode:757b126822696877"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "memory_type:workflow",
+    "type": "memory_type",
+    "name": "workflow",
+    "summary": "Kage memory type workflow.",
+    "first_seen_at": "2026-08-14T14:10:50.557Z",
+    "last_seen_at": "2026-08-14T14:10:50.557Z",
+    "evidence": [
+      "episode:058122d569e8e088"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "memory:repo-streams-csv-signature-repo-map-streams-csv-signature-repo-overview-auto-ove",
+    "type": "memory",
+    "name": "streams-csv-signature repo overview",
+    "aliases": [
+      "repo:streams-csv-signature:repo_map:streams-csv-signature-repo-overview-auto-overview"
+    ],
+    "summary": "README excerpt: <p align=\"center\" <img src=\"assets/logo mark.png\" alt=\"elephc logo\" width=\"130\" </p <h1 align=\"center\" Elephc</h1 <p align=\"center\" <sub <strong Pronounced</strong <em el ef see</em — just spell out &ldqu",
+    "first_seen_at": "2026-08-14T14:10:22.798Z",
+    "last_seen_at": "2026-08-26T06:37:54.668Z",
+    "evidence": [
+      "episode:649cee4c35487bf8"
+    ]
+  },
+  {
+    "id": "memory:repo-streams-csv-signature-repo-map-streams-csv-signature-repo-structure-auto-st",
+    "type": "memory",
+    "name": "streams-csv-signature repo structure",
+    "aliases": [
+      "repo:streams-csv-signature:repo_map:streams-csv-signature-repo-structure-auto-structure"
+    ],
+    "summary": "Detected repo structure: README.md, CLAUDE.md, AGENTS.md, .github/workflows, src, tests. CI workflows: .github/workflows/ci image.yml, .github/workflows/ci.yml, .github/workflows/pdo live.yml, .github/workflows/pr labels",
+    "first_seen_at": "2026-08-14T14:10:22.895Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:757b126822696877"
+    ]
+  },
+  {
+    "id": "memory:repo-streams-csv-signature-workflow-change-memory-worktree-streams-csv-signature",
+    "type": "memory",
+    "name": "Change memory: worktree-streams-csv-signature",
+    "aliases": [
+      "repo:streams-csv-signature:workflow:change-memory-worktree-streams-csv-signature"
+    ],
+    "summary": "Repo-local context for 2 changed repo paths on worktree-streams-csv-signature.",
+    "first_seen_at": "2026-08-14T14:10:50.557Z",
+    "last_seen_at": "2026-08-14T14:10:50.557Z",
+    "evidence": [
+      "episode:058122d569e8e088"
+    ]
+  },
+  {
+    "id": "path:agents-md",
+    "type": "path",
+    "name": "AGENTS.md",
+    "summary": "Repository path referenced by memory packets.",
+    "first_seen_at": "2026-08-14T14:10:22.895Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:757b126822696877"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "path:claude-md",
+    "type": "path",
+    "name": "CLAUDE.md",
+    "summary": "Repository path referenced by memory packets.",
+    "first_seen_at": "2026-08-14T14:10:22.895Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:757b126822696877"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "path:codebase-memory-artifact-json",
+    "type": "path",
+    "name": ".codebase-memory/artifact.json",
+    "summary": "Repository path referenced by memory packets.",
+    "first_seen_at": "2026-08-14T14:10:50.557Z",
+    "last_seen_at": "2026-08-14T14:10:50.557Z",
+    "evidence": [
+      "episode:058122d569e8e088"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "path:codebase-memory-graph-db-zst",
+    "type": "path",
+    "name": ".codebase-memory/graph.db.zst",
+    "summary": "Repository path referenced by memory packets.",
+    "first_seen_at": "2026-08-14T14:10:50.557Z",
+    "last_seen_at": "2026-08-14T14:10:50.557Z",
+    "evidence": [
+      "episode:058122d569e8e088"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "path:github-workflows",
+    "type": "path",
+    "name": ".github/workflows",
+    "summary": "Repository path referenced by memory packets.",
+    "first_seen_at": "2026-08-14T14:10:22.895Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:757b126822696877"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "path:readme-md",
+    "type": "path",
+    "name": "README.md",
+    "summary": "Repository path referenced by memory packets.",
+    "first_seen_at": "2026-08-14T14:10:22.798Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:649cee4c35487bf8",
+      "episode:757b126822696877"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "path:src",
+    "type": "path",
+    "name": "src",
+    "summary": "Repository path referenced by memory packets.",
+    "first_seen_at": "2026-08-14T14:10:22.895Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:757b126822696877"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "path:tests",
+    "type": "path",
+    "name": "tests",
+    "summary": "Repository path referenced by memory packets.",
+    "first_seen_at": "2026-08-14T14:10:22.895Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:757b126822696877"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "repo:streams-csv-signature",
+    "type": "repo",
+    "name": "streams-csv-signature",
+    "summary": "Repository memory graph for streams-csv-signature.",
+    "first_seen_at": "2026-08-26T06:37:56.045Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "aliases": [],
+    "evidence": []
+  },
+  {
+    "id": "tag:branch-worktree-streams-csv-signature",
+    "type": "tag",
+    "name": "branch:worktree-streams-csv-signature",
+    "summary": "Topic tag branch:worktree-streams-csv-signature.",
+    "first_seen_at": "2026-08-14T14:10:50.557Z",
+    "last_seen_at": "2026-08-14T14:10:50.557Z",
+    "evidence": [
+      "episode:058122d569e8e088"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "tag:change-memory",
+    "type": "tag",
+    "name": "change-memory",
+    "summary": "Topic tag change-memory.",
+    "first_seen_at": "2026-08-14T14:10:50.557Z",
+    "last_seen_at": "2026-08-14T14:10:50.557Z",
+    "evidence": [
+      "episode:058122d569e8e088"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "tag:diff-proposal",
+    "type": "tag",
+    "name": "diff-proposal",
+    "summary": "Topic tag diff-proposal.",
+    "first_seen_at": "2026-08-14T14:10:50.557Z",
+    "last_seen_at": "2026-08-14T14:10:50.557Z",
+    "evidence": [
+      "episode:058122d569e8e088"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "tag:index",
+    "type": "tag",
+    "name": "index",
+    "summary": "Topic tag index.",
+    "first_seen_at": "2026-08-14T14:10:22.895Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:757b126822696877"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "tag:overview",
+    "type": "tag",
+    "name": "overview",
+    "summary": "Topic tag overview.",
+    "first_seen_at": "2026-08-14T14:10:22.798Z",
+    "last_seen_at": "2026-08-26T06:37:54.668Z",
+    "evidence": [
+      "episode:649cee4c35487bf8"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "tag:repo",
+    "type": "tag",
+    "name": "repo",
+    "summary": "Topic tag repo.",
+    "first_seen_at": "2026-08-14T14:10:22.798Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:649cee4c35487bf8",
+      "episode:757b126822696877"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "tag:repo-local",
+    "type": "tag",
+    "name": "repo-local",
+    "summary": "Topic tag repo-local.",
+    "first_seen_at": "2026-08-14T14:10:50.557Z",
+    "last_seen_at": "2026-08-14T14:10:50.557Z",
+    "evidence": [
+      "episode:058122d569e8e088"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "tag:structure",
+    "type": "tag",
+    "name": "structure",
+    "summary": "Topic tag structure.",
+    "first_seen_at": "2026-08-14T14:10:22.895Z",
+    "last_seen_at": "2026-08-26T06:37:56.045Z",
+    "evidence": [
+      "episode:757b126822696877"
+    ],
+    "aliases": []
+  }
+]

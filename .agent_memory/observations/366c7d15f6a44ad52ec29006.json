@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport re, pathlib\np = pathlib.Path('src/codegen_support/runtime/io/fread.rs')\ns = p.read_text()\nhead, sep, tail = s.partition('fn emit_wrapper_chunked_read')\nassert sep, 'split marker missing'\nbefore = head.count('sub sp, sp, #64')\nhead = head.replace('sub sp, sp, #64', 'sub sp, sp, #80')\nhead = head.replace('stp x29, x30, [sp, #48]', 'stp x29, x30, [sp, #64]')\nhead = head.replace('ldp x29, x30, [sp, #48]', 'ldp x29, x30, [sp, #64]')\nhead = head.replace('add sp, sp, #64', 'add s… [+143 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport re, pathlib\np = pathlib.Path('src/codegen_support/runtime/io/fread.rs')\ns = p.read_text()\nhead, sep, tail = s.partition('fn emit_wrapper_chunked_read')\nassert sep, 'split marker missing'\nbefore = h",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport re, pathlib\np = pathlib.Path('src/codegen_support/runtime/io/fread.rs')\ns = p.read_text()\nhead, sep, tail = s.partition('fn emit_wrapper_chunked_read')\nassert sep, 'split marker missing'\nbefore = head.count('sub sp, sp, #64')\nhead = head.replace('sub sp, sp, #64', 'sub sp, sp, #80')\nhead = head.replace('stp x29, x30, [sp, #48]', 'stp x29, x30, [sp, #64]')\nhead = head.replace('ldp x29, x30, [sp, #48]', 'ldp x29, x30, [sp, #64]')\nhead = head.replace('add sp, sp, #64', 'add sp, sp, #80')\nhead = head.replace('add x29, sp, #48', 'add x29, sp, #64')\np.write_text(head + sep + tail)\nprint('subs rewritten:', before)\nPYEOF: subs rewritten: 1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "366c7d15f6a44ad52ec29006",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:20:16.941Z",
+  "stored_at": "2026-08-23T20:20:16.942Z"
+}

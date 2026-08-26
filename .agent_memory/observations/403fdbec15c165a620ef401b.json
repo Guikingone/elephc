@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_prelude_lookup_builder.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_prelude_lookup_builder.py: \"\"\"A prelude declares its functions in one of TWO spellings, and the lookup has to know both.\n\n`gz_prelude` and `dir",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_prelude_lookup_builder.py: \"\"\"A prelude declares its functions in one of TWO spellings, and the lookup has to know both.\n\n`gz_prelude` and `dir_prelude` carry PHP source, so `function gzopen(` appears literally.\n`hash_prelude` BUILDS its declarations in Rust — `function(\"hash_init\")` — so no PHP `function`\nline exists for it anywhere. Searching only for the PHP spelling left `hash_init` with no source\npointer at all, which is worse than the wrong one it had before.\n\nBoth patterns are tried, and the PHP one first: it gives a real body line, where the builder call\ngives the line that names the function.\n\"\"\"\nimport pathlib",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "403fdbec15c165a620ef401b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:33:37.541Z",
+  "stored_at": "2026-08-21T12:33:37.542Z"
+}

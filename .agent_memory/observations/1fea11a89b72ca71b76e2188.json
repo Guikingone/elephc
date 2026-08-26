@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs; grep -rn \"PERSISTENT\" $D/php_network.h $D/php_streams.h | head -20",
+  "summary": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs; grep -rn \"PERSISTENT\" $D/php_network.h $D/php_streams.h | head -20: 05:#define PHP_STREAM_FREE_PERSISTENT 16 /* manually freeing a persistent",
+  "text": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs; grep -rn \"PERSISTENT\" $D/php_network.h $D/php_streams.h | head -20: 05:#define PHP_STREAM_FREE_PERSISTENT 16 /* manually freeing a persistent connection */ /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs/php_streams.h:310:#define PHP_STREAM_FREE_CLOSE_PERSISTENT (PHP_STREAM_FREE_CLOSE | PHP_STREAM_FREE_PERSISTENT) /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs/php_streams.h:315:#define php_stream_pclose(stream) _php_stream_free((stream), PHP_STREAM_FREE_CLOSE_PERSISTENT) /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs/php_streams.h:569:#define STREAM_OPEN_PERSISTENT 0x00000800",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1fea11a89b72ca71b76e2188",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:16:24.934Z",
+  "stored_at": "2026-08-14T14:16:24.935Z"
+}

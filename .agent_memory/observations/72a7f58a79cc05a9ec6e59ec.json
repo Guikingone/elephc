@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -B 30 'internal: true' crates/elephc-builtin-contract/src/catalog_data.rs | grep 'name: \"' | head -10",
+  "summary": "About to run: grep -B 30 'internal: true' crates/elephc-builtin-contract/src/catalog_data.rs | grep 'name: \"' | head -10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "72a7f58a79cc05a9ec6e59ec",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:40:38.289Z",
+  "stored_at": "2026-08-25T14:40:38.290Z"
+}

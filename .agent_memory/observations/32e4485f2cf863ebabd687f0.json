@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/loop_edge_store_leak_tests.rs",
+  "command": "",
+  "summary": "About to run: Edit",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "32e4485f2cf863ebabd687f0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T15:51:20.762Z",
+  "stored_at": "2026-08-23T15:51:20.763Z",
+  "low_signal": true
+}

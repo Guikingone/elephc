@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 10,16p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/afk/p.php",
+  "summary": "sed -n 10,16p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/afk/p.php: s(\"indexed, last dropped\", array_filter([1, 2, 0], fn($v) => (bool) $v)); s(\"indexed, all dropped\", array_filter([0, 0], fn($v) ",
+  "text": "sed -n 10,16p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/afk/p.php: s(\"indexed, last dropped\", array_filter([1, 2, 0], fn($v) => (bool) $v)); s(\"indexed, all dropped\", array_filter([0, 0], fn($v) => (bool) $v)); s(\"no callback\", array_filter([0, 1, \"\", 2, null, 3])); s(\"assoc\", array_filter([\"a\" => 1, \"b\" => 0, \"c\" => 2])); // The keys have to survive as KEYS, not just in the rendering. $f = array_filter([0, 1, 2], fn($v) => (bool) $v);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2e0be71bb55aff35dc199c38",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:32:26.241Z",
+  "stored_at": "2026-08-22T11:32:26.242Z"
+}

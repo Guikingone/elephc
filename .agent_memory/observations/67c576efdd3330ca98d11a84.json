@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo build 2>&1 | tail -15",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo build 2>&1 | tail -15",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "67c576efdd3330ca98d11a84",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:53:02.684Z",
+  "stored_at": "2026-08-23T17:53:02.685Z"
+}

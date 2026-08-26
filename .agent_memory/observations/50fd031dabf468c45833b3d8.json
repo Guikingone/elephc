@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"__rt_file_failed\\|__rt_file_out\" src/codegen_support/runtime/io/file.rs | head -12",
+  "summary": "grep -n \"__rt_file_failed\\|__rt_file_out\" src/codegen_support/runtime/io/file.rs | head -12: 75: emitter.instruction(\"cbz x1, __rt_file_failed\"); 77: emitter.instruction(\"cbz x1, __rt_file_failed\"); // a null payload is a FAILED read, which PHP reports as false 138: emitter.label(\"__rt_file_failed\"); 142: emitter.label",
+  "text": "grep -n \"__rt_file_failed\\|__rt_file_out\" src/codegen_support/runtime/io/file.rs | head -12: 75: emitter.instruction(\"cbz x1, __rt_file_failed\"); 77: emitter.instruction(\"cbz x1, __rt_file_failed\"); // a null payload is a FAILED read, which PHP reports as false 138: emitter.label(\"__rt_file_failed\"); 142: emitter.label(\"__rt_file_out\"); 147: emitter.label(\"__rt_file_failed\"); 149: emitter.instruction(\"b __rt_file_out\"); 225: emitter.instruction(\"jz __rt_file_failed_x\"); 229: emitter.instruction(\"jz __rt_file_failed\"); // answer null rather than the empty array an EMPTY file produces 280: emitter.label(\"__rt_file_out_x\"); 285: emitter.label(\"__rt_file_failed_x\"); 287: emitter.instruction(\"jmp __rt_file_out_x\"); 360: let branches_away = guard.contains(\"cbz x1, __rt_file_failed\")",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "50fd031dabf468c45833b3d8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:14:36.739Z",
+  "stored_at": "2026-08-20T18:14:36.739Z"
+}

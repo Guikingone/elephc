@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/php_user_filter_01 && php -n php_user_filter_01.php 2>&1 | head -5; echo \"--- elephc:\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run php_user_filter_01.php 2>&1 | tail -4",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/php_user_filter_01 && php -n php_user_filter_01.php 2>&1 | head -5; echo \"--- elephc:\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.cl",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/php_user_filter_01 && php -n php_user_filter_01.php 2>&1 | head -5; echo \"--- elephc:\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run php_user_filter_01.php 2>&1 | tail -4: Fatal error: Declaration of bar::filter($in, $out, &$consumed): int must be compatible with php_user_filter::filter($in, $out, &$consumed, bool $closing): int in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/php_user_filter_01/php_user_filter_01.php on line 8 Stack trace: #0 {main} --- elephc: error[3:5]: Method 'foo::filter' must return a value on every path error[4:5]: Method 'foo::onCreate' must return a value on every path error[8:5]: Method 'bar::filter' must return a value on every path error[9:5]: Method 'bar::onCreate' must return a value on every path",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "35f53c89d6f77e084cdc6446",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:34:52.531Z",
+  "stored_at": "2026-08-17T08:34:52.531Z"
+}

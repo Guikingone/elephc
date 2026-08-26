@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv; head -25 streams_behaviour_sweep.py; echo \"=== behavsweep ===\"; ls behavsweep | head -8; ls behavsweep | wc -l",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv; head -25 streams_behaviour_sweep.py; echo \"=== behavsweep ===\"; ls behavsweep | head -8; ls behavsweep | wc -l: the whole of stdout, stderr and the e",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv; head -25 streams_behaviour_sweep.py; echo \"=== behavsweep ===\"; ls behavsweep | head -8; ls behavsweep | wc -l: the whole of stdout, stderr and the exit code are compared, so a missing warning counts as a divergence just like a wrong value. Each case runs in its OWN directory. php and elephc sharing one working directory once scored a completely broken write path as 15/15, because the file the reader found had been left there by the other engine. \"\"\" import pathlib, subprocess, shutil, sys D = pathlib.Path(__file__).parent / 'behavsweep' ELEPHC = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc' WRAPPER = ''' class W { public $context; private $pos = 0; private $data = \"line one\\\\nline two\\\\nline three\\\\n\"; public function stream_open($p, $m, $o, &$op) { return true; } public function stream_read($n) { $out = substr($this->data, $this->pos, $n); $this->pos += strlen($out); === behavsweep === c0 c0_run c1 c10 c10_run c11 c11_run c12 92",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0af01815f2c55118430e95da",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:09:53.039Z",
+  "stored_at": "2026-08-23T07:09:53.040Z"
+}

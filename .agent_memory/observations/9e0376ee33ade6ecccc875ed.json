@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '518,580p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_ops.rs",
+  "summary": "sed -n '518,580p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_ops.rs: pointer // for the boxer below and turns the blank sentinel into that `[null]`, widening every other // row to boxed Mixed cells so the null is representab",
+  "text": "sed -n '518,580p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_ops.rs: pointer // for the boxer below and turns the blank sentinel into that `[null]`, widening every other // row to boxed Mixed cells so the null is representable at all. abi::emit_call_label(ctx.emitter, \"__rt_fgetcsv_row_to_mixed\"); // The OWNED boxer, as scandir/glob/file use: every non-null answer here is a FRESHLY created // array — the widened row, or the substituted `[null]` — so the box must become its sole // owner. The plain boxer only retains, leaving the creation reference alive; that leaked the // whole row per call, and boxing the cells made each leaked row one block per field heavier. box_listing_or_false_result(ctx, \"fgetcsv\"); // EOF is the null pointer, and PHP calls that false store_if_result(ctx, inst) } /// Lowers `str_getcsv(string, separator?, enclosure?, escape?)` through the shared CSV /// state machine, packing separator/enclosure/escape into the same `csv_opts` word",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9e0376ee33ade6ecccc875ed",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:19:31.575Z",
+  "stored_at": "2026-08-14T14:19:31.576Z"
+}

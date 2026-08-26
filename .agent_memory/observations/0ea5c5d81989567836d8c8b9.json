@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"Warning: \" tests/codegen/io/filesystem.rs | head -5; echo \"--- how they assert location ---\"; grep -rn \"on line\" tests/codegen/io/*.rs | head -5",
+  "summary": "grep -rn \"Warning: \" tests/codegen/io/filesystem.rs | head -5; echo \"--- how they assert location ---\"; grep -rn \"on line\" tests/codegen/io/*.rs | head -5: io/filesystem.rs:401: Warning: scandir(/etc/hosts): Failed to open directory: Not a directory\\n\\ tests/codegen/io/filesystem.rs:402: Warning: scandir(): (errno 20):",
+  "text": "grep -rn \"Warning: \" tests/codegen/io/filesystem.rs | head -5; echo \"--- how they assert location ---\"; grep -rn \"on line\" tests/codegen/io/*.rs | head -5: io/filesystem.rs:401: Warning: scandir(/etc/hosts): Failed to open directory: Not a directory\\n\\ tests/codegen/io/filesystem.rs:402: Warning: scandir(): (errno 20): Not a directory\\n\", tests/codegen/io/filesystem.rs:433: \"Warning: file_put_contents(/no/such/dir/leak.txt): Failed to open stream: \\ --- how they assert location --- tests/codegen/io/compress_wrapper.rs:176:function line(mixed $h, ?int $n = null): string|false { tests/codegen/io/streams.rs:1237:/// remaining difference from PHP is the ` in FILE on line N` suffix elephc never adds. tests/codegen/io/streams.rs:4652: // Warning: stream_filter_append(): Unable to locate filter \"string.strip_tags\" in ... on line 5 tests/codegen/io/streams.rs:9108:/// http_get_last_response_headers() instead in /path/test.php on line 3 tests/codegen/io/streams.rs:9111:/// Warning: Undefined variable $http_response_header in /path/test.php on line 3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0ea5c5d81989567836d8c8b9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:09:32.591Z",
+  "stored_at": "2026-08-22T09:09:32.591Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn store_flock_would_block\" -A 45 src/ | head -50",
+  "summary": "grep -rn \"fn store_flock_would_block\" -A 45 src/ | head -50: ref.immediate { src/codegen/lower_inst/builtins/io/path_call_helpers.rs-90- return Ok(Some(slot)); src/codegen/lower_inst/builtins/io/path_call_helpers.rs-91- } src/codegen/lower_inst/builtins/io/path_call_helpers.rs-92- } src/codegen/lower_inst/builtins/io/p",
+  "text": "grep -rn \"fn store_flock_would_block\" -A 45 src/ | head -50: ref.immediate { src/codegen/lower_inst/builtins/io/path_call_helpers.rs-90- return Ok(Some(slot)); src/codegen/lower_inst/builtins/io/path_call_helpers.rs-91- } src/codegen/lower_inst/builtins/io/path_call_helpers.rs-92- } src/codegen/lower_inst/builtins/io/path_call_helpers.rs-93- Ok(None) src/codegen/lower_inst/builtins/io/path_call_helpers.rs-94-} src/codegen/lower_inst/builtins/io/path_call_helpers.rs-95- src/codegen/lower_inst/builtins/io/path_call_helpers.rs-96-/// Loads two path strings into the runtime ABI, calls a helper, and stores its result. src/codegen/lower_inst/builtins/io/path_call_helpers.rs-97-pub(super) fn lower_binary_path_call( src/codegen/lower_inst/builtins/io/path_call_helpers.rs-98- ctx: &mut FunctionContext<'_>, src/codegen/lower_inst/builtins/io/path_call_helpers.rs-99- inst: &Instruction, src/codegen/lower_inst/builtins/io/path_call_helpers.rs-100- name: &str,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8dbaffd0c16cd46c88395ecd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:19:43.805Z",
+  "stored_at": "2026-08-21T16:19:43.805Z"
+}

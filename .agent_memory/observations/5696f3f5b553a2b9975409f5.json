@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"emit_type_error(ctx\\|emit_value_error(ctx\" -B 8 src/codegen/lower_inst/builtins/io/stream_context.rs | grep -E \"fn |message|context\" | head -8",
+  "summary": "grep -n \"emit_type_error(ctx\\|emit_value_error(ctx\" -B 8 src/codegen/lower_inst/builtins/io/stream_context.rs | grep -E \"fn |message|context\" | head -8: 561- retain_stream_context_options_scratch(ctx); 562- merge_stream_context_options_into_scratch(ctx, options)?; 563- update_stream_context_state_from_handle(ctx, conte",
+  "text": "grep -n \"emit_type_error(ctx\\|emit_value_error(ctx\" -B 8 src/codegen/lower_inst/builtins/io/stream_context.rs | grep -E \"fn |message|context\" | head -8: 561- retain_stream_context_options_scratch(ctx); 562- merge_stream_context_options_into_scratch(ctx, options)?; 563- update_stream_context_state_from_handle(ctx, context)?; 568- emit_branch_on_stream_context_option_name_null(ctx, option_name, &null_name)?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5696f3f5b553a2b9975409f5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:07:08.683Z",
+  "stored_at": "2026-08-22T15:07:08.684Z"
+}

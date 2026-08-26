@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 250,258p src/codegen_support/runtime/emitters.rs",
+  "summary": "sed -n 250,258p src/codegen_support/runtime/emitters.rs: managed::emit_managed_runtime(emitter, features); platform::emit_platform_runtime(emitter, features); } #[cfg(test)] mod tests;",
+  "text": "sed -n 250,258p src/codegen_support/runtime/emitters.rs: managed::emit_managed_runtime(emitter, features); platform::emit_platform_runtime(emitter, features); } #[cfg(test)] mod tests;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e68a63c4dbe781a0f02fdb4a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:01:53.035Z",
+  "stored_at": "2026-08-21T16:01:53.035Z"
+}

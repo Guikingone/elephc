@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"PregMatch\\b\" -g '*.rs' src/eir/ src/codegen/ 2>/dev/null | head -20",
+  "summary": "rg -n \"PregMatch\\b\" -g '*.rs' src/eir/ src/codegen/ 2>/dev/null | head -20: src/codegen/lower_inst/runtime_functions/group_11.rs:109: RuntimeFnId::PregMatch => Some({",
+  "text": "rg -n \"PregMatch\\b\" -g '*.rs' src/eir/ src/codegen/ 2>/dev/null | head -20: src/codegen/lower_inst/runtime_functions/group_11.rs:109: RuntimeFnId::PregMatch => Some({",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c408ffa544dbc47907e665f1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:33:34.768Z",
+  "stored_at": "2026-08-16T15:33:34.768Z"
+}

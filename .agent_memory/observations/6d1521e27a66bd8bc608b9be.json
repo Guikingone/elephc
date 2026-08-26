@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_seekable.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_seekable.txt: fix(streams): php://input and php://output reported the OPPOSITE of their own seekability\n\nMEASURED on `php -n` 8.5.6, seven str",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_seekable.txt: fix(streams): php://input and php://output reported the OPPOSITE of their own seekability\n\nMEASURED on `php -n` 8.5.6, seven streams in one program:\n\n    php://input   php: seekable=true    elephc: false\n    php://output  php: seekable=false   elephc: true\n\nEvery other stream in that program already agreed — a plain file, `php://memory`, `php://temp`,\n`php://stderr` and `data:` alike. These two are php's OWN sub-streams: `php://input` is served from\na rewindable buffer of the request body and seeks; `php://output` is the output layer and has no\nposition at all. Neither property belongs to the ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6d1521e27a66bd8bc608b9be",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:43:06.114Z",
+  "stored_at": "2026-08-22T20:43:06.115Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git show origin/main:src/codegen_support/runtime/io/stream_wrapper_register.rs 2>/dev/null | grep -nE \"disabled_builtin|builtin_wrapper_index|swr_scan_start\" | head -8",
+  "summary": "About to run: git show origin/main:src/codegen_support/runtime/io/stream_wrapper_register.rs 2>/dev/null | grep -nE \"disabled_builtin|builtin_wrapper_index|swr_scan_start\" | head -8",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "82753f744a91de2f45da2e8b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:14:04.657Z",
+  "stored_at": "2026-08-21T19:14:04.657Z"
+}

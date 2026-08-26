@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 2500 python3 run.py user-wrapper 2>&1 | tail -40",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 2500 python3 run.py user-wrapper 2>&1 | tail -40: IDENTICAL 0 DIFFERS 0 REFUSED 1 php parse 0 --- REFUSED --- ### user-wrapper-register ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 2500 python3 run.py user-wrapper 2>&1 | tail -40: IDENTICAL 0 DIFFERS 0 REFUSED 1 php parse 0 --- REFUSED --- ### user-wrapper-register error[23:9]: Array index must be integer --- DIFFERS ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a579b8c1aeed4e55454ecdf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:54:20.382Z",
+  "stored_at": "2026-08-26T07:54:20.383Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && grep -n \"failures:\" streams_readers.txt | head -4 && sed -n '935,950p' streams_readers.txt",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && grep -n \"failures:\" streams_readers.txt | head -4 && sed -n '935,950p' streams_readers.txt: 630:failures: 940:failures: binary exited with status s",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && grep -n \"failures:\" streams_readers.txt | head -4 && sed -n '935,950p' streams_readers.txt: 630:failures: 940:failures: binary exited with status signal: 11 (SIGSEGV) stdout: stderr: failures: codegen::io::streams::test_a_wrapper_without_a_context_property_is_still_deprecated codegen::io::streams::test_an_untyped_context_property_receives_its_context codegen::io::streams::test_class_constant_names_a_registered_stream_class codegen::io::streams::test_close_flush_leaves_other_filter_shapes_byte_identical codegen::io::streams::test_closing_dispatch_delivers_an_empty_brigade codegen::io::streams::test_filter_fatal_fails_the_read codegen::io::streams::test_filter_registration_owns_its_name_after_the_caller_reassigns_it codegen::io::streams::test_flock_would_block_out_parameter_may_be_undeclared codegen::io::streams::test_fopen_false_stream_use_is_type_error codegen::io::streams::test_fopen_user_wrapper_fscanf_reads_through_stream_read",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "691ba832b3efbd00e8111a0f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:39:38.963Z",
+  "stored_at": "2026-08-21T10:39:38.964Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fgetc_leak.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fgetc_leak.php: <?php\n// How far does the loop get, and is it fgetc() that leaks or the comparison?\n$path = \"leak.txt\";\nfile_put_contents($path, s",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fgetc_leak.php: <?php\n// How far does the loop get, and is it fgetc() that leaks or the comparison?\n$path = \"leak.txt\";\nfile_put_contents($path, str_repeat(\"a\", 200000));\n\n$h = fopen($path, \"r\");\n$n = 0;\nwhile ($n < 50000) {\n    $c = fgetc($h);\n    $n++;\n}\necho \"50k plain reads: ok\\n\";\nfclose($h);\n\n$h2 = fopen($path, \"r\");\n$m = 0;\nwhile (($c = fgetc($h2)) !== false) {\n    $m++;\n    if ($m >= 50000) {\n        break;\n    }\n}\necho \"50k compared reads: ok\\n\";\nfclose($h2);\nunlink($path);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eba5b788b0bd56e3ce41091a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:47:08.262Z",
+  "stored_at": "2026-08-23T12:47:08.263Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_array_value_type_stamp\" -A 40 src/codegen.rs src/codegen/mod.rs 2>/dev/null | head -50",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_array_value_type_stamp\" -A 40 src/codegen.rs src/codegen/mod.rs 2>/dev/null | head -50 completed",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_array_value_type_stamp\" -A 40 src/codegen.rs src/codegen/mod.rs 2>/dev/null | head -50 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "08998732eeb3d22003a0e567",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:18:47.273Z",
+  "stored_at": "2026-08-23T07:18:47.274Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::io)' 2>&1 | tail -6",
+  "summary": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::io)' 2>&1 | tail",
+  "text": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::io)' 2>&1 | tail -6: Summary [ 352.199s] 1056 tests run: 1052 passed, 4 timed out, 7856 skipped TIMEOUT [ 60.090s] ( 278/1056) elephc::codegen_tests codegen::io::output_buffering::test_eval_handlers_across_boundaries TIMEOUT [ 60.056s] ( 279/1056) elephc::codegen_tests codegen::io::output_buffering::test_eval_ob_get_length_and_false_case TIMEOUT [ 60.028s] ( 281/1056) elephc::codegen_tests codegen::io::output_buffering::test_eval_ob_queries_through_bridge TIMEOUT [ 60.020s] ( 314/1056) elephc::codegen_tests codegen::io::output_buffering::test_ob_state_is_shared_between_static_and_eval error: test run failed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18cc35ba5fb5eae01d516e00",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T19:27:39.801Z",
+  "stored_at": "2026-08-23T19:27:39.802Z"
+}

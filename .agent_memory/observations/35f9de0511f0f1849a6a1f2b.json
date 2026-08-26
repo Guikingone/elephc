@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"PHAR_CLASS_NAMES\" -A 8 src/types/checker/builtin_spl_classes/registry.rs | head -14; echo \"=== zip declares ===\"; grep -n \"class_map.insert\" src/types/checker/builtin_spl_classes/zip.rs | head -8",
+  "summary": "grep -n \"PHAR_CLASS_NAMES\" -A 8 src/types/checker/builtin_spl_classes/registry.rs | head -14; echo \"=== zip declares ===\"; grep -n \"class_map.insert\" src/types/checker/builtin_spl_classes/zip.rs | head -8: tin SPL or Phar classes. 63-/// 64-/// WHY THIS GATE EXISTS, measured rather than assumed. Registering these 40 cl",
+  "text": "grep -n \"PHAR_CLASS_NAMES\" -A 8 src/types/checker/builtin_spl_classes/registry.rs | head -14; echo \"=== zip declares ===\"; grep -n \"class_map.insert\" src/types/checker/builtin_spl_classes/zip.rs | head -8: tin SPL or Phar classes. 63-/// 64-/// WHY THIS GATE EXISTS, measured rather than assumed. Registering these 40 classes costs 65-/// **27 ms of the type-check phase** — 54% of it for `<?php echo 1;`, and about 12% of that 66-/// program's whole compile. It is not the registration that costs (7 ms builds all 99 builtin 67-/// classes); it is the checker afterwards walking every one of them to patch signatures, 68-/// validate contracts and flatten inheritance. A program that names none of them pays for all -- 89:/// The set is `SPL_CLASS_NAMES` plus `PHAR_CLASS_NAMES`; they are not split because 90-/// `PharFileInfo extends SplFileInfo`, so gating Phar separately would imply the SPL gate anyway. 91-pub(crate) fn program_may_reference_spl(program: &[crate::parser::ast::Stmt]) -> bool { 92- let usage = crate::prelude_prune::usage::collect(program); === zip declares === 72: class_map.insert(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "35f9de0511f0f1849a6a1f2b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:16:12.570Z",
+  "stored_at": "2026-08-21T15:16:12.571Z"
+}

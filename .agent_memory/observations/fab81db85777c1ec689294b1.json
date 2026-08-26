@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git checkout src/codegen_support/runtime/emitters/tests.rs && export CARGO_INCREMENTAL=0 && cargo test -p elephc --lib 2>&1 | tail -4",
+  "summary": "git checkout src/codegen_support/runtime/emitters/tests.rs && export CARGO_INCREMENTAL=0 && cargo test -p elephc --lib 2>&1 | tail -4: Updated 1 path from the index test ir_lower::tests::corpus::lowers_examples_corpus ... ok test result: ok. 1503 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.5",
+  "text": "git checkout src/codegen_support/runtime/emitters/tests.rs && export CARGO_INCREMENTAL=0 && cargo test -p elephc --lib 2>&1 | tail -4: Updated 1 path from the index test ir_lower::tests::corpus::lowers_examples_corpus ... ok test result: ok. 1503 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.57s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fab81db85777c1ec689294b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:09:36.843Z",
+  "stored_at": "2026-08-21T16:09:36.844Z"
+}

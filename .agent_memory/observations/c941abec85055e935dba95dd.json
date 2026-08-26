@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "tail -20 tests/codegen/io/streams.rs",
+  "summary": "tail -20 tests/codegen/io/streams.rs: class PlainReadW { public $context; private $data = \"abcdef\"; private $pos = 0; public function stream_open($p, $m, $o, &$op): bool { return true; } public function stream_read(int $count): string { $chunk = substr($this->data, $this->pos, $count); $this->pos = $this->pos + strlen(",
+  "text": "tail -20 tests/codegen/io/streams.rs: class PlainReadW { public $context; private $data = \"abcdef\"; private $pos = 0; public function stream_open($p, $m, $o, &$op): bool { return true; } public function stream_read(int $count): string { $chunk = substr($this->data, $this->pos, $count); $this->pos = $this->pos + strlen($chunk); return $chunk; } public function stream_eof(): bool { return $this->pos >= strlen($this->data); } } stream_wrapper_register(\"plainread\", \"PlainReadW\"); $f = fopen(\"plainread://x\", \"r\"); echo \"[\", fread($f, 3), \"][\", fread($f, 3), \"]\"; fclose($f); \"#, ); assert_eq!(out, \"[abc][def]\"); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c941abec85055e935dba95dd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:11:59.572Z",
+  "stored_at": "2026-08-21T18:11:59.572Z"
+}

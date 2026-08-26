@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"php_fd_open\\|x86_64\" src/codegen_support/runtime/io/php_wrapper_open.rs | head -20",
+  "summary": "About to run: grep -n \"php_fd_open\\|x86_64\" src/codegen_support/runtime/io/php_wrapper_open.rs | head -20",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "baf21b5b23438d2ff17a5c78",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T13:02:41.790Z",
+  "stored_at": "2026-08-16T13:02:41.790Z"
+}

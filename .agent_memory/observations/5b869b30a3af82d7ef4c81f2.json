@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests -- objects::gc_aliasing::test_gc_array_unique_borrowed_array_survives_unset objects::magic_methods::test_empty_on_virtual_property_consults_isset objects::property_access::nullsafe::test_empty_on_declared_instance_property optimizer::declaration_reachability::test_globals_array_alias_keeps_receiver_method_body regressions::arrays::test_ternary_missed_read_structural_mixed_consumers_observe_null runtime_gc::heap_codegen::every_x86_64_incref_call_site_passes_its_pointer_in_rax 2>&1 | tail -12",
+  "summary": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests -- objects::gc_aliasing::test_gc_array_unique_borrowed_array_survives_unset objects::magic_methods::test_empty_on_virtual_property_consults_isset objects::property_access::nullsafe::test_empty_on_declared_instance_property optimizer::declaration_reac",
+  "text": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests -- objects::gc_aliasing::test_gc_array_unique_borrowed_array_survives_unset objects::magic_methods::test_empty_on_virtual_property_consults_isset objects::property_access::nullsafe::test_empty_on_declared_instance_property optimizer::declaration_reachability::test_globals_array_alias_keeps_receiver_method_body regressions::arrays::test_ternary_missed_read_structural_mixed_consumers_observe_null runtime_gc::heap_codegen::every_x86_64_incref_call_site_passes_its_pointer_in_rax 2>&1 | tail -12: failures: codegen::objects::gc_aliasing::test_gc_array_unique_borrowed_array_survives_unset codegen::objects::magic_methods::test_empty_on_virtual_property_consults_isset codegen::objects::property_access::nullsafe::test_empty_on_declared_instance_property codegen::optimizer::declaration_reachability::test_globals_array_alias_keeps_receiver_method_body codegen::regressions::arrays::test_ternary_missed_read_structural_mixed_consumers_observe_null codegen::runtime_gc::heap_codegen::every_x86_64_incref_call_site_passes_its_pointer_in_rax test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 8826 filtered out; finished in 3.84s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5b869b30a3af82d7ef4c81f2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:22:20.615Z",
+  "stored_at": "2026-08-22T07:22:20.616Z"
+}

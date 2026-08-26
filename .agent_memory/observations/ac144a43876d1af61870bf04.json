@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests test_eval_declared_class_rejects_throwable_interfaces 2>&1 | grep \"test result\" ; cargo nextest run --test codegen_tests -E 'test(test_pdo_begin_after_raw_begin_throws) or test(test_pdo_clone_throws)' --test-threads 2 2>&1 | grep -E \"Summary\"",
+  "summary": "cargo test --test codegen_tests test_eval_declared_class_rejects_throwable_interfaces 2>&1 | grep \"test result\" ; cargo nextest run --test codegen_tests -E 'test(test_pdo_begin_after_raw_begin_throws) or test(test_pdo_clone_throws)' --test-threads 2 2>&1 | grep -E \"Summary\": test result: ok. 1 passed; 0 failed; 0 ignor",
+  "text": "cargo test --test codegen_tests test_eval_declared_class_rejects_throwable_interfaces 2>&1 | grep \"test result\" ; cargo nextest run --test codegen_tests -E 'test(test_pdo_begin_after_raw_begin_throws) or test(test_pdo_clone_throws)' --test-threads 2 2>&1 | grep -E \"Summary\": test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8304 filtered out; finished in 41.03s Summary [ 60.089s] 2/3 tests run: 0 passed, 2 timed out, 8302 skipped",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ac144a43876d1af61870bf04",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T18:53:20.823Z",
+  "stored_at": "2026-08-14T18:53:20.823Z"
+}

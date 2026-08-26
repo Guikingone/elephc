@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/stream_context_probe.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/stream_context_probe.py: \"\"\"stream_context_* option validation, which the 46-program sweep does not reach.\n\nFound while trying to demonstrate a tra",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/stream_context_probe.py: \"\"\"stream_context_* option validation, which the 46-program sweep does not reach.\n\nFound while trying to demonstrate a trace-argument bug: `stream_context_set_option($ctx, [\"a\"=>1])`\nmade php raise a ValueError and elephc exit 0. The sweep says 46/46, and this is a reminder of what\nthat number means — 46 whole programs, not the whole surface.\n\"\"\"\nimport pathlib\nimport shutil\nimport subprocess\n\nHERE = pathlib.Path(__file__).parent\nD = HERE / 'ctxprobe'\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nELEPHC = str(ROOT / 'target/d",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fa1e44574ad59ed6db3b33b3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:11:17.682Z",
+  "stored_at": "2026-08-22T15:11:17.682Z"
+}

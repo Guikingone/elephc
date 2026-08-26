@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/flag-matrix.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/flag-matrix.php: <?php\n$cases = [\n    \"empty\"        => \"\",\n    \"one\"          => \"a\",\n    \"one-nl\"       => \"a\\n\",\n    \"blank-middle\" =>",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/flag-matrix.php: <?php\n$cases = [\n    \"empty\"        => \"\",\n    \"one\"          => \"a\",\n    \"one-nl\"       => \"a\\n\",\n    \"blank-middle\" => \"a\\n\\nb\\n\",\n    \"blank-first\"  => \"\\na\\n\",\n    \"blank-last\"   => \"a\\n\\n\",\n];\nforeach ($cases as $label => $body) {\n    file_put_contents(\"f.txt\", $body);\n    for ($flags = 0; $flags < 8; $flags++) {\n        $o = new SplFileObject(\"f.txt\");\n        $o->setFlags($flags);\n        echo $label, \"/\", $flags, \"=>\";\n        foreach ($o as $k => $line) { echo $k, \":\", var_export($line, true), \";\"; }\n        echo \"\\n\";\n        unset($o);\n    }\n}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7ed884ce2a6b9bb05f41d004",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:54:04.356Z",
+  "stored_at": "2026-08-25T09:54:04.357Z"
+}

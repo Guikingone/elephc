@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/mod.rs'\ns = open(p).read()\nanchor = \"/// Head of the connect-failure line, after the `Warning: <fn>(): ` the three prefixes carry.\"\nnew = '''/// Bytes reserved for the diagnostic line buffer.\n///\n/// One php diagnostic, composed from however many pieces the emitting helper writes. The longest\n/// in this compiler names a filter, a wrapper class and a method, and stays well inside this; a\n/// message that would overflow is truncated rather than al… [+673 chars truncated]",
+  "summary": "About to run: python3 - <<'PYEOF' p = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/mod.rs' s = open(p).read() anchor = \"/// Head of t",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0bdb05d218652858f6e19023",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:39:25.132Z",
+  "stored_at": "2026-08-18T13:39:25.133Z"
+}

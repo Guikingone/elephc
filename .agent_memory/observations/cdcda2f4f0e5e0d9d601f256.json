@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/arrays.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/arrays.rs: /// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on x86_64.\nfn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext -> /// Stores a fresh box",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/arrays.rs: /// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on x86_64.\nfn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext -> /// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on x86_64.\n///\n/// Carries the same one-word/two-word rule as the AArch64 body above, for the same reason: a\n/// caller cell holding a scalar is ONE word, and writing two overwrote the neighbouring slot.\nfn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_>) {\n    let runtime_label = ctx.next_label(\"mixed_array_set_runtime\");\n    let mixed_cell_label = ctx.next_label(\"mixed_arr",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cdcda2f4f0e5e0d9d601f256",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:10:38.494Z",
+  "stored_at": "2026-08-16T17:10:38.495Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 1,100p src/codegen_support/runtime/io/filter_param_warning.rs",
+  "summary": "About to run: sed -n 1,100p src/codegen_support/runtime/io/filter_param_warning.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b981876f64c7d0be73348039",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:57:46.700Z",
+  "stored_at": "2026-08-22T08:57:46.701Z"
+}

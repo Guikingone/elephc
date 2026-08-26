@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_typeerror_x86.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_typeerror_x86.py: \"\"\"The x86_64 half of the same rule, plus the slot the tally was sharing with $microseconds.\"\"\"\nimport pathlib\n\nROOT = pa",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_typeerror_x86.py: \"\"\"The x86_64 half of the same rule, plus the slot the tally was sharing with $microseconds.\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\nf = ROOT / 'src/codegen_support/runtime/io/stream_select.rs'\nt = f.read_text()\n\n# ---- the tally moves off the microseconds slot ---------------------------------------------------\nfor old, new in [\n    ('    emitter.instruction(\"mov QWORD PTR [rbp - 2184], 0\");                        // clear the castable-descriptor tally',\n     '    emitter.instruction(&format!(\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "da369ccf4cd1c7a4c8ae1385",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:23:17.190Z",
+  "stored_at": "2026-08-23T07:23:17.191Z"
+}

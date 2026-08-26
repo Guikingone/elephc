@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn lower_null\\b\" -A25 src/ir_lower/expr/scalar_literals.rs",
+  "summary": "grep -rn \"fn lower_null\\b\" -A25 src/ir_lower/expr/scalar_literals.rs: stNull.default_effects(), src/ir_lower/expr/scalar_literals.rs-97- Some(expr.span), src/ir_lower/expr/scalar_literals.rs-98- ) src/ir_lower/expr/scalar_literals.rs-99- .expect(\"const_null produces a value\"); src/ir_lower/expr/scalar_literals.rs-100- ",
+  "text": "grep -rn \"fn lower_null\\b\" -A25 src/ir_lower/expr/scalar_literals.rs: stNull.default_effects(), src/ir_lower/expr/scalar_literals.rs-97- Some(expr.span), src/ir_lower/expr/scalar_literals.rs-98- ) src/ir_lower/expr/scalar_literals.rs-99- .expect(\"const_null produces a value\"); src/ir_lower/expr/scalar_literals.rs-100- LoweredValue { value, ir_type: IrType::I64 } src/ir_lower/expr/scalar_literals.rs-101-} src/ir_lower/expr/scalar_literals.rs-102- src/ir_lower/expr/scalar_literals.rs-103-/// Lowers a nullsafe expression that is known to short-circuit to PHP null. src/ir_lower/expr/scalar_literals.rs-104-pub(super) fn lower_boxed_null(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue { src/ir_lower/expr/scalar_literals.rs-105- let null = lower_null(ctx, expr); src/ir_lower/expr/scalar_literals.rs-106- ctx.box_value_as_mixed(null, PhpType::Mixed, Some(expr.span)) src/ir_lower/expr/scalar_literals.rs-107-} src/ir_lower/expr/scalar_literals.rs-108-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a59f02616c44fb9a7e671716",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:28:53.868Z",
+  "stored_at": "2026-08-20T19:28:53.868Z"
+}

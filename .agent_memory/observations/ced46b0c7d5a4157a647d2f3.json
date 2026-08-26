@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub(crate) fn emit_type_error\\|pub(super) fn emit_type_error\\|fn emit_type_error\" -A 25 src/codegen/lower_inst/exceptions.rs | head -40; echo \"=== ValueGuard ===\"; grep -n \"enum ValueGuard\" -A 25 src/codegen/lower_inst/exceptions.rs | head -30",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub(crate) fn emit_type_error\\|pub(super) fn emit_type_error\\|fn emit_type_error\" -A 25 src/codegen/lower_inst/exceptions.rs | head -40; echo \"=== ValueGuard ===\"; grep -n \"enum ValueGuard\" -A 25 src/codegen/lower_i",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub(crate) fn emit_type_error\\|pub(super) fn emit_type_error\\|fn emit_type_error\" -A 25 src/codegen/lower_inst/exceptions.rs | head -40; echo \"=== ValueGuard ===\"; grep -n \"enum ValueGuard\" -A 25 src/codegen/lower_inst/exceptions.rs | head -30: gister, read as a signed integer, must satisfy 81- /// `-maximum <= value <= maximum` (`array_pad()`'s `$length` magnitude). 82- /// 83- /// The bound is checked on the signed argument itself rather than on `abs(value)` 84- /// so `PHP_INT_MIN`, whose magnitude is not representable, fails the guard instead 85- /// of wrapping back to a negative \"absolute\" length. 86- SignedMagnitudeAtMost(&'a str, i64), 87- /// The 64-bit register, read as a signed integer, must satisfy 88- /// `minimum <= value <= maximum` (`round()`'s `$mode` enumeration). 89- /// 90- /// Both ends are inclusive; the guard is used for builtin arguments whose accepted 91- /// values are a small contiguous set of PHP constants rather than a magnitude limit. 92- SignedInRange(&'a str, i64, i64), 93- /// The 64-bit register must not hold the given immediate (`range()`'s zero `$step`). 94- NotEqualToImmediate(&'a str, i64),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ced46b0c7d5a4157a647d2f3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:19:38.014Z",
+  "stored_at": "2026-08-23T07:19:38.014Z"
+}

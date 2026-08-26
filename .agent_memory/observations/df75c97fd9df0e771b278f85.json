@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git checkout -- src/ir_lower/context.rs src/ir_lower/stmt/loops.rs src/parser/control.rs src/codegen_support/runtime/arrays/array_to_hash_unique.rs src/codegen_support/runtime/arrays/hash_to_hash_unique.rs src/codegen_support/runtime/exceptions/trace_buffer.rs; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast -E 'test(test_mysqli_completed_surface_exists) or test(test_mysqli_unconnected_ops_raise_error)' 2>&1 | tail -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git checkout -- src/ir_lower/context.rs src/ir_lower/stmt/loops.rs src/parser/control.rs src/codegen_support/runtime/arrays/array_to_hash_unique.rs src/codegen_support/runtime/arrays/hash_to_hash_unique.rs src/codegen_suppor",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git checkout -- src/ir_lower/context.rs src/ir_lower/stmt/loops.rs src/parser/control.rs src/codegen_support/runtime/arrays/array_to_hash_unique.rs src/codegen_support/runtime/arrays/hash_to_hash_unique.rs src/codegen_support/runtime/exceptions/trace_buffer.rs; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast -E 'test(test_mysqli_completed_surface_exists) or test(test_mysqli_unconnected_ops_raise_error)' 2>&1 | tail -8: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace ──────────── Summary [ 3.870s] 2 tests run: 0 passed, 2 failed, 8896 skipped FAIL [ 3.818s] (1/2) elephc::codegen_tests codegen::mysqli::test_mysqli_unconnected_ops_raise_error FAIL [ 3.820s] (2/2) elephc::codegen_tests codegen::mysqli::test_mysqli_completed_surface_exists error: test run failed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "df75c97fd9df0e771b278f85",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:21:34.991Z",
+  "stored_at": "2026-08-23T16:21:34.992Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"fn referenced_stream_registration_class_names\" -A34 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/ | head -38",
+  "summary": "rtk proxy grep -rn \"fn referenced_stream_registration_class_names\" -A34 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/ | head -38: ntime_metadata/dynamic_references.rs-305- module /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/workt",
+  "text": "rtk proxy grep -rn \"fn referenced_stream_registration_class_names\" -A34 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/ | head -38: ntime_metadata/dynamic_references.rs-305- module /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/dynamic_references.rs-306- .class_infos /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/dynamic_references.rs-307- .keys() /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/dynamic_references.rs-308- .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\\\')) == wanted) /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/dynamic_references.rs-309- .cloned() /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/runtime_metadata/dynamic_references.rs-310-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cdba4932872cfd167c909795",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:49:55.539Z",
+  "stored_at": "2026-08-17T09:49:55.541Z"
+}

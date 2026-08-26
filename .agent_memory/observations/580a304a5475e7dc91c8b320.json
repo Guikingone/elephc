@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport re, pathlib\ns = pathlib.Path(\"crates/elephc-builtin-contract/src/catalog_data.rs\").read_text()\nblocks = s.split(\"BuiltinContract {\")\nfor b in blocks[1:]:\n    nm = re.search(r'name: \"([^\"]+)\"', b)\n    if not nm: continue\n    for pm in re.finditer(r'ParamSpec \\{\\s*name: \"([^\"]+)\",\\s*ty: ([^,]+),\\s*default: ([^\\n]+),\\s*by_ref: (true|false),\\s*\\nwrites: ([^\\n]+),', b):\n        if pm.group(4) == \"true\":\n            print(f\"{nm.group(1):28} {pm.group(1):14} ty={pm.group(2).strip():22} default={pm.group(3).strip().rstrip(','):26} writes={pm.group(5).strip().rstrip(',')}\")\nPY",
+  "summary": "python3 - <<'PY'\nimport re, pathlib\ns = pathlib.Path(\"crates/elephc-builtin-contract/src/catalog_data.rs\").read_text()\nblocks = s.split(\"BuiltinContract {\")\nfor b in blocks[1:]:\n    nm = re.search(r'name: \"([^\"]+)\"', b)\n    if not nm: continue\n    for pm in re.finditer(r'ParamSpec \\{\\s*name: \"([^\"]+)\",\\s*ty: ([^,]+),\\s",
+  "text": "python3 - <<'PY'\nimport re, pathlib\ns = pathlib.Path(\"crates/elephc-builtin-contract/src/catalog_data.rs\").read_text()\nblocks = s.split(\"BuiltinContract {\")\nfor b in blocks[1:]:\n    nm = re.search(r'name: \"([^\"]+)\"', b)\n    if not nm: continue\n    for pm in re.finditer(r'ParamSpec \\{\\s*name: \"([^\"]+)\",\\s*ty: ([^,]+),\\s*default: ([^\\n]+),\\s*by_ref: (true|false),\\s*\\nwrites: ([^\\n]+),', b):\n        if pm.group(4) == \"true\":\n            print(f\"{nm.group(1):28} {pm.group(1):14} ty={pm.group(2).strip():22} default={pm.group(3).strip().rstrip(','):26} writes={pm.group(5).strip().rstrip(',')}\")\nPY: :Mixed default=None writes=None openssl_encrypt tag ty=TypeSpec::Mixed default=Some(DefaultSpec::Null) writes=None preg_match matches ty=TypeSpec::Mixed default=Some(DefaultSpec::EmptyArray) writes=None prev array ty=TypeSpec::Mixed default=None writes=None reset array ty=TypeSpec::Mixed default=None writes=None rsort array ty=TypeSpec::Mixed default=None writes=None settype var ty=TypeSpec::Mixed default=None writes=None shuffle array ty=TypeSpec::Mixed default=None writes=None sort array ty=TypeSpec::Mixed default=None writes=None stream_select read ty=TypeSpec::Mixed default=None writes=None stream_select write ty=TypeSpec::Mixed default=None writes=None stream_select except ty=TypeSpec::Mixed default=None writes=None uasort array ty=TypeSpec::Mixed default=None writes=None uksort array ty=TypeSpec::Mixed default=None writes=None usort array ty=TypeSpec::Mixed default=None writes=None",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "580a304a5475e7dc91c8b320",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:06:28.155Z",
+  "stored_at": "2026-08-25T13:06:28.155Z"
+}

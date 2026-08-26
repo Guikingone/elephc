@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_interleave.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_interleave.py: \"\"\"Do the readers on a user wrapper agree about the stream POSITION between calls?\n\nphp buffers what a read did not need in ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_interleave.py: \"\"\"Do the readers on a user wrapper agree about the stream POSITION between calls?\n\nphp buffers what a read did not need in the stream's own read buffer, and every reader sees it.\n`fgets` on a wrapper fills that buffer here; `fread` on a wrapper tail-calls `stream_read` without\ndraining it first. If those two disagree, an `fgets` followed by an `fread` skips or repeats bytes\n— a silent wrong answer that neither call reports.\n\nEach row interleaves two readers, so the second one's bytes are the evidence.\n\"\"\"\nimport pathlib, subprocess\n\nD = pathlib.Path(__file__).parent / 'interleave'\nROOT = path",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "065d7ff29b8d6e782cb793a7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:01:44.727Z",
+  "stored_at": "2026-08-21T13:01:44.727Z"
+}

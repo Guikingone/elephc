@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/eof-after-last-line.php 2>/dev/null || find /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep -name 'eof-after-last-line*' | head",
+  "summary": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/eof-after-last-line.php 2>/dev/null || find /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktree",
+  "text": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/eof-after-last-line.php 2>/dev/null || find /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep -name 'eof-after-last-line*' | head: f.txt\", \"r\"); 4 echo \"file l1=\", var_export(fgets($h), true), \" eof=\", var_export(feof($h), true), \"\\n\"; 5 echo \"file l2=\", var_export(fgets($h), true), \" eof=\", var_export(feof($h), true), \"\\n\"; 6 echo \"file l3=\", var_export(fgets($h), true), \" eof=\", var_export(feof($h), true), \"\\n\"; 7 8 $m = fopen(\"php://memory\", \"r+\"); 9 fwrite($m, \"a\\nbb\\n\"); 10 rewind($m); 11 echo \"mem l1=\", var_export(fgets($m), true), \" eof=\", var_export(feof($m), true), \"\\n\"; 12 echo \"mem l2=\", var_export(fgets($m), true), \" eof=\", var_export(feof($m), true), \"\\n\"; 13 echo \"mem l3=\", var_export(fgets($m), true), \" eof=\", var_export(feof($m), true), \"\\n\"; 14 15 $t = fopen(\"php://temp\", \"r+\"); 16 fwrite($t, \"a\\nbb\\n\"); 17 rewind($t); 18 echo \"temp l1=\", var_export(fgets($t), true), \" eof=\", var_export(feof($t), true), \"\\n\"; 19 echo \"temp l2=\", var_export(fgets($t), true), \" eof=\", var_export(feof($t), true), \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b21a75d60230279f5b93738a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:41:39.011Z",
+  "stored_at": "2026-08-25T13:41:39.012Z"
+}

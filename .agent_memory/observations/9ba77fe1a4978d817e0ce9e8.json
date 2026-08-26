@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"aux_from_result\\|kind_from_result\\|cleanup\" src/codegen/lower_inst/builtins/io/boxing_helpers.rs | head -12",
+  "summary": "grep -n \"aux_from_result\\|kind_from_result\\|cleanup\" src/codegen/lower_inst/builtins/io/boxing_helpers.rs | head -12: 98:/// The resource is tagged with scope-cleanup kind 1 (native stream fd, closed via 107:/// The legacy cleanup `kind` becomes the backend kind in stable StreamState. 114: aux_from_result: bool, 115: k",
+  "text": "grep -n \"aux_from_result\\|kind_from_result\\|cleanup\" src/codegen/lower_inst/builtins/io/boxing_helpers.rs | head -12: 98:/// The resource is tagged with scope-cleanup kind 1 (native stream fd, closed via 107:/// The legacy cleanup `kind` becomes the backend kind in stable StreamState. 114: aux_from_result: bool, 115: kind_from_result: bool, 117: let kind = cleanup.stamp(); 124: if aux_from_result { 129: if kind_from_result { 159: if kind_from_result { 162: } else if aux_from_result { 167: if !kind_from_result {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9ba77fe1a4978d817e0ce9e8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:45:20.509Z",
+  "stored_at": "2026-08-20T17:45:20.510Z"
+}

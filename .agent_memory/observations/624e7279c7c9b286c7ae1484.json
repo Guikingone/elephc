@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace_report.py && sed -n '385,425p' src/codegen_support/runtime/exceptions/uncaught_report.rs",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace_report.py && sed -n '385,425p' src/codegen_support/runtime/exceptions/uncaught_report.rs: uncaught_parent_found\"); emitter.instruction(\"mov QW",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace_report.py && sed -n '385,425p' src/codegen_support/runtime/exceptions/uncaught_report.rs: uncaught_parent_found\"); emitter.instruction(\"mov QWORD PTR [rsp], r10\"); // report the wrapper next emitter.instruction(\"mov QWORD PTR [rsp + 8], 1\"); // under `Next` emitter.instruction(\"jmp __rt_uncaught_block\"); emitter.label(\"__rt_uncaught_last\"); emitter.instruction(\"mov r10, QWORD PTR [rsp]\"); emitter.instruction(&format!(\"mov rdi, QWORD PTR [r10 + {}]\", THROWABLE_CREATION_LINE_OFFSET)); emitter.instruction(\"xor esi, esi\"); // the unwinder cannot know whose frame it is on emitter.instruction(\"call __rt_trace_write_block\"); // php's Stack trace: block, when the frame list is complete emitter.instruction(&format!(\"mov edi, {}\", UNCAUGHT_EXIT_STATUS)); // PHP exits 255 for an uncaught exception emitter.instruction(\"mov eax, 60\"); // Linux x86_64 syscall 60 = exit emitter.instruction(\"syscall\"); // exit the process after reporting the throwable emitter.label(\"__rt_uncaught_fallback\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "624e7279c7c9b286c7ae1484",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:27:41.427Z",
+  "stored_at": "2026-08-26T09:27:41.427Z"
+}

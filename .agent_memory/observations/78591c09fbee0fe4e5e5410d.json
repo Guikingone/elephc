@@ -1,0 +1,16 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/array-key-miss.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/array-key-miss.php: <?php\n$h = [\"a\" => 1];\necho $h[\"missing\"];\necho \"|\";\n$a = [1, 2];\necho $a[9];\necho \"|end\\n\";",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/array-key-miss.php: <?php\n$h = [\"a\" => 1];\necho $h[\"missing\"];\necho \"|\";\n$a = [1, 2];\necho $a[9];\necho \"|end\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "78591c09fbee0fe4e5e5410d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:46:48.930Z",
+  "stored_at": "2026-08-25T08:46:48.930Z",
+  "low_signal": true
+}

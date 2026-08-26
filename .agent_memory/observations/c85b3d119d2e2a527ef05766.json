@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git checkout -q worktree-streams-csv-signature 2>/dev/null || git checkout -q 359ec4ca0; git log --oneline -1; echo \"--- remaining chunk verdicts ---\"; tail -8 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bt97ph7lq.output",
+  "summary": "About to run: git checkout -q worktree-streams-csv-signature 2>/dev/null || git checkout -q 359ec4ca0; git log --oneline -1; echo \"--- remaining chunk verdicts ---\"; tail -8 /private/tmp/claude-501/-Users-guillaume",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c85b3d119d2e2a527ef05766",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:24:16.516Z",
+  "stored_at": "2026-08-22T07:24:16.517Z"
+}

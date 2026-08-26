@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='tests/codegen/io/streams.rs'\ns=open(p).read()\nold = '''            \"6161616161616161616161613d0d0a616161616161616161\\\\n\",\n            // the escape FITS at column 6 with line-length 10, so no break precedes it\n            \"6161616161613d45393d0d0a626262626262\\\\n\",\n            // at line-length 8 it does not, so the break comes first and the triplet stays whole\n            \"61616161616161613d0d0a3d45396262623d0d0a626262\\\\n\",'''\nnew = '''            \"6161616161… [+770 chars truncated]",
+  "summary": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='tests/codegen/io/streams.rs'\ns=open(p).read()\nold = '''            \"6161616161616161616161613d0d0a616161616161616161\\\\n\",\n            // the escape FITS at column 6 with line-length 1",
+  "text": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='tests/codegen/io/streams.rs'\ns=open(p).read()\nold = '''            \"6161616161616161616161613d0d0a616161616161616161\\\\n\",\n            // the escape FITS at column 6 with line-length 10, so no break precedes it\n            \"6161616161613d45393d0d0a626262626262\\\\n\",\n            // at line-length 8 it does not, so the break comes first and the triplet stays whole\n            \"61616161616161613d0d0a3d45396262623d0d0a626262\\\\n\",'''\nnew = '''            \"61616161616161616161613d0d0a616161616161616161\\\\n\",\n            // the escape FITS at column 6 with line-length 10, so no break precedes it\n            \"6161616161613d45393d0d0a626262626262\\\\n\",\n            // at line-length 8 the eighth `a` already needs one, and the triplet stays whole after\n            \"616161616161613d0d0a613d45396262623d0d0a626262\\\\n\",'''\nassert s.count(old)==1\ns=s.replace(old,new)\ns=s.replace('''            // 11 a's, the soft `=` that costs a column of its own, CRLF, then the remaining 9''',\n            '''            // 11 a's, the soft `=` that costs the twelfth column, CRLF, then the remaining 9''')\nopen(p,'w').write(s)\nprint('expectation set from php')\nPYEOF\ncargo test --test codegen_tests test_builtin_filters_read_their_params 2>&1 | tail -6: Traceback (most recent call last): File \"<stdin>\", line 15, in <module> AssertionError failures: codegen::io::streams::test_builtin_filters_read_their_params test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8419 filtered out; finished in 2.78s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6a3faf4457f97645cee807d9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:28:25.341Z",
+  "stored_at": "2026-08-17T14:28:25.342Z"
+}

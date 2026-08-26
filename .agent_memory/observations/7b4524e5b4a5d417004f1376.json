@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; cargo test -p elephc --lib 2>&1 | tail -4; echo \"--- scanf behaviour ---\"; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scanf_engine_reach.py 2>&1 | head -8",
+  "summary": "export CARGO_INCREMENTAL=0; cargo test -p elephc --lib 2>&1 | tail -4; echo \"--- scanf behaviour ---\"; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scanf_engine_reach.py 2>&1 | head -8: test",
+  "text": "export CARGO_INCREMENTAL=0; cargo test -p elephc --lib 2>&1 | tail -4; echo \"--- scanf behaviour ---\"; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scanf_engine_reach.py 2>&1 | head -8: test ir_lower::tests::corpus::lowers_examples_corpus ... ok test result: ok. 1530 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.13s --- scanf behaviour --- sscanf, array form same sscanf, by-ref vars form same fscanf, array form same fscanf, by-ref vars form same both sscanf and fscanf same fscanf on a real file same",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7b4524e5b4a5d417004f1376",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:47:36.678Z",
+  "stored_at": "2026-08-22T07:47:36.679Z"
+}

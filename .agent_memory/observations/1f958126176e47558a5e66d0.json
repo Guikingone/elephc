@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"params:\" src/builtins/registry.rs 2>/dev/null | head -5; grep -rln \"by_ref\" src/builtins | head -5",
+  "summary": "grep -rn \"params:\" src/builtins/registry.rs 2>/dev/null | head -5; grep -rln \"by_ref\" src/builtins | head -5: src/builtins/registry.rs:38: pub params: Vec<(String, PhpType)>, src/builtins/registry.rs:45: pub ref_params: Vec<bool>, src/builtins/registry.rs:83: let mut params: Vec<(String, PhpType)> = Vec::with_capacity(",
+  "text": "grep -rn \"params:\" src/builtins/registry.rs 2>/dev/null | head -5; grep -rln \"by_ref\" src/builtins | head -5: src/builtins/registry.rs:38: pub params: Vec<(String, PhpType)>, src/builtins/registry.rs:45: pub ref_params: Vec<bool>, src/builtins/registry.rs:83: let mut params: Vec<(String, PhpType)> = Vec::with_capacity(total); src/builtins/registry.rs:85: let mut ref_params: Vec<bool> = Vec::with_capacity(total); src/builtins/registry.rs:230: params: def.params.clone(), src/builtins/docs.rs src/builtins/registry.rs src/builtins/semantics.rs src/builtins/macros.rs src/builtins/string/sscanf.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1f958126176e47558a5e66d0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:01:22.265Z",
+  "stored_at": "2026-08-21T11:01:22.266Z"
+}

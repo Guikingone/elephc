@@ -1,0 +1,13 @@
+{
+  "type": "session_end",
+  "summary": "Claude Code is compacting context; distill durable observations before compaction.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5b3d0a977de8de4eb420908f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T16:48:53.809Z",
+  "stored_at": "2026-08-24T16:48:53.810Z",
+  "low_signal": true
+}

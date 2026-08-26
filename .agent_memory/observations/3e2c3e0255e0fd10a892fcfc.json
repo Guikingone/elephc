@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nvar_dump(sscanf(\"1 x\", \"%%d %%d\", $a, $b), $a, $b);\\nvar_dump(sscanf(\"\", \"%%d\", $c), $c);\\nvar_dump(sscanf(\"5\", \"%%d %%d\", $d, $e), $d, $e);\\nvar_dump(sscanf(\"a b c\", \"%%s %%s\", $f, $g), $f, $g);\\nvar_dump(sscanf(\"7\", \"%%d\", $h, $i), $h, $i);\\n' > t8.php && php -n t8.php 2>&1",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nvar_dump",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3e2c3e0255e0fd10a892fcfc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:21:24.820Z",
+  "stored_at": "2026-08-18T10:21:24.820Z"
+}

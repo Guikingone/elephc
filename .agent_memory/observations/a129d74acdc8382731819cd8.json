@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r '\nvar_dump(str_replace(\"a\", \"X\", [\"abc\", \"aaa\"]));\nvar_dump(str_replace([\"a\",\"b\"], [\"1\",\"2\"], [\"ab\", \"ba\"]));\nvar_dump(str_replace(\"a\", \"X\", [\"k1\" => \"abc\", \"k2\" => \"za\"]));\nvar_dump(str_replace(\"a\", \"X\", []));\nvar_dump(str_replace(\"a\", \"X\", [5 => \"aa\", 9 => \"b\"]));\nvar_dump(str_replace(\"a\", \"X\", [\"x\", 42, 1.5, true, null]));'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r '\nvar_dump(str_replace(\"a\", \"X\", [\"abc\", \"aaa\"]));\nvar_dump(str_replace([\"a\",\"b\"], [\"1\",\"2\"], [\"ab\", \"ba\"]));\nvar_dump(str_replace(\"a",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r '\nvar_dump(str_replace(\"a\", \"X\", [\"abc\", \"aaa\"]));\nvar_dump(str_replace([\"a\",\"b\"], [\"1\",\"2\"], [\"ab\", \"ba\"]));\nvar_dump(str_replace(\"a\", \"X\", [\"k1\" => \"abc\", \"k2\" => \"za\"]));\nvar_dump(str_replace(\"a\", \"X\", []));\nvar_dump(str_replace(\"a\", \"X\", [5 => \"aa\", 9 => \"b\"]));\nvar_dump(str_replace(\"a\", \"X\", [\"x\", 42, 1.5, true, null]));': array(2) { [0]=> string(3) \"Xbc\" [1]=> string(3) \"XXX\" } array(2) { [0]=> string(2) \"12\" [1]=> string(2) \"21\" } array(2) { [\"k1\"]=> string(3) \"Xbc\" [\"k2\"]=> string(2) \"zX\" } array(0) { } array(2) { [5]=> string(2) \"XX\" [9]=> string(1) \"b\" } array(5) { [0]=> string(1) \"x\" [1]=> string(2) \"42\" [2]=> string(3) \"1.5\" [3]=> string(1) \"1\" [4]=> string(0) \"\" }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a129d74acdc8382731819cd8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T08:29:26.624Z",
+  "stored_at": "2026-08-18T08:29:26.624Z"
+}

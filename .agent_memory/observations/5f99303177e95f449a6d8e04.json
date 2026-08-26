@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php && php -n s.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php && php -n s.php: == SplTempFileObject == n=1 last='' eofAfter=true a n=1 last='a' eofAfter=true a\\n n=1 last='a ' eofAfter=true a\\nb\\n n=2 last=",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php && php -n s.php: == SplTempFileObject == n=1 last='' eofAfter=true a n=1 last='a' eofAfter=true a\\n n=1 last='a ' eofAfter=true a\\nb\\n n=2 last='b ' eofAfter=true a\\nb n=2 last='b' eofAfter=true == SplFileObject on a plain file == n=1 last='' eofAfter=true a n=1 last='a' eofAfter=true a\\n n=2 last='' eofAfter=true a\\nb\\n n=3 last='' eofAfter=true a\\nb n=2 last='b' eofAfter=true == eof() BEFORE iterating == temp afterWrite=false afterRewind=false plain fresh=false afterRewind=false",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f99303177e95f449a6d8e04",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:54:09.716Z",
+  "stored_at": "2026-08-25T13:54:09.716Z"
+}

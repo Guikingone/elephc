@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fix_lib_tests.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fix_lib_tests.py: \"\"\"Repairs the three unit tests and the one fixture my own earlier commits broke.\n\n`cargo test --lib` had stopped COMPILING: the",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fix_lib_tests.py: \"\"\"Repairs the three unit tests and the one fixture my own earlier commits broke.\n\n`cargo test --lib` had stopped COMPILING: the stack-trace work added a 16th parameter to\n`emit_runtime_data_user` (`has_user_frames`, which decides the `_rt_trace_exact` flag) and the\nwidened-locals work added a field to `CheckResult`. Neither touched the test-only callers, and a\n`cargo build` does not compile them — so nothing said so until the suite was run.\n\nThe three fixtures all declare user classes with methods, which is exactly the module shape whose\ntraces are exact, so they pass `true` rather than a pla",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b776d3c087113cd62b11e47c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:25:27.426Z",
+  "stored_at": "2026-08-22T16:25:27.426Z"
+}

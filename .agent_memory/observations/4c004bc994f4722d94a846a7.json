@@ -1,0 +1,17 @@
+{
+  "type": "tool_use",
+  "tool": "SendMessage",
+  "path": "",
+  "command": "",
+  "summary": "SendMessage: Resuming agent a6dd4a6",
+  "text": "Resuming agent a6dd4a6",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4c004bc994f4722d94a846a7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T16:50:44.496Z",
+  "stored_at": "2026-08-15T16:50:44.497Z",
+  "low_signal": true
+}

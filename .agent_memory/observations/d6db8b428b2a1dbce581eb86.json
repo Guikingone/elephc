@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_file_get_contents_bytes\" -A 22 src/codegen/lower_inst/builtins/io/*.rs | head -26",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_file_get_contents_bytes\" -A 22 src/codegen/lower_inst/builtins/io/*.rs | head -26: hole scheme; RFC 2397 has no `//` and php makes it optional, so the src/codegen/lower_inst/builtins/io/phar_read.rs-78- // ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_file_get_contents_bytes\" -A 22 src/codegen/lower_inst/builtins/io/*.rs | head -26: hole scheme; RFC 2397 has no `//` and php makes it optional, so the src/codegen/lower_inst/builtins/io/phar_read.rs-78- // canonical spelling is `data:,abc` / `data:text/plain;base64,...`. Testing `data://` src/codegen/lower_inst/builtins/io/phar_read.rs-79- // matched only the rarer form, so `file_get_contents(\"data:,abc\")` fell through to the src/codegen/lower_inst/builtins/io/phar_read.rs-80- // FILE reader and answered false with \"No such file or directory\" — while `fopen()` on src/codegen/lower_inst/builtins/io/phar_read.rs-81- // the same URL read it. `data://` still matches, since it starts with `data:`. src/codegen/lower_inst/builtins/io/phar_read.rs-82- // The OPENER knows both compress schemes and decompresses through them; the plain byte src/codegen/lower_inst/builtins/io/phar_read.rs-83- // reader below does not, and they are in `STREAM_WRAPPERS`, so they used to fall through",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d6db8b428b2a1dbce581eb86",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:49:33.388Z",
+  "stored_at": "2026-08-22T19:49:33.388Z"
+}

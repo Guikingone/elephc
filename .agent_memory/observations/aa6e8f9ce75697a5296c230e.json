@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_static_diag_warning\" -A 18 src/codegen/lower_inst/ 2>/dev/null | head -24",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_static_diag_warning\" -A 18 src/codegen/lower_inst/ 2>/dev/null | head -24: ore.rs-1426- abi::emit_load_int_immediate(ctx.emitter, \"rsi\", len as i64); src/codegen/lower_inst/builtins/io/fopen_core.rs-1427- }",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_static_diag_warning\" -A 18 src/codegen/lower_inst/ 2>/dev/null | head -24: ore.rs-1426- abi::emit_load_int_immediate(ctx.emitter, \"rsi\", len as i64); src/codegen/lower_inst/builtins/io/fopen_core.rs-1427- } src/codegen/lower_inst/builtins/io/fopen_core.rs-1428- } src/codegen/lower_inst/builtins/io/fopen_core.rs-1429- abi::emit_call_label(ctx.emitter, \"__rt_diag_warning\"); src/codegen/lower_inst/builtins/io/fopen_core.rs-1430-} src/codegen/lower_inst/builtins/io/fopen_core.rs-1431- src/codegen/lower_inst/builtins/io/fopen_core.rs-1432-/// Returns whether a literal `php://filter/...` URL names NO resource — missing or empty. src/codegen/lower_inst/builtins/io/fopen_core.rs-1433-/// src/codegen/lower_inst/builtins/io/fopen_core.rs-1434-/// This is the case php answers with `Error: No URL resource specified`; a nested resource src/codegen/lower_inst/builtins/io/fopen_core.rs-1435-/// also makes [`parse_php_filter_url`] decline, but that is a different php behavior.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aa6e8f9ce75697a5296c230e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:22:13.494Z",
+  "stored_at": "2026-08-22T18:22:13.495Z"
+}

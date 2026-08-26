@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"fn store_call_normalized_local\" -A25 src/ir_lower/context.rs | head -30",
+  "summary": "rtk proxy rg -n \"fn store_call_normalized_local\" -A25 src/ir_lower/context.rs | head -30: 1741: pub(crate) fn store_call_normalized_local( 1742- &mut self, 1743- name: &str, 1744- value: LoweredValue, 1745- php_type: PhpType, 1746- span: Option<Span>, 1747- ) -> LoweredValue { 1748- self.store_mutated_local_impl(name, ",
+  "text": "rtk proxy rg -n \"fn store_call_normalized_local\" -A25 src/ir_lower/context.rs | head -30: 1741: pub(crate) fn store_call_normalized_local( 1742- &mut self, 1743- name: &str, 1744- value: LoweredValue, 1745- php_type: PhpType, 1746- span: Option<Span>, 1747- ) -> LoweredValue { 1748- self.store_mutated_local_impl(name, value, php_type, span, true, false) 1749- } 1750- 1751- /// Stores a mutation result whose previous boxed local owner was released beforehand. 1752- pub(crate) fn store_prepared_mutated_local( 1753- &mut self, 1754- name: &str, 1755- value: LoweredValue, 1756- php_type: PhpType, 1757- span: Option<Span>, 1758- ) -> LoweredValue { 1759- self.store_mutated_local_impl(name, value, php_type, span, false, true) 1760- } 1761- 1762- /// Implements consuming local storeback with caller-selected cleanup timing. 1763- fn store_mutated_local_impl( 1764- &mut self, 1765- name: &str, 1766- value: LoweredValue,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "745bf1a3bc997d615edd37ac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:58:03.562Z",
+  "stored_at": "2026-08-16T20:58:03.563Z"
+}

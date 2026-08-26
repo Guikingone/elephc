@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '985,1035p' src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "sed -n '985,1035p' src/types/checker/builtin_spl_classes/filesystem.rs: W_LINE` is applied by `current()`, not by the loader. fn spl_file_object_trailing_line_stmt() -> Stmt { let last_line = array_access( file_lines_expr(), binary_expr(count_expr(file_lines_expr()), BinOp::Sub, int_expr(1)), ); if_stmt( binary_expr( b",
+  "text": "sed -n '985,1035p' src/types/checker/builtin_spl_classes/filesystem.rs: W_LINE` is applied by `current()`, not by the loader. fn spl_file_object_trailing_line_stmt() -> Stmt { let last_line = array_access( file_lines_expr(), binary_expr(count_expr(file_lines_expr()), BinOp::Sub, int_expr(1)), ); if_stmt( binary_expr( binary_expr(count_expr(file_lines_expr()), BinOp::StrictEq, int_expr(0)), BinOp::Or, binary_expr( function_call(\"substr\", vec![last_line, int_expr(-1)]), BinOp::StrictEq, string_expr(\"\\n\"), ), ), vec![property_array_push_stmt(this_expr(), \"lines\", string_expr(\"\"))], None, ) } /// Builds the SplTempFileObject constructor body. fn spl_temp_file_object_construct_body() -> Vec<Stmt> { let body = vec![ if_stmt( binary_expr(var_expr(\"maxMemory\"), BinOp::Lt, int_expr(0)), vec![assign_stmt(\"path\", string_expr(\"php://memory\"))], Some(vec![assign_stmt( \"path\", binary_expr(string_expr(\"php://temp/maxmemory:\"), BinOp::Concat, var_expr(\"maxMemory\")), )]), ),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f21df47fb94e5b315230673f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:26:43.582Z",
+  "stored_at": "2026-08-24T20:26:43.582Z"
+}

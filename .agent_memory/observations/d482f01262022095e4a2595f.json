@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"TRANSPORT\" src/codegen_support/runtime/resources/layout.rs | head -12",
+  "summary": "rg -n \"TRANSPORT\" src/codegen_support/runtime/resources/layout.rs | head -12: 191:pub(crate) const STREAM_TRANSPORT_OFFSET: i64 = 208; 230:pub(crate) const STREAM_TRANSPORT_TCP: u64 = 1; 233:pub(crate) const STREAM_TRANSPORT_UDP: u64 = 2; 236:pub(crate) const STREAM_TRANSPORT_UNIX: u64 = 3; 239:pub(crate) const STREAM_",
+  "text": "rg -n \"TRANSPORT\" src/codegen_support/runtime/resources/layout.rs | head -12: 191:pub(crate) const STREAM_TRANSPORT_OFFSET: i64 = 208; 230:pub(crate) const STREAM_TRANSPORT_TCP: u64 = 1; 233:pub(crate) const STREAM_TRANSPORT_UDP: u64 = 2; 236:pub(crate) const STREAM_TRANSPORT_UNIX: u64 = 3; 239:pub(crate) const STREAM_TRANSPORT_GENERIC: u64 = 4; 356: assert!(STREAM_TRANSPORT_OFFSET > STREAM_MODE_LEN_OFFSET); 357: assert!(STREAM_TRANSPORT_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET); 358: assert!(STREAM_APPEND_SKIP_OFFSET == STREAM_TRANSPORT_OFFSET + 8);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d482f01262022095e4a2595f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:16:16.544Z",
+  "stored_at": "2026-08-17T13:16:16.544Z"
+}

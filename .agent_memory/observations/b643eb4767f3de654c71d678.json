@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-ir std5.php 2>&1 | sed -n '146,155p'; echo \"=== the working one (line 245) ===\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-ir std5.php 2>&1 | sed -n '243,250p'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-ir std5.php 2>&1 | sed -n '14",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-ir std5.php 2>&1 | sed -n '146,155p'; echo \"=== the working one (line 245) ===\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-ir std5.php 2>&1 | sed -n '243,250p': source<stream>> own=owned = acquire v0 ; effects: writes_heap, refcount_op ; span: 3:1 store_local v3 slot[0] ; effects: writes_local ; span: 3:1 release v0 ; effects: writes_heap, refcount_op ; span: 3:1 === the working one (line 245) === release v38 ; effects: writes_heap, refcount_op ; span: 13:1 concat_reset ; effects: writes_global ; span: 14:1 v40: Heap(Hash) php=array<string, mixed> own=owned = hash_new capacity=1 ; effects: alloc_heap ; span: 14:6 v41: Str php=string own=persistent = const_str data[4] ; span: 14:7 v42: Heap(Mixed) php=resource<stream>|bool own=maybe_owned = load_local slot[4] ; effects: reads_local ; span: 14:14 hash_set v40 v41 v42 ; effects: writes_heap, refcount_op, may_fatal ; span: 14:6 v43: Heap(Hash) php=array<string, mixed> own=owned = acquire v40 ; effects: writes_heap, refcount_op ; span: 14:1 store_local v43 slot[5] ; effects: writes_local ; span: 14:1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b643eb4767f3de654c71d678",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:44:10.836Z",
+  "stored_at": "2026-08-22T16:44:10.836Z"
+}

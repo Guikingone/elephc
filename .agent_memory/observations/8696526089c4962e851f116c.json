@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '215,260p' src/codegen_support/runtime/exceptions/uncaught_report.rs",
+  "summary": "sed -n '215,260p' src/codegen_support/runtime/exceptions/uncaught_report.rs: ter.instruction(\"mov x9, #1\"); emitter.instruction(\"str x9, [sp, #8]\"); // under `Next` emitter.instruction(\"b __rt_uncaught_block\"); emitter.label(\"__rt_uncaught_last\"); emitter.instruction(\"ldr x9, [sp, #0]\"); emitter.instruction(&format!(\"l",
+  "text": "sed -n '215,260p' src/codegen_support/runtime/exceptions/uncaught_report.rs: ter.instruction(\"mov x9, #1\"); emitter.instruction(\"str x9, [sp, #8]\"); // under `Next` emitter.instruction(\"b __rt_uncaught_block\"); emitter.label(\"__rt_uncaught_last\"); emitter.instruction(\"ldr x9, [sp, #0]\"); emitter.instruction(&format!(\"ldr x0, [x9, #{}]\", THROWABLE_CREATION_LINE_OFFSET)); emitter.instruction(\"mov x1, #0\"); // the unwinder cannot know whose frame it is on emitter.instruction(\"bl __rt_trace_write_block\"); // php's Stack trace: block, when the frame list is complete emitter.instruction(&format!(\"mov x0, #{}\", UNCAUGHT_EXIT_STATUS)); // PHP exits 255 for an uncaught exception emitter.syscall(1); emitter.label(\"__rt_uncaught_fallback\"); abi::emit_symbol_address(emitter, \"x1\", \"_uncaught_exc_msg\"); emitter.instruction(&format!(\"mov x2, #{}\", UNCAUGHT_FALLBACK_LEN)); // the pre-existing constant message emitter.instruction(\"mov x0, #1\"); // fd = stdout emitter.syscall(4);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8696526089c4962e851f116c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:27:17.925Z",
+  "stored_at": "2026-08-26T09:27:17.926Z"
+}

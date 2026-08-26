@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Agent",
+  "path": "",
+  "command": "",
+  "summary": "Agent: async_launched adffbf19773163e7b TDD: implode float/hash + filter flush claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `9ea6f1d01e` ; sinon `git reset --hard 9ea6f1d01e` AVANT tout (9 agents",
+  "text": "async_launched adffbf19773163e7b TDD: implode float/hash + filter flush claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `9ea6f1d01e` ; sinon `git reset --hard 9ea6f1d01e` AVANT tout (9 agents sur 9 ont reçu une base erronée — systématique). Chemins absolus ; ne pousse RIEN ; pas de Co-Authored-By ; jamais `.codebase-memory/*` stagé. ⚠️ RESSOURCES CRITIQUES : ~26 GiB libres et UN AUTRE AGENT travaille en parallèle sur le même hôte. Purge `$TMPDIR/elephc_*` de +2h AVANT de commencer, à mi-parcours et sur tout `No space left`. UN SEUL cargo à la fois ; builds debug ; PAS de docker ; supprime ton scratch à la fin. Un timeout nextest à 60 s pile = faux rouge (charge de l'autre agent) → rejoue isolé via `cargo test`, qui n'a pas de plafond. ⚠️ PORTES avant commit : `cargo test -p elephc-builtin-contract` · `cargo test --test builtin_parity_tests` · `cargo nextest run --test ir_backend_smoke_test`. ⚠️ NE TOUCHE PAS aux fichiers de l'autre agent : il travaille sur `fopen`/`php://fd`, les erreurs de parse eval, les métadonnées `http://`. Reste dans les tiens. TDD STRICT : mesure `php",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3d505fb5e2213c8996946c9a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T07:14:27.029Z",
+  "stored_at": "2026-08-16T07:14:27.030Z"
+}

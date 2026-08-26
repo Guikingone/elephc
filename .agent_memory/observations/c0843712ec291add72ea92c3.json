@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 205,260p src/types/checker/type_compat/unions.rs",
+  "summary": "sed -n 205,260p src/types/checker/type_compat/unions.rs: ::Resource(None)) => { PhpType::Resource(Some(kind.clone())) } _ => PhpType::Resource(None), }); } None } /// Computes the merged array element type when writing a value of `new_ty` into an /// array that already has `existing` element type. Returns `Some(merged)",
+  "text": "sed -n 205,260p src/types/checker/type_compat/unions.rs: ::Resource(None)) => { PhpType::Resource(Some(kind.clone())) } _ => PhpType::Resource(None), }); } None } /// Computes the merged array element type when writing a value of `new_ty` into an /// array that already has `existing` element type. Returns `Some(merged)` for compatible /// types (same, `Never`, `Mixed`, or compatible objects), or `None` otherwise. pub(crate) fn merge_array_element_type( &self, existing: &PhpType, new_ty: &PhpType, ) -> Option<PhpType> { if existing == new_ty { return Some(existing.clone()); } if matches!(existing, PhpType::Never) { return Some(new_ty.clone()); } if matches!(new_ty, PhpType::Never) { return Some(existing.clone()); } if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) { return Some(PhpType::Mixed); } match (existing, new_ty) { (PhpType::Object(left), PhpType::Object(right)) => self.common_object_type(left, right), _ => None,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c0843712ec291add72ea92c3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:55:53.213Z",
+  "stored_at": "2026-08-22T12:55:53.214Z"
+}

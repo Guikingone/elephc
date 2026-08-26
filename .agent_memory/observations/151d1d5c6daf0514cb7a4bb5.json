@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>bo8zxqqhc</task-id>\n<tool-use-id>toolu_01S7sH4sg2vm6kvNTuZ7rZCL</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bo8zxqqhc.output</output-file>\n<status>completed</status>\n<summary>Background command \"Re-run the sweep after the tag fix\" completed (exit code 0)</summary>\n</task-notification>",
+  "summary": "<task-notification> <task-id>bo8zxqqhc</task-id> <tool-use-id>toolu_01S7sH4sg2vm6kvNTuZ7rZCL</tool-use-id> <output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8db",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "151d1d5c6daf0514cb7a4bb5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:19:15.852Z",
+  "stored_at": "2026-08-22T15:19:15.852Z",
+  "low_signal": true
+}

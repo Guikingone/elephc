@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '250,266p' tests/codegen/io/files.rs; echo '--- helper ---'; grep -rn 'fn compile_and_capture\\|diagnostics:' tests/codegen/support/runner.rs | head -6",
+  "summary": "sed -n '250,266p' tests/codegen/io/files.rs; echo '--- helper ---'; grep -rn 'fn compile_and_capture\\|diagnostics:' tests/codegen/support/runner.rs | head -6: ); assert_eq!(out, \"1:xyz|w\"); } /// Verifies `file_get_contents` on a missing file emits a runtime warning to stderr and continues execution. /// Fixture: tries",
+  "text": "sed -n '250,266p' tests/codegen/io/files.rs; echo '--- helper ---'; grep -rn 'fn compile_and_capture\\|diagnostics:' tests/codegen/support/runner.rs | head -6: ); assert_eq!(out, \"1:xyz|w\"); } /// Verifies `file_get_contents` on a missing file emits a runtime warning to stderr and continues execution. /// Fixture: tries to read \"missing.txt\" which does not exist. /// Asserts: program exits successfully, stdout is \"after\" (execution continued), stderr contains the PHP warning. /// This is a regression check for missing-file handling to ensure no fatal error is raised. #[test] fn test_file_get_contents_missing_emits_runtime_warning() { let out = compile_and_run_capture( r#\"<?php echo file_get_contents(\"missing.txt\"); echo \"after\"; \"#, ); assert!(out.success, \"program failed: {}\", out.stderr); --- helper --- tests/codegen/support/runner.rs:1033: pub(crate) diagnostics: String, tests/codegen/support/runner.rs:1038: pub(crate) located_diagnostics: String,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c139cd029dfb859501b0e0bf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:34:59.937Z",
+  "stored_at": "2026-08-24T19:34:59.938Z"
+}

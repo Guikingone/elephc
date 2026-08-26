@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"STREAM_WRAPPERS\" -A 20 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/stream_constants.rs | head -30",
+  "summary": "grep -n \"STREAM_WRAPPERS\" -A 20 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/stream_constants.rs | head -30: 19:pub(crate) const STREAM_WRAPPERS: &[&str] = &[ 20- \"file\", 21- \"php\", 22- \"data\", 23- \"ftp\", 24- \"http\", 25- \"https\", 26- \"ftps\", 27- \"compress.zlib\", ",
+  "text": "grep -n \"STREAM_WRAPPERS\" -A 20 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/stream_constants.rs | head -30: 19:pub(crate) const STREAM_WRAPPERS: &[&str] = &[ 20- \"file\", 21- \"php\", 22- \"data\", 23- \"ftp\", 24- \"http\", 25- \"https\", 26- \"ftps\", 27- \"compress.zlib\", 28- \"compress.bzip2\", 29- \"phar\", 30- \"glob\", 31-]; 32- 33-/// The transports `stream_get_transports()` advertises, in php-src's own order. 34-/// 35-/// `sslv2` and `sslv3` are deliberately absent: PHP 8.5.6 does not list them, the 36-/// protocols are dead, and advertising a transport tells a caller it may open one. 37-pub(crate) const STREAM_TRANSPORTS: &[&str] = &[ 38- \"tcp\", 39- \"udp\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "80951a0701825810858a15df",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:21:45.668Z",
+  "stored_at": "2026-08-14T14:21:45.668Z"
+}

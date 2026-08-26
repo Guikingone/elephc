@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --lib 2>&1 | grep -E \"^test result:|FAILED|panicked\" -A 2 | head -25",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --lib 2>&1 | grep -E \"^test result:|FAILED|panicked\" -A 2 | head -25: o_next_case ... ok -- test types::error_constants::tests::error_level_constants_match_php_values ... FAILED test types::json_constants::tests::json_pretty_print_is_128 ... ok test types::json_constants::tests::no_du",
+  "text": "RUST_MIN_STACK=33554432 cargo test --lib 2>&1 | grep -E \"^test result:|FAILED|panicked\" -A 2 | head -25: o_next_case ... ok -- test types::error_constants::tests::error_level_constants_match_php_values ... FAILED test types::json_constants::tests::json_pretty_print_is_128 ... ok test types::json_constants::tests::no_duplicate_constant_names ... ok -- thread 'ir_lower::tests::corpus::lowers_examples_corpus' (39649615) panicked at src/ir_lower/tests/mod.rs:95:70: type check failed: CompileError { span: Span { line: 20, col: 52, end_line: 20, end_col: 74 }, file: None, message: \"Undefined constant: ARRAY_FILTER_USE_VALUE\", related: [] } -- thread 'types::error_constants::tests::error_level_constants_match_php_values' (39650936) panicked at src/types/error_constants.rs:57:13: assertion `left == right` failed: E_ALL value mismatch left: 30719 -- test result: FAILED. 1530 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.37s error: test failed, to rerun pass `-p elephc --lib`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "92dceb1278db1ad444653b5a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:56:26.678Z",
+  "stored_at": "2026-08-22T09:56:26.678Z"
+}

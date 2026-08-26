@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '14,45p' src/codegen/lower_inst/builtins/io/stream_copy_queries.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '14,45p' src/codegen/lower_inst/builtins/io/stream_copy_queries.rs: code the copy consults at the end is a process-wide slot, and it lives in BSS — // it starts at ZERO, which IS PSFS_ERR_FATAL, and an earlier stream'",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '14,45p' src/codegen/lower_inst/builtins/io/stream_copy_queries.rs: code the copy consults at the end is a process-wide slot, and it lives in BSS — // it starts at ZERO, which IS PSFS_ERR_FATAL, and an earlier stream's dispatch would // otherwise still be showing. Reset it so only a refusal during THIS copy can be read back. match ctx.emitter.target.arch { Arch::AArch64 => { abi::emit_symbol_address(ctx.emitter, \"x9\", \"_user_filter_last_psfs\"); ctx.emitter.instruction(\"mov x10, #2\"); // PSFS_PASS_ON ctx.emitter.instruction(\"str x10, [x9]\"); } Arch::X86_64 => { abi::emit_symbol_address(ctx.emitter, \"r9\", \"_user_filter_last_psfs\"); ctx.emitter.instruction(\"mov QWORD PTR [r9], 2\"); // PSFS_PASS_ON } } materialize_stream_copy_length(ctx, inst)?; if inst.operands.len() >= 4 { let offset = expect_operand(inst, 3)?; require_int( ctx.load_value_to_result(offset)?.codegen_repr(), \"stream_copy_to_stream offset\", )?; let skip_seek = ctx.next_label(\"scs_skip_seek\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b3cb32407723a7dc901175cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T12:44:21.893Z",
+  "stored_at": "2026-08-24T12:44:21.893Z"
+}

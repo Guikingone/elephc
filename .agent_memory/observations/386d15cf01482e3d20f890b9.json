@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/last_six.py; sed -n '6650,6670p' tests/ir_backend_smoke_test.rs",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/last_six.py; sed -n '6650,6670p' tests/ir_backend_smoke_test.rs: Traceback (most recent call last): File \"/private/tmp/claude-501/-Users-guillaumelo",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/last_six.py; sed -n '6650,6670p' tests/ir_backend_smoke_test.rs: Traceback (most recent call last): File \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/last_six.py\", line 29, in <module> assert s.count(old) == 1, (\"unset\", s.count(old)) ^^^^^^^^^^^^^^^^^ AssertionError: ('unset', 50) let duplicate = compile_ir_backend_and_run( \"define_duplicate_warning\", \"<?php define(\\\"DUPLICATE_WARN\\\", 1); echo define(\\\"DUPLICATE_WARN\\\", 2) ? \\\"bad\\\" : \\\"ok\\\"; echo DUPLICATE_WARN;\", &[], ); assert!( duplicate.status.success(), \"IR backend duplicate define fixture failed\" ); assert_eq!( String::from_utf8(duplicate.stdout).expect(\"stdout should be utf8\"), \"ok1\" ); let stderr = String::from_utf8(duplicate.stderr).expect(\"stderr should be utf8\"); assert!( stderr.contains(\"Warning: define()\"), \"expected duplicate define warning, got stderr={stderr}\" ); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "386d15cf01482e3d20f890b9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:45:28.500Z",
+  "stored_at": "2026-08-25T08:45:28.500Z"
+}

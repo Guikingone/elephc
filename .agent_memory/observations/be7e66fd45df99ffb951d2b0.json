@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 18,70p src/types/model.rs | grep -nE \"^\\s+[A-Z][A-Za-z]*\" | head -25",
+  "summary": "sed -n 18,70p src/types/model.rs | grep -nE \"^\\s+[A-Z][A-Za-z]*\" | head -25: 2: Int, 3: Float, 4: Str, 5: Bool, 7: False, 8: Void, 9: Never, 10: Iterable, 11: Mixed, 12: Array(Box<PhpType>), 13: AssocArray { 17: Buffer(Box<PhpType>), 18: Callable, 19: Object(String), 20: Packed(String), 21: Pointer(Option<String>), // ",
+  "text": "sed -n 18,70p src/types/model.rs | grep -nE \"^\\s+[A-Z][A-Za-z]*\" | head -25: 2: Int, 3: Float, 4: Str, 5: Bool, 7: False, 8: Void, 9: Never, 10: Iterable, 11: Mixed, 12: Array(Box<PhpType>), 13: AssocArray { 17: Buffer(Box<PhpType>), 18: Callable, 19: Object(String), 20: Packed(String), 21: Pointer(Option<String>), // None = opaque ptr, Some(\"Class\") = typed ptr<Class> 22: Resource(Option<String>), // None = generic resource, Some(\"stream\") = file/stdio stream 23: Union(Vec<PhpType>), 29: TaggedScalar, 35: PhpType::Resource(Some(\"stream\".to_string()))",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "be7e66fd45df99ffb951d2b0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:27:56.231Z",
+  "stored_at": "2026-08-21T17:27:56.232Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/STREAMS_CAMPAIGN.md",
+  "summary": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/STREAMS_CAMPAIGN.md: ## Status legend\n- [ ] open   - [x] fixed+tested   - [~] in progress -> ## Status legend\n- [ ] open   - [x] fixed+tested   - [~",
+  "text": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/STREAMS_CAMPAIGN.md: ## Status legend\n- [ ] open   - [x] fixed+tested   - [~] in progress -> ## Status legend\n- [ ] open   - [x] fixed+tested   - [~] in progress\n\n## LANDED so far (all verified against `php -n` 8.5.6)\n1. `stream_select()` SEGV on a closed stream + `ValueError: No stream arrays were passed`\n   for an empty/all-null/nothing-castable call. `3fb364c2a`\n2. `fwrite()`/`fputs()` third argument `?int $length`; `?int` boxed-null family\n   (`__rt_mixed_cast_int_nullable`, fixes `fgets($h, $mixedNull)` too);\n   quoted-printable keeps SPACE/TAB literal; `uri` om",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bb0ee720fb701b805d85782d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:40:32.740Z",
+  "stored_at": "2026-08-17T08:40:32.741Z"
+}

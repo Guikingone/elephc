@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '18,26p' src/codegen_support/runtime/data/fixed.rs; echo \"   ...(coupé)...\"; sed -n '66,74p' src/codegen_support/runtime/data/fixed.rs",
+  "summary": "About to run: sed -n '18,26p' src/codegen_support/runtime/data/fixed.rs; echo \" ...(coupé)...\"; sed -n '66,74p' src/codegen_support/runtime/data/fixed.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1aaba1d7b851968c108b6224",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:18:42.884Z",
+  "stored_at": "2026-08-20T17:18:42.884Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_mixed_unbox\" src/codegen_support/runtime/io/*.rs | head -10",
+  "summary": "grep -rn \"__rt_mixed_unbox\" src/codegen_support/runtime/io/*.rs | head -10: rt/runtime/io/fputcsv.rs:684: /// read `rax` — the first opens by falling into `__rt_mixed_unbox`, whose input register that src/codegen_support/runtime/io/ob_handler.rs:180: emitter.instruction(\"bl __rt_mixed_unbox\"); // expose the result tag ",
+  "text": "grep -rn \"__rt_mixed_unbox\" src/codegen_support/runtime/io/*.rs | head -10: rt/runtime/io/fputcsv.rs:684: /// read `rax` — the first opens by falling into `__rt_mixed_unbox`, whose input register that src/codegen_support/runtime/io/ob_handler.rs:180: emitter.instruction(\"bl __rt_mixed_unbox\"); // expose the result tag and payload words src/codegen_support/runtime/io/ob_handler.rs:217: emitter.instruction(\"call __rt_mixed_unbox\"); // expose the result tag and payload words src/codegen_support/runtime/io/ob_handler.rs:631: assert!(mac.contains(\"bl __rt_mixed_unbox\")); src/codegen_support/runtime/io/print_r_walk.rs:370: emitter.instruction(\"bl __rt_mixed_unbox\"); // x0=inner tag, x1=lo, x2=hi src/codegen_support/runtime/io/print_r_walk.rs:469: emitter.instruction(\"call __rt_mixed_unbox\"); // rax=inner tag, rdi=lo, rdx=hi src/codegen_support/runtime/io/stream_context_get_usec_option.rs:25://! (`__rt_hash_get` returns it in `rsi`, `__rt_mixed_unbox` in `rdx`), so the",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ec14a94d625542cb0c4e3932",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:41:18.918Z",
+  "stored_at": "2026-08-21T09:41:18.919Z"
+}

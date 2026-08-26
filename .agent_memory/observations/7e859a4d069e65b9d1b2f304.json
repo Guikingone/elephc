@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md')\nt = p.read_text()\nanchor = '- 🎯🔴 **BUT: streams à 100 %**'\nassert t.count(anchor) == 1\nnew = '''- ✅✅✅🎯 **Famille `gz*` LIVRÉE (14 fn)** via [prélude PHP sur `compress.zlib://`](adding-a-php-prelude-checklist.md) — 15/15 vs php. 🔑 elle a démasqué 2 trous SILENCI… [+904 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memo",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md')\nt = p.read_text()\nanchor = '- 🎯🔴 **BUT: streams à 100 %**'\nassert t.count(anchor) == 1\nnew = '''- ✅✅✅🎯 **Famille `gz*` LIVRÉE (14 fn)** via [prélude PHP sur `compress.zlib://`](adding-a-php-prelude-checklist.md) — 15/15 vs php. 🔑 elle a démasqué 2 trous SILENCIEUX du wrapper: mode CALCULÉ toujours lu en « r », et URL CALCULÉE invisible des lecteurs d'octets. RESTE zlib: 12 (dont `gzencode`/`gzdecode`, cadrage gzip MESURÉ; 8 incrémentaux `deflate_*`/`inflate_*`+`ob_gzhandler`).\n- 🔴🔴🔑★★★ [`?T $x = null` SCALAIRE ≡ argument omis, `mixed` NON](php-null-default-scalar-vs-mixed.md) — 3 réponses SILENCIEUSES fausses (`stream_get_contents($h,null)` → `\"\"`). Contre-exemple mesuré = `stream_filter_append`.\n- 🔴🔴🛠️ [MÊME répertoire php+elephc = chemin d'ÉCRITURE vert à tort](shared-workdir-fakes-a-write-path-green.md) — ma sonde annonçait 15/15 sur une écriture TOTALEMENT cassée.\n- 🔴🔑 [« déplacé » qui n'était qu'un AJOUT](a-move-that-was-only-an-add.md) — symptôme = le correctif suivant ne change RIEN. 🔑 `load_value_to_result` rend la repr CHARGÉE, pas le type déclaré.\n'''\np.write_text(t.replace(anchor, new + anchor, 1))\nprint('MEMORY.md updated')\nPY: MEMORY.md updated",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7e859a4d069e65b9d1b2f304",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:38:02.366Z",
+  "stored_at": "2026-08-21T12:38:02.367Z"
+}

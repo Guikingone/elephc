@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff docs/php/compatibility.md | head -30",
+  "summary": "About to run: git diff docs/php/compatibility.md | head -30",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1a9f2232c6bc126b83a0ccde",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T12:15:11.089Z",
+  "stored_at": "2026-08-15T12:15:11.090Z"
+}

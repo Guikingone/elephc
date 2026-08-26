@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn test_stream_type_error_reports_runtime_string_type\" -B 15 -A 25 tests/codegen/io/streams.rs",
+  "summary": "grep -n \"fn test_stream_type_error_reports_runtime_string_type\" -B 15 -A 25 tests/codegen/io/streams.rs: r reports the actual runtime type when a non-stream is passed. 254-#[test] 255:fn test_stream_type_error_reports_runtime_string_type() { 256- let out = compile_and_run_capture( 257- r#\"<?php 258-function identity(mi",
+  "text": "grep -n \"fn test_stream_type_error_reports_runtime_string_type\" -B 15 -A 25 tests/codegen/io/streams.rs: r reports the actual runtime type when a non-stream is passed. 254-#[test] 255:fn test_stream_type_error_reports_runtime_string_type() { 256- let out = compile_and_run_capture( 257- r#\"<?php 258-function identity(mixed $value): mixed { 259- return $value; 260-} 261-fgets(identity(\"not a stream\")); 262-\"#, 263- ); 264- assert!(!out.success, \"program unexpectedly succeeded\"); 265- assert!( 266- out.stderr.contains(\"TypeError: fgets()\") && out.stderr.contains(\"string given\"), 267- \"expected string TypeError, got stderr={}\", 268- out.stderr 269- ); 270-} 271- 272-/// Verifies fopen() result can be guarded with a false check before reading from it. 273-#[test] 274-fn test_fopen_guarded_resource_path_can_read() { 275- let (out, dir) = compile_and_run_in_dir( 276- r#\"<?php 277-file_put_contents(\"guarded.txt\", \"safe\"); 278-$f = fopen(\"guarded.txt\", \"r\"); 279-if ($f === false) { 280- echo \"fail\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "03c7698160bbbdcea4beee91",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:45:43.419Z",
+  "stored_at": "2026-08-21T16:45:43.419Z"
+}

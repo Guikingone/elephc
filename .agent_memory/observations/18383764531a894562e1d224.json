@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/cbname/array_filter_builtin && php -n p.php; echo \"=== elephc ===\"; cd ../array_filter_builtin_run && ./p; echo \"=== array_walk error ===\"; cd ../array_walk_builtin && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php 2>&1 | tail -2",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/cbname/array_filter_builtin && php -n p.php; echo \"=== elephc ===\"; cd ../array_filter_builtin_run && ./p; echo \"=== array_walk error ===\"; cd ../arra",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/cbname/array_filter_builtin && php -n p.php; echo \"=== elephc ===\"; cd ../array_filter_builtin_run && ./p; echo \"=== array_walk error ===\"; cd ../array_walk_builtin && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php 2>&1 | tail -2: Array ( [1] => 1 [2] => 2 ) === elephc === Array ( [0] => 1 [1] => 2 ) === array_walk error === EIR backend error: unsupported EIR backend feature: array_walk PHP type Str",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18383764531a894562e1d224",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:18:54.547Z",
+  "stored_at": "2026-08-22T11:18:54.548Z"
+}

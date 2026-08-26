@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '215,290p' src/codegen_support/runtime/io/file.rs",
+  "summary": "sed -n '215,290p' src/codegen_support/runtime/io/file.rs: ult register emitter.label(\"__rt_file_out_x\"); emitter.instruction(\"add rsp, 64\"); // release the temporary file payload and scan-state spill slots used by file() emitter.instruction(\"pop rbp\"); // restore the caller frame pointer before returning the line array",
+  "text": "sed -n '215,290p' src/codegen_support/runtime/io/file.rs: ult register emitter.label(\"__rt_file_out_x\"); emitter.instruction(\"add rsp, 64\"); // release the temporary file payload and scan-state spill slots used by file() emitter.instruction(\"pop rbp\"); // restore the caller frame pointer before returning the line array emitter.instruction(\"ret\"); // return the array of file lines to the caller emitter.label(\"__rt_file_failed_x\"); emitter.instruction(\"xor eax, eax\"); // the caller boxes the null as PHP false emitter.instruction(\"jmp __rt_file_out_x\"); } /// Emits the x86_64 `$flags` handling applied to one complete `file()` line before it is pushed. /// /// Mirrors [`emit_file_line_flags_aarch64`] instruction for instruction: on entry `r9` is the line /// start pointer and `rcx` its length including any terminator, and on exit `rcx` is the length /// PHP would store. `FILE_IGNORE_NEW_LINES` (bit 1) drops a trailing `\\n` and then a trailing `\\r`;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b517b9da4f791c6783c39cc0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:43:08.934Z",
+  "stored_at": "2026-08-20T20:43:08.935Z"
+}

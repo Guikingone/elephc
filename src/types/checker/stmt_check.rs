@@ -65,10 +65,14 @@ impl Checker {
             StmtKind::FunctionVariantGroup { .. } => Ok(()),
             StmtKind::FunctionVariantMark { .. } => Ok(()),
             StmtKind::IncludeOnceGuard { body, .. } => {
-                for stmt in body {
-                    self.check_stmt(stmt, env)?;
-                }
-                Ok(())
+                // The guard lowers to a real runtime branch (`Op::IncludeOnceGuard`), so its
+                // body is conditional exactly like an `if` body.
+                self.in_conditional_scope(env, |checker, env| {
+                    for stmt in body {
+                        checker.check_stmt(stmt, env)?;
+                    }
+                    Ok(())
+                })
             }
             StmtKind::IfDef { .. } => {
                 Err(CompileError::new(stmt.span, "Unresolved ifdef statement"))
@@ -106,7 +110,11 @@ impl Checker {
             | StmtKind::While { .. }
             | StmtKind::For { .. }
             | StmtKind::Throw(..)
-            | StmtKind::Try { .. } => self.check_control_flow_stmt(stmt, env),
+            | StmtKind::Try { .. } => {
+                self.in_conditional_scope(env, |checker, env| {
+                    checker.check_control_flow_stmt(stmt, env)
+                })
+            }
             StmtKind::Include { .. } => {
                 Err(CompileError::new(stmt.span, "Unresolved include statement"))
             }
@@ -114,7 +122,18 @@ impl Checker {
             StmtKind::Break(levels) => self.check_loop_exit(stmt.span, "break", *levels),
             StmtKind::Continue(levels) => self.check_loop_exit(stmt.span, "continue", *levels),
             StmtKind::ExprStmt(expr) => {
-                self.infer_type_with_assignment_effects(expr, env)?;
+                // The one position an `unset(...)` may end a local binding from. elephc's parser
+                // accepts `unset` as an expression (PHP's grammar does not), so the kill has to
+                // be told where it is: from a `?:`/`??`/`&&` operand it would record decisions
+                // for an operand that may never run, and its checker-side effects outlive the
+                // discarded branch env. Saved and restored so a nested statement (a prelude
+                // block, say) cannot leave this pointing at a finished node.
+                let saved_statement_position = self
+                    .statement_position_expr
+                    .replace(expr as *const crate::parser::ast::Expr as usize);
+                let result = self.infer_type_with_assignment_effects(expr, env);
+                self.statement_position_expr = saved_statement_position;
+                result?;
                 Ok(())
             }
             StmtKind::FunctionDecl { .. } => Ok(()),
@@ -171,6 +190,31 @@ impl Checker {
             | StmtKind::ExternClassDecl { .. }
             | StmtKind::ExternGlobalDecl { .. } => Ok(()),
         }
+    }
+
+    /// Checks a statement group whose body may not run, keeping the local-binding eligibility
+    /// state honest about it.
+    ///
+    /// `local_conditional_depth` is raised for the whole group (the loop/branch CONDITION included,
+    /// which is conservative and accepted), so no `unset` or retype inside it is eligible — the
+    /// checker shares one mutable `TypeEnv` across branches, so a kill in one arm would otherwise
+    /// leak into its siblings and into the code after the join.
+    ///
+    /// Names the group INTRODUCED — `foreach` and `list()` targets, `catch` variables, builtin
+    /// out-parameters, array auto-vivification — are deliberately NOT swept into
+    /// `local_binding_depth` afterwards. The sweep this replaced cloned every key of `env` on entry
+    /// and re-walked them on exit, roughly quadrupling the cost of type-checking a 400-local scope,
+    /// and it bought nothing: a MISSING depth entry and a depth of 1 or more are the same answer to
+    /// [`Checker::local_binding_is_killable`], which is the only killable-relevant reader, and the
+    /// pre-scan's `contains_key` probe runs at body entry, before any group has been walked.
+    fn in_conditional_scope<F>(&mut self, env: &mut TypeEnv, f: F) -> Result<(), CompileError>
+    where
+        F: FnOnce(&mut Self, &mut TypeEnv) -> Result<(), CompileError>,
+    {
+        self.local_conditional_depth += 1;
+        let result = f(self, env);
+        self.local_conditional_depth -= 1;
+        result
     }
 
     /// Validates a `break` or `continue` statement against the current loop depth.

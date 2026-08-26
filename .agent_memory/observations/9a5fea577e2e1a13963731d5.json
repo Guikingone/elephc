@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo nextest run --test codegen_tests -E 'test(/implode|join|filter|fclose|ftell/) and not test(imagefilter)' --no-fail-fast 2>&1 | grep -E \"FAIL |TIMEOUT |Summary\" | head -5",
+  "summary": "cargo nextest run --test codegen_tests -E 'test(/implode|join|filter|fclose|ftell/) and not test(imagefilter)' --no-fail-fast 2>&1 | grep -E \"FAIL |TIMEOUT |Summary\" | head -5: TIMEOUT [ 60.017s] (164/177) elephc::codegen_tests codegen::eval::test_eval_dispatches_array_filter_builtin_call TIMEOUT [ 60.022s] (165/177) e",
+  "text": "cargo nextest run --test codegen_tests -E 'test(/implode|join|filter|fclose|ftell/) and not test(imagefilter)' --no-fail-fast 2>&1 | grep -E \"FAIL |TIMEOUT |Summary\" | head -5: TIMEOUT [ 60.017s] (164/177) elephc::codegen_tests codegen::eval::test_eval_dispatches_array_filter_builtin_call TIMEOUT [ 60.022s] (165/177) elephc::codegen_tests codegen::eval::test_eval_dispatches_explode_implode_builtin_calls Summary [ 79.716s] 177 tests run: 175 passed, 2 timed out, 8185 skipped TIMEOUT [ 60.017s] (164/177) elephc::codegen_tests codegen::eval::test_eval_dispatches_array_filter_builtin_call TIMEOUT [ 60.022s] (165/177) elephc::codegen_tests codegen::eval::test_eval_dispatches_explode_implode_builtin_calls",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9a5fea577e2e1a13963731d5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T08:52:34.612Z",
+  "stored_at": "2026-08-16T08:52:34.612Z"
+}

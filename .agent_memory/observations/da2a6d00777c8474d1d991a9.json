@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"ValueError\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs | head -6",
+  "summary": "rtk proxy grep -rn \"ValueError\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs | head -6: /elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs:2013: catch (ValueError $e) { echo $e->getMessage(), \"\\n\"; } /Users/guillaumeloul",
+  "text": "rtk proxy grep -rn \"ValueError\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs | head -6: /elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs:2013: catch (ValueError $e) { echo $e->getMessage(), \"\\n\"; } /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs:4900:/// open(\"\") => ValueError: ZipArchive::open(): Argument #1 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs:4938:try {{ $e = new ZipArchive(); $e->open(\"\"); }} catch (ValueError $x) {{ echo $x->getMessage(), \"\\n\"; }} /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs:6412:/// Verifies a negative `$length` raises php-src's verbatim `ValueError`. /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs:6421:} catch (ValueError $e) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "da2a6d00777c8474d1d991a9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:23:34.545Z",
+  "stored_at": "2026-08-17T07:23:34.545Z"
+}

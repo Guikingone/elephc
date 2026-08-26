@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cd $S/w10 && php -n p.php 2>&1 | head -6 | od -c | head -12",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cd $S/w10 && php -n p.php 2>&1 | head -6 | od -c | head -12: 0000000 \\n W a r n i n g : m k d i r ( 0000020 ) : F i l e e x i s t s i 0000040 n / p",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cd $S/w10 && php -n p.php 2>&1 | head -6 | od -c | head -12: 0000000 \\n W a r n i n g : m k d i r ( 0000020 ) : F i l e e x i s t s i 0000040 n / p r i v a t e / t m p / c 0000060 l a u d e - 5 0 1 / - U s e r s 0000100 - g u i l l a u m e l o u l i e 0000120 r - P h p s t o r m P r o j e c 0000140 t s - o s s - e l e p h c - - c 0000160 l a u d e - w o r k t r e e s - 0000200 s t r e a m s - c s v - s i g n 0000220 a t u r e / c 8 d b e 3 8 f - 1 0000240 f 7 9 - 4 8 4 f - 9 b 8 3 - 6 2 0000260 b a c a b 9 c a 5 6 / s c r a t",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e5aa0e17a4cb59eaa452dc86",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:46:49.164Z",
+  "stored_at": "2026-08-24T18:46:49.164Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'SplTempFileObject' tests/ | head -10",
+  "summary": "grep -rn 'SplTempFileObject' tests/ | head -10: s `SplTempFileObject` memory-mode read/write methods lower through EIR. tests/ir_backend_smoke_test.rs:3926:$tmp = new SplTempFileObject(-1); tests/ir_backend_smoke_test.rs:3943:/// Verifies `SplTempFileObject` memory cursor, overwrite, read, and stat helpers. tests/ir_ba",
+  "text": "grep -rn 'SplTempFileObject' tests/ | head -10: s `SplTempFileObject` memory-mode read/write methods lower through EIR. tests/ir_backend_smoke_test.rs:3926:$tmp = new SplTempFileObject(-1); tests/ir_backend_smoke_test.rs:3943:/// Verifies `SplTempFileObject` memory cursor, overwrite, read, and stat helpers. tests/ir_backend_smoke_test.rs:3947:$tmp = new SplTempFileObject(10); tests/ir_backend_smoke_test.rs:3970:/// Verifies `SplTempFileObject` byte reads, flush, and truncate in memory mode. tests/ir_backend_smoke_test.rs:3974:$tmp = new SplTempFileObject(-1); tests/ir_backend_smoke_test.rs:3991:/// Verifies `SplTempFileObject` spills to a temp stream and preserves cursor semantics. tests/ir_backend_smoke_test.rs:3995:$tmp = new SplTempFileObject(3); tests/php_oracle/tests/test_reachability.py:202: \"SplTempFileObject\", tests/php_oracle/drift/streams/php-8.5.6/linux-x86_64/streams-full.json:38707: \"declaring_class\": \"SplTempFileObject\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a21a0534775ea7e51514b59d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:42:16.634Z",
+  "stored_at": "2026-08-24T20:42:16.634Z"
+}

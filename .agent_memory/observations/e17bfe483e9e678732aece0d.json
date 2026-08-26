@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fparams_pass.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fparams_pass.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codeg",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fparams_pass.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen/lower_inst/builtins/io/filter_helpers.rs'\ns = open(p).read()\n\n# --- the attach helper gains the instruction, so it can materialize `$params` itself ---\nold = '''/// With `user_object`, the node carries a `php_user_filter` instance parked on the\n/// stack under the stream handle, and its built-in id stays 0. The node retains no\n/// params value in that case: the attach helper already exposed `$params` on the\n/// instance, which is what `filter()` reads.\nfn emit_att",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e17bfe483e9e678732aece0d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:02:36.727Z",
+  "stored_at": "2026-08-17T14:02:36.727Z"
+}

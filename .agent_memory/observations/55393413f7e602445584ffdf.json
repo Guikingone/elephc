@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"classes_by_name\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | rtk proxy grep -v \"new_by_name.rs\" | head -6",
+  "summary": "rtk proxy grep -rn \"classes_by_name\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | rtk proxy grep -v \"new_by_name.rs\" | head -6: /guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/eval_bridge/aarch64_valu",
+  "text": "rtk proxy grep -rn \"classes_by_name\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | rtk proxy grep -v \"new_by_name.rs\" | head -6: /guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/eval_bridge/aarch64_values_classes.rs:282: abi::emit_symbol_address(emitter, \"x9\", \"_classes_by_name_count\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/eval_bridge/aarch64_values_classes.rs:286: abi::emit_symbol_address(emitter, \"x10\", \"_classes_by_name\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/eval_bridge/x86_64_values_classes.rs:92: abi::emit_symbol_address(emitter, \"r10\", \"_classes_by_name_count\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/eval_bridge/x86_64_values_classes.rs:97: abi::emit_symbol_address(emitter, \"r11\", \"_classes_by_name\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "55393413f7e602445584ffdf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:08:16.076Z",
+  "stored_at": "2026-08-17T09:08:16.076Z"
+}

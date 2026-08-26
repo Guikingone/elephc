@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"allowed_class_names\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | rtk proxy grep -v \"data/user.rs\" | head -6",
+  "summary": "rtk proxy grep -rn \"allowed_class_names\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | rtk proxy grep -v \"data/user.rs\" | head -6: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/mod.rs:258: let mut allowed_clas",
+  "text": "rtk proxy grep -rn \"allowed_class_names\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | rtk proxy grep -v \"data/user.rs\" | head -6: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/mod.rs:258: let mut allowed_class_names = runtime_referenced_class_names(module); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/mod.rs:260: allowed_class_names.extend(module.class_infos.keys().cloned()); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/mod.rs:262: let runtime_interfaces = runtime_referenced_interfaces(module, &allowed_class_names); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/mod.rs:268: Some(&allowed_class_names), /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/mod.rs:288: Some(&allowed_class_names),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b0c6c00b4cafe4cc0a989e78",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:49:24.918Z",
+  "stored_at": "2026-08-17T09:49:24.918Z"
+}

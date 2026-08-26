@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn lower_sort\" -A 45 src/codegen/lower_inst/builtins/arrays/misc_dispatch.rs | head -60",
+  "summary": "grep -n \"fn lower_sort\" -A 45 src/codegen/lower_inst/builtins/arrays/misc_dispatch.rs | head -60: ugh the descending value-sort wrapper. 195-/// Lowers `arsort()`, routing hash receivers to the descending insertion-order value sorter. 196-pub(crate) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> ",
+  "text": "grep -n \"fn lower_sort\" -A 45 src/codegen/lower_inst/builtins/arrays/misc_dispatch.rs | head -60: ugh the descending value-sort wrapper. 195-/// Lowers `arsort()`, routing hash receivers to the descending insertion-order value sorter. 196-pub(crate) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { 197- super::super::ensure_arg_count(inst, \"arsort\", 1)?; 198- if sort_receiver_is_hash(ctx, inst)? { 199- return lower_hash_link_sort(ctx, inst, \"__rt_hash_arsort\"); 200- } 201- lower_indexed_array_sort(ctx, inst, \"arsort\", \"__rt_arsort\", None) 202-} 203- 204-/// Lowers `ksort()` through the key-sort helper surface. 205-pub(crate) fn lower_ksort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { 206- lower_array_key_sort(ctx, inst, \"ksort\", KeySortOrder::Ascending) 207-} 208- 209-/// Lowers `krsort()` through the reverse key-sort helper surface. 210-pub(crate) fn lower_krsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3d0a444c98b1018af2a533a6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:13:07.442Z",
+  "stored_at": "2026-08-22T10:13:07.442Z"
+}

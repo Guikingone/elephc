@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && rm -rf globf && mkdir globf && printf '%s' '<?php\nvar_dump(GLOB_BRACE, GLOB_MARK, GLOB_NOSORT, GLOB_NOCHECK, GLOB_NOESCAPE, GLOB_ERR, GLOB_ONLYDIR, GLOB_AVAILABLE_FLAGS);\nmkdir(\"d\"); mkdir(\"d/sub\");\nfile_put_contents(\"d/b.txt\", \"\"); file_put_contents(\"d/a.txt\", \"\"); file_put_contents(\"d/c.log\", \"\");\necho \"-- plain --\\n\"; var_dump(glob(\"d/*\"));\necho \"-- ONLYDIR --\\n\"; var_dump(glob(\"d/*\", GLOB_ONLYDIR));\necho \"-- MARK --\\n\";… [+498 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && rm -rf globf && mkdir globf",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e7d779e8c28ea29d68776df5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:07:33.733Z",
+  "stored_at": "2026-08-21T20:07:33.733Z"
+}

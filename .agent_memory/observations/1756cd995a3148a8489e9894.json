@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_php_input\" src/codegen_support/runtime/ | head -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_php_input\" src/codegen_support/runtime/ | head -5: src/codegen_support/runtime/io/http_response.rs:4://! `__rt_stdout_write` / `__rt_php_input` web-gating discipline. src/codegen_support/runtime/io/php_input.r",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_php_input\" src/codegen_support/runtime/ | head -5: src/codegen_support/runtime/io/http_response.rs:4://! `__rt_stdout_write` / `__rt_php_input` web-gating discipline. src/codegen_support/runtime/io/php_input.rs:2://! Emits the `__rt_php_input` runtime helper: backs `file_get_contents('php://input')` src/codegen_support/runtime/io/php_input.rs:23:/// Emits the `__rt_php_input` runtime helper for the active target. src/codegen_support/runtime/io/php_input.rs:37: emitter.label_global(\"__rt_php_input\"); src/codegen_support/runtime/io/php_input.rs:57:/// Emits the x86_64 Linux variant of `__rt_php_input`.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1756cd995a3148a8489e9894",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:21:53.677Z",
+  "stored_at": "2026-08-22T21:21:53.678Z"
+}

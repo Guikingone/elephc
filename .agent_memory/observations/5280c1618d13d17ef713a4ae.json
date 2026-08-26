@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/x86; mkdir -p $S/x86; cp $S/probes2/warn-shapes.php $S/x86/p.php; cd $S/x86 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q --target linux-x86_64 --emit-asm p.php 2>&1 | tail -1; clang -c -target x86_64-unknown-linux-gnu -x assembler -o /dev/null $S/x86/p.s 2>&1 | head -5; echo \"ASM_OK\"",
+  "summary": "About to run: S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/x86; mkdir -p $S/",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5280c1618d13d17ef713a4ae",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:22:07.140Z",
+  "stored_at": "2026-08-24T19:22:07.140Z"
+}

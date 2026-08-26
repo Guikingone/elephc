@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_file_get_contents_bytes\" -A 80 src/codegen/lower_inst/builtins/io/phar_read.rs | head -100",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_file_get_contents_bytes\" -A 80 src/codegen/lower_inst/builtins/io/phar_read.rs | head -100: t 3 for `<?php echo 1;`. 127- // 128- // The test is \"contains no `://`\", never a list of known schemes. A list wou",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_file_get_contents_bytes\" -A 80 src/codegen/lower_inst/builtins/io/phar_read.rs | head -100: t 3 for `<?php echo 1;`. 127- // 128- // The test is \"contains no `://`\", never a list of known schemes. A list would silently open 129- // a file literally named `compress.zlib://x` on the day a scheme is missing from it; this way 130- // an unrecognised scheme still reaches the multiplexer and behaves as it does today. 131- let literal_cannot_be_a_wrapper = path_literal 132- .as_deref() 133- .is_some_and(|literal| !literal.contains(\"://\")); 134- // A literal `zip://` URL reads its archive at RUN time (see the fopen lowering), so it needs 135- // the bridge published exactly like a filename that is only known then — but only the one 136- // entry point a zip read reaches. 137- if path_literal.as_deref().is_some_and(|p| p.starts_with(\"zip://\")) { 138- publish_zip_bridge_function_pointer(ctx); 139- } else if path_literal.is_none() { 140- publish_dynamic_phar_function_pointers(ctx); 141- }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4f9e915c94f4f3b07d051134",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:17:32.443Z",
+  "stored_at": "2026-08-22T21:17:32.444Z"
+}

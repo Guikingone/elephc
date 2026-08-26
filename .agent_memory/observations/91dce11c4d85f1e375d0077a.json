@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/resolve_changelog_union.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/resolve_changelog_union.py: \"\"\"Resolves the CHANGELOG conflict by UNION, because both sides are real work.\n\nEach side added entries under `[Unrelea",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/resolve_changelog_union.py: \"\"\"Resolves the CHANGELOG conflict by UNION, because both sides are real work.\n\nEach side added entries under `[Unreleased]`. Choosing one would drop the other's release notes\nsilently — the same failure mode as taking `theirs` on a restructured file. The merge keeps both,\nthis branch's entries first, then upstream's, and drops nothing.\n\nReports what it kept so the count can be checked against the two sides.\n\"\"\"\nimport pathlib, re\n\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n                 'streams-csv-signature/CHANGELOG.md')\ntext = p.read_text(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "91dce11c4d85f1e375d0077a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:38:56.956Z",
+  "stored_at": "2026-08-22T06:38:56.957Z"
+}

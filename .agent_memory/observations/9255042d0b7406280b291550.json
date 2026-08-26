@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -i '' 's|^mod object_to_string;|mod object_to_string;\\nmod offset_on_scalar;|' tests/codegen/mod.rs; grep -n \"offset_on_scalar\\|object_to_string\" tests/codegen/mod.rs",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -i '' 's|^mod object_to_string;|mod object_to_string;\\nmod offset_on_scalar;|' tests/codegen/mod.rs;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9255042d0b7406280b291550",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:58:09.305Z",
+  "stored_at": "2026-08-24T07:58:09.306Z"
+}

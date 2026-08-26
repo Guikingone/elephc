@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git cherry-pick eea4bdd4cb 689fe9dc5e 6cf1024bad 04c280fabb 2>&1 | tail -2; git log --format=\"%h %s\" -5 | head -5",
+  "summary": "git cherry-pick eea4bdd4cb 689fe9dc5e 6cf1024bad 04c280fabb 2>&1 | tail -2; git log --format=\"%h %s\" -5 | head -5: Date: Sun Aug 16 10:25:45 2026 +0200 4 files changed, 97 insertions(+), 5 deletions(-) 22a97454aa fix(streams): an `e` in an fopen() mode asked for close-on-exec and got a descriptor that survives exec 473",
+  "text": "git cherry-pick eea4bdd4cb 689fe9dc5e 6cf1024bad 04c280fabb 2>&1 | tail -2; git log --format=\"%h %s\" -5 | head -5: Date: Sun Aug 16 10:25:45 2026 +0200 4 files changed, 97 insertions(+), 5 deletions(-) 22a97454aa fix(streams): an `e` in an fopen() mode asked for close-on-exec and got a descriptor that survives exec 47374c0b86 fix(eval): a parse error named neither the file nor the fragment line, and exited 1 where php exits 255 b81b5b20d3 fix(streams): an http:// stream's metadata had no wrapper_data, and its header list had a phantom entry 385416bbed fix(streams): php://fd/N answered a silent false for every descriptor it could not open 9ea6f1d01e fix(streams): stream_get_meta_data() invented three keys, dropped a data: URI's own, and asked the wrong question about seekability",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2192f98d477afa0d3e9fe680",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T08:26:45.457Z",
+  "stored_at": "2026-08-16T08:26:45.457Z"
+}

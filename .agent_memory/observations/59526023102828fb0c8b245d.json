@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"warning\" tests/codegen/eval_constructors.rs | head -8; echo ---; grep -rn \"warning\" tests/codegen/eval_reflection_invocation.rs | head -8",
+  "summary": "grep -rn \"warning\" tests/codegen/eval_constructors.rs | head -8; echo ---; grep -rn \"warning\" tests/codegen/eval_reflection_invocation.rs | head -8: tests/codegen/eval_constructors.rs:149: for warning in [ tests/codegen/eval_constructors.rs:153: let count = out.stderr.matches(warning).count(); tests/codegen/eval_constr",
+  "text": "grep -rn \"warning\" tests/codegen/eval_constructors.rs | head -8; echo ---; grep -rn \"warning\" tests/codegen/eval_reflection_invocation.rs | head -8: tests/codegen/eval_constructors.rs:149: for warning in [ tests/codegen/eval_constructors.rs:153: let count = out.stderr.matches(warning).count(); tests/codegen/eval_constructors.rs:156: \"expected at least two by-ref warnings {warning:?}, saw {count}: {}\", --- tests/codegen/eval_reflection_invocation.rs:50: for warning in [ tests/codegen/eval_reflection_invocation.rs:55: out.stderr.contains(warning), tests/codegen/eval_reflection_invocation.rs:56: \"missing by-ref warning {warning:?}: {}\", tests/codegen/eval_reflection_invocation.rs:132: for warning in [ tests/codegen/eval_reflection_invocation.rs:139: out.stderr.contains(warning), tests/codegen/eval_reflection_invocation.rs:140: \"missing by-ref warning {warning:?}: {}\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "59526023102828fb0c8b245d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:12:32.227Z",
+  "stored_at": "2026-08-18T15:12:32.228Z"
+}

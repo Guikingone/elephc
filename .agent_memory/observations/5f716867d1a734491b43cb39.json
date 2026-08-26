@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 37,125p src/codegen_support/runtime/io/stream_wrapper_register.rs",
+  "summary": "sed -n 37,125p src/codegen_support/runtime/io/stream_wrapper_register.rs: very caller-owned buffer, so the helper needs a // real frame: `__rt_str_persist` is a call and would otherwise clobber scratch. emitter.instruction(\"push rbp\"); // preserve the caller frame pointer emitter.instruction(\"mov rbp, rsp\"); // establi",
+  "text": "sed -n 37,125p src/codegen_support/runtime/io/stream_wrapper_register.rs: very caller-owned buffer, so the helper needs a // real frame: `__rt_str_persist` is a call and would otherwise clobber scratch. emitter.instruction(\"push rbp\"); // preserve the caller frame pointer emitter.instruction(\"mov rbp, rsp\"); // establish the spill-area frame pointer emitter.instruction(\"sub rsp, 64\"); // reserve the persisted-argument spill slots (keeps rsp 16-byte aligned) emitter.instruction(\"mov QWORD PTR [rbp - 8], rdi\"); // spill the borrowed protocol pointer emitter.instruction(\"mov QWORD PTR [rbp - 16], rsi\"); // spill the protocol length emitter.instruction(\"mov QWORD PTR [rbp - 24], rdx\"); // spill the borrowed class-name pointer emitter.instruction(\"mov QWORD PTR [rbp - 32], rcx\"); // spill the class-name length emitter.instruction(\"mov QWORD PTR [rbp - 40], r8\"); // spill the registration flags // -- reserve a free slot, growing the table when every slot is taken --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f716867d1a734491b43cb39",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:53:21.770Z",
+  "stored_at": "2026-08-21T16:53:21.770Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"runtime_value_tag\" src/codegen/class_layout*.rs src/codegen/var_dump*.rs 2>/dev/null | head; grep -rln \"_vd_props\\|var_dump_descriptor\\|vd_prop_table\" src/ | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"runtime_value_tag\" src/codegen/class_layout*.rs src/codegen/var_dump*.rs 2>/dev/null | head; grep -rln \"_vd_props\\|var_dump_descriptor\\|vd_prop_table\" src/ | head: (eval):1: no matches found: src/codegen/class_layo",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"runtime_value_tag\" src/codegen/class_layout*.rs src/codegen/var_dump*.rs 2>/dev/null | head; grep -rln \"_vd_props\\|var_dump_descriptor\\|vd_prop_table\" src/ | head: (eval):1: no matches found: src/codegen/class_layout*.rs src/codegen_support/runtime/data/user.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0ae968c381f768ae134837b6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:46:01.347Z",
+  "stored_at": "2026-08-23T08:46:01.347Z"
+}

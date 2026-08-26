@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 wrapper_other_readers.py 2>&1 | tail -18",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 wrapper_other_readers.py 2>&1 | tail -18: SAME csv_plain php : 'Deprecated: fgetcsv(): the $escape parameter must be provided as its defaul",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 wrapper_other_readers.py 2>&1 | tail -18: SAME csv_plain php : 'Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change in csv_plain.php on line 22 array(3' SAME csv_after_gets php : 'Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change in csv_after_gets.php on line 22 ar' SAME sgl_plain php : 'string(8) \"aa,bb,cc\"' DIFFERS sgl_after_gets php : 'string(5) \"bb,cc\"' elephc : 'string(22) \"aa,\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\"' SAME eof_after_gets php : 'bool(false) string(6) \"bb,cc \"' DIFFERS passthru_after php : 'bb,cc dd,ee,ff 42 xyz int(22)' elephc : 'int(0)' 4/6 other readers agree with php",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3e33c429b7b10ba31e2aa397",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:22:53.052Z",
+  "stored_at": "2026-08-21T13:22:53.053Z"
+}

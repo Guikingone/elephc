@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-asm nullprop2.php > /dev/null 2>&1; grep -n \"hash_isset\" -A 22 nullprop2.s | sed -n '1,30p'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-asm nullprop2.php > /dev/null",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-asm nullprop2.php > /dev/null 2>&1; grep -n \"hash_isset\" -A 22 nullprop2.s | sed -n '1,30p': =47 end=10:48 op=hash_isset 9828- ldur x1, [x29, #-160] 9829- ldur x2, [x29, #-152] 9830- bl __rt_hash_normalize_key 9831- ldur x0, [x29, #-144] 9832- bl __rt_hash_get 9833- cbz x0, _eir_main_isset_hash_missing_391 9834- cmp x3, #8 9835- b.eq _eir_main_isset_hash_missing_391 9836- cmp x3, #7 9837- b.ne _eir_main_isset_hash_concrete_non_null_393 9838- mov x0, x1 9839- cbz x0, _eir_main_isset_hash_missing_391 9840- movz x9, #0xfffe 9841- movk x9, #0xffff, lsl #16 9842- movk x9, #0xffff, lsl #32 9843- movk x9, #0x7fff, lsl #48 9844- cmp x0, x9 9845- b.eq _eir_main_isset_hash_missing_391 9846- bl __rt_mixed_unbox 9847- cmp x0, #8 9848- b.eq _eir_main_isset_hash_missing_391 9849-_eir_main_isset_hash_concrete_non_null_393: -- 9990: ; @src line=11 col=47 end=11:48 op=hash_isset 9991- sub x9, x29, #272 9992- ldr x1, [x9] 9993- sub x9, x29, #264 9994- ldr x2, [x9] 9995- bl __rt_hash_normalize_key",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a8c14cbb0e117ec58e72e67",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:52:56.361Z",
+  "stored_at": "2026-08-23T08:52:56.362Z"
+}

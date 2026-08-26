@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test -p elephc --test codegen_tests io::streams::test_stream_filter_register_accepts_registration -- --nocapture 2>&1 | tail -30",
+  "summary": "cargo test -p elephc --test codegen_tests io::streams::test_stream_filter_register_accepts_registration -- --nocapture 2>&1 | tail -30: Finished `test` profile [unoptimized + debuginfo] target(s) in 1.11s Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-d468f4b4b84961b3) running 1 test thread 'codegen::i",
+  "text": "cargo test -p elephc --test codegen_tests io::streams::test_stream_filter_register_accepts_registration -- --nocapture 2>&1 | tail -30: Finished `test` profile [unoptimized + debuginfo] target(s) in 1.11s Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-d468f4b4b84961b3) running 1 test thread 'codegen::io::streams::test_stream_filter_register_accepts_registration' (35440940) panicked at tests/codegen/support/runner.rs:968:5: binary exited with status signal: 11 (SIGSEGV) stdout: stderr: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace test codegen::io::streams::test_stream_filter_register_accepts_registration ... FAILED failures: failures: codegen::io::streams::test_stream_filter_register_accepts_registration test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8781 filtered out; finished in 1.00s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "51b45f2816982936227c46ec",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:37:13.783Z",
+  "stored_at": "2026-08-21T15:37:13.784Z"
+}

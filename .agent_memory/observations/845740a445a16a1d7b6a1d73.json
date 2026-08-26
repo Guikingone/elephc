@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/seven-path-builtins-failed-in-silence.md",
+  "command": "",
+  "summary": "About to run: Write",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "845740a445a16a1d7b6a1d73",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:53:39.849Z",
+  "stored_at": "2026-08-24T19:53:39.849Z",
+  "low_signal": true
+}

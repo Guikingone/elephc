@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trim_index.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trim_index.py: import pathlib\n\np = pathlib.Path(\n    \"/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/mem",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trim_index.py: import pathlib\n\np = pathlib.Path(\n    \"/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md\"\n)\ns = p.read_text()\nbefore = len(s)\n\n# The bare names at the end of these lines are already greppable; the pointer is the link.\nswaps = [\n    (\n        \"· [`--emit-asm` ne montre PAS le runtime](emit-asm-shows-the-call-not-the-runtime.md) · [DEUX voies, UNE arche câblée](two-dispatches-one-arch-loses-the-diagnostic.md) · [7 tests ÉPINGLAIENT la divergence](tests-written-from-the-implementation-pin-the-bug.md) · [MERGE origin/main](streams-branch-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2c87e070905fc8b870e0e9bb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:54:34.944Z",
+  "stored_at": "2026-08-24T19:54:34.945Z"
+}

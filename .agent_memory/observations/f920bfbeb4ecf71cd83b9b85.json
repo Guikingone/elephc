@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_test.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_test.py: import pathlib\n\np = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'streams-csv-si",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_test.py: import pathlib\n\np = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'streams-csv-signature/tests/codegen/io/streams.rs'\n)\nt = p.read_text()\nANCHOR = '''/// A refused seek says WHY, and says it twice when the wrapper has no `stream_seek` at all.'''\nNEW = '''/// `stream_select()` refuses an array holding something that is not a stream, in php's two wordings.\n///\n/// MEASURED on `php -n` 8.5.6 across twelve shapes. The rule: php counts what it can select FIRST,\n/// and a zero count is `ValueError: No stream arrays were passed` whatever else the array",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f920bfbeb4ecf71cd83b9b85",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:25:58.775Z",
+  "stored_at": "2026-08-23T07:25:58.776Z"
+}

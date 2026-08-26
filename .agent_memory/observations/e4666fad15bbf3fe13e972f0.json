@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"diag_warning\\|DiagWarning\" src/ir/runtime_fn.rs src/ir/runtime_call.rs 2>/dev/null | head; echo \"--- how other lowerings emit a warning through IR:\"; grep -rn \"__rt_diag_warning\" src/ir_lower/ | head",
+  "summary": "grep -n \"diag_warning\\|DiagWarning\" src/ir/runtime_fn.rs src/ir/runtime_call.rs 2>/dev/null | head; echo \"--- how other lowerings emit a warning through IR:\"; grep -rn \"__rt_diag_warning\" src/ir_lower/ | head: --- how other lowerings emit a warning through IR:",
+  "text": "grep -n \"diag_warning\\|DiagWarning\" src/ir/runtime_fn.rs src/ir/runtime_call.rs 2>/dev/null | head; echo \"--- how other lowerings emit a warning through IR:\"; grep -rn \"__rt_diag_warning\" src/ir_lower/ | head: --- how other lowerings emit a warning through IR:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e4666fad15bbf3fe13e972f0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T19:49:39.028Z",
+  "stored_at": "2026-08-18T19:49:39.029Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '414,452p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/call_validation.rs",
+  "summary": "rtk proxy sed -n '414,452p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/call_validation.rs: ler_env: &TypeEnv, callee_desc: &str, ) -> Result<PhpType, CompileError> { self.check_known_callable_call_with_options( sig, args, span, caller_env, cal",
+  "text": "rtk proxy sed -n '414,452p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/call_validation.rs: ler_env: &TypeEnv, callee_desc: &str, ) -> Result<PhpType, CompileError> { self.check_known_callable_call_with_options( sig, args, span, caller_env, callee_desc, true, false, ) } /// Shared implementation for known callable call validation. /// /// `coercive_param_binding` opts the callee into PHP's coercive parameter binding for its /// declared parameters; see `check_user_declared_call` for when that is sound. fn check_known_callable_call_with_options( &mut self, sig: &FunctionSig, args: &[Expr], span: crate::span::Span, caller_env: &TypeEnv, callee_desc: &str, allow_by_ref_spread: bool, coercive_param_binding: bool, ) -> Result<PhpType, CompileError> { let normalized_args = self.normalize_named_call_args(sig, args, span, callee_desc, caller_env)?; let args = normalized_args.as_slice(); let effective_arg_count = args .iter() .filter(|a| !matches!(a.kind, ExprKind::Spread(_))) .count();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3050b22dc3d80b655392cc07",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:19:43.764Z",
+  "stored_at": "2026-08-17T09:19:43.764Z"
+}

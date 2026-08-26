@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/frame_balance.py 2>&1 | head -60",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/frame_balance.py 2>&1 | head -60: alls off the end with sp+0 __rt_stack_overflow: falls off the end with sp+0 __rt_instanceof_invalid_target: fal",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/frame_balance.py 2>&1 | head -60: alls off the end with sp+0 __rt_stack_overflow: falls off the end with sp+0 __rt_instanceof_invalid_target: falls off the end with sp+0 __rt_exception_matches: falls off the end with sp+0 __rt_heap_debug_fail: falls off the end with sp+0 __rt_array_new: falls off the end with sp-24 __rt_hash_new: falls off the end with sp-24 __rt_range: falls off the end with sp-48 __rt_iterable_unsupported_kind: falls off the end with sp+0 __rt_buffer_new: falls off the end with sp-72 __rt_buffer_bounds_fail: falls off the end with sp+0 __rt_buffer_registry_exhausted: falls off the end with sp+0 __rt_buffer_use_after_free: falls off the end with sp+0 __rt_dirname_levels: falls off the end with sp-24 __rt_ptr_read_string: falls off the end with sp+0 __rt_fiber_entry: falls off the end with sp-272 __rt_fiber_construct: falls off the end with sp-40 __rt_fiber_throw_state_error: falls off the end with sp-24",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c0c17a7ccc42ab24ec6a3619",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:56:08.557Z",
+  "stored_at": "2026-08-21T15:56:08.557Z"
+}

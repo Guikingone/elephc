@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_filters.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_filters.rs: let (from_sym, _) = ctx.data.add_string(from_cstr.as_bytes());\n    let (to_sym, _) = ctx.data.add_string(to_cstr.as_bytes());\n    let write_label = ctx.next_lab -> le",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_filters.rs: let (from_sym, _) = ctx.data.add_string(from_cstr.as_bytes());\n    let (to_sym, _) = ctx.data.add_string(to_cstr.as_bytes());\n    let write_label = ctx.next_lab -> let (from_sym, _) = ctx.data.add_string(from_cstr.as_bytes());\n    let (to_sym, _) = ctx.data.add_string(to_cstr.as_bytes());\n    emit_iconv_transform_for_current_fd(ctx, inst, &from_sym, &to_sym)?;\n    emit_inert_filter_resource(ctx, inst, false)?;\n    store_if_result(ctx, inst)\n}\n\n/// Picks the read or the write transcoder from `$mode` and attaches it to the descriptor already\n/// held in the integer result register.\n///\n/// Shared by the literal attach and the dynamic-name",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "357c5f73f1ab2daed9924361",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:53:04.429Z",
+  "stored_at": "2026-08-18T09:53:04.429Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '1,20p' tests/codegen/arrays/by_ref_params.rs; echo \"=== count ===\"; rtk proxy rg -c \"#\\[test\\]\" tests/codegen/arrays/by_ref_params.rs",
+  "summary": "rtk proxy sed -n '1,20p' tests/codegen/arrays/by_ref_params.rs; echo \"=== count ===\"; rtk proxy rg -c \"#\\[test\\]\" tests/codegen/arrays/by_ref_params.rs: _ref_cell` had nowhere to publish the copy-on-write split or the growth relocation. //! //! Called from: //! - `cargo test` through Rust's test harness. //! //! Key de",
+  "text": "rtk proxy sed -n '1,20p' tests/codegen/arrays/by_ref_params.rs; echo \"=== count ===\"; rtk proxy rg -c \"#\\[test\\]\" tests/codegen/arrays/by_ref_params.rs: _ref_cell` had nowhere to publish the copy-on-write split or the growth relocation. //! //! Called from: //! - `cargo test` through Rust's test harness. //! //! Key details: //! - Every expected value is verbatim `LC_ALL=C php` 8.4 output for the same fixture. //! - The `$alias = $x;` lines are load-bearing: they make the receiver shared, so the runtime's //! ensure-unique separates a private copy. Without the write-back that copy was mutated and //! thrown away, and the caller observed the original array — a silent wrong answer. //! - `array_unshift` fails even WITHOUT an alias, because prepending reaches `__rt_array_grow` //! and the caller then held a pointer to storage the growth had already freed. The //! nine-value fixture forces that growth. //! - The heap-debug assertion pins that republishing the relocated pointer does not double //! release the previous storage. === count === 5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4878f2ad6dd27389ed944f71",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:26:07.448Z",
+  "stored_at": "2026-08-16T20:26:07.448Z"
+}

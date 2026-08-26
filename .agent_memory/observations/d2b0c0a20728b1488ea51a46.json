@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn is_php_memory_stream\" -A 12 crates/elephc-magician/src/stream_wrappers.rs; grep -n \"php://\" crates/elephc-magician/src/stream_wrappers.rs | head -20",
+  "summary": "About to run: grep -rn \"fn is_php_memory_stream\" -A 12 crates/elephc-magician/src/stream_wrappers.rs; grep -n \"php://\" crates/elephc-magician/src/stream_wrappers.rs | head -20",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d2b0c0a20728b1488ea51a46",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:23:18.259Z",
+  "stored_at": "2026-08-14T14:23:18.260Z"
+}

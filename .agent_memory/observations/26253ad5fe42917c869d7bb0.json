@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 6 2>&1 | head -120",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 6 2>&1 | head -120: s_writeable\") >>>>>>> origin/main --- lines 346..350 --- <<<<<<< HEAD lower_is_executable_with_wrapper(ctx, in",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 6 2>&1 | head -120: s_writeable\") >>>>>>> origin/main --- lines 346..350 --- <<<<<<< HEAD lower_is_executable_with_wrapper(ctx, inst) ======= super::wrapper_dispatch::lower_is_executable_with_wrapper(ctx, inst) >>>>>>> origin/main ########## src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs (1 hunk(s)) ########## --- lines 74..84 --- <<<<<<< HEAD ctx.emitter.instruction(&format!(\"cbnz x0, {}\", wrapper_done_label)); // stop streaming when stream_eof reports EOF ctx.emitter.instruction(\"ldr x0, [sp, #0]\"); // reload the read handle for reading ctx.emitter.instruction(\"mov x1, #4096\"); // request a bounded read chunk ======= ctx.emitter.instruction( &format!(\"cbnz x0, {}\", wrapper_done_label) ); // stop streaming when stream_eof reports EOF ctx.emitter.instruction(\"ldr x0, [sp, #0]\"); // reload the wrapper fd for reading ctx.emitter.instruction(\"mov x1, #4096\"); // request a bounded wrapper read chunk",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "26253ad5fe42917c869d7bb0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:13:51.944Z",
+  "stored_at": "2026-08-20T17:13:51.944Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "pgrep -fl \"codegen_tests-\" | head -3; pgrep -c \"codegen_tests\" 2>/dev/null || echo \"none\"",
+  "summary": "pgrep -fl \"codegen_tests-\" | head -3; pgrep -c \"codegen_tests\" 2>/dev/null || echo \"none\": 39333 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps/codegen_tests-16c45d69d5f633ba --exact codegen::callables::state_and_variadics::test_global_read_write --nocaptur",
+  "text": "pgrep -fl \"codegen_tests-\" | head -3; pgrep -c \"codegen_tests\" 2>/dev/null || echo \"none\": 39333 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps/codegen_tests-16c45d69d5f633ba --exact codegen::callables::state_and_variadics::test_global_read_write --nocapture 39447 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps/codegen_tests-16c45d69d5f633ba --exact codegen::callables::state_and_variadics::test_global_write --nocapture 48651 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/wasm-target/target/debug/deps/codegen_tests-81d8065a713c5d62 --test-threads=2 none",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "28bac590382ebcedd8a57b7b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T21:00:21.803Z",
+  "stored_at": "2026-08-16T21:00:21.803Z"
+}

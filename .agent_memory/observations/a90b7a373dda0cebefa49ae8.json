@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -5; echo \"=== status ===\"; git status --short -- docs/php/builtins.md docs/php/builtins docs/internals/builtins scripts/docs/builtin_registry.json | head -10",
+  "summary": "python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -5; echo \"=== status ===\"; git status --short -- docs/php/builtins.md docs/php/builtins docs/internals/builtins scripts/docs/builtin_registry.json | head -10: streams-csv-signature/scripts/docs/builtin_registry.json Rendered: 1076 pages (0 kept hand-",
+  "text": "python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -5; echo \"=== status ===\"; git status --short -- docs/php/builtins.md docs/php/builtins docs/internals/builtins scripts/docs/builtin_registry.json | head -10: streams-csv-signature/scripts/docs/builtin_registry.json Rendered: 1076 pages (0 kept hand-written). Master index at /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/builtins.md === status === M docs/internals/builtins/_internal/__elephc_callable_ptr.md M docs/internals/builtins/_internal/__elephc_class_has_constructor.md M docs/internals/builtins/_internal/__elephc_gmmktime_raw.md M docs/internals/builtins/_internal/__elephc_hash_ctx_copy.md M docs/internals/builtins/_internal/__elephc_hash_ctx_final.md M docs/internals/builtins/_internal/__elephc_hash_ctx_init.md M docs/internals/builtins/_internal/__elephc_hash_ctx_update.md M docs/internals/builtins/_internal/__elephc_initialize_pdo_statement.md M docs/internals/builtins/_internal/__elephc_invoke_pdo_statement_constructor.md M docs/internals/builtins/_internal/__elephc_mktime_raw.md",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a90b7a373dda0cebefa49ae8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:24:54.057Z",
+  "stored_at": "2026-08-16T17:24:54.057Z"
+}

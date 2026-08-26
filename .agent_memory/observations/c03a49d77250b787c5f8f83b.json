@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,60p' /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-audit-full-surface-2026-08-14.md 2>/dev/null",
+  "summary": "sed -n '1,60p' /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-audit-full-surface-2026-08-14.md 2>/dev/null: vs null). **Why:** l'utilisateur a demandé « rien laisser de côté » ; ces écarts sont la carte complète de la distance au 100 % php sur la surface stre",
+  "text": "sed -n '1,60p' /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-audit-full-surface-2026-08-14.md 2>/dev/null: vs null). **Why:** l'utilisateur a demandé « rien laisser de côté » ; ces écarts sont la carte complète de la distance au 100 % php sur la surface streams — les P0 corrompent du code CORRECT en silence. **How to apply:** vague TDD par clusters : (A) constantes+défauts+listes (1,5,7, get_filters/wrappers, consumed, dynamic filter names) ; (B) CSV (3,4,11, eol, dépréciations SPL+gating) ; (C) userspace (2,9,8,10 + warnings P1). ⚠️ re-tester `stream_select` php://memory (SIGSEGV sur binaire FRÈRE divergent, PAS confirmé sur cette branche) ; deux tests épinglent du FAUX (streams.rs:2191 strip_tags, :2559 php://output) — les corriger AVEC le comportement ; régénérer l'oracle drift ledger (périmé : transports, str_getcsv, stream_context_set_options). ⚠️ le worktree n'a PAS de ./target visible pour les sous-agents (CARGO_TARGET_DIR externe?) — les agents de fix doivent bâtir dans LEUR worktree.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c03a49d77250b787c5f8f83b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:29:57.251Z",
+  "stored_at": "2026-08-21T11:29:57.252Z"
+}

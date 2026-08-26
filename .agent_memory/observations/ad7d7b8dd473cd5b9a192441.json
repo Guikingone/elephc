@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 6880,6900p src/pdo_prelude.rs",
+  "summary": "sed -n 6880,6900p src/pdo_prelude.rs: ory, ) -> Program { if !force && !detect::program_uses_pdo(&program) { return program; } // BUILT, not parsed. `build::pdo_declarations` produces the same AST the PHP below parses // to — `built_declarations_match_the_php_for_every_profile` compares them node by node // across all ",
+  "text": "sed -n 6880,6900p src/pdo_prelude.rs: ory, ) -> Program { if !force && !detect::program_uses_pdo(&program) { return program; } // BUILT, not parsed. `build::pdo_declarations` produces the same AST the PHP below parses // to — `built_declarations_match_the_php_for_every_profile` compares them node by node // across all 63 profile/driver combinations — so the tokenizer and parser no longer run // over 6,500 lines of embedded source on every PDO compile. let mut combined = build::pdo_declarations(php_version, OptionalDrivers::from_build_environment()); inventory.record_program(\"pdo\", &combined); // These methods invoke only closure descriptors that this prelude creates and stores // privately. Their generic callable syntax is not a user-controlled declaration lookup. for (class, method) in [ (\"PDO\", \"__construct\"), (\"PDOStatement\", \"execute\"), (\"PDOStatement\", \"syncOutputParameters\"), (\"PDOStatement\", \"updateBoundColumns\"), ] {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ad7d7b8dd473cd5b9a192441",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:18:01.043Z",
+  "stored_at": "2026-08-22T07:18:01.043Z"
+}

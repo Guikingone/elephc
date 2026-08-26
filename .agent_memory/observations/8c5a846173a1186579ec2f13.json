@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/keep_both.py src/types/result.rs 2>&1 | tail -2; sed -n '/^<<<<<<</,/^>>>>>>>/p' src/types/checker/driver/init.rs",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/keep_both.py src/types/result.rs 2>&1 | tail -2; sed -n '/^<<<<<<</,/^>>>>>>>/p' src/types/checker/driver/init.rs: src/types/result.rs: joined",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/keep_both.py src/types/result.rs 2>&1 | tail -2; sed -n '/^<<<<<<</,/^>>>>>>>/p' src/types/checker/driver/init.rs: src/types/result.rs: joined 7 + 101 lines src/types/result.rs: 1 hunk(s) joined <<<<<<< HEAD widened_scalar_locals: HashSet::new(), tentative_return_deprecations: Vec::new(), ======= strict_locals: false, local_conditional_depth: 0, local_binding_depth: HashMap::new(), ref_aliased_locals: HashSet::new(), static_local_names: HashSet::new(), typed_local_names: HashSet::new(), local_bind_kill_sites: HashMap::new(), local_retype_sites: HashMap::new(), statement_position_expr: None, body_contains_eval: false, mixed_storage_locals: HashSet::new(), mixed_storage_store_sites: HashMap::new(), binding_decision_warnings: HashMap::new(), retired_mixed_storage_store_sites: HashSet::new(), >>>>>>> origin/main",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8c5a846173a1186579ec2f13",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:10:10.744Z",
+  "stored_at": "2026-08-26T17:10:10.745Z"
+}

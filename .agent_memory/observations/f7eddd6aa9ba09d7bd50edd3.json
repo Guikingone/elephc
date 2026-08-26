@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"\\\"timeout\\\"\" src --include=\"*.rs\" | head -10; echo \"=== timeout use ===\"; grep -rn \"timeout\" src/codegen_support/runtime/io/http_build_request.rs | head -20",
+  "summary": "grep -rn \"\\\"timeout\\\"\" src --include=\"*.rs\" | head -10; echo \"=== timeout use ===\"; grep -rn \"timeout\" src/codegen_support/runtime/io/http_build_request.rs | head -20: e first non-digit byte src/codegen_support/runtime/io/http_build_request.rs:452: // [rbp - 160..168] timeout (ptr+len) src/codegen_support/runtime/io/ht",
+  "text": "grep -rn \"\\\"timeout\\\"\" src --include=\"*.rs\" | head -10; echo \"=== timeout use ===\"; grep -rn \"timeout\" src/codegen_support/runtime/io/http_build_request.rs | head -20: e first non-digit byte src/codegen_support/runtime/io/http_build_request.rs:452: // [rbp - 160..168] timeout (ptr+len) src/codegen_support/runtime/io/http_build_request.rs:531: // timeout, ignore_errors, proxy, follow_location, max_redirects). Only src/codegen_support/runtime/io/http_build_request.rs:546: lookup_str_x(emitter, \"_http_timeout_key_str\", 7, 160); // strlen(\"timeout\") src/codegen_support/runtime/io/http_build_request.rs:618: // timeout: parse seconds as base-10 int. src/codegen_support/runtime/io/http_build_request.rs:619: abi::emit_symbol_address(emitter, \"r10\", \"_http_active_timeout_seconds\"); // load runtime data address src/codegen_support/runtime/io/http_build_request.rs:621: emitter.instruction(\"mov r11, QWORD PTR [rbp - 168]\"); // timeout_len src/codegen_support/runtime/io/http_build_request.rs:624: emitter.instruction(\"mov r12, QWORD PTR [rbp - 160]\"); // timeout_ptr",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f7eddd6aa9ba09d7bd50edd3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:16:54.768Z",
+  "stored_at": "2026-08-14T14:16:54.769Z"
+}

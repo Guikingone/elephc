@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rc \"out\\.stderr\" tests/codegen/ | grep -v \":0$\" | sort -t: -k2 -rn",
+  "summary": "grep -rc \"out\\.stderr\" tests/codegen/ | grep -v \":0$\" | sort -t: -k2 -rn: lease.rs:3 tests/codegen/pointers.rs:3 tests/codegen/ffi/syntax_and_callbacks.rs:3 tests/codegen/ffi/extern_calls.rs:3 tests/codegen/exceptions.rs:3 tests/codegen/callables/expr_calls.rs:3 tests/codegen/arrays/indexed/oob_reads.rs:3 tests/codegen",
+  "text": "grep -rc \"out\\.stderr\" tests/codegen/ | grep -v \":0$\" | sort -t: -k2 -rn: lease.rs:3 tests/codegen/pointers.rs:3 tests/codegen/ffi/syntax_and_callbacks.rs:3 tests/codegen/ffi/extern_calls.rs:3 tests/codegen/exceptions.rs:3 tests/codegen/callables/expr_calls.rs:3 tests/codegen/arrays/indexed/oob_reads.rs:3 tests/codegen/arrays/foreach_value_append.rs:3 tests/codegen/arrays/by_ref_params.rs:3 tests/codegen/arrays/assoc.rs:3 tests/codegen/types/never.rs:2 tests/codegen/support/runner.rs:2 tests/codegen/runtime_gc/cow_and_cycles.rs:2 tests/codegen/oop/reflection_construction.rs:2 tests/codegen/io/stat_ext.rs:2 tests/codegen/arrays/nested.rs:2 tests/codegen/types/named_arguments/spread.rs:1 tests/codegen/support/projects.rs:1 tests/codegen/regressions/mixed_method_dispatch.rs:1 tests/codegen/regressions/closures_and_refs.rs:1 tests/codegen/generators/basic.rs:1 tests/codegen/eval_closures.rs:1 tests/codegen/eval_callables.rs:1 tests/codegen/eval_builtin_parity.rs:1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b0afafa1f4dc036215525d58",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:11:52.657Z",
+  "stored_at": "2026-08-18T15:11:52.658Z"
+}

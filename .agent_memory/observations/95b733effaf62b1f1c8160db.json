@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_fgetsbulk2.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_fgetsbulk2.py: import pathlib\n\nroot = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-s",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_fgetsbulk2.py: import pathlib\n\nroot = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\np = root / \"src/codegen_support/runtime/io/fgets.rs\"\ns = p.read_text()\n\nhead, sep, tail = s.partition(\"fn emit_fgets_linux_x86_64\")\nassert sep, \"x86 split\"\nhead = head.replace(\"sub sp, sp, #112\", \"sub sp, sp, #128\")\nhead = head.replace(\"stp x29, x30, [sp, #96]\", \"stp x29, x30, [sp, #112]\")\nhead = head.replace(\"ldp x29, x30, [sp, #96]\", \"ldp x29, x30, [sp, #112]\")\nhead = head.replace(\"add sp, sp, #112\", \"add sp, sp, #128\")\nhead = head.replace(\"add x29, sp, #96",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "95b733effaf62b1f1c8160db",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T16:48:41.882Z",
+  "stored_at": "2026-08-24T16:48:41.882Z"
+}

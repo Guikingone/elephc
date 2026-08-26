@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn create_by_ref_arg_local\\b' -A 60 src/ir_lower/ | head -80",
+  "summary": "grep -rn 'fn create_by_ref_arg_local\\b' -A 60 src/ir_lower/ | head -80: able NULL. src/ir_lower/expr/call_arg_coercion.rs-132- let regular = crate::types::call_args::regular_param_count(sig); src/ir_lower/expr/call_arg_coercion.rs-133- let by_ref_variadic = super::variadic_args::variadic_param_is_by_ref(sig); src/ir_lo",
+  "text": "grep -rn 'fn create_by_ref_arg_local\\b' -A 60 src/ir_lower/ | head -80: able NULL. src/ir_lower/expr/call_arg_coercion.rs-132- let regular = crate::types::call_args::regular_param_count(sig); src/ir_lower/expr/call_arg_coercion.rs-133- let by_ref_variadic = super::variadic_args::variadic_param_is_by_ref(sig); src/ir_lower/expr/call_arg_coercion.rs-134- for (index, arg) in args.iter().enumerate() { src/ir_lower/expr/call_arg_coercion.rs-135- let in_variadic_tail = index >= regular; src/ir_lower/expr/call_arg_coercion.rs-136- if in_variadic_tail { src/ir_lower/expr/call_arg_coercion.rs-137- if !by_ref_variadic { src/ir_lower/expr/call_arg_coercion.rs-138- continue; src/ir_lower/expr/call_arg_coercion.rs-139- } src/ir_lower/expr/call_arg_coercion.rs-140- } else { src/ir_lower/expr/call_arg_coercion.rs-141- if !sig.ref_params.get(index).copied().unwrap_or(false) { src/ir_lower/expr/call_arg_coercion.rs-142- continue; src/ir_lower/expr/call_arg_coercion.rs-143- }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "118149cd6fba82aabf73db6d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:04:11.692Z",
+  "stored_at": "2026-08-25T13:04:11.692Z"
+}

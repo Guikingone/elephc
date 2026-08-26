@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"file_put_contents data\" src/ | head -4",
+  "summary": "grep -rn \"file_put_contents data\" src/ | head -4: src/codegen/lower_inst/builtins/io/phar_write.rs:122: load_string_to_result(ctx, data, \"file_put_contents data\")?; src/codegen/lower_inst/builtins/io/phar_write.rs:144: load_string_to_result(ctx, data, \"file_put_contents data\")?; src/codegen/lower_inst/builtins/io/phar_",
+  "text": "grep -rn \"file_put_contents data\" src/ | head -4: src/codegen/lower_inst/builtins/io/phar_write.rs:122: load_string_to_result(ctx, data, \"file_put_contents data\")?; src/codegen/lower_inst/builtins/io/phar_write.rs:144: load_string_to_result(ctx, data, \"file_put_contents data\")?; src/codegen/lower_inst/builtins/io/phar_write.rs:213: load_string_to_result(ctx, data, \"file_put_contents data\")?; src/codegen/lower_inst/builtins/io/phar_write.rs:238: load_string_to_result(ctx, data, \"file_put_contents data\")?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fad0c133c318becee1a53515",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:06:00.668Z",
+  "stored_at": "2026-08-21T20:06:00.669Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/output_values.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/output_values.rs: PhpType::Array(_) | PhpType::AssocArray { .. } => {\n            conversions::emit_array_like_string_result(ctx);\n            abi::emit_write_stdout(ctx.emitter, -> PhpType::Array(",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/output_values.rs: PhpType::Array(_) | PhpType::AssocArray { .. } => {\n            conversions::emit_array_like_string_result(ctx);\n            abi::emit_write_stdout(ctx.emitter, -> PhpType::Array(_) | PhpType::AssocArray { .. } => {\n            conversions::emit_array_like_string_result(ctx);\n            abi::emit_write_stdout(ctx.emitter, &PhpType::Str);\n            Ok(())\n        }\n        // Echoing a first-class callable is the same php event as concatenating one: a Closure\n        // has no `__toString`, so php raises a CATCHABLE `Error` at run time. Refusing here made\n        // `try { echo $f; } catch (Error $e)` impossible to compile.\n        Ph",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1ad3a7ca1fd1cb83e0423aff",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:43:32.984Z",
+  "stored_at": "2026-08-23T17:43:32.984Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r '\nforeach ([10, 100, 400, 4000, 40000] as $n) {\n  $h = fopen(\"php://memory\",\"w+\");\n  stream_filter_append($h, \"zlib.deflate\", STREAM_FILTER_WRITE);\n  fwrite($h, str_repeat(\"a\", $n));\n  $mid = ftell($h);\n  rewind($h);\n  $seen = strlen((string) stream_get_contents($h));\n  fclose($h);\n  printf(\"in=%-6d ftell=%-6d visible_before_close=%d\\n\", $n, $mid, $seen);\n}'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r '\nforeach ([10, 100, 400, 4000, 40000] as $n) {\n  $h = fopen(\"php://memory\",\"w+\");\n  stream_filter_append($h, \"zlib.deflate\", STREAM_",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r '\nforeach ([10, 100, 400, 4000, 40000] as $n) {\n  $h = fopen(\"php://memory\",\"w+\");\n  stream_filter_append($h, \"zlib.deflate\", STREAM_FILTER_WRITE);\n  fwrite($h, str_repeat(\"a\", $n));\n  $mid = ftell($h);\n  rewind($h);\n  $seen = strlen((string) stream_get_contents($h));\n  fclose($h);\n  printf(\"in=%-6d ftell=%-6d visible_before_close=%d\\n\", $n, $mid, $seen);\n}': in=10 ftell=0 visible_before_close=10 in=100 ftell=0 visible_before_close=10 in=400 ftell=0 visible_before_close=12 in=4000 ftell=0 visible_before_close=26 in=40000 ftell=0 visible_before_close=61",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3e0c93f049e081eb4fe6ff98",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T19:18:44.423Z",
+  "stored_at": "2026-08-17T19:18:44.424Z"
+}

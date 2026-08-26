@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && grep -n \"test_wrapper_ftell_reports_phps_position_not_stream_tell stdout\" -A 14 io_chunk.txt | head -18",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && grep -n \"test_wrapper_ftell_reports_phps_position_not_stream_tell stdout\" -A 14 io_chunk.txt | head -18: 5: 1317-assertion `left == right` failed 1",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && grep -n \"test_wrapper_ftell_reports_phps_position_not_stream_tell stdout\" -A 14 io_chunk.txt | head -18: 5: 1317-assertion `left == right` failed 1318- left: \"0|wrapped|7|3| pay|7\" 1319- right: \"0|wrapped|7|3|pped|7\" 1320- 1321----- codegen::io::streams::test_zip_archive_extract_to_matches_php stdout ---- 1322- 1323-thread 'codegen::io::streams::test_zip_archive_extract_to_matches_php' (34637908) panicked at tests/codegen/support/compiler.rs:267:63: 1324-type check failed: CompileError { span: Span { line: 2, col: 6, end_line: 2, end_col: 22 }, file: None, message: \"Undefined class: ZipArchive\", related: [CompileError { span: Span { line: 17, col: 7, end_line: 17, end_col: 23 }, file: None, message: \"Undefined class: ZipArchive\", related: [] }] } 1325- 1326----- codegen::io::streams::test_zip_archive_open_flag_matrix_matches_php stdout ---- 1327- 1328-thread 'codegen::io::streams::test_zip_archive_open_flag_matrix_matches_php' (34637909) panicked at tests/codegen/support/compiler.rs:267:63:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a470afa99e536fcdf5b8c68a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:09:22.628Z",
+  "stored_at": "2026-08-21T14:09:22.629Z"
+}

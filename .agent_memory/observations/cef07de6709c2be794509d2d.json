@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '\"seek\", vec!\\[param(\"line\"' -B 2 -A 2 src/types/checker/builtin_spl_classes/filesystem.rs; echo '--- props ---'; grep -n 'fn spl_file_object_properties' -A 20 src/types/checker/builtin_spl_classes/filesystem.rs | head -22",
+  "summary": "grep -n '\"seek\", vec!\\[param(\"line\"' -B 2 -A 2 src/types/checker/builtin_spl_classes/filesystem.rs; echo '--- props ---'; grep -n 'fn spl_file_object_properties' -A 20 src/types/checker/builtin_spl_classes/filesystem.rs | head -22: ypeExpr::Str), 241- protected_storage_property(\"escape\", TypeExpr::Str), 242- protected_",
+  "text": "grep -n '\"seek\", vec!\\[param(\"line\"' -B 2 -A 2 src/types/checker/builtin_spl_classes/filesystem.rs; echo '--- props ---'; grep -n 'fn spl_file_object_properties' -A 20 src/types/checker/builtin_spl_classes/filesystem.rs | head -22: ypeExpr::Str), 241- protected_storage_property(\"escape\", TypeExpr::Str), 242- protected_storage_property(\"maxLineLen\", TypeExpr::Int), 243- // READ_CSV records, and whether they still describe `lines` under the current controls. 244- // A RECORD is not a line: a quoted field may hold newlines, so one record can span 245- // several entries of `lines`, and the mapping has to be built once rather than guessed 246- // per `current()` call. 247- protected_storage_property(\"csvRecords\", array_type()), 248- // 1 for a record that came from a line holding nothing but its terminator. SKIP_EMPTY 249- // (with DROP_NEW_LINE) steps OVER those without renumbering the rest, so the flag is 250- // recorded per record rather than the record being dropped. 251- protected_storage_property(\"csvBlank\", array_type()), 252- // Whether any line has been consumed through `fgets()`/`fscanf()` yet. It exists for",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cef07de6709c2be794509d2d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:30:06.776Z",
+  "stored_at": "2026-08-25T09:30:06.776Z"
+}

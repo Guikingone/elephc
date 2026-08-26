@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn 'label_global(\"__rt_copy\")' src/codegen_support/ | head -3",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn 'label_global(\"__rt_copy\")' src/codegen_support/ | head -3: src/codegen_support/runtime/io/fs.rs:228: emitter.label_global(\"__rt_copy\"); src/codegen_support/runtime/io/fs.rs:365: emitter.label_global(\"__rt_copy\");",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn 'label_global(\"__rt_copy\")' src/codegen_support/ | head -3: src/codegen_support/runtime/io/fs.rs:228: emitter.label_global(\"__rt_copy\"); src/codegen_support/runtime/io/fs.rs:365: emitter.label_global(\"__rt_copy\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2be8be264c87687ed788deb8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:29:44.683Z",
+  "stored_at": "2026-08-24T07:29:44.684Z"
+}

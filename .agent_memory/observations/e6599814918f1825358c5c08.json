@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh run view 31838427224 -R Guikingone/elephc --json jobs,workflowName --jq '{workflow: .workflowName, jobs: (.jobs | length), by_conclusion: (.jobs | group_by(.conclusion) | map({(.[0].conclusion): length}) | add)}'",
+  "summary": "gh run view 31838427224 -R Guikingone/elephc --json jobs,workflowName --jq '{workflow: .workflowName, jobs: (.jobs | length), by_conclusion: (.jobs | group_by(.conclusion) | map({(.[0].conclusion): length}) | add)}': {\"by_conclusion\":{\"skipped\":1,\"success\":126},\"jobs\":127,\"workflow\":\"CI\"}",
+  "text": "gh run view 31838427224 -R Guikingone/elephc --json jobs,workflowName --jq '{workflow: .workflowName, jobs: (.jobs | length), by_conclusion: (.jobs | group_by(.conclusion) | map({(.[0].conclusion): length}) | add)}': {\"by_conclusion\":{\"skipped\":1,\"success\":126},\"jobs\":127,\"workflow\":\"CI\"}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e6599814918f1825358c5c08",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T09:23:52.144Z",
+  "stored_at": "2026-08-15T09:23:52.144Z",
+  "low_signal": true
+}

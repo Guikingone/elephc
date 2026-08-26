@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_eval_diff.py 2>&1 | tail -25",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_eval_diff.py 2>&1 | tail -25: SAME plain SAME onlydir SAME mark SAME mark_onlydir SAME nocheck SAME nocheck_onlydir SAME brace SAME brace_or",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_eval_diff.py 2>&1 | tail -25: SAME plain SAME onlydir SAME mark SAME mark_onlydir SAME nocheck SAME nocheck_onlydir SAME brace SAME brace_order SAME brace_duplicates SAME brace_nested SAME brace_nocheck SAME brace_unmatched SAME no_brace SAME nosort_count SAME bad_flag_64 SAME bad_flag_glibc_brace SAME bad_flag_negative SAME available SAME flags_zero 19/19 identical",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e142c1090fc3dd2e900dcfd6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:30:35.020Z",
+  "stored_at": "2026-08-22T09:30:35.020Z"
+}

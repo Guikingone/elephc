@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"by_ref_widened_params\" -B2 -A3 src/types/checker/inference/objects/methods.rs | head -30",
+  "summary": "About to run: rtk proxy rg -n \"by_ref_widened_params\" -B2 -A3 src/types/checker/inference/objects/methods.rs | head -30",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3944224ff87a65e447713c12",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:35:59.417Z",
+  "stored_at": "2026-08-16T20:35:59.417Z"
+}

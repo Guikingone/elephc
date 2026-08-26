@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_psfs.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_psfs.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\np = 'src/codegen_supp",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_psfs.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\np = 'src/codegen_support/runtime/io/fread_filtered.rs'\ns = open(p).read()\n\nRESET = ('    // php answers `false` — not `\"\"` — when a read filter reports PSFS_ERR_FATAL, so the\\n'\n         '    // code the brigade publishes has to survive to the return below. It is reset to\\n'\n         '    // PSFS_PASS_ON first because the symbol lives in BSS and starts at ZERO, which IS\\n'\n         '    // PSFS_ERR_FATAL: without this an ordinary EOF on the very first filtered read would\\n'\n     ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f26d51b91378d4fbe1abf19e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:20:53.432Z",
+  "stored_at": "2026-08-17T12:20:53.433Z"
+}

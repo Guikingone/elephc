@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '400,450p' src/parser/stmt/oop/body.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '400,450p' src/parser/stmt/oop/body.rs: modifiers.is_abstract, by_ref: false, is_promoted: false, default, span: member_span, attributes: member_attributes, }); continue; } return Err(CompileError::new( member_span, &",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '400,450p' src/parser/stmt/oop/body.rs: modifiers.is_abstract, by_ref: false, is_promoted: false, default, span: member_span, attributes: member_attributes, }); continue; } return Err(CompileError::new( member_span, &format!( \"Expected trait use, property, or method declaration in {} body\", owner_kind ), )); } Ok((trait_uses, properties, methods, constants, cases)) } /// Appends promoted constructor properties to the class properties list. /// Validates that no property with the same name already exists in the class, /// returning an error on duplicate declaration. fn append_promoted_properties( properties: &mut Vec<ClassProperty>, promoted_properties: Vec<ClassProperty>, ) -> Result<(), CompileError> { for promoted in promoted_properties { if properties .iter() .any(|property| property.name == promoted.name) { return Err(CompileError::new( promoted.span, &format!(\"Cannot redeclare promoted property ${}\", promoted.name), )); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7c6cf00a6cde15fbe299ca65",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:40:32.055Z",
+  "stored_at": "2026-08-23T08:40:32.056Z"
+}

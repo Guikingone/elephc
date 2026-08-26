@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/ | grep -iE \"stream|filter|wrap|http|ftp|phar|zlib|data|glob|context|socket|tls|ssl\"",
+  "summary": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/ | grep -iE \"stream|filter|wrap|http|ftp|phar|zlib|data|glob|context|socket|tls|ssl\": No matches found",
+  "text": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/ | grep -iE \"stream|filter|wrap|http|ftp|phar|zlib|data|glob|context|socket|tls|ssl\": No matches found",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "348aa58d5bc3cffff303c38f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:12:05.813Z",
+  "stored_at": "2026-08-14T14:12:05.814Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm42.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm42.php: <?php\nvar_dump(STREAM_PF_INET6, STREAM_IPPROTO_TCP, STREAM_SOCK_STREAM, STREAM_CRYPTO_METHOD_TLS_CLIENT, SEEK_SET, SEEK_CUR, SEEK_END",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm42.php: <?php\nvar_dump(STREAM_PF_INET6, STREAM_IPPROTO_TCP, STREAM_SOCK_STREAM, STREAM_CRYPTO_METHOD_TLS_CLIENT, SEEK_SET, SEEK_CUR, SEEK_END);\nvar_dump(STREAM_PF_INET, STREAM_PF_UNIX, STREAM_IPPROTO_UDP, STREAM_IPPROTO_IP, STREAM_SOCK_DGRAM);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c22a57db03a1dc02112d558d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:18:24.771Z",
+  "stored_at": "2026-08-18T11:18:24.772Z"
+}

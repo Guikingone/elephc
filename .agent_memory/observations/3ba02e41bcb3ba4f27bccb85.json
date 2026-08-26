@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -rn \"hash_init\" --glob '*.rs' src/builtins/ | head -5; echo \"=== catalog kind ===\"; rtk proxy rg -n -B3 -A12 \"name: \\\"hash_init\\\"\" crates/elephc-builtin-contract/src/catalog_data.rs | head -30",
+  "summary": "rtk proxy rg -rn \"hash_init\" --glob '*.rs' src/builtins/ | head -5; echo \"=== catalog kind ===\"; rtk proxy rg -n -B3 -A12 \"name: \\\"hash_init\\\"\" crates/elephc-builtin-contract/src/catalog_data.rs | head -30: src/builtins/string/__elephc_hash_ctx_init.rs://! constructor that the compiler-injected hash prelude wraps as PH",
+  "text": "rtk proxy rg -rn \"hash_init\" --glob '*.rs' src/builtins/ | head -5; echo \"=== catalog kind ===\"; rtk proxy rg -n -B3 -A12 \"name: \\\"hash_init\\\"\" crates/elephc-builtin-contract/src/catalog_data.rs | head -30: src/builtins/string/__elephc_hash_ctx_init.rs://! constructor that the compiler-injected hash prelude wraps as PHP's `n()`. src/builtins/string/__elephc_hash_ctx_init.rs://! - The elephc-PHP body of `n()` in `crate::hash_prelude`. src/builtins/string/__elephc_hash_ctx_init.rs://! - WHY IT IS INTERNAL. PHP 8's `n()` returns a `HashContext` *object*, not a src/builtins/string/__elephc_hash_ctx_init.rs://! name (`Cannot redeclare built-in function`). Renaming the builtin frees `n` src/builtins/string/mod.rs:// `__elephc_` names: PHP's `n`/`hash_update`/`hash_final`/`hash_copy` are === catalog kind ===",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3ba02e41bcb3ba4f27bccb85",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:46:06.012Z",
+  "stored_at": "2026-08-16T15:46:06.013Z"
+}

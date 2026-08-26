@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_spl.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_spl.py: import pathlib\n\nroot = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signatur",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_spl.py: import pathlib\n\nroot = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\np = root / \"src/types/checker/builtin_spl_classes/filesystem.rs\"\ns = p.read_text()\n\nold = '''/// Builds statements that reload SplFileObject line storage from a filesystem path.\nfn file_object_load_lines_body(path: Expr) -> Vec<Stmt> {\n    vec![\n        property_assign_stmt(this_expr(), \"lines\", empty_array_expr()),\n        foreach_stmt(\n            function_call(\"file\", vec![path]),\n            None,\n            \"line\",\n            vec![property_array_push_s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "96ed446eb081c0bced6665f5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:02:20.488Z",
+  "stored_at": "2026-08-24T08:02:20.489Z"
+}

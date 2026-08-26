@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn lower_scanf_engine_call\" -A40 src/builtins/string/sscanf.rs | head -55",
+  "summary": "grep -rn \"fn lower_scanf_engine_call\" -A40 src/builtins/string/sscanf.rs | head -55: ing/sscanf.rs-125-pub(crate) fn reject_by_ref_vars( src/builtins/string/sscanf.rs-126- name: &str, src/builtins/string/sscanf.rs-127- arg_count: usize, src/builtins/string/sscanf.rs-128- span: crate::span::Span, src/builtins/string/ssc",
+  "text": "grep -rn \"fn lower_scanf_engine_call\" -A40 src/builtins/string/sscanf.rs | head -55: ing/sscanf.rs-125-pub(crate) fn reject_by_ref_vars( src/builtins/string/sscanf.rs-126- name: &str, src/builtins/string/sscanf.rs-127- arg_count: usize, src/builtins/string/sscanf.rs-128- span: crate::span::Span, src/builtins/string/sscanf.rs-129-) -> Result<(), CompileError> { src/builtins/string/sscanf.rs-130- if arg_count <= 2 { src/builtins/string/sscanf.rs-131- return Ok(()); src/builtins/string/sscanf.rs-132- } src/builtins/string/sscanf.rs-133- Err(CompileError::new( src/builtins/string/sscanf.rs-134- span, src/builtins/string/sscanf.rs-135- &format!( src/builtins/string/sscanf.rs-136- \"{}(): the by-ref $vars output form is not supported; \\ src/builtins/string/sscanf.rs-137- call it with only the format and read the returned array\", src/builtins/string/sscanf.rs-138- name src/builtins/string/sscanf.rs-139- ), src/builtins/string/sscanf.rs-140- )) src/builtins/string/sscanf.rs-141-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "95c3e6c1e31b2265174d838b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:33:03.583Z",
+  "stored_at": "2026-08-18T09:33:03.585Z"
+}

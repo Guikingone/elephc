@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/emitter-frame-balance-is-a-testable-property.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/emitter-frame-balance-is-a-testable-property.md: ---\nname: emitter-frame-balance-is-a-testable-property\ndescription: Un émetteur qui agrandit sa trame et n'ajuste qu'UN épilogue corrompt la pile en silence — la bal",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/emitter-frame-balance-is-a-testable-property.md: ---\nname: emitter-frame-balance-is-a-testable-property\ndescription: Un émetteur qui agrandit sa trame et n'ajuste qu'UN épilogue corrompt la pile en silence — la balance se lit dans l'assembleur émis\nmetadata:\n  type: feedback\n---\n\nCommit `62aac2a68`. `emit_user_wrapper_fread` avait agrandi sa trame pour les sauvegardes du\nrésultat boxé — AArch64 32 → 64, x86_64 16 → 48 — et n'avait mis à jour QUE l'épilogue du chemin\nédité. Les bras de repli relâchaient l'ANCIENNE taille : une classe wrapper sans `stream_read()`\nrevenait avec `sp` en dessous de là où l'appelant l'avait laissé.\n\n**Rien ne le d",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9079b6fe9eacf7de4dbe652a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T21:09:12.163Z",
+  "stored_at": "2026-08-20T21:09:12.164Z"
+}

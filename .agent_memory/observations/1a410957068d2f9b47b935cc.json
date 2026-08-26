@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests -- spl::file_object_read_ahead io::temp_stream_eof 2>&1 | tail -20",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests -- spl::file_object_read_ahead io::temp_stream_eof 2>&1 | tail -20: test codegen::io::temp_stream_eof::only_a_temp_stream_reports_eof_when_a_line_read_drains_it ... ok test codegen::spl::file_object_read_ahead::reading_by_ha",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests -- spl::file_object_read_ahead io::temp_stream_eof 2>&1 | tail -20: test codegen::io::temp_stream_eof::only_a_temp_stream_reports_eof_when_a_line_read_drains_it ... ok test codegen::spl::file_object_read_ahead::reading_by_hand_does_not_read_ahead ... ok failures: ---- codegen::spl::file_object_read_ahead::the_iteration_reads_one_line_ahead_of_what_it_yields stdout ---- thread 'codegen::spl::file_object_read_ahead::the_iteration_reads_one_line_ahead_of_what_it_yields' (65432860) panicked at tests/codegen/support/runner.rs:968:5: binary exited with status signal: 11 (SIGSEGV) stdout: temp 0: start= stderr: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace failures: codegen::spl::file_object_read_ahead::the_iteration_reads_one_line_ahead_of_what_it_yields test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 8966 filtered out; finished in 3.55s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1a410957068d2f9b47b935cc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:17:26.010Z",
+  "stored_at": "2026-08-25T14:17:26.011Z"
+}

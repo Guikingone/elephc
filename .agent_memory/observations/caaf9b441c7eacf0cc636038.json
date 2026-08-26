@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub(crate) const ARRAY_TO_STRING_MSG\\|^pub(crate) mod data\\|pub mod data\" src/codegen_support/runtime/data/mod.rs src/codegen_support/runtime/mod.rs 2>/dev/null | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub(crate) const ARRAY_TO_STRING_MSG\\|^pub(crate) mod data\\|pub mod data\" src/codegen_support/runtime/data/mod.rs src/codegen_support/runtime/mod.rs 2>/dev/null | head: src/codegen_support/runtime/data/mod.rs:533:pu",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub(crate) const ARRAY_TO_STRING_MSG\\|^pub(crate) mod data\\|pub mod data\" src/codegen_support/runtime/data/mod.rs src/codegen_support/runtime/mod.rs 2>/dev/null | head: src/codegen_support/runtime/data/mod.rs:533:pub(crate) const ARRAY_TO_STRING_MSG: &str = \"Warning: Array to string conversion\\n\"; src/codegen_support/runtime/mod.rs:17:pub(crate) mod data;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "caaf9b441c7eacf0cc636038",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:29:07.134Z",
+  "stored_at": "2026-08-23T16:29:07.134Z"
+}

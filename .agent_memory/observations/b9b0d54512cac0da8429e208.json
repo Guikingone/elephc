@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"Deprecated:\" src/ --glob '*.rs' | head -5; echo \"=== codegen gate:\"; rg -rn \"allow_dynamic_properties\" src/ --glob '*.rs' | rg -v \"types/checker\" | head -6",
+  "summary": "rg -rn \"Deprecated:\" src/ --glob '*.rs' | head -5; echo \"=== codegen gate:\"; rg -rn \"allow_dynamic_properties\" src/ --glob '*.rs' | rg -v \"types/checker\" | head -6:  must be provided as its default value will change\\\\n\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs: out.push_str(\".globl _diag_csv_escape_deprecated_fp",
+  "text": "rg -rn \"Deprecated:\" src/ --glob '*.rs' | head -5; echo \"=== codegen gate:\"; rg -rn \"allow_dynamic_properties\" src/ --glob '*.rs' | rg -v \"types/checker\" | head -6:  must be provided as its default value will change\\\\n\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs: out.push_str(\".globl _diag_csv_escape_deprecated_fputcsv_msg\\n_diag_csv_escape_deprecated_fputcsv_msg:\\n .ascii \\\"n fputcsv(): the $escape parameter must be provided as its default value will change\\\\n\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs: out.push_str(\".globl _diag_csv_escape_deprecated_str_getcsv_msg\\n_diag_csv_escape_deprecated_str_getcsv_msg:\\n .ascii \\\"n str_getcsv(): the $escape parameter must be provided as its default value will change\\\\n\\\"\\n\"); === codegen gate: src/types/schema.rs: pub n: bool, src/codegen/lower_inst/objects.rs: n: bool, src/ir_lower/expr/native_isset.rs: if class_info.n { src/ir_lower/tests/exhaustive.rs: n: true, src/codegen_support/runtime/data/user.rs: class_name == \"stdClass\" || class_info.n src/codegen_support/runtime/data/user.rs: n: false,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b9b0d54512cac0da8429e208",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:45:40.710Z",
+  "stored_at": "2026-08-17T21:45:40.711Z"
+}

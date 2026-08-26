@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"prelude\" scripts/docs/elephc_builtins/extract.py | head -20",
+  "summary": "grep -n \"prelude\" scripts/docs/elephc_builtins/extract.py | head -20: 21:Language constructs, dedicated syntax, injected preludes, and eval-only surfaces 485: if kind == \"prelude\": 486: prelude = repo / \"src\" / \"hash_prelude.rs\" 487: match = re.search(rf\"^function\\s+{re.escape(canonical)}\\s*\\(\", read(prelude), re.MULTI",
+  "text": "grep -n \"prelude\" scripts/docs/elephc_builtins/extract.py | head -20: 21:Language constructs, dedicated syntax, injected preludes, and eval-only surfaces 485: if kind == \"prelude\": 486: prelude = repo / \"src\" / \"hash_prelude.rs\" 487: match = re.search(rf\"^function\\s+{re.escape(canonical)}\\s*\\(\", read(prelude), re.MULTILINE) 488: lowering.codegen_file = str(prelude.relative_to(repo)) 489: lowering.codegen_line = read(prelude)[: match.start()].count(\"\\n\") + 1 if match else 1 491: lowering.notes.append(\"Implemented by a compiler-injected PHP prelude.\")",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "66b8352f12732720702e4196",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:18:08.568Z",
+  "stored_at": "2026-08-21T12:18:08.570Z"
+}

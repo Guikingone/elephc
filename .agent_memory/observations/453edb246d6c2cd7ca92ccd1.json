@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '505,530p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/call_validation.rs",
+  "summary": "rtk proxy sed -n '505,530p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/call_validation.rs: _ => None, }) }); let mut param_idx = 0usize; for arg in args { let actual_ty = self.infer_type(arg, caller_env)?; if matches!(arg.kind, ExprKind::Sprea",
+  "text": "rtk proxy sed -n '505,530p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/call_validation.rs: _ => None, }) }); let mut param_idx = 0usize; for arg in args { let actual_ty = self.infer_type(arg, caller_env)?; if matches!(arg.kind, ExprKind::Spread(_)) { continue; } if param_idx < regular_param_count { if sig.ref_params.get(param_idx).copied().unwrap_or(false) && !self.is_by_ref_argument_lvalue(arg, caller_env)? { let param_name = sig .params .get(param_idx) .map(|(name, _)| name.as_str()) .unwrap_or(\"arg\"); return Err(CompileError::new( arg.span, &format!( \"{} parameter ${} must be passed a variable\", callee_desc, param_name ), ));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "453edb246d6c2cd7ca92ccd1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:18:44.811Z",
+  "stored_at": "2026-08-17T09:18:44.812Z"
+}

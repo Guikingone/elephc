@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '128,145p' tests/codegen/io/files.rs",
+  "summary": "sed -n '128,145p' tests/codegen/io/files.rs: assert!( out.diagnostics .contains(\"Warning: disk_total_space(): No such file or directory\\n\"), \"expected the total-space wording too, got stderr={}\", out.diagnostics ); // Three calls fail, one of them suppressed: exactly two lines may be printed. assert_eq!( out.stderr.mat",
+  "text": "sed -n '128,145p' tests/codegen/io/files.rs: assert!( out.diagnostics .contains(\"Warning: disk_total_space(): No such file or directory\\n\"), \"expected the total-space wording too, got stderr={}\", out.diagnostics ); // Three calls fail, one of them suppressed: exactly two lines may be printed. assert_eq!( out.stderr.matches(\"No such file or directory\").count(), 2, \"@ must suppress the third, got stderr={}\", out.stderr ); } /// Verifies `sys_get_temp_dir()` derives its answer from `TMPDIR`, as php does. /// /// It used to answer a hardcoded `/tmp`. On macOS php hands out a private per-user directory,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c6127a61f546d00c98780429",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T14:56:18.593Z",
+  "stored_at": "2026-08-18T14:56:18.593Z"
+}

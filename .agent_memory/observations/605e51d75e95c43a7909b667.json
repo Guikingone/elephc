@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/wrapper_chunk_reads.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/wrapper_chunk_reads.rs: /// Verifies `fgets()` still asks for a chunk, so the four readers agree.\n#[test]\nfn test_a_bounded_fgets_still_asks_for_a_chunk() { -> /// Verifies a SEEK throws the buffered byt",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/wrapper_chunk_reads.rs: /// Verifies `fgets()` still asks for a chunk, so the four readers agree.\n#[test]\nfn test_a_bounded_fgets_still_asks_for_a_chunk() { -> /// Verifies a SEEK throws the buffered bytes away.\n///\n/// Buffering a chunk gives the stream bytes from AHEAD of wherever the caller seeks to next, and\n/// serving them afterwards is a wrong answer made of valid bytes: `fread($h, 5)` then\n/// `fseek($h, 3)` then `fread($h, 4)` answered bytes 7..10 out of the stale buffer. php discards\n/// the buffer and reads again, which the SECOND `read(8192)` in the expected output is the\n/// evidence for — this wrapper cannot actually s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "605e51d75e95c43a7909b667",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:16:19.971Z",
+  "stored_at": "2026-08-21T14:16:19.971Z"
+}

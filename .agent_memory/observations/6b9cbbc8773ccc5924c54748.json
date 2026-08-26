@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ && ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/crates/",
+  "summary": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ && ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/crates/: onal debug_info.rs errors eval_aot eval_aot.rs exports.rs func_args hash_prelude hash_prelude.rs image_prelude im",
+  "text": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ && ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/crates/: onal debug_info.rs errors eval_aot eval_aot.rs exports.rs func_args hash_prelude hash_prelude.rs image_prelude image_prelude.rs intrinsics.rs ir ir_lower ir_passes lexer lib.rs link_plan.rs link_planning.rs linker list_id_prelude list_id_prelude.rs magic_constants magic_constants.rs main.rs name_resolver names.rs native_deps opcache opcache_prelude opcache_prelude.rs optimize optimize.rs parser pdo_prelude pdo_prelude.rs php_profile php_version.rs pipeline pipeline.rs progress.rs resolver runtime_cache.rs source.rs source_map.rs span.rs stream_compliance.rs strict_php strict_php.rs string_bytes.rs superglobals.rs termination.rs timings.rs types tz_prelude tz_prelude.rs var_export_prelude var_export_prelude.rs version_prelude.rs web_prelude web_prelude.rs elephc-bcmath elephc-builtin-contract elephc-crypto elephc-image elephc-magician elephc-pdo elephc-phar elephc-tls elephc-tz elephc-web",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6b9cbbc8773ccc5924c54748",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:07.681Z",
+  "stored_at": "2026-08-14T14:11:07.681Z"
+}

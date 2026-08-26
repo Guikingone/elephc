@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"stream_select\" -A6 tests/codegen/eval.rs | grep -n \"assert\\|int(\" | head -8",
+  "summary": "grep -n \"stream_select\" -A6 tests/codegen/eval.rs | grep -n \"assert\\|int(\" | head -8: 5:7971- assert!( 13:7983- assert!( 36:8054- assert_eq!(out, \"dynfsock:namedfsock:fccselect:namedselect\");",
+  "text": "grep -n \"stream_select\" -A6 tests/codegen/eval.rs | grep -n \"assert\\|int(\" | head -8: 5:7971- assert!( 13:7983- assert!( 36:8054- assert_eq!(out, \"dynfsock:namedfsock:fccselect:namedselect\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5e126f799d451fa01e6691d0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:20:20.940Z",
+  "stored_at": "2026-08-18T11:20:20.941Z"
+}

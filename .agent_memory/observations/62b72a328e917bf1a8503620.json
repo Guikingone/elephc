@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '592,600p' src/types/checker/builtin_spl_classes/filesystem.rs; echo \"--- 628 ---\"; sed -n '626,640p' src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '592,600p' src/types/checker/builtin_spl_classes/filesystem.rs; echo \"--- 628 ---\"; sed -n '626,640p' src/types/checker/builtin_spl_classes/filesystem.rs: \"__construct\", vec![ param(\"directory\", TypeExpr::Str), param_",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '592,600p' src/types/checker/builtin_spl_classes/filesystem.rs; echo \"--- 628 ---\"; sed -n '626,640p' src/types/checker/builtin_spl_classes/filesystem.rs: \"__construct\", vec![ param(\"directory\", TypeExpr::Str), param_default(\"flags\", TypeExpr::Int, int_expr(FS_SKIP_DOTS)), ], Some(TypeExpr::Void), directory_construct_body(var_expr(\"directory\"), var_expr(\"flags\"), true, false), ), method_with_body(\"current\", Vec::new(), Some(mixed_type()), filesystem_current_body()), --- 628 --- vec![ method_with_body( \"__construct\", vec![ param(\"directory\", TypeExpr::Str), param_default(\"flags\", TypeExpr::Int, int_expr(FS_CURRENT_AS_FILEINFO)), ], Some(TypeExpr::Void), directory_construct_body(var_expr(\"directory\"), var_expr(\"flags\"), true, false), ), method_with_body(\"hasChildren\", Vec::new(), Some(TypeExpr::Bool), recursive_directory_has_children_body()), method_with_body( \"getChildren\", Vec::new(), Some(TypeExpr::Nullable(Box::new(named_type(\"RecursiveIterator\")))),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "62b72a328e917bf1a8503620",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:34:09.105Z",
+  "stored_at": "2026-08-23T09:34:09.105Z"
+}

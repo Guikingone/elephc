@@ -1,0 +1,16 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sldiff.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sldiff.py: \"\"\"Runs the symlink probe once in a FRESH directory per engine and prints the first difference.\"\"\"\n\nimport pathlib\nimport shutil\nimport sub",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sldiff.py: \"\"\"Runs the symlink probe once in a FRESH directory per engine and prints the first difference.\"\"\"\n\nimport pathlib\nimport shutil\nimport subprocess\n\nHERE = pathlib.Path(\n    \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc\"\n    \"--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad\"\n)\nSRC = HERE / \"sweep/probes/symlink-family.php\"\nELEPHC = (\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/\"\n    \"streams-csv-signature/target/debug/elephc\"\n)\n\nout = {}\nfor engine in (\"php\", \"elephc\"):\n    d = HERE / \"sldiff\" ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "34c96c78284fef2f474ba617",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:53:49.443Z",
+  "stored_at": "2026-08-26T08:53:49.444Z",
+  "low_signal": true
+}

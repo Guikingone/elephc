@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn php_constant_value\\|CONSTANT_TABLE\\|fn lookup_constant\" src/ --include \"*.rs\" | head -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn php_constant_value\\|CONSTANT_TABLE\\|fn lookup_constant\" src/ --include \"*.rs\" | head -8 completed",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn php_constant_value\\|CONSTANT_TABLE\\|fn lookup_constant\" src/ --include \"*.rs\" | head -8 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f4ec8831b5a9c8e00099ca26",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:19:34.431Z",
+  "stored_at": "2026-08-23T09:19:34.431Z"
+}

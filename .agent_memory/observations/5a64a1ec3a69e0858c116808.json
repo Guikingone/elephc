@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rniE \"\\\"(stdin|stdout|stderr|input|output|memory|temp|fd/|filter)\\\"\" src/ir_lower src/codegen_support/runtime/io src/types 2>/dev/null | head -40",
+  "summary": "grep -rniE \"\\\"(stdin|stdout|stderr|input|output|memory|temp|fd/|filter)\\\"\" src/ir_lower src/codegen_support/runtime/io src/types 2>/dev/null | head -40: lass_static_property_regular_args(&args, \"filter\", None)?; src/ir_lower/program/metadata.rs:109: let is_filter_class = methods.contains_key(\"filter\"); src/codegen_supp",
+  "text": "grep -rniE \"\\\"(stdin|stdout|stderr|input|output|memory|temp|fd/|filter)\\\"\" src/ir_lower src/codegen_support/runtime/io src/types 2>/dev/null | head -40: lass_static_property_regular_args(&args, \"filter\", None)?; src/ir_lower/program/metadata.rs:109: let is_filter_class = methods.contains_key(\"filter\"); src/codegen_support/runtime/io/php_wrapper_open.rs:108: emitter.instruction(\"add x13, x13, x10\"); // step past \"fd/\" src/codegen_support/runtime/io/php_wrapper_open.rs:206: emitter.instruction(\"add r8, r10\"); // step past \"fd/\" src/types/checker/driver/init.rs:85: constants.insert(\"STDIN\".to_string(), PhpType::stream_resource()); src/types/checker/driver/init.rs:86: constants.insert(\"STDOUT\".to_string(), PhpType::stream_resource()); src/types/checker/driver/init.rs:87: constants.insert(\"STDERR\".to_string(), PhpType::stream_resource()); src/types/checker/builtin_types/reflection/class_collections.rs:55: let filter = variable_expr(\"filter\", dummy_span); src/types/checker/builtin_types/reflection/class_collections.rs:90: \"filter\".to_string(),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5a64a1ec3a69e0858c116808",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:12:33.513Z",
+  "stored_at": "2026-08-14T14:12:33.513Z"
+}

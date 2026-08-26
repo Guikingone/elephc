@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/ir_lower/context.rs\")\ns = p.read_text()\nold = \"\"\"            let stored = self.store_local(name, null, PhpType::Void, span);\n            self.mark_local_uninitialized(name);\n            stored\n        }\"\"\"\nnew = \"\"\"            let stored = self.store_local(name, null, PhpType::Void, span);\n            self.mark_local_uninitialized(name);\n            return stored;\n        }\"\"\"\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nprint(\"explicit return restored\")\nPY\nsed -n '312,322p' src/types/checker/inference/expr/effects.rs",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path(\"src/ir_lower/context.rs\") s = p.read_text() old = \"\"\" let stored = self.store_local(name, null, PhpType::Void, span); self.mark_local_uninitialized(na",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "49a2b327f5d2e1546ba5d220",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T19:39:45.325Z",
+  "stored_at": "2026-08-26T19:39:45.326Z"
+}

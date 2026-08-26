@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"SPL_FILE_DROP_NEW_LINE\" src/types/checker/builtin_spl_classes/filesystem.rs | head -10",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"SPL_FILE_DROP_NEW_LINE\" src/types/checker/builtin_spl_classes/filesystem.rs | head -10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ac9bbee25a774fbb397abac9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:28:34.019Z",
+  "stored_at": "2026-08-23T09:28:34.020Z"
+}

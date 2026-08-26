@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '360,385p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '360,385p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs: re_if_result(ctx, inst) } /// Lowers `fprintf(stream, format, values...)` as `sprintf()` plus stream write. pub(crate) fn lower_fprintf(ctx: &mut Funct",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '360,385p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs: re_if_result(ctx, inst) } /// Lowers `fprintf(stream, format, values...)` as `sprintf()` plus stream write. pub(crate) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { ensure_arg_count_between(inst, \"fprintf\", 2, usize::MAX)?; let stream = expect_operand(inst, 0)?; let format = expect_operand(inst, 1)?; let spec_cats = super::super::strings::sprintf_spec_cats_for_format(ctx, format)?; load_open_stream_handle_to_result(ctx, stream, \"fprintf\")?; abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); for index in (2..inst.operands.len()).rev() { let value = expect_operand(inst, index)?; let spec_cat = spec_cats.get(index - 2).copied(); super::super::strings::pack_sprintf_like_arg(ctx, value, spec_cat, \"fprintf\")?; } load_string_to_result(ctx, format, \"fprintf format\")?; match ctx.emitter.target.arch { Arch::AArch64 => { ctx.emitter.instruction(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a95a54c05895c6220a882ab",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:54:10.836Z",
+  "stored_at": "2026-08-22T17:54:10.837Z"
+}

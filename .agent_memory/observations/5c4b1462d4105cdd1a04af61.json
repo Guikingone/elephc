@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nsrc = open('filterreg.php').read()\n# elephc refuses the undefined-class registration at compile time; drop that one case so the\n# REST of php's rules can be measured against it.\nsrc = src.replace(\"\"\"// 2. A class that does not exist: php does NOT check at registration.\nvar_dump(stream_filter_register('never.defined', 'NoSuchClassAtAll'));\n\"\"\", \"\")\nsrc = src.replace(\"\"\"// 7. Using the filter registered w… [+323 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY' src = ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5c4b1462d4105cdd1a04af61",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:36:34.710Z",
+  "stored_at": "2026-08-17T08:36:34.711Z"
+}

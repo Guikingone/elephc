@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '690,705p' src/ir/instr.rs; echo \"--- who dispatches to that lowering:\"; grep -rn \"lower_nullable_prop_get_with_warning\" src/codegen/ | head",
+  "summary": "sed -n '690,705p' src/ir/instr.rs; echo \"--- who dispatches to that lowering:\"; grep -rn \"lower_nullable_prop_get_with_warning\" src/codegen/ | head: etExists | PropInitialized | LoadPropRefCell => { E::READS_HEAP } PropGet | NullsafePropGet => { E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT } // Not a pure ",
+  "text": "sed -n '690,705p' src/ir/instr.rs; echo \"--- who dispatches to that lowering:\"; grep -rn \"lower_nullable_prop_get_with_warning\" src/codegen/ | head: etExists | PropInitialized | LoadPropRefCell => { E::READS_HEAP } PropGet | NullsafePropGet => { E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT } // Not a pure read despite the name, exactly like `ArrayGetForWrite`: the // copy-on-write split rewrites the receiver's PROPERTY slot, so it must never be // treated as reorderable or redundant against the plain property reads around it. PropGetForWrite => { E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT } DynamicPropGet => { E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT } --- who dispatches to that lowering: src/codegen/lower_inst/objects/known_property_reads.rs:66: return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, property); src/codegen/lower_inst/objects/mixed_property_reads.rs:306:pub(super) fn lower_nullable_prop_get_with_warning(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f2495a5da7123c5ab9486cbb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:56:17.688Z",
+  "stored_at": "2026-08-18T20:56:17.689Z"
+}

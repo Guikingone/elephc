@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/gh17037 && php -n gh17037.php 2>&1 | head -3; echo \"--- elephc:\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run gh17037.php 2>&1 | tail -3",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/gh17037 && php -n gh17037.php 2>&1 | head -3; echo \"--- elephc:\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/gh17037 && php -n gh17037.php 2>&1 | head -3; echo \"--- elephc:\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run gh17037.php 2>&1 | tail -3: bool(false) --- elephc: error[2:10]: stream_filter_register(): undefined class 'filter_string_toupper'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d99f2ba5b6e518bee2fbe402",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:35:20.024Z",
+  "stored_at": "2026-08-17T08:35:20.025Z"
+}

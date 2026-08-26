@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 45,70p src/types/error_constants.rs",
+  "summary": "About to run: sed -n 45,70p src/types/error_constants.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "afd79e935a1454e87bdd2d0a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:56:55.696Z",
+  "stored_at": "2026-08-22T09:56:55.697Z"
+}

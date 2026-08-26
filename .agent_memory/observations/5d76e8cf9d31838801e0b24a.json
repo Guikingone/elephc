@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 4 1 2>&1 | head -70",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 4 1 2>&1 | head -70:  elephc now does the same, so a helper that // read only stderr would hand every failure assertion an empty s",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 4 1 2>&1 | head -70:  elephc now does the same, so a helper that // read only stderr would hand every failure assertion an empty string. Compiler diagnostics // still arrive on stderr, so both are returned rather than either one. let mut combined = String::from_utf8(output.stdout).unwrap(); combined.push_str(&String::from_utf8(output.stderr).unwrap()); combined >>>>>>> origin/main ########## tests/error_tests.rs (2 hunk(s)) ########## --- lines 40..47 --- <<<<<<< HEAD let ast = elephc::dir_prelude::inject_if_used(ast); let ast = elephc::hash_prelude::inject_if_used(ast, false); let ast = elephc::scanf_prelude::inject_if_used(ast); ======= let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new(); let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory); >>>>>>> origin/main --- lines 63..70 --- <<<<<<< HEAD let ast = elephc::dir_prelude::inject_if_used(ast);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5d76e8cf9d31838801e0b24a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:32:31.311Z",
+  "stored_at": "2026-08-20T17:32:31.312Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/defaultless.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/defaultless.php: <?php\n// Is a property with NO default the problem, on its own?\nclass One\n{\n    public $a;\n}\nclass Two\n{\n    public $a;\n    publi",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/defaultless.php: <?php\n// Is a property with NO default the problem, on its own?\nclass One\n{\n    public $a;\n}\nclass Two\n{\n    public $a;\n    public $b = \"x\";\n}\nclass Three\n{\n    public $a, $b = \"x\";\n}\nvar_dump(get_object_vars(new One()));\necho \"one done\\n\";\nvar_dump(get_object_vars(new Two()));\necho \"two done\\n\";\nvar_dump(get_object_vars(new Three()));\necho \"three done\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d4d00146fc1cb4023f4d42a5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:45:08.194Z",
+  "stored_at": "2026-08-23T08:45:08.195Z"
+}

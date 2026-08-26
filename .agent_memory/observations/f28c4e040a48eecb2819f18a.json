@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"strerror\\|Is a directory\" src/codegen_support/runtime/ | head -6",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"strerror\\|Is a directory\" src/codegen_support/runtime/ | head -6: src/codegen_support/runtime/io/socket_gai_message.rs:12://! reason is the platform's own `gai_strerror` text. elephc left `&$error_message` empty, s",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"strerror\\|Is a directory\" src/codegen_support/runtime/ | head -6: src/codegen_support/runtime/io/socket_gai_message.rs:12://! reason is the platform's own `gai_strerror` text. elephc left `&$error_message` empty, so the src/codegen_support/runtime/io/socket_gai_message.rs:16://! `strerror` pointer for every other failure, so an allocation there would have no owner. A src/codegen_support/runtime/io/socket_gai_message.rs:50: emitter.bl_c(\"gai_strerror\"); // x0 = static NUL-terminated reason src/codegen_support/runtime/io/socket_gai_message.rs:128: emitter.bl_c(\"gai_strerror\"); // rax = static NUL-terminated reason src/codegen_support/runtime/io/socket_errno.rs:14://! - The message comes from libc `strerror`, which is where php-src gets it too — so the text src/codegen_support/runtime/io/socket_errno.rs:123:/// Emits `__rt_socket_strerror`: the message for a socket error number.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f28c4e040a48eecb2819f18a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:05:39.870Z",
+  "stored_at": "2026-08-24T13:05:39.870Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build --lib 2>&1 | grep -E \"warning: unused\" -A 6 | head -12",
+  "summary": "cargo build --lib 2>&1 | grep -E \"warning: unused\" -A 6 | head -12: warning: unused import: `STREAM_SERVER_BIND` --> src/types/stream_constants.rs:78:5 | 78 | STREAM_SERVER_BIND, STREAM_SERVER_DEFAULT_FLAGS, STREAM_SERVER_LISTEN, | ^^^^^^^^^^^^^^^^^^ | = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by",
+  "text": "cargo build --lib 2>&1 | grep -E \"warning: unused\" -A 6 | head -12: warning: unused import: `STREAM_SERVER_BIND` --> src/types/stream_constants.rs:78:5 | 78 | STREAM_SERVER_BIND, STREAM_SERVER_DEFAULT_FLAGS, STREAM_SERVER_LISTEN, | ^^^^^^^^^^^^^^^^^^ | = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b582505b8b960031e7de2203",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:48:38.075Z",
+  "stored_at": "2026-08-22T09:48:38.075Z"
+}

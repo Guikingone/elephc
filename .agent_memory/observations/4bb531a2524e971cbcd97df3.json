@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o np5 np5.php > /dev/null 2>&1; lldb -b -s crash2.lldb ./np5 2>&1 | tail -30",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o np5 np5.php > /dev/null 2>&1; lld",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o np5 np5.php > /dev/null 2>&1; lldb -b -s crash2.lldb ./np5 2>&1 | tail -30: v x0, x1 0x100001258 <+320>: cbz x0, 0x100001288 ; ___lldb_unnamed_symbol_100001288 0x10000125c <+324>: mov x9, #0xfffe ; =65534 0x100001260 <+328>: movk x9, #0xffff, lsl #16 0x100001264 <+332>: movk x9, #0xffff, lsl #32 0x100001268 <+336>: movk x9, #0x7fff, lsl #48 0x10000126c <+340>: cmp x0, x9 0x100001270 <+344>: b.eq 0x100001288 ; ___lldb_unnamed_symbol_100001288 0x100001274 <+348>: bl 0x100003cd4 ; ___lldb_unnamed_symbol_100003cd4 0x100001278 <+352>: cmp x0, #0x8 0x10000127c <+356>: b.eq 0x100001288 ; ___lldb_unnamed_symbol_100001288 np5`___lldb_unnamed_symbol_100001280: 0x100001280 <+0>: mov x0, #0x0 ; =0 0x100001284 <+4>: b 0x10000128c ; ___lldb_unnamed_symbol_10000128c np5`___lldb_unnamed_symbol_100001288: 0x100001288 <+0>: mov x0, #0x1 ; =1 np5`___lldb_unnamed_symbol_10000128c: 0x10000128c <+0>: cmp x0, #0x0 0x100001290 <+4>: cset x0, eq 0x100001294 <+8>: mov x21, x0 (lldb) quit",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4bb531a2524e971cbcd97df3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:54:44.472Z",
+  "stored_at": "2026-08-23T08:54:44.472Z"
+}

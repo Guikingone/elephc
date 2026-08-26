@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/exception_location.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/exception_location.rs: //! Purpose:\n//! Integration tests for the SOURCE LOCATION an exception raised inside a builtin class reports.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n/",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/exception_location.rs: //! Purpose:\n//! Integration tests for the SOURCE LOCATION an exception raised inside a builtin class reports.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - php reports the CALL SITE for an exception an internal method throws, because the `new`\n//!   lives in php-src and has no php line of its own. elephc's builtin classes are compiled from\n//!   SYNTHESIZED bodies, whose `new` carries no span either — so `getLine()` answered `0` and the\n//!   uncaught report dropped both its ` in FILE:LINE` suffix and its `  thrown in` tail.\n//! - MEASURED on ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "44adadf83f0da4de29bcc0f1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:53:41.551Z",
+  "stored_at": "2026-08-25T12:53:41.551Z"
+}

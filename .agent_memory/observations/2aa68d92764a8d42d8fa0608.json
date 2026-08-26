@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fpwarn_refuse.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fpwarn_refuse.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n# --- 1. the",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fpwarn_refuse.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n# --- 1. the absorber reports whether the params were USABLE ---\np = 'src/codegen_support/runtime/io/filter_params.rs'\ns = open(p).read()\n\nold = '''/// Emits `__rt_filter_absorb_params(state)`, which parses the node's retained `$params` array.\n///\n/// Reads `line-length`, `line-break-chars` and `binary` and publishes them as plain words on the\n/// node. A missing key, a non-array `$params`, and no `$params` at all all leave the zeroed\n/// defaults in place, which is php's behavio",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2aa68d92764a8d42d8fa0608",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:41:33.102Z",
+  "stored_at": "2026-08-17T14:41:33.102Z"
+}

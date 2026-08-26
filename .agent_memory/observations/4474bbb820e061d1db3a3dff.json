@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '1,60p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/php_wrapper_open.rs | rtk proxy grep -n \"Input\\|x0\\|x1\\|x2\\|label_global\\|//!\" | head -20",
+  "summary": "rtk proxy sed -n '1,60p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/php_wrapper_open.rs | rtk proxy grep -n \"Input\\|x0\\|x1\\|x2\\|label_global\\|//!\" | head -20: path at compile time. A path built at run time had 11://! no such dispatch and fe",
+  "text": "rtk proxy sed -n '1,60p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/php_wrapper_open.rs | rtk proxy grep -n \"Input\\|x0\\|x1\\|x2\\|label_global\\|//!\" | head -20: path at compile time. A path built at run time had 11://! no such dispatch and fell through to the file opener, so `fopen($path, 'r')` with 12://! `php://memory` looked for a FILE of that name and answered `false` — as did every other 13://! scheme. This helper makes the same choices from the bytes. 14://! - The sub-scheme names live in `_php_wrapper_schemes`, a fixed-stride table built in the data 15://! section, so the names and their actions are declared once instead of being spelled out as a 16://! comparison chain in each of the two assembly emitters here. 17://! - Descriptor-backed schemes hand out a `dup()`, never the process's own descriptor, matching 18://! what the literal path already does: `fclose()` on the result must not close the real stdout. 44:/// `__rt_php_wrapper_open(x0 = path, x1 = length) -> x0 = descriptor, or -1`. 51: emitter.label_global(\"__rt_php_wrapper_open\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4474bbb820e061d1db3a3dff",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:58:49.259Z",
+  "stored_at": "2026-08-17T07:58:49.260Z"
+}

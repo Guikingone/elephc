@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"eval_barrier\" src/ | head -30",
+  "summary": "grep -rn \"eval_barrier\" src/ | head -30: &mut self, env: &mut TypeEnv) { src/types/checker/inference/expr/effects.rs:537: self.eval_barrier_active = true; src/types/checker/inference/expr/basic.rs:109: None if self.eval_barrier_active => Ok(PhpType::Int), src/types/checker/inference/expr/class_refs.rs:75: if !self.scop",
+  "text": "grep -rn \"eval_barrier\" src/ | head -30: &mut self, env: &mut TypeEnv) { src/types/checker/inference/expr/effects.rs:537: self.eval_barrier_active = true; src/types/checker/inference/expr/basic.rs:109: None if self.eval_barrier_active => Ok(PhpType::Int), src/types/checker/inference/expr/class_refs.rs:75: if !self.scoped_constant_receiver_is_known(&class_name) && self.eval_barrier_active { src/types/checker/functions/resolution/call.rs:171: if self.eval_barrier_active { src/optimize/tests/propagate/straight_line.rs:95:fn test_propagate_constants_stops_at_eval_barrier() { src/optimize/tests/propagate/straight_line.rs:122:fn test_propagate_constants_stops_at_eval_barrier_in_closure_capture() { src/ir_lower/stmt/static_property_writes.rs:199: ctx.has_eval_barrier() src/ir_lower/context.rs:125: eval_barrier_active: bool, src/ir_lower/context.rs:262: eval_barrier_active: bool, src/ir_lower/context.rs:355: eval_barrier_active: false,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5684795b0f0aa1bc5b34983c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:14:45.753Z",
+  "stored_at": "2026-08-20T19:14:45.754Z"
+}

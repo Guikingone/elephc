@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"function .*(&\\$\" tests/codegen/callables/*.rs tests/codegen/regressions.rs 2>/dev/null | head -6",
+  "summary": "grep -rn \"function .*(&\\$\" tests/codegen/callables/*.rs tests/codegen/regressions.rs 2>/dev/null | head -6 completed",
+  "text": "grep -rn \"function .*(&\\$\" tests/codegen/callables/*.rs tests/codegen/regressions.rs 2>/dev/null | head -6 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8585d415618d63967dcc8de2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:02:09.290Z",
+  "stored_at": "2026-08-18T11:02:09.290Z"
+}

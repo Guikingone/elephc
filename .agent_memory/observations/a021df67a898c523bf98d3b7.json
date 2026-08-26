@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn type_spec_to_php\\|TypeSpec::\" src/builtins/registry.rs | head -10",
+  "summary": "grep -n \"fn type_spec_to_php\\|TypeSpec::\" src/builtins/registry.rs | head -10 completed",
+  "text": "grep -n \"fn type_spec_to_php\\|TypeSpec::\" src/builtins/registry.rs | head -10 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a021df67a898c523bf98d3b7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:19:29.253Z",
+  "stored_at": "2026-08-20T20:19:29.253Z"
+}

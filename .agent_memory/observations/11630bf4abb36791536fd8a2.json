@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"AssocArray {\" src/types/mod.rs 2>/dev/null | head -3; grep -rn \"AssocArray {\" src/types/php_type.rs 2>/dev/null | head -3; grep -rn \"    AssocArray\" -A 5 src/types/*.rs | head -12",
+  "summary": "grep -n \"AssocArray {\" src/types/mod.rs 2>/dev/null | head -3; grep -rn \"AssocArray {\" src/types/php_type.rs 2>/dev/null | head -3; grep -rn \"    AssocArray\" -A 5 src/types/*.rs | head -12: src/types/model.rs:30: AssocArray { src/types/model.rs-31- key: Box<PhpType>, src/types/model.rs-32- value: Box<PhpType>, src/type",
+  "text": "grep -n \"AssocArray {\" src/types/mod.rs 2>/dev/null | head -3; grep -rn \"AssocArray {\" src/types/php_type.rs 2>/dev/null | head -3; grep -rn \"    AssocArray\" -A 5 src/types/*.rs | head -12: src/types/model.rs:30: AssocArray { src/types/model.rs-31- key: Box<PhpType>, src/types/model.rs-32- value: Box<PhpType>, src/types/model.rs-33- }, src/types/model.rs-34- Buffer(Box<PhpType>), src/types/model.rs-35- Callable,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "11630bf4abb36791536fd8a2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:40:09.905Z",
+  "stored_at": "2026-08-22T11:40:09.906Z"
+}

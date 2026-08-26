@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn lower_expect_array_arg\" src/ | head -2",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn lower_expect_array_arg\" src/ | head -2: src/codegen/lower_inst/builtins/expect_array_arg.rs:20:pub(crate) fn lower_expect_array_arg(",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn lower_expect_array_arg\" src/ | head -2: src/codegen/lower_inst/builtins/expect_array_arg.rs:20:pub(crate) fn lower_expect_array_arg(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bd2b6d6ca59a5380ee410f41",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T10:54:18.997Z",
+  "stored_at": "2026-08-23T10:54:18.997Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/dynamic_method_name.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/dynamic_method_name.rs: //! Purpose:\n//! Integration tests for `$object->$name()` on a BUILTIN class, where the method to call is\n//! decided at run time.\n//!\n//! Called from:\n//! - `cargo test` through R",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/dynamic_method_name.rs: //! Purpose:\n//! Integration tests for `$object->$name()` on a BUILTIN class, where the method to call is\n//! decided at run time.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - MEASURED: `foreach ([\"getFilename\", \"getSize\"] as $call) { $info->$call(); }` died with\n//!   `Fatal error: callable array did not resolve to an invokable target` where php answers both.\n//!   The same loop worked as soon as each name had ALSO been called statically somewhere in the\n//!   program — which is what said the dispatch ladder is bounded by the bodies that were",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "deea7d60026ff88995eb97a8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:29:25.902Z",
+  "stored_at": "2026-08-25T12:29:25.903Z"
+}

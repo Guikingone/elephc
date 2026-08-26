@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"streams-compliance\" tools/*.rs examples/*.rs 2>/dev/null | head; echo \"=== files ===\"; ls tools/ examples/ 2>/dev/null | head -20; echo \"=== Cargo example ===\"; grep -n \"\\[\\[example\\]\\]\" -A4 Cargo.toml | head -20",
+  "summary": "grep -rn \"streams-compliance\" tools/*.rs examples/*.rs 2>/dev/null | head; echo \"=== files ===\"; ls tools/ examples/ 2>/dev/null | head -20; echo \"=== Cargo example ===\"; grep -n \"\\[\\[example\\]\\]\" -A4 Cargo.toml | head -20: tools/gen_builtins.rs:26: if std::env::args().any(|argument| argument == \"--streams-compliance\")",
+  "text": "grep -rn \"streams-compliance\" tools/*.rs examples/*.rs 2>/dev/null | head; echo \"=== files ===\"; ls tools/ examples/ 2>/dev/null | head -20; echo \"=== Cargo example ===\"; grep -n \"\\[\\[example\\]\\]\" -A4 Cargo.toml | head -20: tools/gen_builtins.rs:26: if std::env::args().any(|argument| argument == \"--streams-compliance\") { tools/gen_builtins.rs:30: eprintln!(\"--streams-compliance requires --target=<supported-target>\"); === files === examples/: abstract-properties advanced-functions anonymous-classes arithmetic array-access-exception-order array-internal-pointer array-parity arrays assoc-arrays asymmetric-visibility attributes autoload-reflection-stress bcmath binary-literals bitwise build-all.sh calendar callbacks case-insensitive-symbols === Cargo example === 36:[[example]] 37-name = \"gen_builtins\" 38-path = \"tools/gen_builtins.rs\" 39- 40-[dependencies]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "baaf51c4c026cba216b1a877",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:19:00.388Z",
+  "stored_at": "2026-08-14T14:19:00.389Z"
+}

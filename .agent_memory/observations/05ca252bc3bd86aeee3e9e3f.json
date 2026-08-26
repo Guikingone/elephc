@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 -c \"\nimport pathlib\np = pathlib.Path('nullprop.php')\nt = p.read_text()\nt = t.replace('echo \\\"3 object   : \\\";\\nvar_dump(\\$o);\\n', '')\np.write_text(t)\nprint('case 3 removed')\n\"; python3 diff1.py nullprop.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 -c \"\nimport pathlib\np = pathlib.Path('nullprop.php')\nt = p.read_text()\nt = t.replace('echo \\\"3 object   : \\\";\\nvar_dump(\\$o);\\n', '')\np.writ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 -c \"\nimport pathlib\np = pathlib.Path('nullprop.php')\nt = p.read_text()\nt = t.replace('echo \\\"3 object   : \\\";\\nvar_dump(\\$o);\\n', '')\np.write_text(t)\nprint('case 3 removed')\n\"; python3 diff1.py nullprop.php: case 3 removed === php === 1 direct : NULL 2 literal : array(1) { [\"a\"]=> NULL } 4 vars : got 2 5 element : int(1) 6 null one : NULL 7 whole : array(2) { [\"a\"]=> NULL [\"b\"]=> int(1) } === elephc === 1 direct : NULL 2 literal : array(1) { [\"a\"]=> NULL } 4 vars : got 2 5 element : int(1) 6 null one : --- exit -11 (php 0) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "05ca252bc3bd86aeee3e9e3f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:46:45.574Z",
+  "stored_at": "2026-08-23T08:46:45.575Z"
+}

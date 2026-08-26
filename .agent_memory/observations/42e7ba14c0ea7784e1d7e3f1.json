@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/selmin.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/selmin.php: <?php\n\n$h = @fopen(\"nowrap_at_all://x\", \"r\");\nvar_dump($h);\n$read = [$h];\n$write = null;\n$except = null;\nstream_select($read, $write, ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/selmin.php: <?php\n\n$h = @fopen(\"nowrap_at_all://x\", \"r\");\nvar_dump($h);\n$read = [$h];\n$write = null;\n$except = null;\nstream_select($read, $write, $except, 0);\nvar_dump(count($read));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "42e7ba14c0ea7784e1d7e3f1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:41:29.952Z",
+  "stored_at": "2026-08-22T20:41:29.953Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/reassign-across-classes.php 2>/dev/null || find /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep -name 'reassign*' | head",
+  "summary": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/reassign-across-classes.php 2>/dev/null || find /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-work",
+  "text": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/reassign-across-classes.php 2>/dev/null || find /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep -name 'reassign*' | head: 1 <?php 2 class A { public function name(): string { return \"A\"; } } 3 class B { public function name(): string { return \"B\"; } } 4 5 $x = new A(); 6 echo $x->name(); 7 $x = new B(); 8 echo $x->name(), \"\\n\"; 9 10 try { throw new RuntimeException(\"boom\"); } 11 catch (Throwable $e) { echo get_class($e), \";\"; } 12 $e = new A(); 13 echo $e->name(), \"\\n\"; 14 15 $y = new A(); 16 $y = \"now a string\"; 17 echo $y, \"\\n\"; 18 $y = 42; 19 echo $y, \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f4d04753452810ef68d89c4e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:46:07.313Z",
+  "stored_at": "2026-08-26T07:46:07.314Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests spl:: 2>&1 | grep -A 8 '^failures:$' | head -10",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests spl:: 2>&1 | grep -A 8 '^failures:$' | head -10: failures: ---- codegen::spl::file_object_lines::test_skip_empty_turns_the_trailing_element_into_false stdout ---- thread 'codegen::spl::file_object_lines::test_skip_empty_turn",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests spl:: 2>&1 | grep -A 8 '^failures:$' | head -10: failures: ---- codegen::spl::file_object_lines::test_skip_empty_turns_the_trailing_element_into_false stdout ---- thread 'codegen::spl::file_object_lines::test_skip_empty_turns_the_trailing_element_into_false' (63735018) panicked at tests/codegen/spl/file_object_lines.rs:128:5: assertion `left == right` failed left: \"string(2) \\\"a\\n\\\"\\nstring(1) \\\"\\n\\\"\\nstring(2) \\\"b\\n\\\"\\n\" right: \"string(2) \\\"a\\n\\\"\\nstring(1) \\\"\\n\\\"\\nstring(2) \\\"b\\n\\\"\\nbool(false)\\n\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18cff985a7664f739658038a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:59:25.760Z",
+  "stored_at": "2026-08-25T09:59:25.760Z"
+}

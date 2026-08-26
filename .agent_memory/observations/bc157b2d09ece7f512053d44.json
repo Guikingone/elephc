@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && rm -rf unregA unregB && mkdir unregA unregB && printf '%s' '<?php\nfile_put_contents(\"f.txt\", \"abc\");\nvar_dump(stream_wrapper_unregister(\"file\"));\nvar_dump(@fopen(\"f.txt\", \"r\") !== false);\nvar_dump(@file_get_contents(\"f.txt\") !== false);\nvar_dump(@file_exists(\"f.txt\"));\nvar_dump(@filesize(\"f.txt\") !== false);\nvar_dump(stream_wrapper_restore(\"file\"));\nvar_dump(@file_get_contents(\"f.txt\") !== false);\n' > unregA/p.php && cp unr… [+303 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && rm -rf unregA unregB && mkdir unregA unregB && printf '%s' '<?php\nfile_put_contents(\"f.txt\", \"abc\");\nvar_dump(stream_wrapper_unregister(\"file\"));\nv",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && rm -rf unregA unregB && mkdir unregA unregB && printf '%s' '<?php\nfile_put_contents(\"f.txt\", \"abc\");\nvar_dump(stream_wrapper_unregister(\"file\"));\nvar_dump(@fopen(\"f.txt\", \"r\") !== false);\nvar_dump(@file_get_contents(\"f.txt\") !== false);\nvar_dump(@file_exists(\"f.txt\"));\nvar_dump(@filesize(\"f.txt\") !== false);\nvar_dump(stream_wrapper_restore(\"file\"));\nvar_dump(@file_get_contents(\"f.txt\") !== false);\n' > unregA/p.php && cp unregA/p.php unregB/ && cd unregA && php -n p.php > /tmp/php_u.txt 2>&1; cd ../unregB && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php >/dev/null 2>&1 && ./p > /tmp/el_u.txt 2>&1; paste -d'|' /tmp/php_u.txt /tmp/el_u.txt | head -10: bool(true)|bool(true) bool(false)|bool(true) bool(false)|bool(true) bool(false)|bool(true) bool(false)|bool(true) bool(true)|bool(true) bool(true)|bool(true)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bc157b2d09ece7f512053d44",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:08:22.696Z",
+  "stored_at": "2026-08-22T08:08:22.696Z"
+}

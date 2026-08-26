@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"by_ref\" -B4 -A16 src/types/checker/functions/param_binding.rs | head -50",
+  "summary": "rtk proxy rg -n \"by_ref\" -B4 -A16 src/types/checker/functions/param_binding.rs | head -50: self, 53- expected: &PhpType, 54- actual: &PhpType, 55- arg: &Expr, 56- env: &TypeEnv, 57- context: &str, 58- owner: Option<(&str, &str)>, 59: by_ref: bool, 60- ) -> Result<(), CompileError> { 61- self.require_strict_types_param_",
+  "text": "rtk proxy rg -n \"by_ref\" -B4 -A16 src/types/checker/functions/param_binding.rs | head -50: self, 53- expected: &PhpType, 54- actual: &PhpType, 55- arg: &Expr, 56- env: &TypeEnv, 57- context: &str, 58- owner: Option<(&str, &str)>, 59: by_ref: bool, 60- ) -> Result<(), CompileError> { 61- self.require_strict_types_param_binding(expected, actual, arg.span, context)?; 62- if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) { 63- return Ok(()); 64- } 65: if by_ref { 66- return self.require_compatible_arg_type(expected, actual, arg.span, context); 67- } 68- match classify_param_binding(expected, actual, arg) { 69- ParamBinding::Identity | ParamBinding::Cast(_) | ParamBinding::Const(_) => Ok(()), 70- ParamBinding::Callable(target) => { 71- let sig = self 72- .resolve_first_class_callable_sig(&target, arg.span, env) 73- .map_err(|err| { 74- Self::param_binding_error( 75- expected, 76- actual, 77- arg, 78- context, 79- err.message.as_str(), 80- ) 81- })?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1f846476f7f54f33fb728a6d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:21:46.449Z",
+  "stored_at": "2026-08-16T19:21:46.449Z"
+}

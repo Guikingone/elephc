@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn lower_stream_select\" src/codegen/lower_inst/builtins/io/*.rs | head -3; grep -rln \"stream_select\" src/codegen_support/runtime/io/ | head",
+  "summary": "grep -rn \"fn lower_stream_select\" src/codegen/lower_inst/builtins/io/*.rs | head -3; grep -rln \"stream_select\" src/codegen_support/runtime/io/ | head: src/codegen/lower_inst/builtins/io/stream_options.rs:313:pub(crate) fn lower_stream_select( src/codegen_support/runtime/io/stream_select.rs src/codegen_support/runtime/i",
+  "text": "grep -rn \"fn lower_stream_select\" src/codegen/lower_inst/builtins/io/*.rs | head -3; grep -rln \"stream_select\" src/codegen_support/runtime/io/ | head: src/codegen/lower_inst/builtins/io/stream_options.rs:313:pub(crate) fn lower_stream_select( src/codegen_support/runtime/io/stream_select.rs src/codegen_support/runtime/io/user_wrapper_cast.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/io/stream_select_cast_warning.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f99d83172fab04763d50737",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:19:35.722Z",
+  "stored_at": "2026-08-18T11:19:35.723Z"
+}

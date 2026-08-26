@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lazy_empty_magic_property_calls\" -A 30 src/ir_lower/expr/lazy_isset.rs | head -35",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lazy_empty_magic_property_calls\" -A 30 src/ir_lower/expr/lazy_isset.rs | head -35: r)> { 244- match &arg.kind { 245- ExprKind::PropertyAccess { object, property } => { 246- property_existence_magic_class(ctx, obj",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lazy_empty_magic_property_calls\" -A 30 src/ir_lower/expr/lazy_isset.rs | head -35: r)> { 244- match &arg.kind { 245- ExprKind::PropertyAccess { object, property } => { 246- property_existence_magic_class(ctx, object, property, \"__isset\")?; 247- let key = Expr::new(ExprKind::StringLiteral(property.clone()), arg.span); 248- let exists = Expr::new( 249- ExprKind::MethodCall { 250- object: object.clone(), 251- method: \"__isset\".to_string(), 252- args: vec![key.clone()], 253- }, 254- arg.span, 255- ); 256- let get = Expr::new( 257- ExprKind::MethodCall { 258- object: object.clone(), 259- method: \"__get\".to_string(), 260- args: vec![key], 261- }, 262- arg.span, 263- ); 264- Some((exists, get)) 265- } 266- ExprKind::NullsafePropertyAccess { object, property } => { 267- property_existence_magic_class(ctx, object, property, \"__isset\")?; 268- let key = Expr::new(ExprKind::StringLiteral(property.clone()), arg.span); 269- let exists = Expr::new( 270- ExprKind::NullsafeMethodCall {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "220bab3bfb3eccd941b2eeed",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T11:54:53.894Z",
+  "stored_at": "2026-08-23T11:54:53.895Z"
+}

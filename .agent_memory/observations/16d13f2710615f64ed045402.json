@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fpassthru\" -A 20 src/codegen_support/runtime/io/streams_ext.rs | head -30",
+  "summary": "grep -n \"fpassthru\" -A 20 src/codegen_support/runtime/io/streams_ext.rs | head -30: ops; read paths must check Darwin's carry-flag error signaling before 14-//! comparing byte counts. 15-//! - `__rt_flock` translates the PHP `LOCK_UN` value (3) to the POSIX value (8) 16-//! while preserving the `LOCK_NB` flag bit. 17-/",
+  "text": "grep -n \"fpassthru\" -A 20 src/codegen_support/runtime/io/streams_ext.rs | head -30: ops; read paths must check Darwin's carry-flag error signaling before 14-//! comparing byte counts. 15-//! - `__rt_flock` translates the PHP `LOCK_UN` value (3) to the POSIX value (8) 16-//! while preserving the `LOCK_NB` flag bit. 17-//! - `__rt_tmpfile` returns the raw fd in x0/rax (-1 on failure); the codegen 18-//! wrapper boxes it as resource/false via `__rt_mixed_from_value`. 19- 20-use crate::codegen_support::{ 21- abi, 22- emit::Emitter, 23- platform::{Arch, Platform}, 24-}; 25- 26-/// Emits stream-extension runtime helpers for the current target. 27-/// 28-/// Dispatches to `emit_streams_ext_linux_x86_64` when targeting x86_64 Linux; 29-/// otherwise emits ARM64 helpers for all other targets (Darwin, Linux ARM64). 30-/// 31:/// ARM64 helpers emitted: `__rt_fgetc`, `__rt_readfile`, `__rt_fpassthru`, `__rt_flock`, `__rt_tmpfile`. 32-pub fn emit_streams_ext(emitter: &mut Emitter) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "16d13f2710615f64ed045402",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:23:05.479Z",
+  "stored_at": "2026-08-21T13:23:05.479Z"
+}

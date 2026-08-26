@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && grep -n \"php_printf\\|fprintf(stderr\\|php_log_err\\|PG(display_errors)\" main/main.c | sed -n '1,60p'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && grep -n \"php_printf\\|fprintf(stderr\\|php_log_err\\|PG(display_errors)\" main/main.c | sed -n '1,60p': AL(backtrace), STR_PRINT(append_string)); ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && grep -n \"php_printf\\|fprintf(stderr\\|php_log_err\\|PG(display_errors)\" main/main.c | sed -n '1,60p': AL(backtrace), STR_PRINT(append_string)); 1517: if (!PG(display_errors) && 1789: fprintf(stderr, \"%s\", memory_leak_buf); 1792: fprintf(stderr, \"%s\", memory_leak_buf); 1807: fprintf(stderr, \"%s\", memory_leak_buf); 1810: fprintf(stderr, \"%s\", memory_leak_buf); 1834: fprintf(stderr, \"%s\", memory_leak_buf); 1837: fprintf(stderr, \"%s\", memory_leak_buf); 2200: fprintf(stderr, \"\\ncrypt algorithm provider initialization failed\\n\"); 2235: zuf.printf_function = php_printf; 2243: zuf.printf_to_smart_string_function = php_printf_to_smart_string; 2244: zuf.printf_to_smart_str_function = php_printf_to_smart_str; 2267: fprintf(stderr, \"\\nwinsock.dll unusable. %d\\n\", WSAGetLastError()); 2272: fprintf(stderr, \"\\nversion not found in winsock.dll. %d\\n\", WSAGetLastError()); 2322: fprintf(stderr, \"PHP: Unable to initialize stream url wrappers.\\n\"); 2336: fprintf(stderr, \"Unable to start builtin modules\\n\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18cc6e8ebd0ed6061e2976b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:44:02.026Z",
+  "stored_at": "2026-08-18T15:44:02.028Z"
+}

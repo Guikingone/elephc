@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -2; RUST_MIN_STACK=33554432 cargo test --lib 2>&1 | grep -E \"FAILED|failed;\" | grep -v \" 0 failed\" | head -5; echo \"lib ok\"",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -2; RUST_MIN_STACK=33554432 cargo test --lib 2>&1 | grep -E \"FAILED|failed;\" | grep -v \" 0 failed\" | head -5",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -2; RUST_MIN_STACK=33554432 cargo test --lib 2>&1 | grep -E \"FAILED|failed;\" | grep -v \" 0 failed\" | head -5; echo \"lib ok\": 10 scratch directories: 0 belong to a LIVE process, 10 are debris removed 10 directories, 0.02 GB lib ok",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "928a12eab257d11c1ec9679a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:21:51.871Z",
+  "stored_at": "2026-08-22T10:21:51.872Z"
+}

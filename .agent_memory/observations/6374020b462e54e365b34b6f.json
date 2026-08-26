@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -c '^<<<<<<<' CHANGELOG.md docs/internals/the-type-checker.md src/codegen/lower_inst/builtins/io/boxing_helpers.rs src/codegen/lower_inst/builtins/io/host_directory_process.rs src/codegen_support/emit.rs src/codegen_support/runtime/io/disk_space.rs src/ir/instr.rs src/ir_lower/context.rs src/ir_lower/function.rs src/ir_lower/tests/exhaustive.rs src/main.rs",
+  "summary": "grep -c '^<<<<<<<' CHANGELOG.md docs/internals/the-type-checker.md src/codegen/lower_inst/builtins/io/boxing_helpers.rs src/codegen/lower_inst/builtins/io/host_directory_process.rs src/codegen_support/emit.rs src/codegen_support/runtime/io/disk_space.rs src/ir/instr.rs src/ir_lower/context.rs src/ir_lower/function.rs s",
+  "text": "grep -c '^<<<<<<<' CHANGELOG.md docs/internals/the-type-checker.md src/codegen/lower_inst/builtins/io/boxing_helpers.rs src/codegen/lower_inst/builtins/io/host_directory_process.rs src/codegen_support/emit.rs src/codegen_support/runtime/io/disk_space.rs src/ir/instr.rs src/ir_lower/context.rs src/ir_lower/function.rs src/ir_lower/tests/exhaustive.rs src/main.rs: src/codegen/lower_inst/builtins/io/boxing_helpers.rs:1 CHANGELOG.md:1 src/codegen/lower_inst/builtins/io/host_directory_process.rs:1 docs/internals/the-type-checker.md:2 src/codegen_support/emit.rs:1 src/ir/instr.rs:1 src/ir_lower/context.rs:5 src/codegen_support/runtime/io/disk_space.rs:3 src/main.rs:1 src/ir_lower/function.rs:10 src/ir_lower/tests/exhaustive.rs:1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6374020b462e54e365b34b6f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:07:36.104Z",
+  "stored_at": "2026-08-26T17:07:36.105Z"
+}

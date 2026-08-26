@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/path_failure_warnings.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/path_failure_warnings.rs: //! Purpose:\n//! Integration tests for the line php prints when a filesystem PATH OPERATION fails.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/path_failure_warnings.rs: //! Purpose:\n//! Integration tests for the line php prints when a filesystem PATH OPERATION fails.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - MEASURED before the fix: a program of sixteen failing path calls drew SIXTEEN warnings from\n//!   `php -n` 8.5.6 and NINE from elephc — and two of those nine named the wrong function.\n//!   Seven builtins failed in complete silence: `unlink`, `rmdir`, `rename`, `mkdir`, `opendir`,\n//!   `touch` and `chmod`. A script that checked the return value behaved the same either way; a\n//!   script that read the",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "43a16e6674c3c50e7152ec1c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:33:05.167Z",
+  "stored_at": "2026-08-24T19:33:05.167Z"
+}

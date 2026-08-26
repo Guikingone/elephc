@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o s s.php >/dev/null 2>&1 && ./s",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o s s.php >/dev/null 2>&1 && ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o s s.php >/dev/null 2>&1 && ./s failed: Exit code 1 == SplTempFileObject == n=1 last='' eofAfter=true a n=1 last='a' eofAfter=true a\\n n=1 last='a ' eofAfter=true a\\nb\\n n=2 last='b ' eofAfter=true a\\nb n=2 last='b' eofAfter=true == SplFileObject on a plain file == n=1 last='' eofAfter=true a n=1 last='a' eofAfter=true a\\n n=2 last='' eofAfter=true a\\nb\\n n=3 last='' eofAfter=true a\\nb n=2 last='b' eofAfter=true == eof() BEFORE iterating == temp afterWrite=Fatal error: Typed property SplTempFileObject::$iterStarted must not be accessed before initialization",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "85a4e431bcae815ef1cc7b48",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:59:43.413Z",
+  "stored_at": "2026-08-25T13:59:43.414Z"
+}

@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh run view 31805290178 -R Guikingone/elephc --json jobs --jq '[.jobs[] | select(.conclusion != null)] | group_by(.conclusion) | map({(.[0].conclusion): length}) | add'; gh run view 31805290178 -R Guikingone/elephc --json jobs --jq '.jobs[] | select(.conclusion == \"failure\") | .name'",
+  "summary": "gh run view 31805290178 -R Guikingone/elephc --json jobs --jq '[.jobs[] | select(.conclusion != null)] | group_by(.conclusion) | map({(.[0].conclusion): length}) | add'; gh run view 31805290178 -R Guikingone/elephc --json jobs --jq '.jobs[] | select(.conclusion == \"failure\") | .name': {\"failure\":4,\"skipped\":1,\"success\"",
+  "text": "gh run view 31805290178 -R Guikingone/elephc --json jobs --jq '[.jobs[] | select(.conclusion != null)] | group_by(.conclusion) | map({(.[0].conclusion): length}) | add'; gh run view 31805290178 -R Guikingone/elephc --json jobs --jq '.jobs[] | select(.conclusion == \"failure\") | .name': {\"failure\":4,\"skipped\":1,\"success\":122} Non-Codegen Tests (linux-aarch64) Non-Codegen Tests (linux-x86_64) Non-Codegen Tests (macos-aarch64) Build & Test",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3b9ccc6e1c9e94690e557f39",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T15:05:12.340Z",
+  "stored_at": "2026-08-14T15:05:12.340Z",
+  "low_signal": true
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nvar_dump(sscanf(\"x\", \"%%d\", $b), $b);\\nvar_dump(sscanf(\"   \", \"%%d\", $c), $c);\\nvar_dump(sscanf(\"1 2\", \"%%d %%*d %%d\", $d, $e), $d, $e);\\n$h = fopen(\"php://memory\",\"w+\"); fwrite($h, \"\\\\n5\\\\n\"); rewind($h);\\nvar_dump(fscanf($h, \"%%d\", $f), $f);\\nvar_dump(fscanf($h, \"%%d\", $g), $g);\\nvar_dump(fscanf($h, \"%%d\", $i), $i);\\nfclose($h);\\n' > t9.php && php -n t9.php 2>&1",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nvar_dump(sscanf(\"x\", \"%%d\", $b), $b);\\nvar_dump(sscanf(\"   \", \"%%d\", $c), $c);\\nvar_dump(sscanf(\"1 2\", \"%%d %%*d %%d\", $d, $e), ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nvar_dump(sscanf(\"x\", \"%%d\", $b), $b);\\nvar_dump(sscanf(\"   \", \"%%d\", $c), $c);\\nvar_dump(sscanf(\"1 2\", \"%%d %%*d %%d\", $d, $e), $d, $e);\\n$h = fopen(\"php://memory\",\"w+\"); fwrite($h, \"\\\\n5\\\\n\"); rewind($h);\\nvar_dump(fscanf($h, \"%%d\", $f), $f);\\nvar_dump(fscanf($h, \"%%d\", $g), $g);\\nvar_dump(fscanf($h, \"%%d\", $i), $i);\\nfclose($h);\\n' > t9.php && php -n t9.php 2>&1: int(0) NULL int(-1) NULL int(2) int(1) NULL int(-1) NULL int(1) int(5) bool(false) NULL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1db3cf93ce59d731e811465e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:21:50.689Z",
+  "stored_at": "2026-08-18T10:21:50.690Z"
+}

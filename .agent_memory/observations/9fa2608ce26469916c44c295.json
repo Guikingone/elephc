@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub(crate) fn load_local\" -A 30 src/ir_lower/context.rs 2>/dev/null | head -35 || grep -rn \"fn load_local\" src/ir_lower/ | head -3",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub(crate) fn load_local\" -A 30 src/ir_lower/context.rs 2>/dev/null | head -35 || grep -rn \"fn load_local\" src/ir_lower/ | head -3: ary load here reads the slot's uninitialized stack bytes — src/ir_lower/context.rs",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub(crate) fn load_local\" -A 30 src/ir_lower/context.rs 2>/dev/null | head -35 || grep -rn \"fn load_local\" src/ir_lower/ | head -3: ary load here reads the slot's uninitialized stack bytes — src/ir_lower/context.rs-1289- // for a `Mixed` local, as a boxed-cell POINTER, which segfaults on first use. src/ir_lower/context.rs-1290- if self.read_is_of_an_undefined_local(name, slot, kind, uses_global, is_ref_bound) { src/ir_lower/context.rs-1291- return self.emit_undefined_local_read(name, span); src/ir_lower/context.rs-1292- } src/ir_lower/context.rs-1293- let ir_type = value_ir_type(&php_type); src/ir_lower/context.rs-1294- let ownership = Ownership::for_php_type(&php_type); src/ir_lower/context.rs-1295- let op = match (is_ref_bound, uses_global, kind) { src/ir_lower/context.rs-1296- (true, _, _) => Op::LoadRefCell, src/ir_lower/context.rs-1297- (false, true, _) => Op::LoadGlobal, src/ir_lower/context.rs-1298- (false, false, LocalKind::StaticLocal) => Op::LoadStaticLocal, src/ir_lower/context.rs-1299- _ => Op::LoadLocal,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9fa2608ce26469916c44c295",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:50:05.826Z",
+  "stored_at": "2026-08-23T12:50:05.826Z"
+}

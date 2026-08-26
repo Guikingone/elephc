@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 210,235p src/codegen_support/runtime_features.rs",
+  "summary": "sed -n 210,235p src/codegen_support/runtime_features.rs:  optional runtime feature set, using class metadata when codegen has it. fn runtime_features_for_program_and_classes_opt( program: &Program, classes: Option<&HashMap<String, ClassInfo>>, ) -> RuntimeFeatures { let mut features = RuntimeFeatures::none(); features.",
+  "text": "sed -n 210,235p src/codegen_support/runtime_features.rs:  optional runtime feature set, using class metadata when codegen has it. fn runtime_features_for_program_and_classes_opt( program: &Program, classes: Option<&HashMap<String, ClassInfo>>, ) -> RuntimeFeatures { let mut features = RuntimeFeatures::none(); features.regex = program_requires_regex(program, classes); features.phar_archive = class_emission_can_reference_phar_archive(program, classes); features.descriptor_invoker = program_requires_descriptor_invoker(program); features } /// Returns true when user code or emitted builtin class methods can call regex helpers. fn program_requires_regex(program: &Program, classes: Option<&HashMap<String, ClassInfo>>) -> bool { body_has_regex_call(program) || class_emission_can_reference_regex(program, classes) } /// Returns true when class method emission can reference RegexIterator methods. fn class_emission_can_reference_regex( program: &Program,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4add87adafa3e049ec867e8a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:24:19.579Z",
+  "stored_at": "2026-08-22T08:24:19.580Z"
+}

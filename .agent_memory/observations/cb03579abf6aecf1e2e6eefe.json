@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel2.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel2.php: <?php\n// php-src stream_select() paths that are NOT plain select(): the buffered-data emulation\n// (streamsfuncs.c stream_array_emula",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel2.php: <?php\n// php-src stream_select() paths that are NOT plain select(): the buffered-data emulation\n// (streamsfuncs.c stream_array_emulate_read_fd_set) and the filtered-stream cast refusal\n// (main/streams/cast.c \"Cannot cast a filtered stream on this system\").\nfunction t(string $label, callable $fn): void {\n    echo $label, \": \";\n    try { $fn(); } catch (\\Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; return; }\n}\n\n$dir = sys_get_temp_dir();\n\n// A. Buffered data in the READ array short-circuits select() and EMPTIES write/except.\nt(\"a buffered-read empties write\", function () u",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cb03579abf6aecf1e2e6eefe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:34:41.530Z",
+  "stored_at": "2026-08-17T06:34:41.531Z"
+}

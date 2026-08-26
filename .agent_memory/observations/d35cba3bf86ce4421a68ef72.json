@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/keep_both.py src/main.rs 2>&1 | grep hunk; sed -n '/^<<<<<<</,/^>>>>>>>/p' src/ir_lower/tests/exhaustive.rs | head -20",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/keep_both.py src/main.rs 2>&1 | grep hunk; sed -n '/^<<<<<<</,/^>>>>>>>/p' src/ir_lower/tests/exhaustive.rs | head -20: src/main.rs: 1 hunk(s)",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/keep_both.py src/main.rs 2>&1 | grep hunk; sed -n '/^<<<<<<</,/^>>>>>>>/p' src/ir_lower/tests/exhaustive.rs | head -20: src/main.rs: 1 hunk(s) joined <<<<<<< HEAD widened_scalar_locals: Default::default(), tentative_return_deprecations: Default::default(), ======= local_bind_kill_sites: Default::default(), local_retype_sites: Default::default(), mixed_storage_store_sites: Default::default(), >>>>>>> origin/main",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d35cba3bf86ce4421a68ef72",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:13:19.819Z",
+  "stored_at": "2026-08-26T17:13:19.820Z"
+}

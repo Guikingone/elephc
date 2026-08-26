@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r '\nforeach ([42, \"x\", null] as $v) {\n  try { stream_filter_remove($v); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }\n}\n$h = fopen(\"php://memory\",\"w+\"); fclose($h);\ntry { stream_filter_remove($h); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }'",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r ' foreach ([4",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "48d9f61b439ae4f8bedeacd9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:53:47.556Z",
+  "stored_at": "2026-08-17T14:53:47.557Z"
+}

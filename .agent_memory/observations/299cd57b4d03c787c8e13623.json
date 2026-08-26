@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/optimize/effects.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/optimize/effects.rs: StmtKind::Echo(expr) => expr_effect(expr).with_side_effects(), -> StmtKind::Echo(expr) => {\n            let effect = expr_effect(expr).with_side_effects();\n            if string_conversion_may_th",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/optimize/effects.rs: StmtKind::Echo(expr) => expr_effect(expr).with_side_effects(), -> StmtKind::Echo(expr) => {\n            let effect = expr_effect(expr).with_side_effects();\n            if string_conversion_may_throw(expr) {\n                effect.with_may_throw()\n            } else {\n                effect\n            }\n        }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "299cd57b4d03c787c8e13623",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:50:22.818Z",
+  "stored_at": "2026-08-23T17:50:22.818Z"
+}

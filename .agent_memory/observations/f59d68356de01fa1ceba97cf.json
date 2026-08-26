@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/spl-throw-line.php",
+  "summary": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/spl-throw-line.php: 1 <?php 2 function show(string $label, callable $f): void { 3 try { 4 $f(); 5 echo $label, \" no throw\\n\"; 6 } catch ",
+  "text": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/spl-throw-line.php: 1 <?php 2 function show(string $label, callable $f): void { 3 try { 4 $f(); 5 echo $label, \" no throw\\n\"; 6 } catch (Throwable $e) { 7 echo $label, \" \", get_class($e), \" line=\", $e->getLine(), 8 \" file=\", basename($e->getFile()), \"\\n\"; 9 } 10 } 11 12 show(\"DirectoryIterator\", function () { new DirectoryIterator(\"nope\"); }); 13 show(\"SplFileObject\", function () { new SplFileObject(\"nope.txt\"); }); 14 show(\"SplFixedArray\", function () { new SplFixedArray(-1); }); 15 show(\"ArrayObject-get\", function () { $a = new ArrayObject([1]); $a->offsetGet(99); }); 16 show(\"intdiv\", function () { intdiv(1, 0); }); 17 show(\"str_repeat\", function () { str_repeat(\"x\", -1); }); 18 $e = new RuntimeException(\"plain\"); 19 echo \"user line=\", $e->getLine(), \" file=\", basename($e->getFile()), \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f59d68356de01fa1ceba97cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:34:25.967Z",
+  "stored_at": "2026-08-25T13:34:25.968Z"
+}

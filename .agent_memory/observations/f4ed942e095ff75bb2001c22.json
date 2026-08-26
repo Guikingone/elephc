@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm14 2>&1; echo \"=== php ===\"; cat -v /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm14_p.txt",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm14 2>&1; echo \"=== php ===\"; cat -v /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm14 2>&1; echo \"=== php ===\"; cat -v /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm14_p.txt:  Binary files rm14_p.txt and rm14_e.txt differ === php === case 0 array(2) { [0]=> string(1) \"a\" [1]=> string(1) \"b\" } case 1 array(2) { [0]=> string(1) \"a\" [1]=> string(1) \"b\" } case 2 array(2) { [0]=> string(1) \"a\" [1]=> string(1) \"b\" } case 3 array(1) { [0]=> string(1) \"a\" } case 4 array(2) { [0]=> string(2) \" a\" [1]=> string(1) \"b\" } case 5 array(1) { [0]=> string(3) \" a\" } case 6 array(2) { [0]=> string(1) \"a\" [1]=> string(1) \"b\" } case 7 array(2) { [0]=> string(2) \"a \" [1]=> string(1) \"b\" } case 8 array(2) { [0]=> string(5) \" x\"a\"\" [1]=> string(1) \"b\" } case 9 array(1) { [0]=> string(1) \" \" } array(1) { [0]=> string(1) \"a\" } case 10 array(1) { [0]=> NULL } case 11 array(1) { [0]=> string(2) \"a \" } case 12 array(2) { [0]=> string(1) \" \" [1]=> string(1) \"a\" } case 13 array(1) { [0]=> string(1) \"a\" } case 14 array(1) { [0]=> string(1) \"a\" } case 15 array(1) { [0]=> string(4) \"^@\"a\"\" }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f4ed942e095ff75bb2001c22",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:20:27.363Z",
+  "stored_at": "2026-08-18T09:20:27.363Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'label_global(\"__rt_stream_get_contents' src/codegen_support/runtime/io/*.rs | head -3; echo '--- lowering ---'; grep -rn 'fn lower_stream_get_contents' -A 20 src/codegen/lower_inst/builtins/io/stream_read_helpers.rs | head -25",
+  "summary": "grep -rn 'label_global(\"__rt_stream_get_contents' src/codegen_support/runtime/io/*.rs | head -3; echo '--- lowering ---'; grep -rn 'fn lower_stream_get_contents' -A 20 src/codegen/lower_inst/builtins/io/stream_read_helpers.rs | head -25: wer_inst/builtins/io/stream_read_helpers.rs-81-/// Applies the optional `stream_ge",
+  "text": "grep -rn 'label_global(\"__rt_stream_get_contents' src/codegen_support/runtime/io/*.rs | head -3; echo '--- lowering ---'; grep -rn 'fn lower_stream_get_contents' -A 20 src/codegen/lower_inst/builtins/io/stream_read_helpers.rs | head -25: wer_inst/builtins/io/stream_read_helpers.rs-81-/// Applies the optional `stream_get_contents` seek before reading. src/codegen/lower_inst/builtins/io/stream_read_helpers.rs:82:pub(super) fn lower_stream_get_contents_seek( src/codegen/lower_inst/builtins/io/stream_read_helpers.rs-83- ctx: &mut FunctionContext<'_>, src/codegen/lower_inst/builtins/io/stream_read_helpers.rs-84- skip_seek: &str, src/codegen/lower_inst/builtins/io/stream_read_helpers.rs-85- wrap_seek: &str, src/codegen/lower_inst/builtins/io/stream_read_helpers.rs-86- seek_failed: &str, src/codegen/lower_inst/builtins/io/stream_read_helpers.rs-87-) { src/codegen/lower_inst/builtins/io/stream_read_helpers.rs-88- let seek_ok = ctx.next_label(\"sgc_seek_ok\"); src/codegen/lower_inst/builtins/io/stream_read_helpers.rs-89- match ctx.emitter.target.arch { src/codegen/lower_inst/builtins/io/stream_read_helpers.rs-90- Arch::AArch64 => {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "79dc614a432edcd5523f5a73",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:23:57.520Z",
+  "stored_at": "2026-08-25T09:23:57.521Z"
+}

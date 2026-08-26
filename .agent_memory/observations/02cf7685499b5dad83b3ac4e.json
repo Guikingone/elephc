@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_type_error_at\" -B 15 src/codegen/lower_inst/exceptions.rs | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_type_error_at\" -B 15 src/codegen/lower_inst/exceptions.rs | head -20: argument_count_error_class_id\", src/codegen/lower_inst/exceptions.rs-284- message, src/codegen/lower_inst/exceptions.rs-285- location, s",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn emit_type_error_at\" -B 15 src/codegen/lower_inst/exceptions.rs | head -20: argument_count_error_class_id\", src/codegen/lower_inst/exceptions.rs-284- message, src/codegen/lower_inst/exceptions.rs-285- location, src/codegen/lower_inst/exceptions.rs-286- ); src/codegen/lower_inst/exceptions.rs-287-} src/codegen/lower_inst/exceptions.rs-288- src/codegen/lower_inst/exceptions.rs-289-/// Throws a catchable PHP `TypeError` carrying a static message and a source location. src/codegen/lower_inst/exceptions.rs-290-/// src/codegen/lower_inst/exceptions.rs-291-/// The located sibling of `emit_type_error`, for the same reason src/codegen/lower_inst/exceptions.rs-292-/// `emit_argument_count_error` takes one: a `new $c(...)` refusal belongs to a `new` expression the src/codegen/lower_inst/exceptions.rs-293-/// user wrote, so the report ends in ` in FILE:LINE` and `getLine()` answers when it is caught. src/codegen/lower_inst/exceptions.rs:294:pub(super) fn emit_type_error_at(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "02cf7685499b5dad83b3ac4e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T10:55:22.226Z",
+  "stored_at": "2026-08-23T10:55:22.226Z"
+}

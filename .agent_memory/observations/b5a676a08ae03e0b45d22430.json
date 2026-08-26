@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '132,142p' src/codegen_support/runtime/io/user_wrapper_cast.rs",
+  "summary": "sed -n '132,142p' src/codegen_support/runtime/io/user_wrapper_cast.rs: st rdi, {:#x}\", FD_WRAPPER_BIT)); // is the synthetic user-wrapper fd bit set? emitter.instruction(\"jz __rt_uwcast_passthrough_x86\"); // real OS fd → return it unchanged // $cast_as stays in rsi across both lookups (neither touches it). emitter.inst",
+  "text": "sed -n '132,142p' src/codegen_support/runtime/io/user_wrapper_cast.rs: st rdi, {:#x}\", FD_WRAPPER_BIT)); // is the synthetic user-wrapper fd bit set? emitter.instruction(\"jz __rt_uwcast_passthrough_x86\"); // real OS fd → return it unchanged // $cast_as stays in rsi across both lookups (neither touches it). emitter.instruction(&format!(\"sub rdi, {:#x}\", FD_WRAPPER_BIT)); // rdi = fd - 0x40000000 = handle slot index super::emit_load_handles_base(emitter, \"r10\"); // handle table base emitter.instruction(\"mov rdi, QWORD PTR [r10 + rdi * 8]\"); // obj = _user_wrapper_handles[slot] emitter.instruction(\"test rdi, rdi\"); // is the slot empty? emitter.instruction(\"jz __rt_uwcast_neg1_x86\"); // fclose'd or never registered: not selectable emitter.instruction(\"mov r10, QWORD PTR [rdi]\"); // class_id stored at the head of every wrapper object abi::emit_symbol_address(emitter, \"r11\", \"_user_wrapper_vtable_ptrs\"); // base of the per-class user-wrapper vtable pointer table",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b5a676a08ae03e0b45d22430",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T17:57:33.960Z",
+  "stored_at": "2026-08-17T17:57:33.960Z"
+}

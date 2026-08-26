@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: ## Active work — Allègement du binaire (PR #694)\n- ✅✅ [`echo 1;` 182 680 → 51 712 o](class-id-tables-are-dense-and-nondeterministic.md) — le lieur élague DÉJÀ 9 -> ## Allègement du binaire (PR #694) · ",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: ## Active work — Allègement du binaire (PR #694)\n- ✅✅ [`echo 1;` 182 680 → 51 712 o](class-id-tables-are-dense-and-nondeterministic.md) — le lieur élague DÉJÀ 9 -> ## Allègement du binaire (PR #694) · Sortir le PHP des .rs · Hot-reload\n- ✅✅ [`echo 1;` 182 680 → 51 712 o](class-id-tables-are-dense-and-nondeterministic.md) — le lieur élague DÉJÀ 95 % ⇒ le prix = TEMPS DE COMPILATION · [LE TRIVIAL EST AU PLANCHER](binary-size-and-capability-reduction-campaign.md) · [l'élagage de déclarations ne gagne RIEN](declaration-reachability-pass-buys-nothing-in-size.md) · ⛔ [élagage par MÉTHODE REJETÉ](method-level-prune-headroom-is-a-flattering-sam",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1ff72df21202b39bf45119a3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:38:04.437Z",
+  "stored_at": "2026-08-23T13:38:04.438Z"
+}

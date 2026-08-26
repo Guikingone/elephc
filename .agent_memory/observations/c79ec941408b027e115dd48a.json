@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git cherry-pick b13d89cb7c 8042bf0006 b2bcbeee7d 75e822f319 2>&1 | tail -2; git log --format=\"%h %s\" -5 | head -5",
+  "summary": "git cherry-pick b13d89cb7c 8042bf0006 b2bcbeee7d 75e822f319 2>&1 | tail -2; git log --format=\"%h %s\" -5 | head -5: Date: Sat Aug 15 17:51:23 2026 +0200 3 files changed, 120 insertions(+), 11 deletions(-) 8d7b3e6c8e fix(streams): stream_get_meta_data() ordered its keys its own way, and eval refused modes php opens 77429",
+  "text": "git cherry-pick b13d89cb7c 8042bf0006 b2bcbeee7d 75e822f319 2>&1 | tail -2; git log --format=\"%h %s\" -5 | head -5: Date: Sat Aug 15 17:51:23 2026 +0200 3 files changed, 120 insertions(+), 11 deletions(-) 8d7b3e6c8e fix(streams): stream_get_meta_data() ordered its keys its own way, and eval refused modes php opens 7742993bb3 fix(streams): an invalid base64 data: URI opened a stream over the salvage, and three wrappers refused in silence 949758b3b2 fix(streams): an invalid fopen mode described a POINTER as an errno 5ca7f1c554 fix(streams): php://output was a stdout alias, and a read mode refused writes php lets through 98f3fc9509 fix(streams): stream_context_set_option() accepted six shapes php refuses, and never deprecated",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c79ec941408b027e115dd48a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T15:52:40.129Z",
+  "stored_at": "2026-08-15T15:52:40.133Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"SEEK_SET\\|LOCK_EX\" crates/elephc-magician/src/interpreter/ | grep -i \"const\\|=>\" | head -8",
+  "summary": "grep -rn \"SEEK_SET\\|LOCK_EX\" crates/elephc-magician/src/interpreter/ | grep -i \"const\\|=>\" | head -8: crates/elephc-magician/src/interpreter/constant_eval.rs:96: \"LOCK_EX\" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_EX)), crates/elephc-magician/src/interpreter/constants.rs:255:pub(super) const EVAL_LOCK_EX: i64 = 2;",
+  "text": "grep -rn \"SEEK_SET\\|LOCK_EX\" crates/elephc-magician/src/interpreter/ | grep -i \"const\\|=>\" | head -8: crates/elephc-magician/src/interpreter/constant_eval.rs:96: \"LOCK_EX\" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_EX)), crates/elephc-magician/src/interpreter/constants.rs:255:pub(super) const EVAL_LOCK_EX: i64 = 2;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0aeac617a14ad0882c532e0f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:24:28.987Z",
+  "stored_at": "2026-08-22T09:24:28.988Z"
+}

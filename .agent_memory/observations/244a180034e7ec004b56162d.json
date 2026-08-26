@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,120p' src/codegen/lower_inst/builtins/regex.rs",
+  "summary": "sed -n '1,120p' src/codegen/lower_inst/builtins/regex.rs: lace_callback(pattern, callback, subject)` through supported direct callbacks. pub(crate) fn lower_preg_replace_callback( ctx: &mut FunctionContext<'_>, inst: &Instruction, ) -> Result<()> { super::ensure_arg_count(inst, \"preg_replace_callback\", 3)?; let pattern",
+  "text": "sed -n '1,120p' src/codegen/lower_inst/builtins/regex.rs: lace_callback(pattern, callback, subject)` through supported direct callbacks. pub(crate) fn lower_preg_replace_callback( ctx: &mut FunctionContext<'_>, inst: &Instruction, ) -> Result<()> { super::ensure_arg_count(inst, \"preg_replace_callback\", 3)?; let pattern = super::expect_operand(inst, 0)?; let callback = super::expect_operand(inst, 1)?; let subject = super::expect_operand(inst, 2)?; let callback_target = preg_replace_callback_target(ctx, callback)?; let env_bytes = callback_target.reserve_env( ctx, super::super::instruction_strict_php_profile(inst), )?; match ctx.emitter.target.arch { Arch::AArch64 => { load_string_arg(ctx, pattern, \"x1\", \"x2\", \"preg_replace_callback pattern\")?; abi::emit_symbol_address(ctx.emitter, \"x3\", &callback_target.entry_label); load_static_callback_env_arg(ctx, \"x4\", env_bytes); load_string_arg(ctx, subject, \"x5\", \"x6\", \"preg_replace_callback subject\")?; }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "244a180034e7ec004b56162d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:33:45.564Z",
+  "stored_at": "2026-08-16T15:33:45.564Z"
+}

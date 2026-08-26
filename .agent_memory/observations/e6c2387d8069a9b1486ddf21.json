@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git rev-parse 034ac07936",
+  "summary": "git rev-parse 034ac07936: 034ac0793606439d8aa746a800a1323674793d0a",
+  "text": "git rev-parse 034ac07936: 034ac0793606439d8aa746a800a1323674793d0a",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e6c2387d8069a9b1486ddf21",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:59:58.880Z",
+  "stored_at": "2026-08-14T14:59:58.881Z",
+  "low_signal": true
+}

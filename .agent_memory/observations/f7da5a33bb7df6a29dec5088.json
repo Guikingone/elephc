@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub enum TypeExpr\" -A 25 src/parser/ast/*.rs | head -30; echo \"=== AttributeGroup ===\"; grep -rn \"pub struct AttributeGroup\" -A 10 src/parser/ast/*.rs | head -14",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub enum TypeExpr\" -A 25 src/parser/ast/*.rs | head -30; echo \"=== AttributeGroup ===\"; grep -rn \"pub struct AttributeGroup\" -A 10 src/parser/ast/*.rs | head -14: c/parser/ast/types.rs-37-impl TypeExpr { src/parser",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub enum TypeExpr\" -A 25 src/parser/ast/*.rs | head -30; echo \"=== AttributeGroup ===\"; grep -rn \"pub struct AttributeGroup\" -A 10 src/parser/ast/*.rs | head -14: c/parser/ast/types.rs-37-impl TypeExpr { src/parser/ast/types.rs-38- /// Returns whether this type expression contains PHP's late-bound `static` class type. src/parser/ast/types.rs-39- pub fn contains_late_static(&self) -> bool { src/parser/ast/types.rs-40- match self { === AttributeGroup === src/parser/ast/oop.rs:40:pub struct AttributeGroup { src/parser/ast/oop.rs-41- pub attributes: Vec<Attribute>, src/parser/ast/oop.rs-42- #[allow(dead_code)] // Used for error reporting in future passes src/parser/ast/oop.rs-43- pub span: Span, src/parser/ast/oop.rs-44-} src/parser/ast/oop.rs-45- src/parser/ast/oop.rs-46-impl PartialEq for AttributeGroup { src/parser/ast/oop.rs-47- /// Compares two attribute groups by their attributes, ignoring span. src/parser/ast/oop.rs-48- fn eq(&self, other: &Self) -> bool { src/parser/ast/oop.rs-49- self.attributes == other.attributes src/parser/ast/oop.rs-50- }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f7da5a33bb7df6a29dec5088",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:25:35.773Z",
+  "stored_at": "2026-08-22T18:25:35.773Z"
+}

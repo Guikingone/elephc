@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '100,115p' src/ir_lower/context.rs; echo \"--- 214-224\"; sed -n '214,224p' src/ir_lower/context.rs; echo \"--- 328-340\"; sed -n '328,340p' src/ir_lower/context.rs; echo \"--- 375-390\"; sed -n '375,390p' src/ir_lower/context.rs; echo \"--- 412-422\"; sed -n '412,422p' src/ir_lower/context.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '100,115p' src/ir_lower/context.rs; echo \"--- 214-224\"; sed -n '214,224p' src/ir_lower/context.rs; echo \"--- 328-340\"; sed -n '328,340p' src/ir_lower/context.rs; echo \"--- 375-390\"; sed -n '375,390p' src/ir_lower/cont",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '100,115p' src/ir_lower/context.rs; echo \"--- 214-224\"; sed -n '214,224p' src/ir_lower/context.rs; echo \"--- 328-340\"; sed -n '328,340p' src/ir_lower/context.rs; echo \"--- 375-390\"; sed -n '375,390p' src/ir_lower/context.rs; echo \"--- 412-422\"; sed -n '412,422p' src/ir_lower/context.rs: ion_property_locals.clone(), reflection_method_locals: self.reflection_method_locals.clone(), reflection_arg_array_locals: self.reflection_arg_array_locals.clone(), fiber_start_sigs: self.fiber_start_sigs.clone(), ref_bound_locals: self.ref_bound_locals.clone(), ref_cell_owner_locals: self.ref_cell_owner_locals.clone(), --- 412-422 self.local_slots = snapshot.local_slots; self.local_kinds = snapshot.local_kinds; self.local_types = snapshot.local_types; self.initialized_slots = snapshot.initialized_slots; self.constants = snapshot.constants; self.loop_stack = snapshot.loop_stack; self.finally_stack = snapshot.finally_stack; self.static_callable_locals = snapshot.static_callable_locals; self.reflection_class_locals = snapshot.reflection_class_locals; self.reflection_function_locals = snapshot.reflection_function_locals; self.reflection_property_locals = snapshot.reflection_property_locals;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "239b2d2950e1a5bc493960bc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:56:36.391Z",
+  "stored_at": "2026-08-23T12:56:36.392Z"
+}

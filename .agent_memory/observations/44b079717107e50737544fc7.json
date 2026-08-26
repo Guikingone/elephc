@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/segvcases && lldb -b -o run -o \"register read x0 x30\" -o \"image lookup -a \\$x30\" ./open_only 2>&1 | grep -E \"x0 =|x30 =|Summary:\" | head -6",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/segvcases && lldb -b -o run -o \"register read x0 x30\" -o \"image lookup -a \\$x30\" ./open_only 2>&1 | grep -E \"x0 =|x30 =|Summary:\" | head -6: Shell cwd",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/segvcases && lldb -b -o run -o \"register read x0 x30\" -o \"image lookup -a \\$x30\" ./open_only 2>&1 | grep -E \"x0 =|x30 =|Summary:\" | head -6: Shell cwd was reset to /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "44b079717107e50737544fc7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:36:58.140Z",
+  "stored_at": "2026-08-21T09:36:58.140Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"__rt_fwrite_filtered\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/ | head -5",
+  "summary": "rtk proxy grep -rn \"__rt_fwrite_filtered\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/ | head -5: c/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/filter.rs:488: emitter.label_global(\"__rt_fwrite_filtered\"); /Users/guilla",
+  "text": "rtk proxy grep -rn \"__rt_fwrite_filtered\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/ | head -5: c/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/filter.rs:488: emitter.label_global(\"__rt_fwrite_filtered\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/filter.rs:500: emitter.instruction(\"cbz x0, __rt_fwrite_filtered_direct\"); // no live stream: let __rt_fwrite report the error /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/filter.rs:504: emitter.instruction(\"cbz x9, __rt_fwrite_filtered_direct\"); // empty chain: write the payload untouched /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/filter.rs:511: emitter.instruction(\"cbz x0, __rt_fwrite_filtered_direct\"); // out of heap: fall back to an unfiltered write",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "190ad0350edd620c87ea4fb3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:02:19.885Z",
+  "stored_at": "2026-08-17T07:02:19.885Z"
+}

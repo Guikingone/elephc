@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add -A src tests && git commit -q -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg45.txt && git log --oneline -1 | cat",
+  "summary": "git add -A src tests && git commit -q -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg45.txt && git log --oneline -1 | cat: bcdf27d2e fix(streams): stream context options arriving as a boxed Mixe",
+  "text": "git add -A src tests && git commit -q -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg45.txt && git log --oneline -1 | cat: bcdf27d2e fix(streams): stream context options arriving as a boxed Mixed value were misjudged",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "76b0344aa4b3135dd62f63c6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:52:30.885Z",
+  "stored_at": "2026-08-22T15:52:30.886Z"
+}

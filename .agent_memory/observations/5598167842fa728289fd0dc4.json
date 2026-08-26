@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests -- codegen::io::files::test_disk_space_failure_names_itself_and_the_reason codegen::io::misc 2>&1 | grep -E \"left:|right:\" | head -10",
+  "summary": "cargo test --test codegen_tests -- codegen::io::files::test_disk_space_failure_names_itself_and_the_reason codegen::io::misc 2>&1 | grep -E \"left:|right:\" | head -10 completed",
+  "text": "cargo test --test codegen_tests -- codegen::io::files::test_disk_space_failure_names_itself_and_the_reason codegen::io::misc 2>&1 | grep -E \"left:|right:\" | head -10 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5598167842fa728289fd0dc4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T14:38:06.529Z",
+  "stored_at": "2026-08-18T14:38:06.529Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat named_probes/kimi-k2.7-code-05.php 2>/dev/null | head -25",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat named_probes/kimi-k2.7-code-05.php 2>/dev/null | head -25: <?php $tmp = sys_get_temp_dir(); mkdir(\"$tmp/elephctest\"); symlink(\"$tmp/elephctest\",",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat named_probes/kimi-k2.7-code-05.php 2>/dev/null | head -25: <?php $tmp = sys_get_temp_dir(); mkdir(\"$tmp/elephctest\"); symlink(\"$tmp/elephctest\", \"$tmp/elephclink\"); chdir(\"$tmp/elephclink\"); echo realpath('.'), \"\\n\"; print_r(realpath_cache_get()); chdir('..'); rmdir(\"$tmp/elephctest\"); unlink(\"$tmp/elephclink\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d3ddfd2a3af79dcdf755580b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:20:07.573Z",
+  "stored_at": "2026-08-22T18:20:07.574Z"
+}

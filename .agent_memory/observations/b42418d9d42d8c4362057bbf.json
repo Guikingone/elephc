@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"__rt_swr_bad_proto\\|__rt_swr_dup_proto\\|__rt_swr_proto_ok\" src/codegen_support/runtime/io/stream_wrapper_register.rs | head -20",
+  "summary": "grep -n \"__rt_swr_bad_proto\\|__rt_swr_dup_proto\\|__rt_swr_proto_ok\" src/codegen_support/runtime/io/stream_wrapper_register.rs | head -20: // not a built-in name either 141: emitter.instruction(\"b.ne __rt_swr_proto_ok\"); // unregistered: the name is free again 142: emitter.instruction(\"b __rt_swr_dup_proto\"); 143: emitt",
+  "text": "grep -n \"__rt_swr_bad_proto\\|__rt_swr_dup_proto\\|__rt_swr_proto_ok\" src/codegen_support/runtime/io/stream_wrapper_register.rs | head -20: // not a built-in name either 141: emitter.instruction(\"b.ne __rt_swr_proto_ok\"); // unregistered: the name is free again 142: emitter.instruction(\"b __rt_swr_dup_proto\"); 143: emitter.label(\"__rt_swr_proto_ok\"); 193: emitter.label(\"__rt_swr_bad_proto\"); 201: emitter.label(\"__rt_swr_dup_proto\"); 240: emitter.instruction(\"jb __rt_swr_bad_proto_x\"); 244: emitter.instruction(\"jb __rt_swr_bad_proto_x\"); 247: emitter.instruction(\"jmp __rt_swr_bad_proto_x\"); // above 'z', including every non-ASCII byte 255: emitter.instruction(\"jmp __rt_swr_bad_proto_x\"); 282: emitter.instruction(\"jae __rt_swr_dup_proto_x\"); // the names agree 298: emitter.instruction(\"jl __rt_swr_proto_ok_x\"); // not a built-in name either 305: emitter.instruction(\"jnz __rt_swr_proto_ok_x\"); // unregistered: the name is free again 306: emitter.instruction(\"jmp __rt_swr_dup_proto_x\"); 307: emitter.label(\"__rt_swr_proto_ok_x\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b42418d9d42d8c4362057bbf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:04:19.747Z",
+  "stored_at": "2026-08-21T17:04:19.748Z"
+}

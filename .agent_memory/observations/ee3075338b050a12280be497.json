@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '13,40p' src/codegen/lower_inst/method_dispatch.rs; echo '--- new ---'; sed -n '13,32p' src/codegen/lower_inst/objects/fixed_new.rs",
+  "summary": "sed -n '13,40p' src/codegen/lower_inst/method_dispatch.rs; echo '--- new ---'; sed -n '13,32p' src/codegen/lower_inst/objects/fixed_new.rs: r_callback_filter_accept_intrinsic(ctx, inst, intrinsic); --- new --- pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R",
+  "text": "sed -n '13,40p' src/codegen/lower_inst/method_dispatch.rs; echo '--- new ---'; sed -n '13,32p' src/codegen/lower_inst/objects/fixed_new.rs: r_callback_filter_accept_intrinsic(ctx, inst, intrinsic); --- new --- pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { let class_name = class_name_immediate(ctx, inst)?.to_string(); if is_fiber_class(&class_name) { return lower_fiber_new(ctx, inst); } if reflection::is_reflection_owner_class(&class_name) { return reflection::lower_reflection_owner_new(ctx, inst, &class_name); } if class_name == \"CallbackFilterIterator\" || class_name == \"RecursiveCallbackFilterIterator\" { return lower_callback_filter_iterator_new(ctx, inst, &class_name); } if is_builtin_stdclass(&class_name) { return lower_stdclass_new(ctx, inst); } if class_name == \"IteratorIterator\" { return lower_iterator_iterator_new(ctx, inst); } if is_spl_doubly_linked_list_family(&class_name) { return lower_spl_doubly_linked_list_new(ctx, inst, &class_name); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee3075338b050a12280be497",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:31:41.184Z",
+  "stored_at": "2026-08-25T12:31:41.184Z"
+}

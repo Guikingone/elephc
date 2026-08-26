@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '150,205p' src/ir_lower/expr/unary_logic.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '150,205p' src/ir_lower/expr/unary_logic.rs: e(expr.span)); store_value_into_temp(ctx, &temp_name, PhpType::Bool, const_value, expr.span); branch_to(ctx, merge); ctx.builder.position_at_end(merge); take_owned_temp(ctx",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '150,205p' src/ir_lower/expr/unary_logic.rs: e(expr.span)); store_value_into_temp(ctx, &temp_name, PhpType::Bool, const_value, expr.span); branch_to(ctx, merge); ctx.builder.position_at_end(merge); take_owned_temp(ctx, &temp_name, expr.span) } /// Lowers non-short-circuiting PHP logical `xor`. pub(super) fn lower_logical_xor( ctx: &mut LoweringContext<'_, '_>, left: &Expr, right: &Expr, expr: &Expr, ) -> LoweredValue { let lhs = lower_expr(ctx, left); let lhs = lower_truthy_bool(ctx, lhs, Some(left.span)); let rhs = lower_expr(ctx, right); let rhs = lower_truthy_bool(ctx, rhs, Some(right.span)); ctx.emit_value( Op::ICmp, vec![lhs.value, rhs.value], Some(Immediate::CmpPredicate(CmpPredicate::Ne)), PhpType::Bool, Op::ICmp.default_effects(), Some(expr.span), ) } /// Converts a lowered PHP value into a canonical boolean and releases an owned input. pub(super) fn lower_truthy_bool( ctx: &mut LoweringContext<'_, '_>, input: LoweredValue,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4bf7d3a1e4a56a620b7c7294",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:39:59.789Z",
+  "stored_at": "2026-08-24T07:39:59.789Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh residcost resid resid2 resid3 resarr resarr2 sockpair 2>&1 | head -16",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh residcost resid resid2 resid3 resarr resarr2 sockpair 2>&1 | head -16: residcost IDENTICAL resid IDENTICAL resid2 IDENTICAL resid3 I",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh residcost resid resid2 resid3 resarr resarr2 sockpair 2>&1 | head -16: residcost IDENTICAL resid IDENTICAL resid2 IDENTICAL resid3 IDENTICAL resarr IDENTICAL resarr2 IDENTICAL sockpair IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0990765dc5ef63f8e4d93ed2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:50:12.246Z",
+  "stored_at": "2026-08-17T12:50:12.246Z"
+}

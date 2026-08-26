@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fatal_stream_tests.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fatal_stream_tests.py: \"\"\"Two more tests that read the wrong stream of the harness's split output.\n\nBoth assert the fatal report is in `output.",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fatal_stream_tests.py: \"\"\"Two more tests that read the wrong stream of the harness's split output.\n\nBoth assert the fatal report is in `output.stdout`. It is not: the harness splits php diagnostics\nout of stdout by KIND PREFIX, and `Fatal error:` is one — the same field their own neighbours\nalready read. VERIFIED pre-existing: they fail identically at `ab65a74cc`, before any of the\nstack-trace work, and the compiled program prints the right text when run by hand.\n\nA permanently red gate hides whatever it was written to catch.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/eleph",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2f6a111aa362e04d199f0be1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:47:51.806Z",
+  "stored_at": "2026-08-22T12:47:51.807Z"
+}

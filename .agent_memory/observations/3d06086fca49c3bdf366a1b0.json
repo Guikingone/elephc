@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '20,45p' src/ir_lower/program/metadata.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '20,45p' src/ir_lower/program/metadata.rs: od_names = collect_declared_trait_method_names(program); module.declared_trait_methods = collect_declared_trait_methods(program); module.declared_trait_property_names = colle",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '20,45p' src/ir_lower/program/metadata.rs: od_names = collect_declared_trait_method_names(program); module.declared_trait_methods = collect_declared_trait_methods(program); module.declared_trait_property_names = collect_declared_trait_property_names(program); module.declared_trait_constant_names = collect_declared_trait_constant_names(program); module.declared_trait_constants = collect_declared_trait_constants(program); module.declared_trait_constant_types = collect_declared_trait_constant_types(program); module.declared_trait_constant_visibilities = collect_declared_trait_constant_visibilities(program); module.declared_trait_final_constants = collect_declared_trait_final_constants(program); module.class_infos = check_result.classes.clone(); normalize_class_method_signatures_for_eir(module, &check_result.callable_param_sigs); module.interface_infos = check_result.interfaces.clone(); module.enum_infos = check_result.enums.clone();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3d06086fca49c3bdf366a1b0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:28:04.633Z",
+  "stored_at": "2026-08-22T18:28:04.633Z"
+}

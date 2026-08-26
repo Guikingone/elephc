@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_rejects_false_stream_handles 2>&1 | grep -A 8 'panicked' | head -10",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_rejects_false_stream_handles 2>&1 | grep -A 8 'panicked' | head -10: thread 'ir_backend_rejects_false_stream_handles' (62631106) panicked at tests/ir_backend_smoke_test.rs:5984:5: expected fread TypeError,",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_rejects_false_stream_handles 2>&1 | grep -A 8 'panicked' | head -10: thread 'ir_backend_rejects_false_stream_handles' (62631106) panicked at tests/ir_backend_smoke_test.rs:5984:5: expected fread TypeError, got stderr= note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace failures: ir_backend_rejects_false_stream_handles test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 256 filtered out; finished in 3.44s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a650962abbba92d74c44bd99",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:33:23.701Z",
+  "stored_at": "2026-08-25T08:33:23.702Z"
+}

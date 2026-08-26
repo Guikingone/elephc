@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git stash list | head -2; git diff --stat | tail -2",
+  "summary": "About to run: git stash list | head -2; git diff --stat | tail -2",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ea11c9151009f3a99549ffe1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:08:36.587Z",
+  "stored_at": "2026-08-16T20:08:36.588Z",
+  "low_signal": true
+}

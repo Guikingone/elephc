@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport pathlib\np = pathlib.Path('tests/codegen/eval.rs')\nt = p.read_text()\nold = '''        \\\"program failed: stdout={:?} diagnostics={}\\\",\n        out.stdout, out.diagnostics'''\nnew = '''        \\\"program failed: stdout={:?} stderr={}\\\",\n        out.stdout, out.stderr'''\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('fixed the multi-line case')\n\"",
+  "summary": "python3 -c \"\nimport pathlib\np = pathlib.Path('tests/codegen/eval.rs')\nt = p.read_text()\nold = '''        \\\"program failed: stdout={:?} diagnostics={}\\\",\n        out.stdout, out.diagnostics'''\nnew = '''        \\\"program failed: stdout={:?} stderr={}\\\",\n        out.stdout, out.stderr'''\nassert t.count(old) == 1\np.write_t",
+  "text": "python3 -c \"\nimport pathlib\np = pathlib.Path('tests/codegen/eval.rs')\nt = p.read_text()\nold = '''        \\\"program failed: stdout={:?} diagnostics={}\\\",\n        out.stdout, out.diagnostics'''\nnew = '''        \\\"program failed: stdout={:?} stderr={}\\\",\n        out.stdout, out.stderr'''\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('fixed the multi-line case')\n\": fixed the multi-line case",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d77c54162d345c5016a0bbe4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:38:53.925Z",
+  "stored_at": "2026-08-18T15:38:53.926Z"
+}

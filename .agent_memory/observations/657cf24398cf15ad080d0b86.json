@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "/goal Quand tu auras un support des streams 100% compliant avec PHP, pense bien à l'audit avec GLM 5.2, Kimi K2.7 et Kimi K3 via Ollama afin de vérifier que tout est validé, ils doivent parvenir à un consensus absolu sur la qualité du code, ses performances, l'API et la sécurité.\n\nRappel utile: On ne veut aucun code PHP écrit qui sera parsé (hors tests), si tu implémentes une fonction PHP dans Elephc, utilise l'AST (comme pour PDO)\n\nSurveilles la RAM et les OOMs",
+  "summary": "/goal Quand tu auras un support des streams 100% compliant avec PHP, pense bien à l'audit avec GLM 5.2, Kimi K2.7 et Kimi K3 via Ollama afin de vérifier que tout est validé, ils doivent parvenir à un consensus absolu sur la qualité du code,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "657cf24398cf15ad080d0b86",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:16:44.026Z",
+  "stored_at": "2026-08-22T07:16:44.027Z",
+  "low_signal": true
+}

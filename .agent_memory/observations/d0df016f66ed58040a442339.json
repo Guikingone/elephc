@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '70,95p' src/codegen_support/runtime/io/filter_params.rs",
+  "summary": "sed -n '70,95p' src/codegen_support/runtime/io/filter_params.rs: ); // runtime tag 5 identifies a hash emitter.instruction(\"b.eq __rt_fap_array\"); emitter.instruction(\"cmp x0, #4\"); // tag 4 identifies a packed array emitter.instruction(\"b.eq __rt_fap_done\"); // an array with no string keys: nothing to read // -- not a",
+  "text": "sed -n '70,95p' src/codegen_support/runtime/io/filter_params.rs: ); // runtime tag 5 identifies a hash emitter.instruction(\"b.eq __rt_fap_array\"); emitter.instruction(\"cmp x0, #4\"); // tag 4 identifies a packed array emitter.instruction(\"b.eq __rt_fap_done\"); // an array with no string keys: nothing to read // -- not an array: only the filters that PARSE `$params` refuse it -- emitter.instruction(\"ldr x9, [sp, #0]\"); emitter.instruction(&format!(\"ldr x9, [x9, #{FILTER_BUILTIN_ID_OFFSET}]\")); // which built-in this node runs emitter.instruction(&format!(\"cmp x9, #{FIRST_PARAM_PARSING_FILTER_ID}\")); // the four `convert.*` ids are contiguous emitter.instruction(\"b.lo __rt_fap_done\"); // every other filter ignores `$params` emitter.instruction(&format!(\"cmp x9, #{LAST_PARAM_PARSING_FILTER_ID}\")); emitter.instruction(\"b.hi __rt_fap_done\"); emitter.instruction(\"mov x0, #0\"); // php refuses the attach outright emitter.instruction(\"ldp x29, x30, [sp, #16]\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d0df016f66ed58040a442339",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:41:24.058Z",
+  "stored_at": "2026-08-21T09:41:24.059Z"
+}

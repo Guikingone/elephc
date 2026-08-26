@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo nextest run --test error_tests --no-fail-fast 2>&1 | grep -E \"FAIL |TIMEOUT |Summary\" | head -4 && cargo nextest run --test php_oracle_manifest_tests 2>&1 | grep -E \"Summary\" | head -2",
+  "summary": "About to run: cargo nextest run --test error_tests --no-fail-fast 2>&1 | grep -E \"FAIL |TIMEOUT |Summary\" | head -4 && cargo nextest run --test php_oracle_manifest_tests 2>&1 | grep -E \"Summary\" | head -2",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "53f3a73a082b93f7a117a3e4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T18:19:14.483Z",
+  "stored_at": "2026-08-14T18:19:14.484Z"
+}

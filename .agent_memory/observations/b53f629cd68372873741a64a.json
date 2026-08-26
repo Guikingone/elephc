@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/manifests/streams/php-8.5.6/macos-aarch64/streams-full.json'))\ns=d['surface']\nprint('WRAPPERS:',s['wrappers'])\nprint('TRANSPORTS:',s['transports'])\nprint('FILTERS:',s['filters'])\nprint('CRYPTO:',s['crypto_methods'])\n\"",
+  "summary": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/manifests/streams/php-8.5.6/macos-aarch64/streams-full.json'))\ns=d['surface']\nprint('WRAPPERS:',s['wrappers'])\nprint('TRANSPORTS:',s['transports'])\nprint('FILTERS:',s['filters'])\nprint('CRYPTO:',s['crypto_methods'])\n\": 'STREAM_CRYPTO_METHOD_SSLv3_CLIENT', 'typ",
+  "text": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/manifests/streams/php-8.5.6/macos-aarch64/streams-full.json'))\ns=d['surface']\nprint('WRAPPERS:',s['wrappers'])\nprint('TRANSPORTS:',s['transports'])\nprint('FILTERS:',s['filters'])\nprint('CRYPTO:',s['crypto_methods'])\n\": 'STREAM_CRYPTO_METHOD_SSLv3_CLIENT', 'type': 'int', 'value': 5}, {'name': 'STREAM_CRYPTO_METHOD_SSLv3_SERVER', 'type': 'int', 'value': 4}, {'name': 'STREAM_CRYPTO_METHOD_TLS_CLIENT', 'type': 'int', 'value': 121}, {'name': 'STREAM_CRYPTO_METHOD_TLS_SERVER', 'type': 'int', 'value': 120}, {'name': 'STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT', 'type': 'int', 'value': 9}, {'name': 'STREAM_CRYPTO_METHOD_TLSv1_0_SERVER', 'type': 'int', 'value': 8}, {'name': 'STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT', 'type': 'int', 'value': 17}, {'name': 'STREAM_CRYPTO_METHOD_TLSv1_1_SERVER', 'type': 'int', 'value': 16}, {'name': 'STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT', 'type': 'int', 'value': 33}, {'name': 'STREAM_CRYPTO_METHOD_TLSv1_2_SERVER', 'type': 'int', 'value': 32}, {'name': 'STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT', 'type': 'int', 'value': 65}, {'name': 'STREAM_CRYPTO_METHOD_TLSv1_3_SERVER', 'type': 'int', 'value': 64}]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b53f629cd68372873741a64a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:19:36.149Z",
+  "stored_at": "2026-08-14T14:19:36.150Z"
+}

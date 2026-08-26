@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"php_version\\|PhpVersion\" --include=\"*.rs\" src/codegen/lower_inst/builtins/io/stream_file_ops.rs | head -10; echo \"=== version-gated deprecations elsewhere ===\"; grep -rn \"Php84\\|Php85\\|V8_4\\|Version84\" --include=\"*.rs\" src | head -20",
+  "summary": "grep -rn \"php_version\\|PhpVersion\" --include=\"*.rs\" src/codegen/lower_inst/builtins/io/stream_file_ops.rs | head -10; echo \"=== version-gated deprecations elsewhere ===\"; grep -rn \"Php84\\|Php85\\|V8_4\\|Version84\" --include=\"*.rs\" src | head -20: 85); src/version_prelude.rs:154: let injected = inject_if_used(parse(\"<?php",
+  "text": "grep -rn \"php_version\\|PhpVersion\" --include=\"*.rs\" src/codegen/lower_inst/builtins/io/stream_file_ops.rs | head -10; echo \"=== version-gated deprecations elsewhere ===\"; grep -rn \"Php84\\|Php85\\|V8_4\\|Version84\" --include=\"*.rs\" src | head -20: 85); src/version_prelude.rs:154: let injected = inject_if_used(parse(\"<?php ini_restore('x');\"), PhpVersion::Php85); src/version_prelude.rs:163: let injected = inject_if_used(parse(source), PhpVersion::Php85); src/version_prelude.rs:182: (PhpVersion::Php84, \"4.4.0\"), src/version_prelude.rs:183: (PhpVersion::Php85, \"4.5.0\"), src/version_prelude.rs:202: PhpVersion::Php85, src/php_version.rs:23: Php84, src/php_version.rs:24: Php85, src/php_version.rs:35: Self::Php84, src/php_version.rs:36: Self::Php85, src/php_version.rs:47: Self::Php84, src/php_version.rs:48: Self::Php85, src/php_version.rs:58: Self::Php84 => \"8.4\", src/php_version.rs:59: Self::Php85 => \"8.5\", src/php_version.rs:93: Self::Php84 => 80400, src/php_version.rs:94: Self::Php85 => 80500, src/php_version.rs:106: Self::Php84 => \"8.4.0\", src/php_version.rs:107: Self::Php85 => \"8.5.0\", src/php_version.rs:139: Self::Php84 => \"4.4.0\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fe44ab4648edccb29811c337",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:16:02.274Z",
+  "stored_at": "2026-08-14T14:16:02.274Z"
+}

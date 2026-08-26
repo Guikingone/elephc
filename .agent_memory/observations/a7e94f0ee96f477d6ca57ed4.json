@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test uncaught_exception_report_tests 2>&1 | tail -6",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test uncaught_exception_report_tests 2>&1 | tail -6: synthesized_error_omits_the_location_and_still_exits_255 uncaught_empty_message_omits_the_separator test result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished i",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test uncaught_exception_report_tests 2>&1 | tail -6: synthesized_error_omits_the_location_and_still_exits_255 uncaught_empty_message_omits_the_separator test result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s error: test failed, to rerun pass `-p elephc --test uncaught_exception_report_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a7e94f0ee96f477d6ca57ed4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:51:54.061Z",
+  "stored_at": "2026-08-24T17:51:54.062Z"
+}

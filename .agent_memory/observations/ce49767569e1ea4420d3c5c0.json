@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '405,455p' src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "About to run: sed -n '405,455p' src/types/checker/builtin_spl_classes/filesystem.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ce49767569e1ea4420d3c5c0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:53:29.928Z",
+  "stored_at": "2026-08-24T20:53:29.928Z"
+}

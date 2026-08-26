@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn x86_64_asks_the_registry_whether_a_host_resource_is_closed\\|fn aarch64_eval_key_sort_uses_native_regular_comparator\" src/codegen_support/runtime/eval_bridge.rs",
+  "summary": "grep -n \"fn x86_64_asks_the_registry_whether_a_host_resource_is_closed\\|fn aarch64_eval_key_sort_uses_native_regular_comparator\" src/codegen_support/runtime/eval_bridge.rs: 367: fn x86_64_asks_the_registry_whether_a_host_resource_is_closed() { 387: fn aarch64_eval_key_sort_uses_native_regular_comparator() {",
+  "text": "grep -n \"fn x86_64_asks_the_registry_whether_a_host_resource_is_closed\\|fn aarch64_eval_key_sort_uses_native_regular_comparator\" src/codegen_support/runtime/eval_bridge.rs: 367: fn x86_64_asks_the_registry_whether_a_host_resource_is_closed() { 387: fn aarch64_eval_key_sort_uses_native_regular_comparator() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "80c63a3c1fdbbb9fe4a0f7af",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:38:58.150Z",
+  "stored_at": "2026-08-20T17:38:58.151Z"
+}

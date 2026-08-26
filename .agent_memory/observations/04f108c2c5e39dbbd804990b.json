@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/merge-loss-is-invisible-to-git-log.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/merge-loss-is-invisible-to-git-log.md: ---\nname: merge-loss-is-invisible-to-git-log\ndescription: \"🔴🔴🔑★★★ Un merge qui jette un hunk n'apparaît dans AUCUN `git log -S`: la validation de schéma de stream_wrapper_regi",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/merge-loss-is-invisible-to-git-log.md: ---\nname: merge-loss-is-invisible-to-git-log\ndescription: \"🔴🔴🔑★★★ Un merge qui jette un hunk n'apparaît dans AUCUN `git log -S`: la validation de schéma de stream_wrapper_register existe dans la BASE COMMUNE et pas sur la branche. 🛠️ diff des ENSEMBLES DE SYMBOLES base↔tip\"\nmetadata:\n  node_type: memory\n  type: feedback\n  modified: 2026-08-21T00:00:00.000Z\n---\n\nDécouvert en préparant l'intégration d'`origin/main` dans `feat/streams-csv-signatures`\n(332 commits d'avance, 32 de retard).\n\n## Le fait\n\n`__rt_stream_wrapper_register` valide l'alphabet du schéma dans la **base commune**\n(`783c63af1`,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "04f108c2c5e39dbbd804990b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:13:29.434Z",
+  "stored_at": "2026-08-21T19:13:29.435Z"
+}

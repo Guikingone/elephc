@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/eval-return-array-segfault-and-parse-error-shape.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/eval-return-array-segfault-and-parse-error-shape.md: ---\nname: eval-return-array-segfault-and-parse-error-shape\ndescription: Trois défauts eval mesurés le 2026-08-15, non corrigés — return d'un tableau SEGFAULTE, `",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/eval-return-array-segfault-and-parse-error-shape.md: ---\nname: eval-return-array-segfault-and-parse-error-shape\ndescription: Trois défauts eval mesurés le 2026-08-15, non corrigés — return d'un tableau SEGFAULTE, `1and 2` refusé des deux côtés, erreurs de parse génériques + exit 1\nmetadata:\n  type: project\n---\n\nMesurés sur `8d7b3e6c8e` par l'agent variadique/lexer, hors de son périmètre :\n\n1. 🔴🔴 **`eval('return [1, 2];')` SIGSEGVE** tout seul — rien à voir avec les littéraux (il a masqué un brouillon de test, contourné en imprimant les colonnes au lieu de comparer les tableaux rendus). C'est le retour d'un TABLEAU depuis un fragment eval.\n2. 🔴 *",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "259b95a59f0b0215eb932bd2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T18:39:15.155Z",
+  "stored_at": "2026-08-15T18:39:15.156Z"
+}

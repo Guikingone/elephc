@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"check_stmts|check_block|fn_env|local_env\" src/types/checker/functions/resolution/signature.rs | head -12",
+  "summary": "About to run: rtk proxy rg -n \"check_stmts|check_block|fn_env|local_env\" src/types/checker/functions/resolution/signature.rs | head -12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6f069b4629251412cc0f8d34",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:02:03.952Z",
+  "stored_at": "2026-08-16T20:02:03.953Z"
+}

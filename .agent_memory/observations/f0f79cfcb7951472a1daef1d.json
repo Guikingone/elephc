@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test -p elephc-builtin-contract 2>&1 | grep -B4 \"left: 71\\|left: 32\" | head -14",
+  "summary": "cargo test -p elephc-builtin-contract 2>&1 | grep -B4 \"left: 71\\|left: 32\" | head -14: ---- support::tests::every_contract_has_a_backend_support_record stdout ---- thread 'support::tests::every_contract_has_a_backend_support_record' (132255193) panicked at crates/elephc-builtin-contract/src/support.rs:287:9: assertion ",
+  "text": "cargo test -p elephc-builtin-contract 2>&1 | grep -B4 \"left: 71\\|left: 32\" | head -14: ---- support::tests::every_contract_has_a_backend_support_record stdout ---- thread 'support::tests::every_contract_has_a_backend_support_record' (132255193) panicked at crates/elephc-builtin-contract/src/support.rs:287:9: assertion `left == right` failed left: 32 -- ---- support::tests::every_eval_binding_has_a_documented_execution_route stdout ---- thread 'support::tests::every_eval_binding_has_a_documented_execution_route' (132255194) panicked at crates/elephc-builtin-contract/src/support.rs:337:9: assertion `left == right` failed left: 71",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f0f79cfcb7951472a1daef1d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T13:34:20.027Z",
+  "stored_at": "2026-08-15T13:34:20.027Z"
+}

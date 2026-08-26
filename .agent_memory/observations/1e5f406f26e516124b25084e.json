@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'ValueError\\|value_error\\|negative' src/codegen_support/runtime/spl/fixed_array.rs | head -15",
+  "summary": "grep -n 'ValueError\\|value_error\\|negative' src/codegen_support/runtime/spl/fixed_array.rs | head -15: r if size is negative. 133: emitter.instruction(\"cmp x1, #0\"); // reject negative sizes 134: emitter.instruction(\"b.lt __rt_spl_fixed_set_size_throw\"); // negative sizes raise ValueError 193: \"_spl_value_error_class_i",
+  "text": "grep -n 'ValueError\\|value_error\\|negative' src/codegen_support/runtime/spl/fixed_array.rs | head -15: r if size is negative. 133: emitter.instruction(\"cmp x1, #0\"); // reject negative sizes 134: emitter.instruction(\"b.lt __rt_spl_fixed_set_size_throw\"); // negative sizes raise ValueError 193: \"_spl_value_error_class_id\", 238:/// throws OutOfBoundsException if offset is negative or >= fixed size. 295: emitter.instruction(\"cmp x10, #0\"); // reject negative offsets 296: emitter.instruction(\"b.lt __rt_spl_fixed_offset_set_range_throw\"); // negative offsets are out of range 385:/// Saves frame state, unboxes the offset argument, validates it is a non-negative integer 400: emitter.instruction(\"cmp x10, #0\"); // reject negative offsets 401: emitter.instruction(&format!(\"b.lt {}\", range_label)); // negative offsets are invalid 476:/// if a hash source with preserveKeys=true contains non-integer or negative keys. 510: emitter.instruction(\"cmp x1, #0\"); // negative keys are not fixed-array offsets",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1e5f406f26e516124b25084e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:35:53.107Z",
+  "stored_at": "2026-08-25T13:35:53.107Z"
+}

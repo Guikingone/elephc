@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/port_list_unpack.py && cargo test --test error_tests 2>&1 | grep -E \"^---- |panicked at|assertion|left:|right:|^test result:\" | cut -c1-240",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/port_list_unpack.py && cargo test --test error_tests 2>&1 | grep -E \"^---- |panicked at|assertion|left:|right:|^test result:\" | cut -c1-240: reco",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/port_list_unpack.py && cargo test --test error_tests 2>&1 | grep -E \"^---- |panicked at|assertion|left:|right:|^test result:\" | cut -c1-240: recovery.rs: list-unpack recovery test retargeted, divergence named ---- misc::functions::test_error_by_value_self_capture_still_undefined stdout ---- thread 'misc::functions::test_error_by_value_self_capture_still_undefined' (30215629) panicked at tests/error_tests.rs:104:18: ---- misc::functions::test_error_by_ref_capture_not_assignment_target_still_undefined stdout ---- thread 'misc::functions::test_error_by_ref_capture_not_assignment_target_still_undefined' (30215628) panicked at tests/error_tests.rs:104:18: ---- type_system::test_error_closure_use_undefined_variable stdout ---- thread 'type_system::test_error_closure_use_undefined_variable' (30216343) panicked at tests/error_tests.rs:104:18: test result: FAILED. 1294 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.32s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1e84e7b67331e5570cc9d727",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:39:58.288Z",
+  "stored_at": "2026-08-20T19:39:58.288Z"
+}

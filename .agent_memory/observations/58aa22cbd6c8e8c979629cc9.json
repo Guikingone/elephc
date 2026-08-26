@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && cat psfsfatal_e.txt",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && cat psfsfatal_e.txt: Warning: stream_filter_prepend(): Unable to locate filter \"fatalf\" int(9) Warning: stream_filter_prepend(): Unable to loca",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && cat psfsfatal_e.txt: Warning: stream_filter_prepend(): Unable to locate filter \"fatalf\" int(9) Warning: stream_filter_prepend(): Unable to locate filter \"fatalf\" string(9) \"Test data\" Warning: stream_filter_prepend(): Unable to locate filter \"fatalf\" string(9) \"Test data\" Warning: stream_filter_prepend(): Unable to locate filter \"fatalf\" string(9) \"Test data\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "58aa22cbd6c8e8c979629cc9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:35:36.446Z",
+  "stored_at": "2026-08-17T09:35:36.446Z"
+}

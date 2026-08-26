@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/resource_id_numbering.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/resource_id_numbering.rs: //! Purpose:\n//! Integration tests for the php-visible resource id a stream carries: `php://temp` consumes\n//! TWO of them, so the numbering has a hole after every one.\n//!\n//! Ca",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/resource_id_numbering.rs: //! Purpose:\n//! Integration tests for the php-visible resource id a stream carries: `php://temp` consumes\n//! TWO of them, so the numbering has a hole after every one.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - php's `php://temp` is a temporary-file stream WRAPPING a memory stream, and php registers\n//!   both — so the id after one is two higher, not one. Measured on `php -n` 8.5.6: three\n//!   `php://memory` opens number `5, 6, 7`, while memory-temp-memory numbers `5, 6, 8`.\n//! - The temp stream keeps the FIRST of its two ids, which is wh",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8272203ef24f6cc8d287f9fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:28:01.293Z",
+  "stored_at": "2026-08-24T13:28:01.294Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '60,95p' src/ir_lower/expr/function_calls.rs",
+  "summary": "sed -n '60,95p' src/ir_lower/expr/function_calls.rs: n value; } if let Some(value) = lower_eval_function_probe(ctx, canonical, args, expr) { return value; } if let Some(value) = lower_eval_class_probe(ctx, canonical, args, expr) { return value; } let extension_builtin = source_prefers_extension_builtin(canonical); let ",
+  "text": "sed -n '60,95p' src/ir_lower/expr/function_calls.rs: n value; } if let Some(value) = lower_eval_function_probe(ctx, canonical, args, expr) { return value; } if let Some(value) = lower_eval_class_probe(ctx, canonical, args, expr) { return value; } let extension_builtin = source_prefers_extension_builtin(canonical); let sig = call_signature(ctx, canonical, extension_builtin); let is_extern = ctx.extern_functions.contains_key(canonical); let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin; let operands = if is_extern || is_user_function { lower_args_with_signature(ctx, sig.as_ref(), args) } else { promote_key_preserving_sort_receiver(ctx, canonical, args); lower_builtin_call_args(ctx, canonical, sig.as_ref(), args) }; let php_type = if is_extern || is_user_function { call_return_type(ctx, canonical, &operands) } else if let Some(php_type) = registry_builtin_result_type(ctx, canonical, args, &operands, expr.span)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f20f33facf3f8fa5ec082d40",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:24:17.712Z",
+  "stored_at": "2026-08-18T11:24:17.712Z"
+}

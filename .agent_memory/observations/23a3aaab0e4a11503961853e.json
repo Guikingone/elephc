@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps aux | grep \"[c]odegen_tests\" | head -4 | awk '{print $2, $3, $10, $11}'; echo \"--- children ---\"; pgrep -P $(pgrep -f \"[c]odegen_tests\" | head -1) 2>/dev/null | head -5",
+  "summary": "About to run: ps aux | grep \"[c]odegen_tests\" | head -4 | awk '{print $2, $3, $10, $11}'; echo \"--- children ---\"; pgrep -P $(pgrep -f \"[c]odegen_tests\" | head -1) 2>/dev/null | head -5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "23a3aaab0e4a11503961853e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:39:17.538Z",
+  "stored_at": "2026-08-23T09:39:17.538Z"
+}

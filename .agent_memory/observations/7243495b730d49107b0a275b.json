@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fsock_scheme.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fsock_scheme.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codeg",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fsock_scheme.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen_support/runtime/io/fsockopen.rs'\ns = open(p).read()\n\n# --- module doc ---\nold = '''//! - Assembles a `tcp://host:port` address from the runtime hostname string and\n//!   port integer into the `_fsockopen_addr` scratch buffer (`__rt_itoa` formats\n//!   the port), then delegates to `__rt_stream_socket_client` to connect.\n//! - Reuses the shared `_ftp_tcp_prefix` `\"tcp://\"` literal.'''\nnew = '''//! - Assembles a `tcp://host:port` address from the runtime hostname str",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7243495b730d49107b0a275b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:26:45.492Z",
+  "stored_at": "2026-08-17T13:26:45.493Z"
+}

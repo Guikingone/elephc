@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/data/fixed.rs')\nt = p.read_text()\nold = '''    out.push_str(\\\".globl _swr_bad_proto_msg\\\\\\\\n_swr_bad_proto_msg:\\\\\\\\n    .ascii \\\\\\\\\\\"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\\\\\\\\\\\\\\\n\\\\\\\\\\\"\\\\\\\\n\\\");\n    out.push_str(\\\".globl _swr_dup_proto_msg\\\\\\\\n_swr_dup_proto_msg:\\\\\\\\n    .ascii \\\\\\\\\\\"Warning: stream_wrapper_register(): Protocol is already defined.\\\\\\\\\\\\\\\\n\\\\\\\\\\\"\\\\\\\\n\\\");'''\nnew = '''    // Emitted FROM the constants that document them, not from a second copy of the text: the\n    // wordin… [+720 chars truncated]",
+  "summary": "python3 -c \"\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/data/fixed.rs')\nt = p.read_text()\nold = '''    out.push_str(\\\".globl _swr_bad_proto_msg\\\\\\\\n_swr_bad_proto_msg:\\\\\\\\n    .ascii \\\\\\\\\\\"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\\\\\\\\\\\\\\\n\\\\\\\\\\\"\\\\\\\\n\\\");\n    out.push_str(\\",
+  "text": "python3 -c \"\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/data/fixed.rs')\nt = p.read_text()\nold = '''    out.push_str(\\\".globl _swr_bad_proto_msg\\\\\\\\n_swr_bad_proto_msg:\\\\\\\\n    .ascii \\\\\\\\\\\"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\\\\\\\\\\\\\\\n\\\\\\\\\\\"\\\\\\\\n\\\");\n    out.push_str(\\\".globl _swr_dup_proto_msg\\\\\\\\n_swr_dup_proto_msg:\\\\\\\\n    .ascii \\\\\\\\\\\"Warning: stream_wrapper_register(): Protocol is already defined.\\\\\\\\\\\\\\\\n\\\\\\\\\\\"\\\\\\\\n\\\");'''\nnew = '''    // Emitted FROM the constants that document them, not from a second copy of the text: the\n    // wording and the reason for it live next to the helper that raises the warning, and a\n    // literal here would drift from that the first time either is edited.\n    for (symbol, message) in [\n        (\\\"_swr_bad_proto_msg\\\", crate::codegen_support::runtime::io::BAD_PROTOCOL_WARNING),\n        (\\\"_swr_dup_proto_msg\\\", crate::codegen_support::runtime::io::DUPLICATE_PROTOCOL_WARNING),\n    ] {\n        out.push_str(&format!(\n            \\\".globl {symbol}\\\\\\\\n{symbol}:\\\\\\\\n    .ascii \\\\\\\\\\\"{}\\\\\\\\\\\"\\\\\\\\n\\\",\n            message.replace('\\\\\\\\n', \\\"\\\\\\\\\\\\\\\\n\\\")\n        ));\n    }'''\nassert t.count(old) == 1, t.count(old)\np.write_text(t.replace(old, new))\nprint('fixed.rs: the two protocol warnings now come from their constants')\n\": fixed.rs: the two protocol warnings now come from their constants",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eed73222d5f05dbeb7f26325",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:55:11.964Z",
+  "stored_at": "2026-08-20T17:55:11.964Z"
+}

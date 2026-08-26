@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"STREAM_APPEND_SKIP_OFFSET\\]\\\"\" -B4 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/stream/aarch64.rs 2>/dev/null | head -12; rtk proxy grep -rn \"APPEND_SKIP\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/ | head -5",
+  "summary": "rtk proxy grep -rn \"STREAM_APPEND_SKIP_OFFSET\\]\\\"\" -B4 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/stream/aarch64.rs 2>/dev/null | head -12; rtk proxy grep -rn \"APPEND_SKIP\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/",
+  "text": "rtk proxy grep -rn \"STREAM_APPEND_SKIP_OFFSET\\]\\\"\" -B4 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/stream/aarch64.rs 2>/dev/null | head -12; rtk proxy grep -rn \"APPEND_SKIP\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/ | head -5: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs:201:pub(crate) const STREAM_APPEND_SKIP_OFFSET: i64 = 216; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs:358: assert!(STREAM_APPEND_SKIP_OFFSET == STREAM_TRANSPORT_OFFSET + 8); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs:359: assert!(STREAM_APPEND_SKIP_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs:360: assert!(STREAM_WRAPPER_POS_OFFSET == STREAM_APPEND_SKIP_OFFSET + 8);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e4c0f40edce29507ab43d28d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:54:41.081Z",
+  "stored_at": "2026-08-17T07:54:41.083Z"
+}

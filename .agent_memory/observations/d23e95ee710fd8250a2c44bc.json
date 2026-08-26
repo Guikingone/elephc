@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"cmp r9\\|je __rt_mixed_free_deep\\|jz __rt_mixed_free_deep\\|label(\\\"__rt_mixed_free_deep\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | sed -n '1,40p'",
+  "summary": "grep -n \"cmp r9\\|je __rt_mixed_free_deep\\|jz __rt_mixed_free_deep\\|label(\\\"__rt_mixed_free_deep\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | sed -n '1,40p': treams through the authoritative registry 255: emitter.instruction(\"cmp r9, 4\"); // is this a registry-owned directory stream handle? 257: emitter.inst",
+  "text": "grep -n \"cmp r9\\|je __rt_mixed_free_deep\\|jz __rt_mixed_free_deep\\|label(\\\"__rt_mixed_free_deep\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | sed -n '1,40p': treams through the authoritative registry 255: emitter.instruction(\"cmp r9, 4\"); // is this a registry-owned directory stream handle? 257: emitter.instruction(\"je __rt_mixed_free_deep_resource_registry\"); // release directory streams through the authoritative registry 259: emitter.instruction(\"cmp r9, 9\"); // is this a registry-owned stream-context handle? 261: emitter.instruction(\"je __rt_mixed_free_deep_resource_registry\"); // release contexts through the authoritative registry 266: emitter.label(\"__rt_mixed_free_deep_resource_registry\"); 273: emitter.label(\"__rt_mixed_free_deep_resource_hash\"); 281: emitter.label(\"__rt_mixed_free_deep_string\"); 287: emitter.label(\"__rt_mixed_free_deep_box\"); 296: emitter.label(\"__rt_mixed_free_deep_done\"); 329: compare: \"cmp r9, \", 330: popen_branch: \"je __rt_mixed_free_deep_resource_popen\\n\", 331: dir_branch: \"je __rt_mixed_free_deep_resource_dir\\n\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d23e95ee710fd8250a2c44bc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:55:27.096Z",
+  "stored_at": "2026-08-20T20:55:27.096Z"
+}

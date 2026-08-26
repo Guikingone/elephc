@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/file-function-flags.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/file-function-flags.php: <?php\n// file() across its flag combinations, plus the shapes that trip it.\nfile_put_contents(\"f.txt\", \"a\\n\\nb\\n",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/file-function-flags.php: <?php\n// file() across its flag combinations, plus the shapes that trip it.\nfile_put_contents(\"f.txt\", \"a\\n\\nb\\nc\\n\");\nforeach ([0, FILE_IGNORE_NEW_LINES, FILE_SKIP_EMPTY_LINES,\n          FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES] as $flags) {\n    var_dump($flags, file(\"f.txt\", $flags));\n}\n\n// A file with no trailing newline.\nfile_put_contents(\"g.txt\", \"a\\nb\");\nvar_dump(file(\"g.txt\"), file(\"g.txt\", FILE_IGNORE_NEW_LINES));\n\n// An empty file, and one that is only a newline.\nfile_put_contents(\"h.txt\", \"\");\nvar_dump(file(\"h.txt\"), file(\"h.txt\", FILE_SKIP_EMPTY_LINES));\nfile_put_contents(\"i.tx",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3297d26ed4f9c9597e129233",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:51:36.084Z",
+  "stored_at": "2026-08-26T07:51:36.085Z"
+}

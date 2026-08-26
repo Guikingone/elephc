@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -30 src/image_prelude/build.rs 2>/dev/null | grep -nE \"^use |^//!\" | head -12; echo \"--- or wherever image_declarations lives ---\"; grep -rn \"fn image_declarations\" src/ | head -2",
+  "summary": "head -30 src/image_prelude/build.rs 2>/dev/null | grep -nE \"^use |^//!\" | head -12; echo \"--- or wherever image_declarations lives ---\"; grep -rn \"fn image_declarations\" src/ | head -2: --- or wherever image_declarations lives --- src/image_prelude.rs:13897:pub(crate) fn image_declarations() -> Program {",
+  "text": "head -30 src/image_prelude/build.rs 2>/dev/null | grep -nE \"^use |^//!\" | head -12; echo \"--- or wherever image_declarations lives ---\"; grep -rn \"fn image_declarations\" src/ | head -2: --- or wherever image_declarations lives --- src/image_prelude.rs:13897:pub(crate) fn image_declarations() -> Program {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "78b64cfeff7a95d859c6eaca",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:29:15.700Z",
+  "stored_at": "2026-08-22T07:29:15.700Z"
+}

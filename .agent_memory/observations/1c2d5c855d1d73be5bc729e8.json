@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '450,490p' docs/php/streams.md",
+  "summary": "sed -n '450,490p' docs/php/streams.md: LI puts both on stdout, a repo-wide divergence rather than one specific to this builtin. | When `fopen(\"$protocol://...\")` matches a registered wrapper, elephc creates an instance through the runtime class registry. Declared property defaults are applied, but `__construct` is not ",
+  "text": "sed -n '450,490p' docs/php/streams.md: LI puts both on stdout, a repo-wide divergence rather than one specific to this builtin. | When `fopen(\"$protocol://...\")` matches a registered wrapper, elephc creates an instance through the runtime class registry. Declared property defaults are applied, but `__construct` is not invoked on this path. Supported wrapper methods include `stream_open`, `stream_read`, `stream_write`, `stream_close`, `stream_eof`, `stream_seek`, `stream_tell`, `stream_flush`, `stream_stat`, `stream_lock`, `stream_truncate`, `stream_metadata`, `stream_set_option`, `stream_cast`, `url_stat`, and the directory methods `dir_opendir`, `dir_readdir`, `dir_rewinddir`, and `dir_closedir`. Wrapper methods should declare return types that match their PHP contracts. `stream_stat()` and `url_stat()` are exceptions: declare them without a return type, or as `mixed`, when returning associative stat arrays with string keys.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1c2d5c855d1d73be5bc729e8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:30:26.172Z",
+  "stored_at": "2026-08-18T09:30:26.172Z"
+}

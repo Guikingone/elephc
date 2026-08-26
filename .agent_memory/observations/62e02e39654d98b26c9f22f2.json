@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a6163fbc313b4668b 2>&1 | head -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a70e7663fda8f8e62 2>&1 | head -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a7800e692f6ce9d8b 2>&1 | head -1; df -h / | tail -1",
+  "summary": "git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a6163fbc313b4668b 2>&1 | head -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a70e7663fda8f8e62 2>&1 | head -1; git worktree remove --force /Users/guillaume",
+  "text": "git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a6163fbc313b4668b 2>&1 | head -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a70e7663fda8f8e62 2>&1 | head -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a7800e692f6ce9d8b 2>&1 | head -1; df -h / | tail -1: /dev/disk3s1s1 460Gi 12Gi 49Gi 20% 459k 512M 0% /",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "62e02e39654d98b26c9f22f2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T09:31:44.119Z",
+  "stored_at": "2026-08-15T09:31:44.121Z"
+}

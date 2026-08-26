@@ -1,0 +1,16 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm13.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm13.php: <?php\n// A wide CSV read matrix: enclosures, escapes, embedded newlines, blank records, custom controls.\n$cases = [\n    \"a,b,c\\n\",\n  ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm13.php: <?php\n// A wide CSV read matrix: enclosures, escapes, embedded newlines, blank records, custom controls.\n$cases = [\n    \"a,b,c\\n\",\n    \"\\\"a\\\",\\\"b\\\"\\n\",\n    \"\\\"a,b\\\",c\\n\",\n    \"\\\"a\\nb\\\",c\\n\",\n    \",,\\n\",\n    \"\\n\",\n    \" \\n\",\n    \"a,\\n\",\n    \",a\\n\",\n    \"\\\"\\\"\\n\",\n    \"\\\"\\\",\\\"\\\"\\n\",\n    \"a\\r\\nb\\r\\n\",\n    \"\\\"a\\\"\\\"b\\\",c\\n\",\n    \"\\\"a\\\\\\\"b\\\",c\\n\",\n    \"a,\\\"b\\n\",\n    \"\\\"unterminated\\n\",\n    \"a,b\",\n    \"'x';'y'\\n\",\n    \"\\\"a\\\" ,b\\n\",\n    \" \\\"a\\\",b\\n\",\n];\nforeach ($cases as $i => $text) {\n    $h = fopen(\"php://memory\", \"w+\");\n    fwrite($h, $text);\n    rewind($h);\n    echo \"case $i\\n\";\n    while (($row =",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bac18b430a9c1a5e9e879958",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:19:56.679Z",
+  "stored_at": "2026-08-18T09:19:56.680Z",
+  "low_signal": true
+}

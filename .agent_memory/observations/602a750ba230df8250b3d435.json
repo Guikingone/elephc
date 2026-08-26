@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('tests/error_tests/io_builtins/streams.rs')\nt = p.read_text()\nold = '        \"expects Array(Mixed), got Union([Array(Str), False])\",'\nnew = '        \"expects Array(Mixed), got Union([Array(Mixed), False])\",'\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('streams.rs: fgetcsv element type follows the merged honest declaration')\nPY",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('tests/error_tests/io_builtins/streams.rs')\nt = p.read_text()\nold = '        \"expects Array(Mixed), got Union([Array(Str), False])\",'\nnew = '        \"expects Array(Mixed), got Union([Array(Mixed), False])\",'\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprin",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('tests/error_tests/io_builtins/streams.rs')\nt = p.read_text()\nold = '        \"expects Array(Mixed), got Union([Array(Str), False])\",'\nnew = '        \"expects Array(Mixed), got Union([Array(Mixed), False])\",'\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('streams.rs: fgetcsv element type follows the merged honest declaration')\nPY: streams.rs: fgetcsv element type follows the merged honest declaration",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "602a750ba230df8250b3d435",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:24:02.785Z",
+  "stored_at": "2026-08-20T19:24:02.785Z"
+}

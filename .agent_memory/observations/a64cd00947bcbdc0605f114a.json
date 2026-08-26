@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"dir_prelude\" src/lib.rs src/pipeline.rs",
+  "summary": "rtk proxy rg -n \"dir_prelude\" src/lib.rs src/pipeline.rs: src/pipeline.rs:279: let ast = crate::dir_prelude::inject_if_used(ast); src/lib.rs:32:pub mod dir_prelude;",
+  "text": "rtk proxy rg -n \"dir_prelude\" src/lib.rs src/pipeline.rs: src/pipeline.rs:279: let ast = crate::dir_prelude::inject_if_used(ast); src/lib.rs:32:pub mod dir_prelude;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a64cd00947bcbdc0605f114a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:10:41.550Z",
+  "stored_at": "2026-08-16T16:10:41.550Z"
+}

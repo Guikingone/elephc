@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"Unable to locate filter\" tests/codegen/io/streams.rs | head -5",
+  "summary": "grep -rn \"Unable to locate filter\" tests/codegen/io/streams.rs | head -5: tests/codegen/io/streams.rs:1818: .contains(\"Warning: stream_filter_append(): Unable to locate filter \\\"no.such.filter\\\"\"), tests/codegen/io/streams.rs:1824: .contains(\"Warning: stream_filter_prepend(): Unable to locate filter \\\"also.missing\\\"\"),",
+  "text": "grep -rn \"Unable to locate filter\" tests/codegen/io/streams.rs | head -5: tests/codegen/io/streams.rs:1818: .contains(\"Warning: stream_filter_append(): Unable to locate filter \\\"no.such.filter\\\"\"), tests/codegen/io/streams.rs:1824: .contains(\"Warning: stream_filter_prepend(): Unable to locate filter \\\"also.missing\\\"\"), tests/codegen/io/streams.rs:2428:/// Warning: fopen(): Unable to locate filter \"no.such.filter\" tests/codegen/io/streams.rs:2466: \"Warning: fopen(): Unable to locate filter \\\"no.such.filter\\\"\\n\\ tests/codegen/io/streams.rs:2468: Warning: fopen(): Unable to locate filter \\\"one.bad\\\"\\n\\",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d09828ff8bf205c682f2a582",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:04:00.378Z",
+  "stored_at": "2026-08-18T10:04:00.378Z"
+}

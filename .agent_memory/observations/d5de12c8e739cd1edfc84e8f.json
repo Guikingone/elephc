@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 1,70p src/builtins/io/fscanf.rs",
+  "summary": "sed -n 1,70p src/builtins/io/fscanf.rs: one, argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::Standard, callable: BuiltinCallablePolicy::StaticOnly( \"fscanf is scanned by an injected prelude function, which a runtime-selected callable cannot reach\", ), lowering: BuiltinLowering::Eir(lower), }, } ",
+  "text": "sed -n 1,70p src/builtins/io/fscanf.rs: one, argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::Standard, callable: BuiltinCallablePolicy::StaticOnly( \"fscanf is scanned by an injected prelude function, which a runtime-selected callable cannot reach\", ), lowering: BuiltinLowering::Eir(lower), }, } /// Validates the stream argument and returns php's `array|false|null` result type. /// /// The `$vars` form changes the shape: php answers the conversion COUNT rather than the array, /// and `false` only for a stream already at end of file. fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> { crate::types::checker::builtins::io::common::ensure_stream_resource( cx.checker, cx.name, &cx.args[0], cx.env, )?; crate::builtins::string::sscanf::check_vars_arity(cx.name, cx.args.len(), cx.span)?; Ok(fscanf_result_type(cx.args.len())) } /// Returns php's `fscanf` result type for the given argument count.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d5de12c8e739cd1edfc84e8f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:29:48.533Z",
+  "stored_at": "2026-08-21T16:29:48.534Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn split_php_diagnostics\" -A 40 tests/codegen/support/runner.rs | grep -nE \"Fatal error|located|on line|:\\{|push\" | head -12",
+  "summary": "grep -rn \"fn split_php_diagnostics\" -A 40 tests/codegen/support/runner.rs | grep -nE \"Fatal error|located|on line|:\\{|push\" | head -12: 6:tests/codegen/support/runner.rs-1063- \"Fatal error: \", 15:tests/codegen/support/runner.rs-1072- // deciding on it would file an unlocated warning as program output, which is a far mo",
+  "text": "grep -rn \"fn split_php_diagnostics\" -A 40 tests/codegen/support/runner.rs | grep -nE \"Fatal error|located|on line|:\\{|push\" | head -12: 6:tests/codegen/support/runner.rs-1063- \"Fatal error: \", 15:tests/codegen/support/runner.rs-1072- // deciding on it would file an unlocated warning as program output, which is a far more 17:tests/codegen/support/runner.rs-1074- let needle = format!(\" in {} on line \", script_path); 20:tests/codegen/support/runner.rs-1077- let mut located = String::new(); 24:tests/codegen/support/runner.rs-1081- // php's ` in FILE on line N` is a SEPARATE property, asserted through 25:tests/codegen/support/runner.rs-1082- // `located_diagnostics` by the tests that care — conflating the two made every 38:tests/codegen/support/runner.rs-1095- // The MESSAGE only. php ends every diagnostic with ` in <file> on line <n>`, which is",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d4392c981093f04f10b53e56",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:19:55.524Z",
+  "stored_at": "2026-08-22T07:19:55.525Z"
+}

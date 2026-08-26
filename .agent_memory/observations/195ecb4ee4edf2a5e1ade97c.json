@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"is not a valid stream filter resource\" src/ | head -3",
+  "summary": "grep -rn \"is not a valid stream filter resource\" src/ | head -3: src/codegen/lower_inst/builtins/io/resource_handles.rs:273:/// sentence: php says `supplied resource is not a valid stream filter resource` for EVERY resource src/codegen/lower_inst/builtins/io/resource_handles.rs:280: \"stream_filter_remove(): supplied re",
+  "text": "grep -rn \"is not a valid stream filter resource\" src/ | head -3: src/codegen/lower_inst/builtins/io/resource_handles.rs:273:/// sentence: php says `supplied resource is not a valid stream filter resource` for EVERY resource src/codegen/lower_inst/builtins/io/resource_handles.rs:280: \"stream_filter_remove(): supplied resource is not a valid stream filter resource\".to_string()",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "195ecb4ee4edf2a5e1ade97c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:57:41.957Z",
+  "stored_at": "2026-08-21T18:57:41.958Z"
+}

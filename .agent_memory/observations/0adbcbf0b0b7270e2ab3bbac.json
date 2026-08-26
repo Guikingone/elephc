@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm05 rm27 t12 t13 2>&1",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm05 rm27 t12 t13 2>&1:  Function '__elephc_scanf_arity' parameter $values expects Array(Mixed), got Mixed error[697:26]: Function '",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm05 rm27 t12 t13 2>&1:  Function '__elephc_scanf_arity' parameter $values expects Array(Mixed), got Mixed error[697:26]: Function '__elephc_scanf_arity' parameter $values expects Array(Mixed), got Mixed error[468:1]: Function '__elephc_scanf' return type expects Union([Array(Mixed), Void]), got Mixed t12 COMPILE FAILED: error[631:26]: Function '__elephc_scanf_arity' parameter $values expects Array(Mixed), got Mixed error[717:26]: Function '__elephc_scanf_arity' parameter $values expects Array(Mixed), got Mixed error[501:26]: Function '__elephc_scanf_arity' parameter $values expects Array(Mixed), got Mixed t13 COMPILE FAILED: error[547:26]: Function '__elephc_scanf_arity' parameter $values expects Array(Mixed), got Mixed error[562:26]: Function '__elephc_scanf_arity' parameter $values expects Array(Mixed), got Mixed error[697:26]: Function '__elephc_scanf_arity' parameter $values expects Array(Mixed), got Mixed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0adbcbf0b0b7270e2ab3bbac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:46:56.130Z",
+  "stored_at": "2026-08-18T10:46:56.130Z"
+}

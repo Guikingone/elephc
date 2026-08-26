@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/buffering-funnel-swallows-unterminated-messages.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/buffering-funnel-swallows-unterminated-messages.md: ---\nname: buffering-funnel-swallows-unterminated-messages\ndescription: 🔴🔴🔑 Passer un écrivain IMMÉDIAT à un écrivain TAMPONNÉ avale SILENCIEUSEMENT tout appelant ",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/buffering-funnel-swallows-unterminated-messages.md: ---\nname: buffering-funnel-swallows-unterminated-messages\ndescription: 🔴🔴🔑 Passer un écrivain IMMÉDIAT à un écrivain TAMPONNÉ avale SILENCIEUSEMENT tout appelant qui ne termine pas sa ligne — 25 sites eval perdus d'un coup, zéro erreur.\nmetadata:\n  type: feedback\n---\n\nEn transformant `__rt_diag_warning` d'un `write(2)` immédiat en un **accumulateur** qui n'écrit\nqu'en voyant une nouvelle ligne finale, j'ai fait disparaître **25 sites d'avertissement** de\nl'interpréteur eval d'un seul coup. Aucune erreur, aucun avertissement de compilation : les\nmessages entraient dans le tampon et n'en sortaie",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aa44778c6580d48f85596283",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T14:50:34.161Z",
+  "stored_at": "2026-08-19T14:50:34.162Z"
+}

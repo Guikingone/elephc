@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; $S/r3 & PID=$!; sample $PID 1 -mayDie -f $S/prof.txt >/dev/null 2>&1; wait $PID; grep -m 60 -E '^\\s+[0-9]+ ' $S/prof.txt | head -60",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; $S/r3 & PID=$!; sample $PID 1 -mayDie -f $S/prof.txt >/dev/null 2>&1; wait $PID; grep -m 60 -E '^\\s+[0-9]+ ' $S/prof.txt | head -60 failed: Thi",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; $S/r3 & PID=$!; sample $PID 1 -mayDie -f $S/prof.txt >/dev/null 2>&1; wait $PID; grep -m 60 -E '^\\s+[0-9]+ ' $S/prof.txt | head -60 failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Split it into plain, separate commands and run them from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "db9afc8d61f9a2f9bfd712bd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T16:58:52.283Z",
+  "stored_at": "2026-08-24T16:58:52.284Z"
+}

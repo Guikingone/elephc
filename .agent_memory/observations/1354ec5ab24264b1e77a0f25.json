@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/scanf_dynamic.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/scanf_dynamic.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signatur",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/scanf_dynamic.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\np = ROOT / \"src/scanf_prelude/detect.rs\"\ns = p.read_text()\n\nold = '''        ExprKind::FunctionCall { name, args } => {\n            name_is_scanf(name) || args.iter().any(expr_refs_scanf)\n        }'''\nnew = '''        ExprKind::FunctionCall { name, args } => {\n            name_is_scanf(name)\n                || call_may_reach_any_method(name, args)\n                || args.iter().any(expr_refs_scanf)\n        }'''\nassert s.count(old) == 1, (\"call\", s.count(old))",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1354ec5ab24264b1e77a0f25",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:35:58.806Z",
+  "stored_at": "2026-08-25T12:35:58.806Z"
+}

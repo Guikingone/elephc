@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn local_php_type\" -A 10 src/codegen/context.rs | head -14",
+  "summary": "grep -rn \"fn local_php_type\" -A 10 src/codegen/context.rs | head -14: src/codegen/context.rs:297: pub(super) fn local_php_type(&self, slot: LocalSlotId) -> Result<PhpType> { src/codegen/context.rs-298- self.function src/codegen/context.rs-299- .locals src/codegen/context.rs-300- .get(slot.as_raw() as usize) src/codegen",
+  "text": "grep -rn \"fn local_php_type\" -A 10 src/codegen/context.rs | head -14: src/codegen/context.rs:297: pub(super) fn local_php_type(&self, slot: LocalSlotId) -> Result<PhpType> { src/codegen/context.rs-298- self.function src/codegen/context.rs-299- .locals src/codegen/context.rs-300- .get(slot.as_raw() as usize) src/codegen/context.rs-301- .map(|metadata| metadata.php_type.codegen_repr()) src/codegen/context.rs-302- .ok_or_else(|| CodegenIrError::missing_entry(\"local slot\", slot.as_raw())) src/codegen/context.rs-303- } src/codegen/context.rs-304- src/codegen/context.rs-305- /// Returns the semantic role attached to a local slot. src/codegen/context.rs-306- pub(super) fn local_kind(&self, slot: LocalSlotId) -> Result<LocalKind> { src/codegen/context.rs-307- self.function",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7ec25d0d5fe74700ff74bcfe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:44:40.899Z",
+  "stored_at": "2026-08-22T13:44:40.899Z"
+}

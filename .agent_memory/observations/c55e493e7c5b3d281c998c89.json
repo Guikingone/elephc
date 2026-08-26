@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockmeta3.php','w').write('''<?php\n$path = sys_get_temp_dir() . \"/elephc_sockmeta3.sock\";\n@unlink($path);\n$srv = stream_socket_server(\"unix://\" . $path);\n$cli = stream_socket_client(\"unix://\" . $path);\n$acc = stream_socket_accept($srv);\n$m = stream_get_meta_data($acc);\nvar_dump(array_key_exists(\"wrapper_type\", $m), array_key_exists(\"uri\", $m), $m[\"stream_type\"]);\nfclose($acc); fclose($cli); fclose… [+445 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY' open('",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c55e493e7c5b3d281c998c89",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:25:07.338Z",
+  "stored_at": "2026-08-17T13:25:07.339Z"
+}

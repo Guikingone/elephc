@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"^use \\|SOCKET_FAILED_FSOCKOPEN_PREFIX,\" src/codegen_support/runtime/data/fixed.rs | head -8",
+  "summary": "grep -n \"^use \\|SOCKET_FAILED_FSOCKOPEN_PREFIX,\" src/codegen_support/runtime/data/fixed.rs | head -8: 11:use super::{ 31: SOCKET_FAILED_CLIENT_PREFIX, SOCKET_FAILED_FSOCKOPEN_PREFIX, SOCKET_FAILED_REASON_CLOSE, 60:use super::super::system; 61:use crate::codegen_support::data_section::comm_directive; 62:use crate::codeg",
+  "text": "grep -n \"^use \\|SOCKET_FAILED_FSOCKOPEN_PREFIX,\" src/codegen_support/runtime/data/fixed.rs | head -8: 11:use super::{ 31: SOCKET_FAILED_CLIENT_PREFIX, SOCKET_FAILED_FSOCKOPEN_PREFIX, SOCKET_FAILED_REASON_CLOSE, 60:use super::super::system; 61:use crate::codegen_support::data_section::comm_directive; 62:use crate::codegen_support::runtime::strings::{ 65:use crate::codegen_support::platform::Target; 66:use crate::types::checker::builtins::{",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1ef237661c54bfad233f6022",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:40:02.181Z",
+  "stored_at": "2026-08-17T14:40:02.182Z"
+}

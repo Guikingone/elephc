@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_user_wrapper_x86.py && cargo test -p elephc --lib the_read_helper_dispatches 2>&1 | tail -8",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_user_wrapper_x86.py && cargo test -p elephc --lib the_read_helper_dispatches 2>&1 | tail -8: user_wrapper.rs: the x86_64 boxed-result path ex",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_user_wrapper_x86.py && cargo test -p elephc --lib the_read_helper_dispatches 2>&1 | tail -8: user_wrapper.rs: the x86_64 boxed-result path exists and both frames release in full Finished `test` profile [unoptimized + debuginfo] target(s) in 21.22s Running unittests src/lib.rs (target/debug/deps/elephc-7261e25721c3a6e8) running 1 test test codegen_support::runtime::io::user_wrapper::tests::the_read_helper_dispatches_both_result_shapes_on_both_architectures ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1497 filtered out; finished in 0.00s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1b8937830bc7373b33b62049",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:51:24.827Z",
+  "stored_at": "2026-08-20T20:51:24.827Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"cannot reassign\" -B 30 src/types/checker/stmt_check/assignments/locals.rs | head -50",
+  "summary": "grep -n \"cannot reassign\" -B 30 src/types/checker/stmt_check/assignments/locals.rs | head -50:  the given variable. 742-/// 743-/// If `name` already exists in `env`, attempts to merge the new type with the existing 744-/// type using `checker.merged_assignment_type()`. If merging is not possible, returns 745-/// a typ",
+  "text": "grep -n \"cannot reassign\" -B 30 src/types/checker/stmt_check/assignments/locals.rs | head -50:  the given variable. 742-/// 743-/// If `name` already exists in `env`, attempts to merge the new type with the existing 744-/// type using `checker.merged_assignment_type()`. If merging is not possible, returns 745-/// a type incompatibility error. If `name` does not exist, inserts the type directly. 746-/// 747-/// The merge operation supports widening (e.g., `Int | Float` from separate assignments) 748-/// and preserves type specificity where possible. 749-pub(crate) fn merge_local_assignment_type( 750- checker: &Checker, 751- name: &str, 752- ty: &PhpType, 753- span: Span, 754- env: &mut TypeEnv, 755-) -> Result<(), CompileError> { 756- if let Some(existing) = env.get(name) { 757- let merged_ty = checker.merged_assignment_type(existing, ty); 758- if merged_ty.is_none() { 759- return Err(CompileError::new( 760- span, 761- &format!( 762: \"Type error: cannot reassign ${} from {} to {}\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1459d65da45cd9a577757547",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:11:16.014Z",
+  "stored_at": "2026-08-22T10:11:16.015Z"
+}

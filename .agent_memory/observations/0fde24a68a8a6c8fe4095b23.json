@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn lower_array_set_mixed_key\\|ArraySetMixedKey =>\" src/codegen/lower_inst*.rs src/codegen/lower_inst/*.rs 2>/dev/null | head -5",
+  "summary": "grep -rn \"fn lower_array_set_mixed_key\\|ArraySetMixedKey =>\" src/codegen/lower_inst*.rs src/codegen/lower_inst/*.rs 2>/dev/null | head -5: src/codegen/lower_inst.rs:252: Op::ArraySetMixedKey => arrays::lower_array_set_mixed_key(ctx, &inst), src/codegen/lower_inst/arrays.rs:573:pub(super) fn lower_array_set_mixed_key( s",
+  "text": "grep -rn \"fn lower_array_set_mixed_key\\|ArraySetMixedKey =>\" src/codegen/lower_inst*.rs src/codegen/lower_inst/*.rs 2>/dev/null | head -5: src/codegen/lower_inst.rs:252: Op::ArraySetMixedKey => arrays::lower_array_set_mixed_key(ctx, &inst), src/codegen/lower_inst/arrays.rs:573:pub(super) fn lower_array_set_mixed_key( src/codegen/lower_inst/arrays.rs:662:fn lower_array_set_mixed_key_aarch64( src/codegen/lower_inst/arrays.rs:690:fn lower_array_set_mixed_key_x86_64(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0fde24a68a8a6c8fe4095b23",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:36:18.652Z",
+  "stored_at": "2026-08-18T12:36:18.652Z"
+}

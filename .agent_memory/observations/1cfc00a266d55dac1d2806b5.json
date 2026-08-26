@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn runtime_callable_name_is_reachable\" -A 25 src/codegen/lower_inst/callables.rs | head -30",
+  "summary": "grep -n \"fn runtime_callable_name_is_reachable\" -A 25 src/codegen/lower_inst/callables.rs | head -30: return true; 671- }; 672- let key = php_symbol_key(name.trim_start_matches('\\\\')); 673- candidate_names.iter().any(|candidate| candidate == &key) 674-} 675- 676-/// Builds runtime descriptor cases for extern functions ",
+  "text": "grep -n \"fn runtime_callable_name_is_reachable\" -A 25 src/codegen/lower_inst/callables.rs | head -30: return true; 671- }; 672- let key = php_symbol_key(name.trim_start_matches('\\\\')); 673- candidate_names.iter().any(|candidate| candidate == &key) 674-} 675- 676-/// Builds runtime descriptor cases for extern functions declared in the EIR module. 677-fn runtime_extern_descriptor_cases( 678- ctx: &mut FunctionContext<'_>, 679- candidate_names: Option<&[String]>, 680-) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> { 681- let mut decls = ctx.module.extern_decls.iter().collect::<Vec<_>>(); 682- decls.sort_by(|left, right| left.name.cmp(&right.name)); 683- 684- let mut cases = Vec::new(); 685- for decl in decls { 686- if !runtime_callable_name_is_reachable(&decl.name, candidate_names) { 687- continue; 688- } 689- let wrapper_sig = crate::types::callable_wrapper_sig(&extern_decl_signature(decl)); 690- let entry_label = emit_runtime_extern_wrapper_inline(ctx, &decl.name, &wrapper_sig)?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1cfc00a266d55dac1d2806b5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:03:04.456Z",
+  "stored_at": "2026-08-22T11:03:04.457Z"
+}

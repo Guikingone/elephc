@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_wrapper_seek_reconcile.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_wrapper_seek_reconcile.rs: //! Purpose:\n//! Emits `__rt_user_wrapper_seek_reconcile`, php's position reconciliation after a userspace\n//! wrapper's `stream_seek` reported success.\n//!\n//",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_wrapper_seek_reconcile.rs: //! Purpose:\n//! Emits `__rt_user_wrapper_seek_reconcile`, php's position reconciliation after a userspace\n//! wrapper's `stream_seek` reported success.\n//!\n//! Called from:\n//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.\n//! - The `fseek()` and `rewind()` wrapper arms, once the wrapper's own seek has succeeded.\n//!\n//! Key details:\n//! - php keeps the position for a userspace stream ITSELF, and `main/streams/userspace.c` calls\n//!   `stream_tell` in exactly one place: right after a successful `stream_seek`, to find out where\n//!   t",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5c5214f7381af718dee92902",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:00:44.167Z",
+  "stored_at": "2026-08-22T18:00:44.167Z"
+}

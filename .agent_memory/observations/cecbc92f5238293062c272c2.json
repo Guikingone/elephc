@@ -1,0 +1,17 @@
+{
+  "type": "file_change",
+  "tool": "Read",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/string/sscanf.rs",
+  "command": "",
+  "summary": "Read: text",
+  "text": "text",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cecbc92f5238293062c272c2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:32:54.793Z",
+  "stored_at": "2026-08-16T15:32:54.793Z",
+  "low_signal": true
+}

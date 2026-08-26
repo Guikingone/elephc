@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"_rt_resource_id_of_registry\" src/codegen_support/ | grep label_global | head -2; grep -rn \"next_id\\|_id_counter\\|RESOURCE_NEXT\" src/codegen_support/runtime/resources/registry*.rs src/codegen_support/runtime/resources/*.rs 2>/dev/null | head -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"_rt_resource_id_of_registry\" src/codegen_support/ | grep label_global | head -2; grep -rn \"next_id\\|_id_counter\\|RESOURCE_NEXT\" src/codegen_support/runtime/resources/registry*.rs src/codegen_support/runtime/resourc",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"_rt_resource_id_of_registry\" src/codegen_support/ | grep label_global | head -2; grep -rn \"next_id\\|_id_counter\\|RESOURCE_NEXT\" src/codegen_support/runtime/resources/registry*.rs src/codegen_support/runtime/resources/*.rs 2>/dev/null | head -8: src/codegen_support/runtime/resources/registry/aarch64.rs:811: emitter.label_global(\"__rt_resource_id_of_registry\"); src/codegen_support/runtime/resources/registry/x86_64.rs:824: emitter.label_global(\"__rt_resource_id_of_registry\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e4daf72db7544957f2074e0a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:03:11.182Z",
+  "stored_at": "2026-08-24T13:03:11.183Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_timeout_test.py; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams::test_stream_select 2>&1 | tail -10",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_timeout_test.py; CARGO_INCREMENTAL=0 RUST",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_timeout_test.py; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams::test_stream_select 2>&1 | tail -10: the timeout is pinned test codegen::io::streams::test_stream_select_waits_for_its_timeout ... ok test codegen::io::streams::test_stream_select_rejects_negative_timeout_components ... ok test codegen::io::streams::test_stream_select_refuses_a_memory_stream ... ok test codegen::io::streams::test_stream_select_wrapper_stream_cast_detects_ready ... ok test codegen::io::streams::test_stream_select_wrapper_without_stream_cast_excluded ... ok test codegen::io::streams::test_stream_select_explains_an_uncastable_stream ... ok test codegen::io::streams::test_stream_select_waits_for_the_microsecond_timeout ... ok test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 8866 filtered out; finished in 9.20s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "de5ca83eb19eb9f75aceedb0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:31:03.911Z",
+  "stored_at": "2026-08-23T07:31:03.912Z"
+}

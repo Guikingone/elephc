@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_ftoa\" src/codegen/ | head -8",
+  "summary": "grep -rn \"__rt_ftoa\" src/codegen/ | head -8: src/codegen/runtime_callable_invoker.rs:1991: PhpType::Float => abi::emit_call_label(emitter, \"__rt_ftoa\"), src/codegen/lower_inst/strings.rs:324: abi::emit_call_label(ctx.emitter, \"__rt_ftoa\"); src/codegen/lower_inst/builtins/types.rs:273: abi::emit_call_label(ctx.emitter, ",
+  "text": "grep -rn \"__rt_ftoa\" src/codegen/ | head -8: src/codegen/runtime_callable_invoker.rs:1991: PhpType::Float => abi::emit_call_label(emitter, \"__rt_ftoa\"), src/codegen/lower_inst/strings.rs:324: abi::emit_call_label(ctx.emitter, \"__rt_ftoa\"); src/codegen/lower_inst/builtins/types.rs:273: abi::emit_call_label(ctx.emitter, \"__rt_ftoa\"); src/codegen/lower_inst/builtins/json.rs:528: abi::emit_call_label(ctx.emitter, \"__rt_ftoa\"); src/codegen/lower_inst/builtins/debug.rs:521: abi::emit_call_label(ctx.emitter, \"__rt_ftoa_repr\"); src/codegen/lower_inst/builtins/strings/common.rs:165: abi::emit_call_label(ctx.emitter, \"__rt_ftoa\"); src/codegen/lower_inst/builtins/strings/common.rs:242: abi::emit_call_label(ctx.emitter, \"__rt_ftoa\"); src/codegen/lower_inst/builtins/strings/common.rs:292: abi::emit_call_label(ctx.emitter, \"__rt_ftoa\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "90a40114cf796374f1a5002a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:49:43.469Z",
+  "stored_at": "2026-08-18T20:49:43.470Z"
+}

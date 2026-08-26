@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::offset_on_scalar)' 2>&1 | tail -12",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::offset_on_scalar)' 2>&1 | tail -12: (s) in 17.59s ──────────── Nextest run ID 0097",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::offset_on_scalar)' 2>&1 | tail -12: (s) in 17.59s ──────────── Nextest run ID 0097bffa-ff19-4e05-bfb1-75bcba818ad2 with nextest profile: default Starting 6 tests across 1 binary (8919 tests skipped) PASS [ 1.532s] (1/6) elephc::codegen_tests codegen::offset_on_scalar::test_a_string_base_still_indexes PASS [ 1.800s] (2/6) elephc::codegen_tests codegen::offset_on_scalar::test_a_chained_offset_warns_at_every_level PASS [ 2.084s] (3/6) elephc::codegen_tests codegen::offset_on_scalar::test_the_offset_warning_names_its_line PASS [ 2.353s] (4/6) elephc::codegen_tests codegen::offset_on_scalar::test_the_null_probes_say_nothing_about_a_scalar_base PASS [ 2.617s] (5/6) elephc::codegen_tests codegen::offset_on_scalar::test_every_scalar_base_warns_and_answers_null PASS [ 2.900s] (6/6) elephc::codegen_tests codegen::offset_on_scalar::test_the_bool_word_follows_the_value ──────────── Summary [ 2.970s] 6 tests run: 6 passed, 8919 skipped",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2c4c8c34327b463bb60c95d8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:58:43.323Z",
+  "stored_at": "2026-08-24T07:58:43.324Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs')\nt = p.read_text()\nold = '''/// Pins that a by-ref output still refuses an argument with nowhere to write back into.\n#[test]\nfn test_out_parameter_rejects_an_argument_without_storage() {\n    let error = compile_expect_type_error(\n        r#\"<?php\n$c = @stream_socket_client(\"tcp://127.0.0.1:1\", 0, $errstr, 1);\n\"#,\n    );\n    assert!(\n        error.contains(\"parameter $error_code must be passed a variable\"),\n        \"expected t… [+1187 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs') t = p.read_text() old = '''/",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e4573e3c3e8c8e510bf47be8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:17:04.741Z",
+  "stored_at": "2026-08-21T16:17:04.741Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_probe.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_probe.py: \"\"\"array_filter(), one case per program.\n\nThe first attempt put every case in one file and a single refusal — an associative",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_probe.py: \"\"\"array_filter(), one case per program.\n\nThe first attempt put every case in one file and a single refusal — an associative literal, of all\nthings — took the whole measurement with it. One program per case is the only shape that measures\neach independently.\n\"\"\"\nimport pathlib\nimport shutil\nimport subprocess\n\nHERE = pathlib.Path(__file__).parent\nD = HERE / 'afprobe'\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nELEPHC = str(ROOT / 'target/debug/elephc')\n\nCASES = {\n    'indexed all kept': 'echo json_encode(array_filter([1,2,3]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "464ba097aa17164f32f9b1cc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:32:47.464Z",
+  "stored_at": "2026-08-22T11:32:47.464Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "tail -12 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bobr7jjvh.output",
+  "summary": "tail -12 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bobr7jjvh.output: test codegen::fibers::errors::test_fiber_internal_catch_does_not_escape ... ok test codegen::fibers::errors::test_fiber_throw_escapes_",
+  "text": "tail -12 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bobr7jjvh.output: test codegen::fibers::errors::test_fiber_internal_catch_does_not_escape ... ok test codegen::fibers::errors::test_fiber_throw_escapes_when_fiber_does_not_catch ... ok test codegen::fibers::errors::test_fiber_uncaught_exception_escapes_to_caller ... ok thread 'codegen::fibers::scenarios::test_suspended_fiber_recursion_budget_does_not_leak_to_main' (37270975) has overflowed its stack fatal runtime error: stack overflow, aborting error: test failed, to rerun pass `-p elephc --test codegen_tests` Caused by: process didn't exit successfully: `/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps/codegen_tests-02c27ab574c0dc88` (signal: 6, SIGABRT: process abort signal) [exited with code 0]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1123b371504a8293a333e30c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:50:21.875Z",
+  "stored_at": "2026-08-21T19:50:21.875Z"
+}

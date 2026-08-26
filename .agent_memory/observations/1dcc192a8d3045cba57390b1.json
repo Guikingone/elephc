@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"asm_without_embedded_script_path\" -B 3 -A 3 tests/codegen/optimizer/dead_code_elimination/basics.rs | head -16",
+  "summary": "grep -n \"asm_without_embedded_script_path\" -B 3 -A 3 tests/codegen/optimizer/dead_code_elimination/basics.rs | head -16: 107- ); 108- 109- assert!( 110: !asm_without_embedded_script_path(&user_asm).contains(\"shadowed\"), 111- \"shadowed match arm should not remain in user assembly:\\n{}\", 112- user_asm 113- );",
+  "text": "grep -n \"asm_without_embedded_script_path\" -B 3 -A 3 tests/codegen/optimizer/dead_code_elimination/basics.rs | head -16: 107- ); 108- 109- assert!( 110: !asm_without_embedded_script_path(&user_asm).contains(\"shadowed\"), 111- \"shadowed match arm should not remain in user assembly:\\n{}\", 112- user_asm 113- );",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1dcc192a8d3045cba57390b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:57:29.809Z",
+  "stored_at": "2026-08-21T11:57:29.809Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(test_mysqli_completed_surface_exists) or test(test_mysqli_unconnected_ops_raise_error) or test(test_pdo_sqlite_create_function_int_args) or test(test_pdo_sqlite_create_collation_two_coexist)' --test-threads 1 2>&1 | tail -10",
+  "summary": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(test_mysqli_completed_sur",
+  "text": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(test_mysqli_completed_surface_exists) or test(test_mysqli_unconnected_ops_raise_error) or test(test_pdo_sqlite_create_function_int_args) or test(test_pdo_sqlite_create_collation_two_coexist)' --test-threads 1 2>&1 | tail -10: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace PASS [ 18.720s] (3/4) elephc::codegen_tests codegen::pdo::test_pdo_sqlite_create_collation_two_coexist PASS [ 19.670s] (4/4) elephc::codegen_tests codegen::pdo::test_pdo_sqlite_create_function_int_args ──────────── Summary [ 46.133s] 4 tests run: 2 passed, 2 failed, 8894 skipped FAIL [ 3.941s] (1/4) elephc::codegen_tests codegen::mysqli::test_mysqli_completed_surface_exists FAIL [ 3.750s] (2/4) elephc::codegen_tests codegen::mysqli::test_mysqli_unconnected_ops_raise_error error: test run failed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "564fe0343cdcfb397526cc9d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:19:24.301Z",
+  "stored_at": "2026-08-23T16:19:24.311Z"
+}

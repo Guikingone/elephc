@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"call __rt_concat_publish\");                    // claim the window they occupy\n            emitter.instruction(\"mov rax, QWORD PTR [rbp - 4 -> emitter.instruc",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"call __rt_concat_publish\");                    // claim the window they occupy\n            emitter.instruction(\"mov rax, QWORD PTR [rbp - 4 -> emitter.instruction(\"call __rt_concat_publish\");                    // claim the window they occupy\n            // See the AArch64 counterpart: EOF is judged against the CALLER's request, not\n            // against the chunk the fill asked for.\n            emitter.instruction(\"mov r9, QWORD PTR [rbp - 48]\");                // what the caller received\n            emitter.instruction(\"cmp r9, QWORD PTR [rbp - 16]\");                // against what it asked for\n            emitte",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8897d72630067f88b997a406",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:07:35.126Z",
+  "stored_at": "2026-08-23T20:07:35.126Z"
+}

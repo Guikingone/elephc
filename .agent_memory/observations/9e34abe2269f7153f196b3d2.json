@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/lines/k05/chain2.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/lines/k05/chain2.php: <?php\nfunction inner(): void {\n    try {\n        intdiv(1, 0);\n    } catch (DivisionByZeroError $e) {\n        throw new RuntimeE",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/lines/k05/chain2.php: <?php\nfunction inner(): void {\n    try {\n        intdiv(1, 0);\n    } catch (DivisionByZeroError $e) {\n        throw new RuntimeException(\"wrapping\", 7, $e);\n    }\n}\n\ntry {\n    inner();\n} catch (RuntimeException $e) {\n    echo \"caught \", get_class($e), \" code \", $e->getCode(), \"\\n\";\n    $p = $e->getPrevious();\n    echo \"previous \", get_class($p), \": \", $p->getMessage(), \"\\n\";\n    echo \"deepest \", var_export($p->getPrevious(), true), \"\\n\";\n    throw new LogicException(\"outer\", 0, $e);\n}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9e34abe2269f7153f196b3d2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:50:00.805Z",
+  "stored_at": "2026-08-24T17:50:00.805Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \"\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io.rs')\ns = p.read_text()\nold = '#[path = \\\"io/null_stream_argument.rs\\\"]\\nmod null_stream_argument;'\nnew = old + '\\n#[path = \\\"io/resource_id_numbering.rs\\\"]\\nmod resource_id_numbering;'\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nprint('registered')\n\"; CARGO_PROFILE_DEV_DEBUG=false CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo ne… [+132 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \"\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io.rs')\ns = p.read_text()\nold = '#[path = \\\"io/null_stream_argument.rs\\\"",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \"\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io.rs')\ns = p.read_text()\nold = '#[path = \\\"io/null_stream_argument.rs\\\"]\\nmod null_stream_argument;'\nnew = old + '\\n#[path = \\\"io/resource_id_numbering.rs\\\"]\\nmod resource_id_numbering;'\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nprint('registered')\n\"; CARGO_PROFILE_DEV_DEBUG=false CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::io::resource_id_numbering)' 2>&1 | tail -7: registered ──────────── Nextest run ID a5f28386-a2c7-4c34-baa6-982735940fbf with nextest profile: default Starting 2 tests across 1 binary (8939 tests skipped) PASS [ 1.387s] (1/2) elephc::codegen_tests codegen::io::resource_id_numbering::test_the_other_streams_consume_one_id_each PASS [ 1.868s] (2/2) elephc::codegen_tests codegen::io::resource_id_numbering::test_php_temp_consumes_two_resource_ids ──────────── Summary [ 1.919s] 2 tests run: 2 passed, 8939 skipped",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1479bcaacc4e99ac1424bff5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:28:58.301Z",
+  "stored_at": "2026-08-24T13:28:58.301Z"
+}

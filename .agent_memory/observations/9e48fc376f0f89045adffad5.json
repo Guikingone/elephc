@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs: // -- resolve synthetic user-wrapper fds to a real selectable fd via stream_cast --\n    emitter.instruction(\"test rdx, 0x40000000\");                             -> // -- r",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs: // -- resolve synthetic user-wrapper fds to a real selectable fd via stream_cast --\n    emitter.instruction(\"test rdx, 0x40000000\");                             -> // -- resolve synthetic user-wrapper fds to a real selectable fd via stream_cast --\n    // __rt_stream_fd answers -1 for a handle it cannot resolve, which is what a CLOSED stream\n    // gives. -1 has every bit set, so the synthetic-handle test below matched it and handed -1\n    // to the wrapper cast, which dereferenced it: `fclose($f); stream_select([$f], ...)`\n    // SEGFAULTED. php drops such an entry silently, so -1 goes straight to the store.\n    emitter.instruction(\"cmp",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9e48fc376f0f89045adffad5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:44:17.131Z",
+  "stored_at": "2026-08-17T06:44:17.132Z"
+}

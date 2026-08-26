@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests io::streams::test_wrapper_ftell_reports_phps_position_not_stream_tell io::streams::test_rewind_resets_the_position_ftell_reports_for_a_wrapper 2>&1 | grep -E \"^test |^test result:\" | head -6",
+  "summary": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests io::streams::test_wrapper_ftell_reports_phps_position_not_stream_tell io::streams::test_rewind_resets_the_position_ftell_reports_for_a_wrapper 2>&1 | grep -E \"^test |^test result:\" | head -6 completed",
+  "text": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests io::streams::test_wrapper_ftell_reports_phps_position_not_stream_tell io::streams::test_rewind_resets_the_position_ftell_reports_for_a_wrapper 2>&1 | grep -E \"^test |^test result:\" | head -6 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "489ea55a74980dc1eb9d441f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:13:05.491Z",
+  "stored_at": "2026-08-21T14:13:05.492Z"
+}

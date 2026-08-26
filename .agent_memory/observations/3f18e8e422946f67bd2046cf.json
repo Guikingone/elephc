@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: emitter.label(\"__rt_sgmd_seek_done\");\n\n    // php reports `seekable` from the stream KIND, not from a live probe: it is\n    // `stream->ops->seek != NULL`, and  -> ",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: emitter.label(\"__rt_sgmd_seek_done\");\n\n    // php reports `seekable` from the stream KIND, not from a live probe: it is\n    // `stream->ops->seek != NULL`, and  -> emitter.label(\"__rt_sgmd_seek_done\");\n    // `stream_type` is a wrapper and backend identity in php-src, not a descriptor property. The",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3f18e8e422946f67bd2046cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:33:12.833Z",
+  "stored_at": "2026-08-17T07:33:12.833Z"
+}

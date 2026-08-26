@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"DynamicRuntime\" src/ | grep -v semantics.rs | head -8",
+  "summary": "grep -rn \"DynamicRuntime\" src/ | grep -v semantics.rs | head -8: src/builtins/docs.rs:160: BuiltinCallablePolicy::DynamicRuntime(target) => { src/codegen_support/callable_dispatch.rs:58: crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) => {",
+  "text": "grep -rn \"DynamicRuntime\" src/ | grep -v semantics.rs | head -8: src/builtins/docs.rs:160: BuiltinCallablePolicy::DynamicRuntime(target) => { src/codegen_support/callable_dispatch.rs:58: crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) => {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0b531105bd85b5e271b5ef3a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:32:41.154Z",
+  "stored_at": "2026-08-22T10:32:41.154Z"
+}

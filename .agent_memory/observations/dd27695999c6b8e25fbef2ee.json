@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -laS /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps 2>/dev/null | head -25",
+  "summary": "ls -laS /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps 2>/dev/null | head -25: 0112 Aug 22 19:32 libelephc_magician-4a8ddd3fcfcc72e3.a -rw-r--r--@ 1 guillaumeloulier staff 70005984 Aug 22 19:34 libelephc_magician-c560a0baed340b78.rlib -rw-r--r--@ 1 guillaum",
+  "text": "ls -laS /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps 2>/dev/null | head -25: 0112 Aug 22 19:32 libelephc_magician-4a8ddd3fcfcc72e3.a -rw-r--r--@ 1 guillaumeloulier staff 70005984 Aug 22 19:34 libelephc_magician-c560a0baed340b78.rlib -rw-r--r--@ 1 guillaumeloulier staff 69991032 Aug 22 19:32 libelephc_magician-4a8ddd3fcfcc72e3.rlib -rw-r--r--@ 1 guillaumeloulier staff 67486720 Aug 23 12:29 libelephc_magician-15efac75989cd93f.rlib -rw-r--r--@ 1 guillaumeloulier staff 66780744 Aug 23 12:29 libelephc_magician-15efac75989cd93f.a -rw-r--r--@ 1 guillaumeloulier staff 30577992 Aug 23 12:49 libelephc_phar-55ce84ff396747ba.a -rwxr-xr-x@ 1 guillaumeloulier staff 28576936 Aug 22 20:32 elephc_pdo-f33334e37546ca9c -rwxr-xr-x@ 1 guillaumeloulier staff 27094256 Aug 22 15:52 error_tests-5f80e856934729c4 -rwxr-xr-x@ 1 guillaumeloulier staff 27017312 Aug 23 15:08 error_tests-e4c3c333f80dba6d -rw-r--r--@ 1 guillaumeloulier staff 26256553 Aug 23 15:07 libelephc-4c21de09cd88e721.rmeta",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dd27695999c6b8e25fbef2ee",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:23:52.831Z",
+  "stored_at": "2026-08-23T13:23:52.832Z"
+}

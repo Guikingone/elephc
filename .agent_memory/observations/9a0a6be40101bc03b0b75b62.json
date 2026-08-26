@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -c \"__rt_diag_warning\" src --type rust | sort -t: -k2 -rn | head -8; echo \"=== total call sites:\"; rg -c \"__rt_diag_warning\" src --type rust | rg -o \":[0-9]+\" | rg -o \"[0-9]+\" | paste -sd+ | bc",
+  "summary": "About to run: rg -c \"__rt_diag_warning\" src --type rust | sort -t: -k2 -rn | head -8; echo \"=== total call sites:\"; rg -c \"__rt_diag_warning\" src --type rust | rg -o \":[0-9]+\" | rg -o \"[0-9]+\" | paste -sd+ | bc",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9a0a6be40101bc03b0b75b62",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:49:00.969Z",
+  "stored_at": "2026-08-17T06:49:00.970Z",
+  "low_signal": true
+}

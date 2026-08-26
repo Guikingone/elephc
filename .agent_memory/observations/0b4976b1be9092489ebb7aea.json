@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,30p' src/codegen_support/runtime/arrays/array_set_mixed_key.rs",
+  "summary": "sed -n '1,30p' src/codegen_support/runtime/arrays/array_set_mixed_key.rs: ted. Without that step a prior //! integer push (e.g. `$dst[] = 9`) would read back empty through the Mixed //! foreach value loader, since the union leaves scalar slots raw. //! - The value is a boxed `Mixed` pointer consumed by the write (store",
+  "text": "sed -n '1,30p' src/codegen_support/runtime/arrays/array_set_mixed_key.rs: ted. Without that step a prior //! integer push (e.g. `$dst[] = 9`) would read back empty through the Mixed //! foreach value loader, since the union leaves scalar slots raw. //! - The value is a boxed `Mixed` pointer consumed by the write (stored directly //! into the slot for the indexed path, or stored as a `Mixed`-tagged hash //! payload for the hash path), mirroring `__rt_array_set_mixed` ownership. //! - OWNERSHIP: the caller hands this helper an OWNED reference to the incoming //! array (`lower_array_set_mixed_key_*` acquires it, mirroring `Op::ArrayToHash`). //! The in-place paths hand that `+1` back inside the returned pointer; the promote //! paths abandon the source for a freshly built hash and RELEASE it, because //! `__rt_array_hash_union` only borrows its operands. The helper therefore always //! returns a `+1` the caller owns, and `Op::ArraySetMixedKey` is classified as an",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0b4976b1be9092489ebb7aea",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:50:12.912Z",
+  "stored_at": "2026-08-18T12:50:12.912Z"
+}

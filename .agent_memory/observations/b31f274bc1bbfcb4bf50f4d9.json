@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h /System/Volumes/Data",
+  "summary": "About to run: df -h /System/Volumes/Data",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b31f274bc1bbfcb4bf50f4d9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:30:33.963Z",
+  "stored_at": "2026-08-23T13:30:33.965Z",
+  "low_signal": true
+}

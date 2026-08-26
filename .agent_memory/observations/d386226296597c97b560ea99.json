@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== PHP p1 ===\" && php -n p1_flush.php 2>&1 && echo \"=== PHP p2 ===\" && php -n p2_ftell.php 2>&1",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== PHP p1 ===\" && php -n p1_flush.php 2>&1 && echo \"=== PHP p2 ===\" && php -n p2_ftell.php 2>&1: === PHP p1 === rot13 file: [uryyb] b64 ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== PHP p1 ===\" && php -n p1_flush.php 2>&1 && echo \"=== PHP p2 ===\" && php -n p2_ftell.php 2>&1: === PHP p1 === rot13 file: [uryyb] b64 file: [YWI=] qp file: [a=3Db=E9] deflate len: 5 inflated: [aaaaaaaaaa] === PHP p2 === t0=0 read=[abcd] t1=4 read=[efgh] t2=8 rest=[ij] t3=10 eof=true rot=[nop] t=3 int(0) after seek t=0 next=[ABC]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d386226296597c97b560ea99",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:30:43.311Z",
+  "stored_at": "2026-08-16T15:30:43.312Z"
+}

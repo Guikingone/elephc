@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/php_filter_uri_x86.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/php_filter_uri_x86.py: \"\"\"Mirrors the scheme-driven wrapper identity on x86_64, written from the aarch64 arm line for line.\n\nThe persisted URI liv",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/php_filter_uri_x86.py: \"\"\"Mirrors the scheme-driven wrapper identity on x86_64, written from the aarch64 arm line for line.\n\nThe persisted URI lives in `[rbp - 24]` / `[rbp - 32]` here, which is what the userspace arm just\nbelow reads for the same bytes. The wrapper id being published rides in `rax`.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\np = ROOT / 'src/codegen_support/runtime/io/stream_record_meta.rs'\nt = p.read_text()\n\nOLD = '''    emitter.instruction(\"jne __rt_stream_record_meta_wrapper_x86\");             // pre",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ebcd6d6eb0f078de9f28af1c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:18:20.564Z",
+  "stored_at": "2026-08-22T19:18:20.564Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ctedge.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ctedge.php: <?php\nfunction f(): string { return \"f\"; }\necho f(), \"\\n\";\n// a switch body that leaves and re-enters code\n$x = 2;\nswitch ($x):\n   ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ctedge.php: <?php\nfunction f(): string { return \"f\"; }\necho f(), \"\\n\";\n// a switch body that leaves and re-enters code\n$x = 2;\nswitch ($x):\n    case 1: ?>one<?php break;\n    case 2: ?>two<?php break;\nendswitch;\necho \"\\n\";\n// while with the alternative syntax\n$i = 0;\nwhile ($i < 2): ?>w<?php $i++; endwhile;\necho \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "498c81c180c851c134ecfc49",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T07:15:40.200Z",
+  "stored_at": "2026-08-18T07:15:40.201Z"
+}

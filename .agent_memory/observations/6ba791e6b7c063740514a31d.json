@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rmdead.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rmdead.py: \"\"\"Removes the dead __rt_sscanf assembly engine and its RuntimeFnId wiring.\"\"\"\nimport os\nimport re\nimport subprocess\n\nROOT = '/Users",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rmdead.py: \"\"\"Removes the dead __rt_sscanf assembly engine and its RuntimeFnId wiring.\"\"\"\nimport os\nimport re\nimport subprocess\n\nROOT = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\nos.chdir(ROOT)\n\ndef show(path, pattern, ctx=2):\n    s = open(path).read().splitlines()\n    for i, line in enumerate(s):\n        if re.search(pattern, line):\n            lo = max(0, i - ctx)\n            hi = min(len(s), i + ctx + 1)\n            print(f'--- {path}:{i+1}')\n            for j in range(lo, hi):\n                print(f'{j+1}: {s[j]}')\n\nshow('src/ir/runtime_fn.rs', r'Ss",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6ba791e6b7c063740514a31d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:16:48.822Z",
+  "stored_at": "2026-08-16T16:16:48.823Z"
+}

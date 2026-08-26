@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/multiprop_rules.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/multiprop_rules.php: <?php\n// What exactly does php accept in a comma-separated property declaration?\n$cases = [\n    'plain'            => 'class ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/multiprop_rules.php: <?php\n// What exactly does php accept in a comma-separated property declaration?\n$cases = [\n    'plain'            => 'class T1 { public $a, $b; }',\n    'defaults'         => 'class T2 { public $a = 1, $b = \"x\"; }',\n    'typed'            => 'class T3 { private int $x = 1, $y = 2; }',\n    'static'           => 'class T4 { protected static $s1, $s2 = 3; }',\n    'readonly typed'   => 'class T5 { public readonly int $r1, $r2; }',\n    'trailing comma'   => 'class T6 { public $a, $b, ; }',\n    'hooks in a list'  => 'class T7 { public $a, $b { get => 1; } }',\n    'var keyword'      => 'class T8 { va",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "db60c98a96379c8a2ccc0d20",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:40:49.531Z",
+  "stored_at": "2026-08-23T08:40:49.532Z"
+}

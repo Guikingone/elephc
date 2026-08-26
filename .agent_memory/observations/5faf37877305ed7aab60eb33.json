@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -5",
+  "summary": "python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -5: Wrote 558 builtins to /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json Rendered: 1076 pages (0 kept hand-written). Master index at /Users/guillaumeloulier/PhpstormProje",
+  "text": "python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -5: Wrote 558 builtins to /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json Rendered: 1076 pages (0 kept hand-written). Master index at /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/builtins.md",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5faf37877305ed7aab60eb33",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:46:28.125Z",
+  "stored_at": "2026-08-17T13:46:28.126Z"
+}

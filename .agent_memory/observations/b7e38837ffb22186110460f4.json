@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests eval_builtin_parity 2>&1 | grep -E \"^test result:|FAILED|^failures:\" -A 3 | head -20",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests eval_builtin_parity 2>&1 | grep -E \"^test result:|FAILED|^failures:\" -A 3 | head -20: test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 8814 filtered out; finished in 62.44s",
+  "text": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests eval_builtin_parity 2>&1 | grep -E \"^test result:|FAILED|^failures:\" -A 3 | head -20: test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 8814 filtered out; finished in 62.44s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b7e38837ffb22186110460f4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:40:25.665Z",
+  "stored_at": "2026-08-22T09:40:25.666Z"
+}

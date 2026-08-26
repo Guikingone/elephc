@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_named_x86.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_named_x86.py: \"\"\"The x86_64 half of the named tmpfile.\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjec",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_named_x86.py: \"\"\"The x86_64 half of the named tmpfile.\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\nf = ROOT / 'src/codegen_support/runtime/io/streams_ext.rs'\nt = f.read_text()\n\nOLD = '''    emitter.instruction(\"lea rdi, [rbp - 32]\");                                 // unlink path\n    emitter.instruction(\"call unlink\");                                         // libc unlink — file auto-deletes on close\n    emitter.instruction(\"mov rax, QWORD PTR [rbp - 40]\");                       // return fd\n    emitter.instruct",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1c6d7e997e65a66ec3136c3c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:00:31.254Z",
+  "stored_at": "2026-08-23T08:00:31.255Z"
+}

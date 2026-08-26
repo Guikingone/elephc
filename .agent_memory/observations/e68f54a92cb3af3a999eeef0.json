@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"mtime|date_default_timezone|TZ\" tests/codegen/io/streams.rs | rg -i \"zip|mtime\" | head -20",
+  "summary": "rtk proxy rg -n \"mtime|date_default_timezone|TZ\" tests/codegen/io/streams.rs | rg -i \"zip|mtime\" | head -20: '=>0,'size'=>5,'atime'=>0,'mtime'=>0,'ctime'=>0, 10699: 'rdev'=>0,'size'=>10,'atime'=>0,'mtime'=>0,'ctime'=>0, 10762: 'rdev'=>0,'size'=>7,'atime'=>0,'mtime'=>0,'ctime'=>0, 12518:/// stream_metadata($path, STREAM",
+  "text": "rtk proxy rg -n \"mtime|date_default_timezone|TZ\" tests/codegen/io/streams.rs | rg -i \"zip|mtime\" | head -20: '=>0,'size'=>5,'atime'=>0,'mtime'=>0,'ctime'=>0, 10699: 'rdev'=>0,'size'=>10,'atime'=>0,'mtime'=>0,'ctime'=>0, 10762: 'rdev'=>0,'size'=>7,'atime'=>0,'mtime'=>0,'ctime'=>0, 12518:/// stream_metadata($path, STREAM_META_TOUCH, [mtime, atime]); the value is a 14213:/// measured `is_dir`, `is_link`, `filemtime`, `fileatime`, `filectime`, `filetype`, `fileperms`, 14236: \"rdev\"=>0,\"size\"=>96,\"atime\"=>1000000001,\"mtime\"=>1000000002, 14240: \"rdev\"=>0,\"size\"=>1234,\"atime\"=>1000000001,\"mtime\"=>1000000002, 14250:echo \"filemtime \", filemtime($f), \"\\n\"; clearstatcache(true); 14270: filemtime [4]1000000002\\n\\ 14288:/// just `['mode' => 0100644]` gives `filesize()` `int(0)` and `filemtime()` `int(0)`, while 14310:var_dump(filemtime(\"sp://x\")); 14428:var_dump(filemtime(\"bare://a\")); 14451: Warning: filemtime(): Bare::url_stat is not implemented!\\n\\ 14452: Warning: filemtime(): stat failed for bare://a\\n\\",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e68f54a92cb3af3a999eeef0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:44:09.690Z",
+  "stored_at": "2026-08-16T16:44:09.691Z"
+}

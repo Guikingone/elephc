@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"bytes\\|ret\\|x0\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fputcsv.rs | head -20; echo \"=== header ===\"; sed -n '1,25p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fputcsv.rs",
+  "summary": "grep -n \"bytes\\|ret\\|x0\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fputcsv.rs | head -20; echo \"=== header ===\"; sed -n '1,25p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support",
+  "text": "grep -n \"bytes\\|ret\\|x0\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fputcsv.rs | head -20; echo \"=== header ===\"; sed -n '1,25p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fputcsv.rs: pe, and end-of-line characters passed as a packed `csv_opts` //! word and an optional `(eol_ptr, eol_len)` pair from the EIR lowering. //! //! Called from: //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`. //! //! Key details: //! - `csv_opts = (esc << 16) | (enc << 8) | sep`; zero bytes select defaults //! (sep → ',', enc → '\"', esc → 0 means RFC 4180 doubling mode). //! - `eol_ptr == 0` (or `eol_len == 0`) selects the default `\"\\n\"` terminator. //! - ARM64 and x86_64 variants mirror the same quoting and escaping logic. use crate::codegen_support::{emit::Emitter, platform::Arch}; /// Emits the `__rt_fputcsv` runtime helper, dispatching to the target-specific variant. pub fn emit_fputcsv(emitter: &mut Emitter) { if emitter.target.arch == Arch::X86_64 { emit_fputcsv_linux_x86_64(emitter); return; } emit_fputcsv_aarch64(emitter); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "282761b5da1ff3d4b6d68e83",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:22:16.685Z",
+  "stored_at": "2026-08-14T14:22:16.685Z"
+}

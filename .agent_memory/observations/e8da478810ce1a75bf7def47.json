@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/data/mod.rs')\nt = p.read_text()\nold = '''<<<<<<< HEAD\npub(crate) use user::{\n    is_user_filter_contract_method, is_user_wrapper_contract_method, is_user_wrapper_marker_method,\n};\n=======\npub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_method};\npub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;\n>>>>>>> origin/main'''\nnew = '''pub(crate) use user::{\n    is_user_filter_contract_method, is_user_wrapper_contract_method, is_user_wrapper_marker_method,\n};\npub(crate) use user::USER_WRAPPE… [+130 chars truncated]",
+  "summary": "About to run: python3 -c \" import pathlib p = pathlib.Path('src/codegen_support/runtime/data/mod.rs') t = p.read_text() old = '''<<<<<<< HEAD pub(crate) use user::{ is_user_filter_contract_method, is_user_wrapper_c",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e8da478810ce1a75bf7def47",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T16:57:13.222Z",
+  "stored_at": "2026-08-20T16:57:13.222Z"
+}

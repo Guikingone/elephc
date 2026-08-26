@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/oracle3.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/oracle3.php: <?php\nfunction t(string $subject, string $format): void {\n    printf(\"%-16s | %-12s => \", var_export($subject, true), var_export($",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/oracle3.php: <?php\nfunction t(string $subject, string $format): void {\n    printf(\"%-16s | %-12s => \", var_export($subject, true), var_export($format, true));\n    try { $r = @sscanf($subject, $format); } catch (\\Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; return; }\n    if ($r === null) { echo \"NULL\\n\"; return; }\n    $out = [];\n    foreach ($r as $v) {\n        $out[] = match (true) {\n            is_int($v) => \"int($v)\", is_float($v) => \"float(\" . var_export($v, true) . \")\",\n            is_string($v) => \"str(\" . var_export($v, true) . \")\", is_null($v) => \"NULL\", default => gettype($v),\n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b678243ed97d2ce29220588b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:47:40.284Z",
+  "stored_at": "2026-08-16T15:47:40.284Z"
+}

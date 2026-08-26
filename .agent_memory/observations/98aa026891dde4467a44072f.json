@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/genfixture.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/genfixture.php: <?php\n// Captures php -n 8.5.6's sscanf() answers as the AOT fixture corpus.\n$subjects = [\n    \"\", \" \", \"   \", \"\\n\", \"\\t\\n \", \"",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/genfixture.php: <?php\n// Captures php -n 8.5.6's sscanf() answers as the AOT fixture corpus.\n$subjects = [\n    \"\", \" \", \"   \", \"\\n\", \"\\t\\n \", \"a\", \"abc\", \"abc def\", \"  hello\", \"42\", \"-42\", \"+42\",\n    \"42abc\", \"0777\", \"08\", \"1e3\", \"3.5\", \"-3.5e2\", \".5\", \"5.\", \".\", \".x\", \"-\", \"+\", \"- 5\",\n    \"nan\", \"inf\", \"1.5e\", \"1e\", \"1e+\", \"+.5\", \"1_0\", \"ff\", \"0xff\", \"0X1f\", \"0x\", \"FF\", \"z\",\n    \"777\", \"19\", \"-17\", \"-1f\", \"-1\", \"-2\", \"18446744073709551615\", \"9223372036854775808\",\n    \"99999999999999999999\", \"-99999999999999999999\", \"9223372036854775807\",\n    \"1 2\", \"1 2 3\", \"1 x 3\", \"x 2 3\", \"1 -\", \"1 .\", \"11 22\", \"alpha 12 ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "98aa026891dde4467a44072f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:23:12.846Z",
+  "stored_at": "2026-08-16T16:23:12.846Z"
+}

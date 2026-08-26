@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add crates/elephc-builtin-contract/src/catalog_data.rs src/codegen/lower_inst/builtins/io/stream_file_ops.rs src/codegen/lower_inst/builtins/io.rs src/codegen/lower_inst/call_operands.rs src/codegen_support/runtime/arrays/mixed_cast_int.rs src/codegen_support/runtime/arrays/mod.rs src/codegen_support/runtime/emitters/managed.rs src/codegen_support/runtime/io/stream_filter.rs src/codegen_support/runtime/io/stream_get_meta_data.rs tests/codegen/io/streams.rs tests/error_tests/io_builtins/streams.rs && git status --short | rg -v \"codebase-memory|agent_memory\"",
+  "summary": "git add crates/elephc-builtin-contract/src/catalog_data.rs src/codegen/lower_inst/builtins/io/stream_file_ops.rs src/codegen/lower_inst/builtins/io.rs src/codegen/lower_inst/call_operands.rs src/codegen_support/runtime/arrays/mixed_cast_int.rs src/codegen_support/runtime/arrays/mod.rs src/codegen_support/runtime/emitte",
+  "text": "git add crates/elephc-builtin-contract/src/catalog_data.rs src/codegen/lower_inst/builtins/io/stream_file_ops.rs src/codegen/lower_inst/builtins/io.rs src/codegen/lower_inst/call_operands.rs src/codegen_support/runtime/arrays/mixed_cast_int.rs src/codegen_support/runtime/arrays/mod.rs src/codegen_support/runtime/emitters/managed.rs src/codegen_support/runtime/io/stream_filter.rs src/codegen_support/runtime/io/stream_get_meta_data.rs tests/codegen/io/streams.rs tests/error_tests/io_builtins/streams.rs && git status --short | rg -v \"codebase-memory|agent_memory\": M crates/elephc-builtin-contract/src/catalog_data.rs M docs/php/streams.md M docs/php/strings.md M src/codegen/lower_inst/builtins/io.rs M src/codegen/lower_inst/builtins/io/stream_file_ops.rs M src/codegen/lower_inst/call_operands.rs M src/codegen_support/runtime/arrays/mixed_cast_int.rs M src/codegen_support/runtime/arrays/mod.rs M src/codegen_support/runtime/emitters/managed.rs M src/codegen_support/runtime/io/stream_filter.rs M src/codegen_support/runtime/io/stream_get_meta_data.rs M tests/codegen/io/streams.rs M tests/error_tests/io_builtins/streams.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "22ec756b9c1bf9d13c037691",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:47:55.034Z",
+  "stored_at": "2026-08-17T07:47:55.035Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_side.py ours src/codegen/lower_inst/builtins/arrays/helper_validation.rs\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_side.py theirs src/codegen/lower_inst/builtins/arrays/fill_helpers.rs",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_side.py ours src/codegen/lower_inst/builtins/arrays/helper_validation.rs\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormPro",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_side.py ours src/codegen/lower_inst/builtins/arrays/helper_validation.rs\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_side.py theirs src/codegen/lower_inst/builtins/arrays/fill_helpers.rs: src/codegen/lower_inst/builtins/arrays/helper_validation.rs: 1 hunk(s) -> ours src/codegen/lower_inst/builtins/arrays/fill_helpers.rs: 1 hunk(s) -> theirs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "20b98309f472e3acf32538b3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:08:09.220Z",
+  "stored_at": "2026-08-20T17:08:09.221Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs'\ns = open(p).read()\nold = '''    ProgramOutput {\n        stdout: String::from_utf8(output.stdout).unwrap(),\n        stderr: String::from_utf8(output.stderr).unwrap(),\n        success: output.status.success(),\n        exit_code: output.status.code(),\n    }\n}'''\nnew = '''    // php prints its diagnostics to STDOUT, so they arrive mixed into the program's own output.\n    // Splitting them back apart is what lets a test assert either one without the o… [+713 chars truncated]",
+  "summary": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs'\ns = open(p).read()\nold = '''    ProgramOutput {\n        stdout: String::from_utf8(output.stdout).unwrap(),\n        stderr: String::from_utf8(output.stderr).unwrap(),\n    ",
+  "text": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs'\ns = open(p).read()\nold = '''    ProgramOutput {\n        stdout: String::from_utf8(output.stdout).unwrap(),\n        stderr: String::from_utf8(output.stderr).unwrap(),\n        success: output.status.success(),\n        exit_code: output.status.code(),\n    }\n}'''\nnew = '''    // php prints its diagnostics to STDOUT, so they arrive mixed into the program's own output.\n    // Splitting them back apart is what lets a test assert either one without the other.\n    let raw_stdout = String::from_utf8(output.stdout).unwrap();\n    let script_path = dir.join(\"test.php\").to_string_lossy().into_owned();\n    let (stdout, diagnostics) = split_php_diagnostics(&raw_stdout, &script_path);\n\n    ProgramOutput {\n        stdout,\n        stderr: String::from_utf8(output.stderr).unwrap(),\n        success: output.status.success(),\n        exit_code: output.status.code(),\n        diagnostics,\n    }\n}'''\nassert old in s, \"construction anchor not found\"\ns = s.replace(old, new, 1)\nopen(p, 'w').write(s)\nprint(\"construction updated\")\nPYEOF\ncargo test --test codegen_tests -- codegen::io::streams_ext::test_readfile_missing 2>&1 | grep -E \"^error|left:|right:|test result\" | head -8: construction updated left: \"\\nWarning: file_get_contents(/nonexistent/path/xyz.txt): Failed to open stream: No such file or directory in /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_35878_ThreadId(2)_0/test.php on line 2\\nfalse\" right: \"false\" test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8451 filtered out; finished in 1.19s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "44a7c213beeeb01401b67d3c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:59:31.675Z",
+  "stored_at": "2026-08-18T13:59:31.675Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Agent",
+  "path": "",
+  "command": "",
+  "summary": "Agent: async_launched aece3ab327311a17d TDD: fscanf byref + eval segfault claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `14685e7335` ; sinon `git reset --hard 14685e7335` AVANT tout (les SEPT agen",
+  "text": "async_launched aece3ab327311a17d TDD: fscanf byref + eval segfault claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `14685e7335` ; sinon `git reset --hard 14685e7335` AVANT tout (les SEPT agents précédents ont TOUS reçu une base erronée — c'est systématique, ne saute jamais cette étape). Chemins absolus ; ne pousse RIEN ; pas de Co-Authored-By ; jamais `.codebase-memory/*` stagé. ⚠️ RESSOURCES : ~22 GiB libres seulement. Purge `$TMPDIR/elephc_*` de +2h AVANT de commencer, à mi-parcours, et sur tout `No space left`. UN SEUL cargo à la fois ; builds debug ; PAS de docker ; scratch supprimé à la fin. Timeout nextest à 60 s pile sous charge = faux rouge → rejoue isolé via `cargo test`. ⚠️ PORTES avant commit : `cargo test -p elephc-builtin-contract` · `cargo test --test builtin_parity_tests` · `cargo nextest run --test ir_backend_smoke_test`. Si tu touches le catalogue, mets à jour les compteurs épinglés DANS LE MÊME COMMIT et régénère les docs (`cargo build --example gen_builtins` + `python3 scripts/docs/extract_builtins.py --render --force` + `python3 scripts/docs/gen_php_compa",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "053a4f9fdf2c30d94185bda3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T18:59:43.664Z",
+  "stored_at": "2026-08-15T18:59:43.664Z"
+}

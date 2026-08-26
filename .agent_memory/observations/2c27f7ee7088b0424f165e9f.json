@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"ARRAY_FILTER_USE_VALUE\" src/ crates/ tests/ --include=*.rs | head -8; echo \"=== E_ALL uses ===\"; grep -rn \"32767\\|E_ALL\" src/types/error_constants.rs crates/elephc-builtin-contract/src/php_constants.rs | head -8",
+  "summary": "grep -rn \"ARRAY_FILTER_USE_VALUE\" src/ crates/ tests/ --include=*.rs | head -8; echo \"=== E_ALL uses ===\"; grep -rn \"32767\\|E_ALL\" src/types/error_constants.rs crates/elephc-builtin-contract/src/php_constants.rs | head -8: (eval):1: no matches found: --include=*.rs === E_ALL uses === src/types/error_constants.rs:13://!",
+  "text": "grep -rn \"ARRAY_FILTER_USE_VALUE\" src/ crates/ tests/ --include=*.rs | head -8; echo \"=== E_ALL uses ===\"; grep -rn \"32767\\|E_ALL\" src/types/error_constants.rs crates/elephc-builtin-contract/src/php_constants.rs | head -8: (eval):1: no matches found: --include=*.rs === E_ALL uses === src/types/error_constants.rs:13://! comparisons (`E_ALL & ~E_NOTICE`, `trigger_error($m, E_USER_WARNING)`) src/types/error_constants.rs:17://! - `E_ALL` is `32767` on PHP 8.x (`E_STRICT`, value `2048`, is deprecated but src/types/error_constants.rs:18://! its bit remains set in `E_ALL`). src/types/error_constants.rs:49: (\"E_ALL\", 32767), crates/elephc-builtin-contract/src/php_constants.rs:199: (\"E_ALL\", 32767),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2c27f7ee7088b0424f165e9f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:53:41.130Z",
+  "stored_at": "2026-08-22T09:53:41.130Z"
+}

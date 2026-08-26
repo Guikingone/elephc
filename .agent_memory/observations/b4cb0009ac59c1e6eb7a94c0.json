@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/iconv_spec_split.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/iconv_spec_split.rs: //! Purpose:\n//! Emits `__rt_iconv_spec_split`, which pulls the two charset names out of a `convert.iconv.*`\n//! stream-filter name that is only known at RUN time.\n//!\n//",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/iconv_spec_split.rs: //! Purpose:\n//! Emits `__rt_iconv_spec_split`, which pulls the two charset names out of a `convert.iconv.*`\n//! stream-filter name that is only known at RUN time.\n//!\n//! Called from:\n//! - `crate::codegen::lower_inst::builtins::io::stream_filters`, on the dynamic-name attach path.\n//!\n//! Key details:\n//! - A literal `stream_filter_append($h, \"convert.iconv.UTF-8/ISO-8859-1\")` splits its spec\n//!   during lowering and hands the two halves to `iconv_open()` as data symbols. A name held in\n//!   a variable has no spec to split at compile time, so the same attach sequence is emitted\n//!   again",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b4cb0009ac59c1e6eb7a94c0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:51:54.282Z",
+  "stored_at": "2026-08-18T09:51:54.283Z"
+}

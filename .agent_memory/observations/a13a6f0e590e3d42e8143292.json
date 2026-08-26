@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"preg_match\" src/types/checker/ | grep -iv 'preg_match_all' | head -30",
+  "summary": "grep -rn \"preg_match\" src/types/checker/ | grep -iv 'preg_match_all' | head -30: src/types/checker/builtin_spl_classes/regex.rs:288:/// Builds a preg_match expression against the current target. src/types/checker/builtin_spl_classes/regex.rs:291: function_call(\"preg_match\", vec![regex_pattern_expr(), regex_subject_stri",
+  "text": "grep -rn \"preg_match\" src/types/checker/ | grep -iv 'preg_match_all' | head -30: src/types/checker/builtin_spl_classes/regex.rs:288:/// Builds a preg_match expression against the current target. src/types/checker/builtin_spl_classes/regex.rs:291: function_call(\"preg_match\", vec![regex_pattern_expr(), regex_subject_string_expr()]), src/types/checker/inference/expr/effects.rs:274: if (builtin_name.eq_ignore_ascii_case(\"preg_match\") && idx == 2) src/types/checker/inference/expr/effects.rs:298: if builtin_name.eq_ignore_ascii_case(\"preg_match\") {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a13a6f0e590e3d42e8143292",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:03:50.754Z",
+  "stored_at": "2026-08-25T13:03:50.755Z"
+}

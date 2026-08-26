@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; ./all > elephc_all.txt 2>&1; diff php_all.txt elephc_all.txt && echo \"IDENTICAL (13 shapes)\"; echo \"--- php ---\"; cat php_all.txt",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; ./all > elephc_all.txt 2>&1; diff php_all.txt elephc_all.txt && echo \"IDENTICAL (13 shapes)\"; echo \"--- php ---\"; cat php_all.txt: ror: stream_conte",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; ./all > elephc_all.txt 2>&1; diff php_all.txt elephc_all.txt && echo \"IDENTICAL (13 shapes)\"; echo \"--- php ---\"; cat php_all.txt: ror: stream_context_create(): Argument #1 ($options) must be of type ?array, float given string => TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, string given true => TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, true given false => TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, false given null => context empty-map => context map => context empty-list => context list => ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value namespaced => TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, App\\Deep\\Thing given resource => TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, resource given stdClass => TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, stdClass given",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c501af7bb72cf0f43406853a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:22:08.752Z",
+  "stored_at": "2026-08-22T16:22:08.752Z"
+}

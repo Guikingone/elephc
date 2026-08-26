@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/computedurl.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/computedurl.php: <?php\n\n$scheme = \"data\";\n$url = $scheme . \"://text/plain,hello\";\nvar_dump(@file_get_contents($url));\nvar_dump(@file_get_contents(",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/computedurl.php: <?php\n\n$scheme = \"data\";\n$url = $scheme . \"://text/plain,hello\";\nvar_dump(@file_get_contents($url));\nvar_dump(@file_get_contents(\"data://text/plain,hello\"));\n\n$dir = sys_get_temp_dir();\nfile_put_contents($dir . \"/cu.txt\", \"hello\");\n$filter = \"php://filter/read=string.toupper/resource=\" . $dir . \"/cu.txt\";\nvar_dump(@file_get_contents($filter));\n$h = @fopen($url, \"r\");\nvar_dump($h !== false ? stream_get_contents($h) : false);\nunlink($dir . \"/cu.txt\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c36ff9f92b5e16d036837756",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:48:40.865Z",
+  "stored_at": "2026-08-22T19:48:40.866Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && printf '<?php\\necho \"before\\\\n\";\\nthrow new RuntimeException(\"boom\");\\n' > uncaught.php && php -n uncaught.php 2>/dev/null | cat -A | head -20",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && printf '<?php\\necho \"before\\\\n\";\\nthrow new RuntimeException(\"boom\");\\n' > uncaught.php && php -n uncaught.php 2>/dev/null | cat -A | head -20: cat: i",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && printf '<?php\\necho \"before\\\\n\";\\nthrow new RuntimeException(\"boom\");\\n' > uncaught.php && php -n uncaught.php 2>/dev/null | cat -A | head -20: cat: illegal option -- A usage: cat [-belnstuv] [file ...]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b33f7c87b4d621a35cd50c75",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:15:16.950Z",
+  "stored_at": "2026-08-18T15:15:16.951Z"
+}

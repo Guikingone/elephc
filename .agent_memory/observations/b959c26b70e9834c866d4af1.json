@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln 'EchoValue' src/codegen/ | head -10",
+  "summary": "grep -rln 'EchoValue' src/codegen/ | head -10: src/codegen/shared_mixed_string.rs src/codegen/lower_inst.rs",
+  "text": "grep -rln 'EchoValue' src/codegen/ | head -10: src/codegen/shared_mixed_string.rs src/codegen/lower_inst.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b959c26b70e9834c866d4af1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:21:58.102Z",
+  "stored_at": "2026-08-25T13:21:58.102Z"
+}

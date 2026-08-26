@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/codegen_support/runtime/io/fwrite.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_chunk.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2",
+  "summary": "git add src/codegen_support/runtime/io/fwrite.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_chunk.txt 2>&1 | tail -3 && git push fork worktree-streams",
+  "text": "git add src/codegen_support/runtime/io/fwrite.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_chunk.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2: [worktree-streams-csv-signature be1f8f5b0] fix(streams): stream_set_chunk_size() did not reach a wrapper's stream_write() 2 files changed, 190 insertions(+), 10 deletions(-) To github.com:Guikingone/elephc.git a2c45e559..be1f8f5b0 worktree-streams-csv-signature -> feat/streams-csv-signatures",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3cc5ae15e606d4e7a6891fff",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T17:10:19.463Z",
+  "stored_at": "2026-08-17T17:10:19.463Z"
+}

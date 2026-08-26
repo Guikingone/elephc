@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "printf '<?php\\necho \"x\\\\n\";\\nif (false) { echo $http_response_header; }\\necho \"y\\\\n\";\\n' > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/test.php\nphp -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/test.php 2>/dev/null | od -c | head -12",
+  "summary": "About to run: printf '<?php\\necho \"x\\\\n\";\\nif (false) { echo $http_response_header; }\\necho \"y\\\\n\";\\n' > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-sig",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "63a96148a467a13f06a80e4a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:25:51.707Z",
+  "stored_at": "2026-08-18T15:25:51.708Z"
+}

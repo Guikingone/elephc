@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo check --workspace 2>&1 | grep -E \"^warning\" -A 5 | head -10",
+  "summary": "cargo check --workspace 2>&1 | grep -E \"^warning\" -A 5 | head -10: warning: unused import: `crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_assoc_array_values` --> src/codegen/lower_inst/builtins/strings/split.rs:12:5 | 12 | use crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_assoc_a",
+  "text": "cargo check --workspace 2>&1 | grep -E \"^warning\" -A 5 | head -10: warning: unused import: `crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_assoc_array_values` --> src/codegen/lower_inst/builtins/strings/split.rs:12:5 | 12 | use crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_assoc_array_values; | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ | -- warning: `elephc` (lib) generated 1 warning (run `cargo fix --lib -p elephc` to apply 1 suggestion) warning: `elephc` (bin \"elephc\") generated 1 warning (1 duplicate) Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.44s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ac4608fda7562d454b794806",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:57:53.561Z",
+  "stored_at": "2026-08-20T17:57:53.561Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'MethodCall' src/scanf_prelude/detect.rs | head -8; echo '--- ast variant ---'; grep -n 'MethodCall {' -A 8 src/parser/ast/expr.rs | head -12",
+  "summary": "grep -n 'MethodCall' src/scanf_prelude/detect.rs | head -8; echo '--- ast variant ---'; grep -n 'MethodCall {' -A 8 src/parser/ast/expr.rs | head -12: 160: ExprKind::MethodCall { 166: | ExprKind::NullsafeMethodCall { 174: ExprKind::NullsafeDynamicMethodCall { 181: ExprKind::StaticMethodCall { method, args, .. } => { --",
+  "text": "grep -n 'MethodCall' src/scanf_prelude/detect.rs | head -8; echo '--- ast variant ---'; grep -n 'MethodCall {' -A 8 src/parser/ast/expr.rs | head -12: 160: ExprKind::MethodCall { 166: | ExprKind::NullsafeMethodCall { 174: ExprKind::NullsafeDynamicMethodCall { 181: ExprKind::StaticMethodCall { method, args, .. } => { --- ast variant --- 182: MethodCall { 183- object: Box<Expr>, 184- method: String, 185- args: Vec<Expr>, 186- }, 187: NullsafeMethodCall { 188- object: Box<Expr>, 189- method: String, 190- args: Vec<Expr>, 191- }, 192: NullsafeDynamicMethodCall { 193- object: Box<Expr>,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "910322798e3f69f346af8e89",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:34:48.162Z",
+  "stored_at": "2026-08-25T12:34:48.162Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"ExprKind::Variable\" src/ir_lower/expr/ | head -10",
+  "summary": "grep -rn \"ExprKind::Variable\" src/ir_lower/expr/ | head -10: wer/expr/method_metadata.rs:59: kind: ExprKind::Variable(name), src/ir_lower/expr/reflection_new_instance.rs:43: if let ExprKind::Variable(name) = &array_expr.kind { src/ir_lower/expr/reflection_new_instance.rs:151: let ExprKind::Variable(name) = &object_expr",
+  "text": "grep -rn \"ExprKind::Variable\" src/ir_lower/expr/ | head -10: wer/expr/method_metadata.rs:59: kind: ExprKind::Variable(name), src/ir_lower/expr/reflection_new_instance.rs:43: if let ExprKind::Variable(name) = &array_expr.kind { src/ir_lower/expr/reflection_new_instance.rs:151: let ExprKind::Variable(name) = &object_expr.kind else { src/ir_lower/expr/merge_temps.rs:133: ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name).codegen_repr()), src/ir_lower/expr/descriptor_invoke.rs:123: ExprKind::Variable(name) => ctx src/ir_lower/expr/descriptor_invoke.rs:258: ExprKind::Variable(name) => { src/ir_lower/expr/descriptor_invoke.rs:289: let ExprKind::Variable(name) = &arg.kind else { src/ir_lower/expr/indexed_array_literals.rs:421: ExprKind::Variable(name) => ir_array_storage_type( src/ir_lower/expr/variadic_args.rs:185: if let ExprKind::Variable(name) = &expr.kind { src/ir_lower/expr/native_isset.rs:166: ExprKind::Variable(name) => ctx",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "25b3dff017fe490805e44cc4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T16:10:42.548Z",
+  "stored_at": "2026-08-18T16:10:42.549Z"
+}

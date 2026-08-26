@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/callback_builtin_name2.py && cargo build --bin elephc 2>&1 | grep -E \"^error\" -A 8 | head -20; cargo build --bin elephc 2>&1 | tail -2",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/callback_builtin_name2.py && cargo build --bin elephc 2>&1 | grep -E \"^error\" -A 8 | head -20; cargo build --bin elephc 2>&1 | tail -2: callables",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/callback_builtin_name2.py && cargo build --bin elephc 2>&1 | grep -E \"^error\" -A 8 | head -20; cargo build --bin elephc 2>&1 | tail -2: callables.rs: the string-literal callback branch resolves builtins Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.71s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ebfc7012164394e208b68e21",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:18:25.897Z",
+  "stored_at": "2026-08-22T11:18:25.898Z"
+}

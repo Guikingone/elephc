@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '665,720p' src/optimize/reachability/graph.rs",
+  "summary": "sed -n '665,720p' src/optimize/reachability/graph.rs: thod, is_static)); } else { self.structural_referenced_methods .insert((method, is_static)); } } for (class, method, is_static) in usage.scoped_methods { self.reach.classes.insert(class.clone()); let key = (class.clone(), method, is_static); self.reach.methods.inser",
+  "text": "sed -n '665,720p' src/optimize/reachability/graph.rs: thod, is_static)); } else { self.structural_referenced_methods .insert((method, is_static)); } } for (class, method, is_static) in usage.scoped_methods { self.reach.classes.insert(class.clone()); let key = (class.clone(), method, is_static); self.reach.methods.insert(key.clone()); self.scoped_methods.insert(key.clone()); if behavioral { self.behavioral.classes.insert(class); self.behavioral.methods.insert(key.clone()); self.behavioral_scoped_methods.insert(key); } } if behavioral { self.behavioral .referenced_methods .extend(usage.wildcard_methods); } else { self.structural_referenced_methods .extend(usage.wildcard_methods); } self.apply_global_hazards(); } /// Retains every indexed class that is equal to or descends from one runtime-selected base. fn keep_instantiable_subclasses(&mut self, root: &str, behavioral: bool) { let root = php_symbol_key(root); let classes: Vec<_> = self .index",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "09265f6c3923ad9d511ea2d2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:50:59.318Z",
+  "stored_at": "2026-08-24T20:50:59.318Z"
+}

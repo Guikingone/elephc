@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"glob_pathv_offset\" src/ | head -10",
+  "summary": "grep -rn \"glob_pathv_offset\" src/ | head -10: src/codegen_support/platform/target.rs:547: pub fn glob_pathv_offset(&self) -> usize { src/codegen_support/platform/mod.rs:182: assert_eq!(Platform::MacOS.glob_pathv_offset(), 32); src/codegen_support/platform/mod.rs:183: assert_eq!(Platform::Linux.glob_pathv_offset(), 8); ",
+  "text": "grep -rn \"glob_pathv_offset\" src/ | head -10: src/codegen_support/platform/target.rs:547: pub fn glob_pathv_offset(&self) -> usize { src/codegen_support/platform/mod.rs:182: assert_eq!(Platform::MacOS.glob_pathv_offset(), 32); src/codegen_support/platform/mod.rs:183: assert_eq!(Platform::Linux.glob_pathv_offset(), 8); src/codegen_support/runtime/io/opendir_glob.rs:40: let pathv_off = emitter.platform.glob_pathv_offset() as i64; src/codegen_support/runtime/io/opendir_glob.rs:105: let pathv_off = emitter.platform.glob_pathv_offset() as i64; src/codegen_support/runtime/io/glob.rs:27: let pathv_off = emitter.platform.glob_pathv_offset(); src/codegen_support/runtime/io/glob.rs:120: let pathv_off = emitter.platform.glob_pathv_offset();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9b8604b955414e0da8ea3059",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:53:37.521Z",
+  "stored_at": "2026-08-22T08:53:37.522Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '814,830p' src/codegen_support/runtime/data/fixed.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '814,830p' src/codegen_support/runtime/data/fixed.rs: (\".globl _diag_csv_escape_deprecated_fgetcsv_msg\\n_diag_csv_escape_deprecated_fgetcsv_msg:\\n .ascii \\\"Deprecated: fgetcsv(): the $escape parameter must be provided",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '814,830p' src/codegen_support/runtime/data/fixed.rs: (\".globl _diag_csv_escape_deprecated_fgetcsv_msg\\n_diag_csv_escape_deprecated_fgetcsv_msg:\\n .ascii \\\"Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change\\\\n\\\"\\n\"); out.push_str(\".globl _diag_csv_escape_deprecated_fputcsv_msg\\n_diag_csv_escape_deprecated_fputcsv_msg:\\n .ascii \\\"Deprecated: fputcsv(): the $escape parameter must be provided as its default value will change\\\\n\\\"\\n\"); out.push_str(\".globl _diag_csv_escape_deprecated_str_getcsv_msg\\n_diag_csv_escape_deprecated_str_getcsv_msg:\\n .ascii \\\"Deprecated: str_getcsv(): the $escape parameter must be provided as its default value will change\\\\n\\\"\\n\"); out.push_str(\".globl _diag_undefined_array_key_prefix\\n_diag_undefined_array_key_prefix:\\n .ascii \\\"Warning: Undefined array key \\\"\\n\"); out.push_str(\".globl _diag_undefined_array_key_quote\\n_diag_undefined_array_key_quote:\\n .ascii \\\"\\\\\\\"\\\"\\n\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cc58bee6e551f9205c7aa5fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:59:17.624Z",
+  "stored_at": "2026-08-22T19:59:17.624Z"
+}

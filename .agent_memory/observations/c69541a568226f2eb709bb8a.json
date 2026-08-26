@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/builtins_mod.py && sed -n '/^<<<<<<</,/^>>>>>>>/p' src/types/checker/driver/top_level.rs",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/builtins_mod.py && sed -n '/^<<<<<<</,/^>>>>>>>/p' src/types/checker/driver/top_level.rs: builtins/mod.rs combined: main's ordering, our defau",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/builtins_mod.py && sed -n '/^<<<<<<</,/^>>>>>>>/p' src/types/checker/driver/top_level.rs: builtins/mod.rs combined: main's ordering, our defaulted-slot skip <<<<<<< HEAD // `resolve_null_probe_roots` can append to `all_errors` for statements the loop already // visited, so the two vectors are aligned by padding rather than by construction. through_null.resize(all_errors.len(), false); (global_env, all_errors, through_null) ======= self.active_ref_params = saved_ref_params; self.exit_local_binding_scope(saved_local_binding_scope); (global_env, all_errors) >>>>>>> origin/main",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c69541a568226f2eb709bb8a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:14:13.617Z",
+  "stored_at": "2026-08-26T17:14:13.617Z"
+}

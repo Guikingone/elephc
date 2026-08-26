@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_variadic_null.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_variadic_null.py: p = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/expr/call_arg_coer",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_variadic_null.py: p = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/expr/call_arg_coercion.rs'\ns = open(p).read()\n\nold = '''    let Some(sig) = sig else {\n        return;\n    };\n    for (index, arg) in args.iter().enumerate() {\n        if !sig.ref_params.get(index).copied().unwrap_or(false) {\n            continue;\n        }\n        let Some((_, param_ty)) = sig.params.get(index) else {\n            continue;\n        };\n        if !matches!(param_ty, PhpType::Mixed) {\n            continue;\n        }'''\n\nnew = '''    let Some(sig) = sig else {\n        ret",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eb918916d86ce026f44f85b4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:54:05.559Z",
+  "stored_at": "2026-08-18T12:54:05.559Z"
+}

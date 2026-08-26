@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps -o pid,etime,%cpu,comm -ax 2>/dev/null | grep codegen_tests | head -2; tail -5 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b997lf54b.output 2>/dev/null",
+  "summary": "About to run: ps -o pid,etime,%cpu,comm -ax 2>/dev/null | grep codegen_tests | head -2; tail -5 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9eed45d266a9bf704a1a4b9d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:54:56.589Z",
+  "stored_at": "2026-08-21T17:54:56.590Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\ns=open('fdynprop.php').read()\nopen('fdeclprop.php','w').write(s.replace('class Tag extends php_user_filter {','class Tag extends php_user_filter {\\n    public int $seen = 0;').replace(\"var_dump(stream_get_contents($h));\",\"var_dump(stream_get_contents($h));\"))\nPY\nzsh difftests.sh fdeclprop 2>&1 | head -20",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\ns=open('fdynprop.php').read()\nopen('fdeclprop.php','w').write(s.replace('class Tag extends php_user_filter {','class Tag exten",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\ns=open('fdynprop.php').read()\nopen('fdeclprop.php','w').write(s.replace('class Tag extends php_user_filter {','class Tag extends php_user_filter {\\n    public int $seen = 0;').replace(\"var_dump(stream_get_contents($h));\",\"var_dump(stream_get_contents($h));\"))\nPY\nzsh difftests.sh fdeclprop 2>&1 | head -20: fdeclprop IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f37f4946dbf5ebd8a5bb6610",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:15:34.397Z",
+  "stored_at": "2026-08-17T13:15:34.398Z"
+}

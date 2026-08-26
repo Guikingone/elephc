@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/unregister_surface.py 2>&1 | head -40",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/unregister_surface.py 2>&1 | head -40: le => true DIFF php: file_put_contents => false elephc: file_put_contents => true DIFF php: file_exists =>",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/unregister_surface.py 2>&1 | head -40: le => true DIFF php: file_put_contents => false elephc: file_put_contents => true DIFF php: file_exists => false elephc: file_exists => true DIFF php: is_file => false elephc: is_file => true DIFF php: is_dir => false elephc: is_dir => true DIFF php: is_readable => false elephc: is_readable => true DIFF php: filesize => false elephc: filesize => true DIFF php: filemtime => false elephc: filemtime => true DIFF php: stat => false elephc: stat => true DIFF php: unlink => false elephc: unlink => true DIFF php: rename => false elephc: rename => true DIFF php: mkdir => false elephc: mkdir => true DIFF php: rmdir => false elephc: rmdir => true DIFF php: opendir => false elephc: opendir => true DIFF php: scandir => false elephc: scandir => true DIFF php: touch => false elephc: touch => true DIFF php: realpath => true elephc: realpath => false 3 agree, 19 differ (value shown is \"did it succeed?\")",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "531b86f43a5047b34c829167",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:23:00.917Z",
+  "stored_at": "2026-08-22T08:23:00.917Z"
+}

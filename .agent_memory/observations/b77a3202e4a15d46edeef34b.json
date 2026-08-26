@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,60p' tests/codegen/undefined_variables.rs",
+  "summary": "sed -n '1,60p' tests/codegen/undefined_variables.rs: t_undefined_variable_in_a_concat_inside_a_function_does_not_crash() { let out = compile_and_run_capture( r#\"<?php function f() { return \"a\" . $nope; } echo f(), \"\\n\"; \"#, ); assert!(out.success, \"program failed: {}\", out.stderr); assert_eq!(out.stdout, \"a\\n\"); assert",
+  "text": "sed -n '1,60p' tests/codegen/undefined_variables.rs: t_undefined_variable_in_a_concat_inside_a_function_does_not_crash() { let out = compile_and_run_capture( r#\"<?php function f() { return \"a\" . $nope; } echo f(), \"\\n\"; \"#, ); assert!(out.success, \"program failed: {}\", out.stderr); assert_eq!(out.stdout, \"a\\n\"); assert_eq!(out.diagnostics, \"Warning: Undefined variable $nope\\n\"); } /// Verifies an uncalled function is treated exactly like a called one. /// /// The two used to disagree: a function reached by a direct call had its body error dropped and /// compiled, while the same body left uncalled was REFUSED — an artifact of which pass resolved /// the signature, not of any rule. Two identical bodies in one file, one called and one not, is /// what pins that they now agree. #[test] fn test_called_and_uncalled_functions_agree_on_an_undefined_read() { let out = compile_and_run_capture( r#\"<?php function called() { return \"c\" . $missing_a; }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b77a3202e4a15d46edeef34b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:13:47.120Z",
+  "stored_at": "2026-08-21T11:13:47.120Z"
+}

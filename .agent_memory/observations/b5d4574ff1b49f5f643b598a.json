@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '1,120p' src/dir_prelude/detect.rs",
+  "summary": "rtk proxy sed -n '1,120p' src/dir_prelude/detect.rs:  the /// operand when the target is a runtime expression. fn instanceof_target_refs_directory(target: &InstanceOfTarget) -> bool { match target { InstanceOfTarget::Name(name) => name_is_directory_class(name), InstanceOfTarget::Expr(expr) => expr_refs_directory(expr),",
+  "text": "rtk proxy sed -n '1,120p' src/dir_prelude/detect.rs:  the /// operand when the target is a runtime expression. fn instanceof_target_refs_directory(target: &InstanceOfTarget) -> bool { match target { InstanceOfTarget::Name(name) => name_is_directory_class(name), InstanceOfTarget::Expr(expr) => expr_refs_directory(expr), } } /// Returns whether a first-class-callable target references the surface: the free function /// (`dir(...)`), a static-method receiver, or an instance-method object expression. fn callable_target_refs_directory(target: &CallableTarget) -> bool { match target { CallableTarget::Function(name) => name_is_directory_function(name), CallableTarget::StaticMethod { receiver, .. } => receiver_refs_directory(receiver), CallableTarget::Method { object, .. } => expr_refs_directory(object), } } /// Returns whether a type expression names `Directory`, recursing through /// nullable/union/array/buffer wrappers and `ptr<Class>` targets.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b5d4574ff1b49f5f643b598a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:03:53.504Z",
+  "stored_at": "2026-08-16T16:03:53.504Z"
+}

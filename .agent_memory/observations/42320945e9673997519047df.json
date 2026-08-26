@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '108,140p' src/codegen_support/runtime/io/stream_select.rs",
+  "summary": "sed -n '108,140p' src/codegen_support/runtime/io/stream_select.rs: mputes, on both platforms. emitter.bl_c(\"poll\"); emitter.instruction(\"str x0, [sp, #2104]\"); // save the ready descriptor count emitter.instruction(\"cmp x0, #0\"); // poll returned an error? emitter.instruction(\"b.lt __rt_stream_select_error\"); // negati",
+  "text": "sed -n '108,140p' src/codegen_support/runtime/io/stream_select.rs: mputes, on both platforms. emitter.bl_c(\"poll\"); emitter.instruction(\"str x0, [sp, #2104]\"); // save the ready descriptor count emitter.instruction(\"cmp x0, #0\"); // poll returned an error? emitter.instruction(\"b.lt __rt_stream_select_error\"); // negative → return -1 // -- compact each array to the ready subset -- emit_compact_pollfd_aarch64(emitter, 2048, 2072, \"r\"); emit_compact_pollfd_aarch64(emitter, 2056, 2080, \"w\"); emit_compact_pollfd_aarch64(emitter, 2064, 2088, \"e\"); emitter.instruction(\"ldr x0, [sp, #2104]\"); // return the ready descriptor count emitter.instruction(\"b __rt_stream_select_epilogue\"); // jump to the common epilogue emitter.label(\"__rt_stream_select_error\"); emitter.instruction(\"mov x0, #-1\"); // return -1 on poll failure or overflow emitter.instruction(\"b __rt_stream_select_epilogue\"); // jump to the common epilogue emitter.label(\"__rt_stream_select_no_castable\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "42320945e9673997519047df",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:19:52.488Z",
+  "stored_at": "2026-08-18T11:19:52.489Z"
+}

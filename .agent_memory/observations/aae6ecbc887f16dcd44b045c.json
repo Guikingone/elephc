@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>bil0k1poq</task-id>\n<tool-use-id>toolu_015kokdxaMbawW2bkuqPAaRN</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bil0k1poq.output</output-file>\n<status>killed</status>\n<summary>Background command \"Run the full codegen suite via the pre-built binary\" was stopped</summary>\n</task-notification>",
+  "summary": "<task-notification> <task-id>bil0k1poq</task-id> <tool-use-id>toolu_015kokdxaMbawW2bkuqPAaRN</tool-use-id> <output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8db",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aae6ecbc887f16dcd44b045c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T22:05:24.850Z",
+  "stored_at": "2026-08-17T22:05:24.850Z",
+  "low_signal": true
+}

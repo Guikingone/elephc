@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '110,175p' src/codegen_support/runtime/io/opendir.rs",
+  "summary": "sed -n '110,175p' src/codegen_support/runtime/io/opendir.rs: ter.instruction(\"cmp ecx, 111\"); // 'o'? emitter.instruction(\"jne __rt_opendir_no_glob_x86\"); // not the glob scheme emitter.instruction(\"movzx ecx, BYTE PTR [rax + 3]\"); // load scheme byte 3 emitter.instruction(\"cmp ecx, 98\"); // 'b'? emitter.instruction(\"j",
+  "text": "sed -n '110,175p' src/codegen_support/runtime/io/opendir.rs: ter.instruction(\"cmp ecx, 111\"); // 'o'? emitter.instruction(\"jne __rt_opendir_no_glob_x86\"); // not the glob scheme emitter.instruction(\"movzx ecx, BYTE PTR [rax + 3]\"); // load scheme byte 3 emitter.instruction(\"cmp ecx, 98\"); // 'b'? emitter.instruction(\"jne __rt_opendir_no_glob_x86\"); // not the glob scheme emitter.instruction(\"movzx ecx, BYTE PTR [rax + 4]\"); // load scheme byte 4 emitter.instruction(\"cmp ecx, 58\"); // ':'? emitter.instruction(\"jne __rt_opendir_no_glob_x86\"); // not the glob scheme emitter.instruction(\"movzx ecx, BYTE PTR [rax + 5]\"); // load scheme byte 5 emitter.instruction(\"cmp ecx, 47\"); // '/'? emitter.instruction(\"jne __rt_opendir_no_glob_x86\"); // not the glob scheme emitter.instruction(\"movzx ecx, BYTE PTR [rax + 6]\"); // load scheme byte 6 emitter.instruction(\"cmp ecx, 47\"); // '/'? emitter.instruction(\"jne __rt_opendir_no_glob_x86\"); // not the glob scheme",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "87f10cb9eef81cadc5861b84",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:20:09.455Z",
+  "stored_at": "2026-08-24T19:20:09.455Z"
+}

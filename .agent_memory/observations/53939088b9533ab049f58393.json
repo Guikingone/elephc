@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"writes:\" crates/elephc-builtin-contract/src/catalog_data.rs | head -3; echo \"--- variadic_writes voisin:\"; grep -n \"variadic_writes:\" crates/elephc-builtin-contract/src/catalog_data.rs | head -2",
+  "summary": "grep -n \"writes:\" crates/elephc-builtin-contract/src/catalog_data.rs | head -3; echo \"--- variadic_writes voisin:\"; grep -n \"variadic_writes:\" crates/elephc-builtin-contract/src/catalog_data.rs | head -2: 26:writes: None, 30: variadic_writes: None, 56:writes: None, --- variadic_writes voisin: 30: variadic_writes: None,",
+  "text": "grep -n \"writes:\" crates/elephc-builtin-contract/src/catalog_data.rs | head -3; echo \"--- variadic_writes voisin:\"; grep -n \"variadic_writes:\" crates/elephc-builtin-contract/src/catalog_data.rs | head -2: 26:writes: None, 30: variadic_writes: None, 56:writes: None, --- variadic_writes voisin: 30: variadic_writes: None, 60: variadic_writes: None,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "53939088b9533ab049f58393",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:37:14.097Z",
+  "stored_at": "2026-08-20T17:37:14.098Z"
+}

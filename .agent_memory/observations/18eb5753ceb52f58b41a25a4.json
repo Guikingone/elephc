@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ziproot.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ziproot.php: <?php\n$dir = sys_get_temp_dir() . '/ziproot_probe';\n@mkdir($dir, 0777, true);\n$zipPath = $dir . '/a.zip';\n@unlink($zipPath);\n$z = ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ziproot.php: <?php\n$dir = sys_get_temp_dir() . '/ziproot_probe';\n@mkdir($dir, 0777, true);\n$zipPath = $dir . '/a.zip';\n@unlink($zipPath);\n$z = new ZipArchive();\n$z->open($zipPath, ZipArchive::CREATE);\n$z->addFromString('f.txt', \"hello world\\n\");\n$z->close();\n\n$r = new ZipArchive();\nvar_dump($r->open($zipPath));\n// A destination whose parent component is a regular FILE: ENOTDIR even for root.\nvar_dump($r->extractTo($zipPath . '/x'));\nvar_dump($r->extractTo($dir . '/a.zip/deep/er'));\n// An unwritable directory, for comparison.\n$ro = $dir . '/ro';\n@mkdir($ro, 0555, true);\nvar_dump($r->extractTo($ro . '/sub'))",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18eb5753ceb52f58b41a25a4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:44:57.941Z",
+  "stored_at": "2026-08-16T16:44:57.941Z"
+}

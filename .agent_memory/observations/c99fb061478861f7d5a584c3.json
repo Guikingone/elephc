@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -i '' 's/^mod filter_param_warning;$/mod filter_create_warning;\\nmod filter_param_warning;/' src/codegen_support/runtime/io/mod.rs && sed -i '' 's/^pub(crate) use filter_param_warning::emit_filter_param_warning;$/pub(crate) use filter_create_warning::emit_filter_create_warning;\\npub(crate) use filter_param_warning::emit_filter_param_warning;/' src/codegen_support/runtime/io/mod.rs && sed -i '' 's/^    io::emit_filter_param_warning(emitter);$/    io::emit_filter_param_warning(emitter);\\n    io::emit_filter_create_warning(emitter);/' src/codegen_support/runtime/emitters/platform.rs && grep -… [+112 chars truncated]",
+  "summary": "sed -i '' 's/^mod filter_param_warning;$/mod filter_create_warning;\\nmod filter_param_warning;/' src/codegen_support/runtime/io/mod.rs && sed -i '' 's/^pub(crate) use filter_param_warning::emit_filter_param_warning;$/pub(crate) use filter_create_warning::emit_filter_create_warning;\\npub(crate) use filter_param_warning:",
+  "text": "sed -i '' 's/^mod filter_param_warning;$/mod filter_create_warning;\\nmod filter_param_warning;/' src/codegen_support/runtime/io/mod.rs && sed -i '' 's/^pub(crate) use filter_param_warning::emit_filter_param_warning;$/pub(crate) use filter_create_warning::emit_filter_create_warning;\\npub(crate) use filter_param_warning::emit_filter_param_warning;/' src/codegen_support/runtime/io/mod.rs && sed -i '' 's/^    io::emit_filter_param_warning(emitter);$/    io::emit_filter_param_warning(emitter);\\n    io::emit_filter_create_warning(emitter);/' src/codegen_support/runtime/emitters/platform.rs && grep -n \"filter_create_warning\" src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/emitters/platform.rs: src/codegen_support/runtime/io/mod.rs:37:mod filter_create_warning; src/codegen_support/runtime/io/mod.rs:265:pub(crate) use filter_create_warning::emit_filter_create_warning; src/codegen_support/runtime/emitters/platform.rs:82: io::emit_filter_create_warning(emitter);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c99fb061478861f7d5a584c3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:57:08.077Z",
+  "stored_at": "2026-08-18T09:57:08.078Z"
+}

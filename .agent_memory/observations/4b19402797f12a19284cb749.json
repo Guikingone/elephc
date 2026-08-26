@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn test_stream_context_set_option_refuses_phps_invalid_shapes\" -B 18 -A 40 tests/codegen/io/streams.rs | head -60",
+  "summary": "About to run: grep -n \"fn test_stream_context_set_option_refuses_phps_invalid_shapes\" -B 18 -A 40 tests/codegen/io/streams.rs | head -60",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4b19402797f12a19284cb749",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:01:23.464Z",
+  "stored_at": "2026-08-21T17:01:23.464Z"
+}

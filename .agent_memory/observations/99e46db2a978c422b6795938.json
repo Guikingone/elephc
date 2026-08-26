@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/compare.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/compare.py: \"\"\"Separates a run's PROGRAM output from its DIAGNOSTICS so the two can be compared apart.\n\nelephc deliberately puts warnings on stde",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/compare.py: \"\"\"Separates a run's PROGRAM output from its DIAGNOSTICS so the two can be compared apart.\n\nelephc deliberately puts warnings on stderr while php CLI puts them on stdout, and elephc omits\nphp's \" in FILE on line N\" suffix — `docs/php/streams.md` records both as a repo-wide convention,\nnot a defect. Comparing raw combined output therefore reports a difference for every program that\nwarns at all, which buries the differences that ARE defects. This module strips the known-divergent\nparts so what remains is signal.\n\"\"\"\nimport re\n\nLEVELS = (\n    'Warning', 'Deprecated', 'Notice', 'Fatal error', 'Pa",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "99e46db2a978c422b6795938",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:50:01.256Z",
+  "stored_at": "2026-08-17T06:50:01.257Z"
+}

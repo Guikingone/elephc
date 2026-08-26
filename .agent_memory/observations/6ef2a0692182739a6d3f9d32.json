@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_chunk_default.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_chunk_default.py: \"\"\"php's default stream chunk is 8192, and one of the two places that names it said 4096.\n\n`stream_set_chunk_size($h, 100)` a",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_chunk_default.py: \"\"\"php's default stream chunk is 8192, and one of the two places that names it said 4096.\n\n`stream_set_chunk_size($h, 100)` already answers `int(8192)` for a fresh stream, and\n`stream_get_line` already uses 8192 — the number was right everywhere it was WRITTEN DOWN. The\nread-loop fallback inside `__rt_stream_chunk_size` used 4096, and that is the one a wrapper sees:\n`fgets($h)` asked its `stream_read($count)` for 4096 where php asks for 8192, and an unbounded\n`stream_get_contents($h)` did the same twice.\n\nOne named constant now, so the two cannot drift again.\n\"\"\"\nimport pathlib\n\nROOT = pathlib",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6ef2a0692182739a6d3f9d32",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:56:33.251Z",
+  "stored_at": "2026-08-21T09:56:33.251Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -22 src/builtins/io/stream_socket_get_name.rs; echo \"=== supports_lock ===\"; head -20 src/builtins/io/stream_supports_lock.rs",
+  "summary": "head -22 src/builtins/io/stream_socket_get_name.rs; echo \"=== supports_lock ===\"; head -20 src/builtins/io/stream_supports_lock.rs:  builtin! { contract: \"stream_socket_get_name\", check: check, semantics: crate::builtins::semantics::runtime_fn_semantics( crate::ir::RuntimeFnId::StreamSocketGetName, ), } === supports_lo",
+  "text": "head -22 src/builtins/io/stream_socket_get_name.rs; echo \"=== supports_lock ===\"; head -20 src/builtins/io/stream_supports_lock.rs:  builtin! { contract: \"stream_socket_get_name\", check: check, semantics: crate::builtins::semantics::runtime_fn_semantics( crate::ir::RuntimeFnId::StreamSocketGetName, ), } === supports_lock === //! Purpose: //! Home of the PHP `stream_supports_lock` builtin: its single-source registry declaration and semantic target. //! //! Called from: //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`. //! //! Key details: //! - `check` validates that the stream argument is a stream resource before returning `Bool`. //! - Arguments are pre-inferred by the registry before the hook runs. use crate::builtins::spec::BuiltinCheckCtx; use crate::errors::CompileError; use crate::types::PhpType; builtin! { contract: \"stream_supports_lock\", check: check, semantics: crate::builtins::semantics::runtime_fn_semantics( crate::ir::RuntimeFnId::StreamSupportsLock, ),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d2015db8db1fb56ae4c46e4e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:22:18.082Z",
+  "stored_at": "2026-08-14T14:22:18.083Z"
+}

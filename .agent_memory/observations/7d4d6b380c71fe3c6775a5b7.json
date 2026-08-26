@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/callback_builtin_name2.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/callback_builtin_name2.py: \"\"\"The string-literal callback branch resolves builtins, which is where the refusal really was.\n\nThe first attempt patch",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/callback_builtin_name2.py: \"\"\"The string-literal callback branch resolves builtins, which is where the refusal really was.\n\nThe first attempt patched `infer_callable_runtime_return`, and the measurement did not move — so\nthat path never fired for `array_map(\"strtoupper\", …)`. It is reverted here rather than left in:\na fix that cannot be shown to run is indistinguishable from dead code.\n\nThe refusal comes from `check_callback_builtin_call_in_engine_frame`, whose string-literal branch\ntries user functions, then `fn_decls`, then `check_function_call` — and `check_function_call`\nresolves USER functions only, so a builtin na",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7d4d6b380c71fe3c6775a5b7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:17:43.818Z",
+  "stored_at": "2026-08-22T11:17:43.818Z"
+}

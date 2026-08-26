@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat src/builtins/string/join.rs",
+  "summary": "cat src/builtins/string/join.rs:  registry's alias arity gate requires the two declarations to agree on their //! enforced bounds: one required parameter, at most two. //! - Reference PHP declares `join(string|array $separator, ?array $array = null)`, which //! is what makes BOTH accepted call forms work: `join($separa",
+  "text": "cat src/builtins/string/join.rs:  registry's alias arity gate requires the two declarations to agree on their //! enforced bounds: one required parameter, at most two. //! - Reference PHP declares `join(string|array $separator, ?array $array = null)`, which //! is what makes BOTH accepted call forms work: `join($separator, $array)` and the //! single-argument `join($array)` that joins with an empty separator. `separator` is //! therefore declared `Mixed` here, not `Str`, and the backend picks the operand roles //! from the argument count. (The legacy reversed `join($array, $separator)` order was //! REMOVED in PHP 8.0 and is deliberately not accepted.) //! - Unlike `implode`, no `check` hook narrows the arity: the one-argument form is the //! whole reason this alias carries its own declaration. builtin! { contract: \"join\", semantics: crate::builtins::semantics::runtime_fn_semantics( crate::ir::RuntimeFnId::Implode, ), }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "89f51ca81664de03d2543c37",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:07:58.094Z",
+  "stored_at": "2026-08-21T10:07:58.095Z"
+}

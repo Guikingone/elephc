@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"stream_filter_register\" src/codegen/lower_inst/builtins/io/stream_filters.rs | head -20; echo \"--- runtime ---\"; grep -n \"user_filter_register\\|filter_register\" src/codegen_support/runtime/io/user_filter.rs | head -30",
+  "summary": "grep -n \"stream_filter_register\" src/codegen/lower_inst/builtins/io/stream_filters.rs | head -20; echo \"--- runtime ---\"; grep -n \"user_filter_register\\|filter_register\" src/codegen_support/runtime/io/user_filter.rs | head -30: s\")?; 67: abi::emit_call_label(ctx.emitter, \"__rt_stream_filter_register\"); --- runtime --- ",
+  "text": "grep -n \"stream_filter_register\" src/codegen/lower_inst/builtins/io/stream_filters.rs | head -20; echo \"--- runtime ---\"; grep -n \"user_filter_register\\|filter_register\" src/codegen_support/runtime/io/user_filter.rs | head -30: s\")?; 67: abi::emit_call_label(ctx.emitter, \"__rt_stream_filter_register\"); --- runtime --- 3://! (`__rt_stream_filter_register`, `__rt_resolve_user_filter_id`, 5://! `stream_filter_register`, `stream_filter_append`/`prepend`, and 11://! - The `stream_filter_register` / `stream_filter_append` / 30:/// `__rt_stream_filter_register`: scan `_user_filter_registry` for the 42:pub fn emit_stream_filter_register(emitter: &mut Emitter) { 44: emit_stream_filter_register_linux_x86_64(emitter); 49: emitter.comment(\"--- runtime: stream_filter_register ---\"); 50: emitter.label_global(\"__rt_stream_filter_register\"); 53: // registration: `stream_filter_register('string.toupper', ...)` is false because php owns 148:fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) { 150: emitter.comment(\"--- runtime: stream_filter_register ---\"); 151: emitter.label_global(\"__rt_stream_filter_register\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "56d3aace6397936f1a9db2bc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:39:11.800Z",
+  "stored_at": "2026-08-21T15:39:11.801Z"
+}

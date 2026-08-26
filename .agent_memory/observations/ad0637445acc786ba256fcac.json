@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '640,670p' tests/codegen/spl/filesystem.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '640,670p' tests/codegen/spl/filesystem.rs: iter, $line)`, which is not CSV: an enclosure was /// ordinary text, so `a,\"b,c\",d` came back as `[\"a\", \"\\\"b\", \"c\\\"\", \"d\\n\"]` — four fields, quotes /// attached, the termina",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '640,670p' tests/codegen/spl/filesystem.rs: iter, $line)`, which is not CSV: an enclosure was /// ordinary text, so `a,\"b,c\",d` came back as `[\"a\", \"\\\"b\", \"c\\\"\", \"d\\n\"]` — four fields, quotes /// attached, the terminator glued to the last one. A quoted field holding a newline was cut in /// half across two iterations, and a blank line answered `[\"\\n\"]` where php answers `[null]`. /// Every expectation below is `php -n` 8.5.6 on the same file, including the final `[null]` /// php yields because it reads until a read fails rather than until the lines run out. #[test] fn test_spl_file_object_read_csv_parses_records_not_exploded_lines() { let (out, dir) = compile_and_run_in_dir( r#\"<?php file_put_contents(\"rec.csv\", \"a,\\\"b,c\\\",d\\n\\n\\\"x\\ny\\\",z\\n\"); $f = new SplFileObject(\"rec.csv\"); $f->setFlags(SplFileObject::READ_CSV); foreach ($f as $i => $row) { echo $i, \"=\", json_encode($row), \";\"; } echo \"\\n\"; unset($f); unlink(\"rec.csv\"); \"#, );",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ad0637445acc786ba256fcac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:23:00.442Z",
+  "stored_at": "2026-08-24T08:23:00.443Z"
+}

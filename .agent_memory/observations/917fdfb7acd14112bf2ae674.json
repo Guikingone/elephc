@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '520,560p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs",
+  "summary": "sed -n '520,560p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs: e: bool) { abi::emit_load_int_immediate( ctx.emitter, abi::int_result_reg(ctx.emitter), i64::from(value), ); } /// Returns a literal string operand when the value was produced by `ConstStr`. pub(super) fn optional_const_string_operand( ctx:",
+  "text": "sed -n '520,560p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs: e: bool) { abi::emit_load_int_immediate( ctx.emitter, abi::int_result_reg(ctx.emitter), i64::from(value), ); } /// Returns a literal string operand when the value was produced by `ConstStr`. pub(super) fn optional_const_string_operand( ctx: &FunctionContext<'_>, value: ValueId, ) -> Result<Option<String>> { let value_ref = ctx .function .value(value) .ok_or_else(|| CodegenIrError::missing_entry(\"value\", value.as_raw()))?; let ValueDef::Instruction { inst, .. } = value_ref.def else { return Ok(None); }; let inst_ref = ctx .function .instruction(inst) .ok_or_else(|| CodegenIrError::missing_entry(\"instruction\", inst.as_raw()))?; if inst_ref.op != Op::ConstStr { return Ok(None); } let Some(Immediate::Data(data)) = inst_ref.immediate else { return Err(CodegenIrError::invalid_module( \"string literal operand has no data id\", )); }; Ok(Some( ctx.module .data .strings .get(data.as_raw() as usize)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "917fdfb7acd14112bf2ae674",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:53:44.705Z",
+  "stored_at": "2026-08-21T10:53:44.705Z"
+}

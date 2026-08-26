@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/two-handles-one-file.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/two-handles-one-file.php: <?php\n// Two independent handles on one file: positions, visibility of writes, and stat caching.\nfile_put_conte",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/two-handles-one-file.php: <?php\n// Two independent handles on one file: positions, visibility of writes, and stat caching.\nfile_put_contents(\"t.txt\", \"0123456789\");\n$a = fopen(\"t.txt\", \"r\");\n$b = fopen(\"t.txt\", \"r\");\nvar_dump(fread($a, 3), ftell($a), ftell($b));\nvar_dump(fread($b, 2), ftell($b), ftell($a));\nfclose($a); fclose($b);\n\n// A write through one handle, read through another.\n$w = fopen(\"t.txt\", \"r+\");\n$r = fopen(\"t.txt\", \"r\");\nfwrite($w, \"XY\");\nfflush($w);\nvar_dump(fread($r, 4));\nfclose($w); fclose($r);\nvar_dump(file_get_contents(\"t.txt\"));\n\n// filesize is cached until clearstatcache.\nvar_dump(filesize(\"t.txt\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cc40d44e7719560223ee3f89",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:51:46.093Z",
+  "stored_at": "2026-08-26T07:51:46.094Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test -p elephc-builtin-contract 2>&1 | grep -E \"left|right\" | head -8; cargo test --test builtin_parity_tests non_registry_surfaces_have_complete_backend_contracts 2>&1 | grep -B2 -A8 panicked | head -16",
+  "summary": "cargo test -p elephc-builtin-contract 2>&1 | grep -E \"left|right\" | head -8; cargo test --test builtin_parity_tests non_registry_surfaces_have_complete_backend_contracts 2>&1 | grep -B2 -A8 panicked | head -16: assertion `left == right` failed left: 555 right: 554 assertion `left == right` failed left: 32 right: 31 ass",
+  "text": "cargo test -p elephc-builtin-contract 2>&1 | grep -E \"left|right\" | head -8; cargo test --test builtin_parity_tests non_registry_surfaces_have_complete_backend_contracts 2>&1 | grep -B2 -A8 panicked | head -16: assertion `left == right` failed left: 555 right: 554 assertion `left == right` failed left: 32 right: 31 assertion `left == right` failed left: 71 ---- non_registry_surfaces_have_complete_backend_contracts stdout ---- thread 'non_registry_surfaces_have_complete_backend_contracts' (132253814) panicked at tests/builtin_parity_tests.rs:31:5: assertion `left == right` failed left: 15 right: 14 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace failures: non_registry_surfaces_have_complete_backend_contracts",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d70d8c227bf48a49a03164fb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T13:34:14.195Z",
+  "stored_at": "2026-08-15T13:34:14.196Z"
+}

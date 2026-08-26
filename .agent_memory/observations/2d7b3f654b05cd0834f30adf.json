@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"File\" src/magic_constants.rs | head -8",
+  "summary": "grep -n \"File\" src/magic_constants.rs | head -8: 36:/// Replaces `MagicConstant::File` and `MagicConstant::Dir` with string",
+  "text": "grep -n \"File\" src/magic_constants.rs | head -8: 36:/// Replaces `MagicConstant::File` and `MagicConstant::Dir` with string",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2d7b3f654b05cd0834f30adf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:42:26.097Z",
+  "stored_at": "2026-08-18T13:42:26.097Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn current_builtin_frame' -A 45 src/codegen/context.rs 2>/dev/null | head -60 || grep -rn 'fn current_builtin_frame' -A 45 src/codegen/ | head -60",
+  "summary": "About to run: grep -n 'fn current_builtin_frame' -A 45 src/codegen/context.rs 2>/dev/null | head -60 || grep -rn 'fn current_builtin_frame' -A 45 src/codegen/ | head -60",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f13478c4ecd6b0d3aab9137c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:02:34.187Z",
+  "stored_at": "2026-08-24T18:02:34.188Z"
+}

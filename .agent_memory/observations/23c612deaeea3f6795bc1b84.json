@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn variable_type_or_eval_dynamic\" -A 30 src/types/checker/ | head -40",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn variable_type_or_eval_dynamic\" -A 30 src/types/checker/ | head -40: s returned. Non-spread elements are ignored. src/types/checker/inference/expr/mod.rs-136- fn assoc_spread_literal_value_type(&mut self, elems: ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn variable_type_or_eval_dynamic\" -A 30 src/types/checker/ | head -40: s returned. Non-spread elements are ignored. src/types/checker/inference/expr/mod.rs-136- fn assoc_spread_literal_value_type(&mut self, elems: &[Expr], env: &TypeEnv) -> PhpType { src/types/checker/inference/expr/mod.rs-137- let mut value_ty = PhpType::Never; src/types/checker/inference/expr/mod.rs-138- for elem in elems { src/types/checker/inference/expr/mod.rs-139- let ExprKind::Spread(inner) = &elem.kind else { src/types/checker/inference/expr/mod.rs-140- continue; src/types/checker/inference/expr/mod.rs-141- }; src/types/checker/inference/expr/mod.rs-142- let next = match self.infer_type(inner, env) { src/types/checker/inference/expr/mod.rs-143- Ok(PhpType::Array(elem)) => *elem, src/types/checker/inference/expr/mod.rs-144- Ok(PhpType::AssocArray { value, .. }) => *value, src/types/checker/inference/expr/mod.rs-145- _ => PhpType::Mixed, src/types/checker/inference/expr/mod.rs-146- };",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "23c612deaeea3f6795bc1b84",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:37:17.591Z",
+  "stored_at": "2026-08-23T17:37:17.592Z"
+}

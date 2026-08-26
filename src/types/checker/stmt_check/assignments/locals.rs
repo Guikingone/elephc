@@ -102,12 +102,19 @@ fn null_coalesce_assignment_type(
 ///
 /// On success, updates `env` with the resolved type for `name`. On error, returns a
 /// type mismatch diagnostic.
+///
+/// `stmt_form` is `true` only when this assignment IS a statement (`StmtKind::Assign`).
+/// An assignment used as an expression (`f($x = "s")`, `$y = ($x = "s")`) yields the
+/// assigned value to its enclosing expression, so re-binding `$x` to a fresh slot of a
+/// different type there has no single well-defined result value to hand back — only the
+/// statement form is eligible for the permissive retype below.
 pub(super) fn check_assign(
     checker: &mut Checker,
     name: &str,
     value: &Expr,
     span: Span,
     env: &mut TypeEnv,
+    stmt_form: bool,
 ) -> Result<(), CompileError> {
     // A direct reassignment (`$k = ...`) makes `$k` an ordinary local: it is no
     // longer the boxed `Mixed` `foreach` iteration key. Drop the foreach-key
@@ -208,7 +215,7 @@ pub(super) fn check_assign(
         return Err(error);
     }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
-    merge_local_assignment_type(checker, name, &ty, span, env)
+    merge_local_assignment_type(checker, name, &ty, span, env, stmt_form)
 }
 
 /// Type-checks a reference alias assignment (`$target =& <source>`).
@@ -225,6 +232,11 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // Both sides of `$target =& <source>` share one cell from here on, so neither binding can
+    // be killed or re-bound independently. Recorded before the per-shape checks so an aliasing
+    // that fails a later validation is still treated as an alias.
+    checker.ref_aliased_locals.insert(target.to_string());
+    checker.record_reference_alias_root(source);
     let result = match &source.kind {
         ExprKind::Variable(source_name) => {
             check_ref_assign_variable(checker, target, source_name, span, env)
@@ -337,6 +349,9 @@ impl Checker {
     /// Validates that the variable exists in `env` after assignment, returning its type.
     /// Used by the checker when processing assignment expressions to propagate the
     /// assigned type back to the caller.
+    ///
+    /// This is the EXPRESSION form of an assignment, so it passes `stmt_form: false`: an
+    /// incompatible retype here keeps the hard error in both modes.
     pub(crate) fn check_local_assignment_expression(
         &mut self,
         name: &str,
@@ -344,7 +359,7 @@ impl Checker {
         span: Span,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        check_assign(self, name, value, span, env)?;
+        check_assign(self, name, value, span, env, false)?;
         env.get(name).cloned().ok_or_else(|| {
             CompileError::new(span, &format!("Undefined variable: ${}", name))
         })
@@ -746,13 +761,82 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
 ///
 /// The merge operation supports widening (e.g., `Int | Float` from separate assignments)
 /// and preserves type specificity where possible.
+///
+/// When the two types cannot merge, the assignment either RE-BINDS `name` to a fresh
+/// binding of the new type (permissive default) or stays a hard error (`--strict-locals`,
+/// and every shape a re-bind would be unsound for). Re-binding is what PHP does — the old
+/// value is simply dropped — and it is only safe where the store definitely runs and no
+/// reference can still reach the old cell, which is exactly
+/// [`Checker::local_binding_is_killable`].
+///
+/// `pub(crate)` rather than private: the builtin argument pass binds a write-only by-reference
+/// argument through here, so that a variable already holding an incompatible type reports this
+/// error rather than having the runtime write an int into, say, a string slot.
 pub(crate) fn merge_local_assignment_type(
     checker: &mut Checker,
     name: &str,
     ty: &PhpType,
     span: Span,
     env: &mut TypeEnv,
+    stmt_form: bool,
 ) -> Result<(), CompileError> {
+    // This visit RE-DECIDES the site, so any decision a superseded walk recorded for it is
+    // dropped first. The checker walks a body more than once (top level twice, method bodies
+    // to stability, a function body once per call-site re-specialization) and only the LAST
+    // walk's decisions may reach EIR lowering — a retype recorded against a type the final
+    // walk no longer infers would otherwise make lowering re-bind a compatible assignment.
+    // Mirrors the `unset` kill sites in `inference::expr::effects`, and the per-scope clear
+    // `loop_storage_types` does before each re-walk.
+    //
+    // Qualified by NAME, because a `Span` has no file identity: the same (line, column) in an
+    // included file is an EQUAL span, and this visit must not drop the decision recorded for
+    // that unrelated assignment — a `$x = …` in the main file would otherwise silently disarm
+    // the retype of a `$w = …` at the same position in a library. Exactly ONE name leaves the
+    // span's set of re-bound locals; the key itself goes only once the set is empty.
+    if checker
+        .local_retype_sites
+        .get(&span)
+        .is_some_and(|retyped| retyped.contains(name))
+    {
+        if let Some(retyped) = checker.local_retype_sites.get_mut(&span) {
+            retyped.remove(name);
+            if retyped.is_empty() {
+                checker.local_retype_sites.remove(&span);
+            }
+        }
+        // The WARNING is part of the decision and goes with it. A superseded walk's warning used
+        // to survive its own retraction, which made the diagnostic depend on the order of a
+        // function's call sites — see `Checker::binding_decision_warnings`.
+        checker
+            .binding_decision_warnings
+            .remove(&(span, name.to_string()));
+    }
+    // The syntactic pre-scan's mark is AUTHORITATIVE, on every assignment path and not just at the
+    // first store: the name's frame slot is boxed `Mixed` for the whole body (see
+    // `checker::mixed_storage_scan`), so `Mixed` is the only type the environment may hold for it.
+    //
+    // Consulting the mark on the fresh-insert branch alone left the invariant falsifiable by
+    // FLOW NARROWING. `control_flow` inserts a guard's narrowed type into the shared environment
+    // for the guarded body, so `if (…) { $a = 1; } else { $a = "s"; } if (is_int($a)) { $a = "z"; }`
+    // reached this function with `$a` bound `int` — an existing binding, so the mark was never
+    // looked at — and the merge failed with the hard `cannot reassign $a from int to string` in
+    // BOTH modes. Re-asserting `Mixed` here is what makes the boxed slot and the checker's view
+    // agree again; the guard's narrowing is restored by `control_flow` after the branch either way.
+    //
+    // Everything above still runs (the retype-site re-decision, and the callable/reflection
+    // metadata updates `check_assign` performed before calling in), so only the type merge is
+    // short-circuited.
+    if checker.mixed_storage_locals.contains(name) {
+        // A marked name still needs its binding depth on its FIRST store, for the same reason the
+        // fresh-insert branch below records one: it is the name's single authority on whether a
+        // later decision is judged against a binding this body definitely created.
+        checker
+            .local_binding_depth
+            .entry(name.to_string())
+            .or_insert(checker.local_conditional_depth);
+        env.insert(name.to_string(), PhpType::Mixed);
+        return Ok(());
+    }
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty);
         // A scalar reassignment widens the slot, and the slot type is a whole-frame property:
@@ -765,6 +849,62 @@ pub(crate) fn merge_local_assignment_type(
             checker.widened_scalar_locals.insert((scope, name.to_string()));
         }
         if merged_ty.is_none() {
+            if !checker.strict_locals && stmt_form && checker.local_binding_is_killable(name) {
+                let message = format!(
+                    "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",
+                    name, existing, ty
+                );
+                // Filed against the DECISION's key, not pushed straight into `warnings`, so a
+                // later walk that re-decides this site and drops the retype drops the warning
+                // too. A span that names no node files no decision either, so its warning has
+                // nothing that could retract it and goes out directly, as before.
+                if span.identifies_a_node() {
+                    checker.binding_decision_warnings.insert(
+                        (span, name.to_string()),
+                        CompileWarning::new(span, &message),
+                    );
+                } else {
+                    checker.warnings.push(CompileWarning::new(span, &message));
+                }
+                // The span EIR lowering consults to abandon the old frame slot instead of
+                // storing the new value through it.
+                //
+                // A `Span::dummy()` is NOT such a span: it names no node
+                // (`Span::identifies_a_node`), it is what every compiler-generated AST node
+                // carries, and lowering consults this set at EVERY `StmtKind::Assign`. One
+                // prelude assignment recorded under it would therefore re-bind the local at
+                // every OTHER dummy-span assignment in the program — synthetic class bodies
+                // and the PDO/mysqli/curl preludes are made of those. The re-bind still
+                // happens in the type ENVIRONMENT (that is what keeps such a body compiling
+                // at all); withholding only the span leaves the assignment on the storage
+                // widening path it used before retypes were lowered.
+                //
+                // Inserted into the span's SET of re-bound names rather than over it: two
+                // DIFFERENT locals re-bound at one (line, column) in two files are two decisions,
+                // and one used to evict the other.
+                if span.identifies_a_node() {
+                    checker
+                        .local_retype_sites
+                        .entry(span)
+                        .or_default()
+                        .insert(name.to_string());
+                }
+                // The fresh binding is created here, at depth 0 — pin that explicitly so a
+                // later kill or retype of the same name is judged against THIS binding.
+                checker.local_binding_depth.insert(name.to_string(), 0);
+                // Unlike the `unset` kill, the per-name callable/reflection tables are NOT
+                // cleared here. The old binding's metadata is already gone: `check_assign`
+                // ran `update_callable_assignment_metadata`,
+                // `update_callable_array_assignment_metadata` and
+                // `update_reflection_class_assignment_metadata` for THIS assignment before
+                // calling in, and between them they set-or-remove every entry
+                // `Checker::clear_local_binding_metadata` touches (`foreach_key_locals` is
+                // dropped at the top of `check_assign`). Clearing again would discard the
+                // NEW binding's metadata instead: `$f = 1; $f = function (int $a) {…};
+                // $f("s")` would lose the signature that reports the bad argument.
+                env.insert(name.to_string(), ty.clone());
+                return Ok(());
+            }
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -779,6 +919,13 @@ pub(crate) fn merge_local_assignment_type(
             }
         }
     } else {
+        // A fresh binding: remember the conditional depth it was created at, so a later
+        // depth-0 `unset`/retype knows whether the store that created it definitely ran.
+        checker
+            .local_binding_depth
+            .insert(name.to_string(), checker.local_conditional_depth);
+        // A MARKED name never reaches here: the authoritative check at the top of this function
+        // binds it `Mixed` and returns, on this store and on every later one alike.
         env.insert(name.to_string(), ty.clone());
     }
     Ok(())
@@ -832,6 +979,13 @@ pub(super) fn check_typed_assign(
             ),
         ));
     }
+    // A declared type is a programmer contract: the local is never kill/retype eligible, in
+    // either mode. The binding depth is still recorded so the name has one authority.
+    checker.typed_local_names.insert(name.to_string());
+    checker
+        .local_binding_depth
+        .entry(name.to_string())
+        .or_insert(checker.local_conditional_depth);
     env.insert(name.to_string(), declared_ty);
     let reflected_class = reflection_class_assignment_target(checker, value, env);
     update_reflection_class_assignment_metadata(checker, name, reflected_class);
@@ -1012,6 +1166,9 @@ pub(super) fn check_static_var(
     init: &Expr,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // A `static` local's storage outlives the call, so its binding is never killable — record
+    // it before inference so an erroring initializer still marks the name.
+    checker.static_local_names.insert(name.to_string());
     let ty = match checker.infer_type(init, env) {
         Ok(ty) => ty,
         Err(error) => {

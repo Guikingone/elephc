@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '160,215p' src/ir_lower/expr/constants.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '160,215p' src/ir_lower/expr/constants.rs: ral(value) => emit_typed_constant( ctx, Op::ConstBool, Some(Immediate::Bool(value)), php_type, expr, ), ExprKind::Null => emit_typed_constant(ctx, Op::ConstNull, None, php_ty",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '160,215p' src/ir_lower/expr/constants.rs: ral(value) => emit_typed_constant( ctx, Op::ConstBool, Some(Immediate::Bool(value)), php_type, expr, ), ExprKind::Null => emit_typed_constant(ctx, Op::ConstNull, None, php_type, expr), other => { let synthetic = Expr::new(other, expr.span); super::lower_expr(ctx, &synthetic) } } } /// Emits a literal constant opcode with caller-supplied PHP metadata. fn emit_typed_constant( ctx: &mut LoweringContext<'_, '_>, op: Op, immediate: Option<Immediate>, php_type: PhpType, expr: &Expr, ) -> LoweredValue { let ir_type = value_ir_type(&php_type); let ownership = if matches!(php_type, PhpType::Resource(_)) { Ownership::Persistent } else { Ownership::for_php_type(&php_type) }; let value = ctx .builder .emit_with_effects( op, Vec::new(), immediate, ir_type, php_type.clone(), ownership, op.default_effects(), Some(expr.span), ) .expect(\"constant opcode produces a value\"); LoweredValue { value, ir_type }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fd260a3bd04c53dc66040016",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:43:53.673Z",
+  "stored_at": "2026-08-22T16:43:53.674Z"
+}

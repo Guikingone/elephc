@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 cross_symbol_branches.py 2>&1 | head -40",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 cross_symbol_branches.py 2>&1 | head -40: -> __rt_json_validate+0x10c 117c4 __rt_json_validate_number bl -> __rt_json_validate+0xa0 11810 __",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 cross_symbol_branches.py 2>&1 | head -40: -> __rt_json_validate+0x10c 117c4 __rt_json_validate_number bl -> __rt_json_validate+0xa0 11810 __rt_json_validate_number bl -> __rt_json_validate+0xa0 118b4 __rt_json_validate_number bl -> __rt_json_validate+0xa0 118f8 __rt_json_validate_number bl -> __rt_json_validate+0xa0 1193c __rt_json_validate_number bl -> __rt_json_validate+0xa0 11940 __rt_json_validate_number bl -> __rt_json_validate+0x10c 11948 __rt_json_validate_number bl -> __rt_json_validate+0xa0 11994 __rt_json_validate_number bl -> __rt_json_validate+0xa0 136e4 __rt_unser_at b.eq -> __rt_unser_depth_fatal+0x24 136ec __rt_unser_at b.eq -> __rt_unser_depth_fatal+0x24 13ed0 __rt_unser_depth_fatal b -> __rt_unser_at+0x71c 13edc __rt_unser_depth_fatal b -> __rt_unser_at+0x71c 34c3c __rt_csv_parse_buffer b -> __rt_fgetcsv_eof+0x4 34c44 __rt_fgetcsv_blank b -> __rt_fgetcsv_eof+0x4 36b70 __rt_tmpfile b.lt -> __rt_tmpfile_named+0x70",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "10fff57cf4c7d91b66437a06",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:19:44.089Z",
+  "stored_at": "2026-08-23T08:19:44.089Z"
+}

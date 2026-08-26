@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"callable_reachability\" src/ | head -5; grep -rn \"fn candidates\" -A 20 src/codegen/callable_reachability.rs 2>/dev/null | head -25",
+  "summary": "grep -rln \"callable_reachability\" src/ | head -5; grep -rn \"fn candidates\" -A 20 src/codegen/callable_reachability.rs 2>/dev/null | head -25: lue_names = vec![CallableNameSet::Unknown; function.values.len()]; src/codegen/callable_reachability.rs-87- if function.blocks.is_empty() { src/codegen/callable_reachability.rs-8",
+  "text": "grep -rln \"callable_reachability\" src/ | head -5; grep -rn \"fn candidates\" -A 20 src/codegen/callable_reachability.rs 2>/dev/null | head -25: lue_names = vec![CallableNameSet::Unknown; function.values.len()]; src/codegen/callable_reachability.rs-87- if function.blocks.is_empty() { src/codegen/callable_reachability.rs-88- return value_names; src/codegen/callable_reachability.rs-89- } src/codegen/callable_reachability.rs-90- src/codegen/callable_reachability.rs-91- let unknown_locals = vec![CallableNameSet::Unknown; function.locals.len()]; src/codegen/callable_reachability.rs-92- let mut block_inputs = vec![None::<Vec<CallableNameSet>>; function.blocks.len()]; src/codegen/callable_reachability.rs-93- let entry_index = function.entry.as_raw() as usize; src/codegen/callable_reachability.rs-94- if entry_index >= block_inputs.len() { src/codegen/callable_reachability.rs-95- return value_names; src/codegen/callable_reachability.rs-96- } src/codegen/callable_reachability.rs-97- block_inputs[entry_index] = Some(unknown_locals.clone());",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "82ce331988fc620378c593c0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:10:18.645Z",
+  "stored_at": "2026-08-22T11:10:18.646Z"
+}

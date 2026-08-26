@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"pub struct Function\\b\" -A12 src/ir/*.rs | head -20",
+  "summary": "grep -rn \"pub struct Function\\b\" -A12 src/ir/*.rs | head -20: src/ir/function.rs:53:pub struct Function { src/ir/function.rs-54- pub id: FunctionId, src/ir/function.rs-55- pub name: String, src/ir/function.rs-56- pub params: Vec<FunctionParam>, src/ir/function.rs-57- pub return_type: IrType, src/ir/function.rs-58- pub ",
+  "text": "grep -rn \"pub struct Function\\b\" -A12 src/ir/*.rs | head -20: src/ir/function.rs:53:pub struct Function { src/ir/function.rs-54- pub id: FunctionId, src/ir/function.rs-55- pub name: String, src/ir/function.rs-56- pub params: Vec<FunctionParam>, src/ir/function.rs-57- pub return_type: IrType, src/ir/function.rs-58- pub return_php_type: PhpType, src/ir/function.rs-59- pub locals: Vec<LocalSlot>, src/ir/function.rs-60- pub blocks: Vec<BasicBlock>, src/ir/function.rs-61- pub values: Vec<Value>, src/ir/function.rs-62- pub instructions: Vec<Instruction>, src/ir/function.rs-63- pub entry: BlockId, src/ir/function.rs-64- pub source_signature: Option<String>, src/ir/function.rs-65- pub signature: Option<FunctionSig>,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e9e80413458c4ddc1dd0ce79",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:37:04.886Z",
+  "stored_at": "2026-08-20T20:37:04.886Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"stderr\" docs/compiling/output-and-diagnostics.md",
+  "summary": "grep -n \"stderr\" docs/compiling/output-and-diagnostics.md: 105:Prints a bordered timing table to stderr in addition to the interactive 136:Compiles the program so it prints allocation and free counters to stderr when it 145:counters are printed to stderr after every handled request instead — a growing",
+  "text": "grep -n \"stderr\" docs/compiling/output-and-diagnostics.md: 105:Prints a bordered timing table to stderr in addition to the interactive 136:Compiles the program so it prints allocation and free counters to stderr when it 145:counters are printed to stderr after every handled request instead — a growing",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bb79a7149d58924a90b4b262",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:39:19.451Z",
+  "stored_at": "2026-08-18T15:39:19.452Z"
+}

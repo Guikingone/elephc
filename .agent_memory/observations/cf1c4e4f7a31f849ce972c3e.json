@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"TypeSpec::Int =>\" src/ crates/ | wc -l; echo \"--- match sites on TypeSpec ---\"; grep -rln \"TypeSpec::\" src/ crates/ | wc -l",
+  "summary": "grep -rn \"TypeSpec::Int =>\" src/ crates/ | wc -l; echo \"--- match sites on TypeSpec ---\"; grep -rln \"TypeSpec::\" src/ crates/ | wc -l: 2 --- match sites on TypeSpec --- 9",
+  "text": "grep -rn \"TypeSpec::Int =>\" src/ crates/ | wc -l; echo \"--- match sites on TypeSpec ---\"; grep -rln \"TypeSpec::\" src/ crates/ | wc -l: 2 --- match sites on TypeSpec --- 9",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cf1c4e4f7a31f849ce972c3e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:51:17.392Z",
+  "stored_at": "2026-08-21T16:51:17.393Z",
+  "low_signal": true
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"Warning: stream_select|compile_and_run_capturing_stderr|fn compile_and_run_in_dir\" tests/codegen/io/streams.rs tests/codegen/support*.rs 2>/dev/null | head -6; rg -rn \"fn compile_and_run_in_dir\" tests/ | head -2",
+  "summary": "rg -n \"Warning: stream_select|compile_and_run_capturing_stderr|fn compile_and_run_in_dir\" tests/codegen/io/streams.rs tests/codegen/support*.rs 2>/dev/null | head -6; rg -rn \"fn compile_and_run_in_dir\" tests/ | head -2: (eval):1: no matches found: tests/codegen/support*.rs tests/codegen/support/projects.rs:pub(crate) n",
+  "text": "rg -n \"Warning: stream_select|compile_and_run_capturing_stderr|fn compile_and_run_in_dir\" tests/codegen/io/streams.rs tests/codegen/support*.rs 2>/dev/null | head -6; rg -rn \"fn compile_and_run_in_dir\" tests/ | head -2: (eval):1: no matches found: tests/codegen/support*.rs tests/codegen/support/projects.rs:pub(crate) n(source: &str) -> (String, std::path::PathBuf) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fd5d221505d7b5081eebaca9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:12:06.319Z",
+  "stored_at": "2026-08-17T18:12:06.319Z"
+}

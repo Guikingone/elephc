@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "echo \"--- P7 flock ---\"; php -n -r 'class W { public $context; public function stream_open($p,$m,$o,&$op): bool { return true; } public function stream_lock($op): bool { echo \"LOCK:$op\\n\"; return true; } } stream_wrapper_register(\"w1\",\"W\"); $f=fopen(\"w1://x\",\"w\"); var_dump(flock($f,LOCK_EX)); var_dump(flock($f,LOCK_UN)); fclose($f);' 2>&1\necho \"--- P7b flock MISSING ---\"; php -n -r 'class W { public $context; public function stream_open($p,$m,$o,&$op): bool { return true; } } stream_wrapper_register(\"w1\",\"W\"); $f=fopen(\"w1://x\",\"w\"); var_dump(flock($f,LOCK_EX)); fclose($f);' 2>&1\necho \"--- P9… [+510 chars truncated]",
+  "summary": "About to run: echo \"--- P7 flock ---\"; php -n -r 'class W { public $context; public function stream_open($p,$m,$o,&$op): bool { return true; } public function stream_lock($op): bool { echo \"LOCK:$op\\n\"; return true",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0f0fbfaa8f998a8eb3c40cd2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:11.833Z",
+  "stored_at": "2026-08-14T14:15:11.834Z"
+}

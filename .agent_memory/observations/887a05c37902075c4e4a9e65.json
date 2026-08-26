@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1610,1660p' src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1610,1660p' src/types/checker/builtin_spl_classes/filesystem.rs: her than removing it: the keys of the records that follow are unchanged, so a file whose /// second line is empty iterates 0, 2, 3. Nothing happens wit",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1610,1660p' src/types/checker/builtin_spl_classes/filesystem.rs: her than removing it: the keys of the records that follow are unchanged, so a file whose /// second line is empty iterates 0, 2, 3. Nothing happens without READ_CSV — the plain line /// path keeps its own behaviour. fn spl_file_object_csv_skip_blank_body() -> Vec<Stmt> { let mask = SPL_FILE_READ_CSV | SPL_FILE_SKIP_EMPTY | SPL_FILE_DROP_NEW_LINE; vec![ if_stmt( not_expr(flag_mode_is_expr(file_object_flags_expr(), mask, mask)), vec![return_void_stmt()], None, ), while_stmt( binary_expr( binary_expr( file_line_number_expr(), BinOp::Lt, count_expr(property_access(this_expr(), \"csvBlank\")), ), BinOp::And, binary_expr( array_access(property_access(this_expr(), \"csvBlank\"), file_line_number_expr()), BinOp::StrictEq, int_expr(1), ), ), vec![property_assign_stmt( this_expr(), \"lineNumber\", binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)), )], ), ] } /// Builds SplFileObject valid().",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "887a05c37902075c4e4a9e65",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:28:46.724Z",
+  "stored_at": "2026-08-23T09:28:46.724Z"
+}

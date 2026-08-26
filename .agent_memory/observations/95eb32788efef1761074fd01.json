@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fsock_scheme.py && cargo build 2>&1 | rg -i \"^error|^warning:|-->\" | head -12; echo BUILT",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fsock_scheme.py && cargo build 2>&1 | rg -i \"^error|^warning:|-->\" | head -12; echo BUILT: fsockopen honours an explicit transport and php's por",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fsock_scheme.py && cargo build 2>&1 | rg -i \"^error|^warning:|-->\" | head -12; echo BUILT: fsockopen honours an explicit transport and php's port rule BUILT",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "95eb32788efef1761074fd01",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:28:31.491Z",
+  "stored_at": "2026-08-17T13:28:31.492Z"
+}

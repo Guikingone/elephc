@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport os\nos.chdir('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad')\ns=open('add_psfs_test.py').read()\ns=s.replace('''        \"false|false|''|false|'Test data'|false|9\"''',\n            '''        \"false|false|''|false|'Test data'|''|9\"''')\ns=s.replace(\"// A filter that PASSES must still report the bytes, and an ordinary EOF must still be \\\"\\\".\",\n            \"// A filter that PASSES must still report the bytes, and its EOF must still be \\\"\\\" — the\\n// reset is wh… [+478 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport os\nos.chdir('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad')\ns=open('add_psfs_test.py').read()\ns=s.replace('''        \"false|false|''|false|'Test data'|false|9\"''',\n            '",
+  "text": "python3 - <<'PY'\nimport os\nos.chdir('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad')\ns=open('add_psfs_test.py').read()\ns=s.replace('''        \"false|false|''|false|'Test data'|false|9\"''',\n            '''        \"false|false|''|false|'Test data'|''|9\"''')\ns=s.replace(\"// A filter that PASSES must still report the bytes, and an ordinary EOF must still be \\\"\\\".\",\n            \"// A filter that PASSES must still report the bytes, and its EOF must still be \\\"\\\" — the\\n// reset is what keeps the exhausted read from inheriting the previous stream's refusal.\")\nopen('add_psfs_test.py','w').write(s)\nprint(\"expectation corrected to php's measured output\")\nPY\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_psfs_test.py && cargo test --test codegen_tests test_filter_fatal_fails_the_read 2>&1 | rg \"^test result|left:|right:\" | head -4: expectation corrected to php's measured output psfs test added test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8415 filtered out; finished in 1.56s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a4ba1c5f193ae13736814790",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:33:08.399Z",
+  "stored_at": "2026-08-17T12:33:08.400Z"
+}

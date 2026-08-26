@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"Cannot represent a stream of type\" -r src | head -5",
+  "summary": "About to run: grep -n \"Cannot represent a stream of type\" -r src | head -5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e121daef3458b67c0099154",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:43:27.818Z",
+  "stored_at": "2026-08-18T11:43:27.818Z",
+  "low_signal": true
+}

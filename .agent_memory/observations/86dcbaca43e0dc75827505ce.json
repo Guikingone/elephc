@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg8.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg8.txt: fix(streams): $context shared its vtable quad with the boxed-result mask\n\nBoth sides of the origin/main merge appended ONE quad after a u",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg8.txt: fix(streams): $context shared its vtable quad with the boxed-result mask\n\nBoth sides of the origin/main merge appended ONE quad after a user wrapper's method pointers:\nthis branch the byte offset of a declared `public $context;`, upstream a bitmask of the slots\nwhose method returns a boxed Mixed. The merge kept the mask — correctly, since every helper that\nreads that address reads a mask — but `fopen` went on reading the SAME address as the context\noffset.\n\nWhat the quad happens to hold then decides the behaviour, which is why the symptom looked\narbitrary:\n\n  - a ZERO mask reads as \"no declare",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "86dcbaca43e0dc75827505ce",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:40:44.844Z",
+  "stored_at": "2026-08-21T09:40:44.845Z"
+}

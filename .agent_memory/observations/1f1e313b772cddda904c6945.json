@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '20,60p' src/types/checker/inference/expr/basic.rs",
+  "summary": "sed -n '20,60p' src/types/checker/inference/expr/basic.rs: :False), ExprKind::BoolLiteral(true) => Ok(PhpType::Bool), ExprKind::Null => Ok(PhpType::Void), ExprKind::StringLiteral(_) => Ok(PhpType::Str), ExprKind::IntLiteral(_) => Ok(PhpType::Int), ExprKind::FloatLiteral(_) => Ok(PhpType::Float), ExprKind::Variable(name",
+  "text": "sed -n '20,60p' src/types/checker/inference/expr/basic.rs: :False), ExprKind::BoolLiteral(true) => Ok(PhpType::Bool), ExprKind::Null => Ok(PhpType::Void), ExprKind::StringLiteral(_) => Ok(PhpType::Str), ExprKind::IntLiteral(_) => Ok(PhpType::Int), ExprKind::FloatLiteral(_) => Ok(PhpType::Float), ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env), ExprKind::Negate(inner) => { let ty = self.infer_type(inner, env)?; match ty { PhpType::Int => { if matches!(&inner.kind, ExprKind::IntLiteral(_)) { Ok(PhpType::Int) } else { Ok(PhpType::Mixed) } } PhpType::Float => Ok(PhpType::Float), PhpType::Mixed | PhpType::Bool | PhpType::False | PhpType::Void => { Ok(PhpType::Mixed) } _ => Err(CompileError::new( expr.span, \"Cannot negate a non-numeric value\", )), } } ExprKind::Not(inner) => { self.infer_type(inner, env)?; Ok(PhpType::Bool) } ExprKind::ErrorSuppress(inner) => self.infer_type(inner, env), ExprKind::Print(inner) => {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1f1e313b772cddda904c6945",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:28:16.525Z",
+  "stored_at": "2026-08-20T19:28:16.525Z"
+}

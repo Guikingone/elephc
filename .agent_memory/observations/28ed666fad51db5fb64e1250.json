@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git add src/types/checker/inference/expr/basic.rs src/ir_lower/expr/array_access.rs tests/codegen/offset_on_scalar.rs tests/codegen/mod.rs; git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_offset.txt 2>&1 | tail -4",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git add src/types/checker/inference/expr/basic.rs src/ir_lower/expr/array_access.rs tests/codegen/offset_on_scalar.rs tests/codegen/mod.rs; git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-e",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git add src/types/checker/inference/expr/basic.rs src/ir_lower/expr/array_access.rs tests/codegen/offset_on_scalar.rs tests/codegen/mod.rs; git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_offset.txt 2>&1 | tail -4: [worktree-streams-csv-signature 7b1e902fb] fix(arrays): indexing a scalar REFUSED the whole program where php warns and answers null 4 files changed, 256 insertions(+) create mode 100644 tests/codegen/offset_on_scalar.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "28ed666fad51db5fb64e1250",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:59:09.397Z",
+  "stored_at": "2026-08-24T07:59:09.398Z"
+}

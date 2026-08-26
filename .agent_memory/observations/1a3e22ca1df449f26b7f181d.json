@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn symbol_scratch_reg\" -A8 src/codegen_support/ 2>/dev/null | head -12",
+  "summary": "grep -rn \"fn symbol_scratch_reg\" -A8 src/codegen_support/ 2>/dev/null | head -12: src/codegen_support/abi/registers.rs:117:pub(crate) fn symbol_scratch_reg(emitter: &Emitter) -> &'static str { src/codegen_support/abi/registers.rs-118- match emitter.target.arch { src/codegen_support/abi/registers.rs-119- Arch::AArch64 =",
+  "text": "grep -rn \"fn symbol_scratch_reg\" -A8 src/codegen_support/ 2>/dev/null | head -12: src/codegen_support/abi/registers.rs:117:pub(crate) fn symbol_scratch_reg(emitter: &Emitter) -> &'static str { src/codegen_support/abi/registers.rs-118- match emitter.target.arch { src/codegen_support/abi/registers.rs-119- Arch::AArch64 => \"x9\", src/codegen_support/abi/registers.rs-120- Arch::X86_64 => \"r11\", src/codegen_support/abi/registers.rs-121- } src/codegen_support/abi/registers.rs-122-} src/codegen_support/abi/registers.rs-123- src/codegen_support/abi/registers.rs-124-/// Returns a secondary scratch register for temporary use during code generation. src/codegen_support/abi/registers.rs-125-/// AArch64: x10. x86_64: r10.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1a3e22ca1df449f26b7f181d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:45:57.994Z",
+  "stored_at": "2026-08-18T13:45:57.994Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,20p' src/codegen/lower_inst/builtins/io/fopen_core.rs",
+  "summary": "sed -n '1,20p' src/codegen/lower_inst/builtins/io/fopen_core.rs: //! Purpose: //! Core fopen dispatch and php filter URL parsing. //! //! Called from: //! - `crate::codegen::lower_inst::builtins::io`. //! //! Key details: //! - Preserves target-aware ABI handling, runtime calls, and result ownership. use super::*; /// ",
+  "text": "sed -n '1,20p' src/codegen/lower_inst/builtins/io/fopen_core.rs: //! Purpose: //! Core fopen dispatch and php filter URL parsing. //! //! Called from: //! - `crate::codegen::lower_inst::builtins::io`. //! //! Key details: //! - Preserves target-aware ABI handling, runtime calls, and result ownership. use super::*; /// Lowers `fopen(filename, mode)` and boxes stream resources or PHP false. pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { ensure_arg_count_between(inst, \"fopen\", 2, 4)?; let filename = expect_operand(inst, 0)?; let mode = expect_operand(inst, 1)?; let filename_literal = optional_const_string_operand(ctx, filename)?; begin_fopen_context_scope(ctx, inst.operands.get(3).copied())?; if let Some(path) = filename_literal.as_deref() { let open_mode = LiteralOpenMode::Operand(mode);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6bf4ee79f2f68936f6b6f067",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:01:08.368Z",
+  "stored_at": "2026-08-21T12:01:08.369Z"
+}

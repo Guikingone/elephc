@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log --format=\"%h %s\" 034ac07936..worktree-agent-a7800e692f6ce9d8b 2>/dev/null | head -6; git stash list --format='%gd %gs' | head -3",
+  "summary": "About to run: git log --format=\"%h %s\" 034ac07936..worktree-agent-a7800e692f6ce9d8b 2>/dev/null | head -6; git stash list --format='%gd %gs' | head -3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4cbdadbed3f8858dfe29a22f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T16:26:46.948Z",
+  "stored_at": "2026-08-14T16:26:46.949Z"
+}

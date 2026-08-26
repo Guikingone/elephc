@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"the by-ref \\$vars output form\" src docs -r | head",
+  "summary": "grep -n \"the by-ref \\$vars output form\" src docs -r | head completed",
+  "text": "grep -n \"the by-ref \\$vars output form\" src docs -r | head completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "90ae19aaad81a7e261aa15a0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:31:18.366Z",
+  "stored_at": "2026-08-18T10:31:18.367Z",
+  "low_signal": true
+}

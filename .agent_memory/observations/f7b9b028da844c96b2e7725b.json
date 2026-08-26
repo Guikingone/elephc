@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/compare_surface.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/compare_surface.py: \"\"\"Compares elephc's builtin catalogue against the installed php's ACTUAL surface, per extension.\n\nThe catalogue is a promise; ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/compare_surface.py: \"\"\"Compares elephc's builtin catalogue against the installed php's ACTUAL surface, per extension.\n\nThe catalogue is a promise; what counts is which of php's own functions elephc declares AOT.\nGrouping by owning extension is what makes the answer actionable — whole extensions (curl, intl,\nldap, snmp, soap, tidy) are out of scope by design, and lumping them in drowns the core gaps.\n\"\"\"\nimport json, pathlib, sys\n\nD = pathlib.Path(__file__).parent\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\nphp = json.loads((D / 'php_surface.j",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f7b9b028da844c96b2e7725b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:03:18.211Z",
+  "stored_at": "2026-08-21T10:03:18.212Z"
+}

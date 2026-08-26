@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '160p;210p;274p' src/codegen/lower_inst/builtins/io/seek_hash_arch.rs; git stash list | head -2",
+  "summary": "sed -n '160p;210p;274p' src/codegen/lower_inst/builtins/io/seek_hash_arch.rs; git stash list | head -2: ctx.emitter.instruction(\"add r10, r9\"); // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity ctx.emitter.instruction(\"add x10, x9, x10\"); // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity ctx.emi",
+  "text": "sed -n '160p;210p;274p' src/codegen/lower_inst/builtins/io/seek_hash_arch.rs; git stash list | head -2: ctx.emitter.instruction(\"add r10, r9\"); // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity ctx.emitter.instruction(\"add x10, x9, x10\"); // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity ctx.emitter.instruction(\"add r10, r9\"); // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity stash@{0}: On reconcile/dirname-symfony: batchC-wip-1785481981 stash@{1}: On padawan/dom-routes-minimax: padawan-dom-dtd-pre-fef80e8d54",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "51289e96449fa65db783709a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:11:28.191Z",
+  "stored_at": "2026-08-25T09:11:28.192Z"
+}

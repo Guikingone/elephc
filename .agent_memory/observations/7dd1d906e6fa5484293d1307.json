@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git worktree list | cat; echo \"=== branches pointing at my work ===\"; git branch --contains 9194b37aa 2>&1 | head; echo \"=== reflog ===\"; git reflog -8 | cat",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git worktree list | cat; echo \"=== branches pointing at my work ===\"; git branch --contains 9194b37aa 2>&1 | head; echo \"=== reflog ===\"; git reflog -8 | cat: pe-final-20260801 d14d1ee18 (detached HEAD) === branches pointing",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git worktree list | cat; echo \"=== branches pointing at my work ===\"; git branch --contains 9194b37aa 2>&1 | head; echo \"=== reflog ===\"; git reflog -8 | cat: pe-final-20260801 d14d1ee18 (detached HEAD) === branches pointing at my work === worktree-streams-csv-signature === reflog === 151bb7bbc HEAD@{0}: reset: moving to HEAD~1 8db8271c4 HEAD@{1}: checkout: moving from 2ea175da73ac0324a95b5a11de6d462a599bfd6a to 8db8271c4 2ea175da7 HEAD@{2}: checkout: moving from worktree-streams-csv-signature to 2ea175da7 9194b37aa HEAD@{3}: commit: WIP: uncommitted work parked to test the previous commit 2ea175da7 HEAD@{4}: commit: fix(streams): an object $options was accepted in silence where php names its class ef2916f69 HEAD@{5}: commit: fix(streams): a scalar $options was accepted in silence where php raises a TypeError bcdf27d2e HEAD@{6}: commit: fix(streams): stream context options arriving as a boxed Mixed value were misjudged 9e5df5fe4 HEAD@{7}: commit: fix(streams): a context built from `[]` segfaulted the next set_option(), and three audit findings",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7dd1d906e6fa5484293d1307",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:21:11.075Z",
+  "stored_at": "2026-08-22T17:21:11.076Z"
+}

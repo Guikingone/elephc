@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '186,270p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '186,270p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs: eader. emit_drop_packed_stream_context_options(ctx); } // An INDEXED array is never an options map. php's shape is // `[\"wrappername\"][\"optionna",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '186,270p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs: eader. emit_drop_packed_stream_context_options(ctx); } // An INDEXED array is never an options map. php's shape is // `[\"wrappername\"][\"optionname\"] = $value`, so a list can only be legal when EMPTY — measured, // `stream_context_create([])` is a valid context and `stream_context_create([1])` is a // ValueError, which the guard above already raises. What remains is not to PUBLISH the list: // every reader of this slot treats it as a hash, and `stream_context_set_option()` on a // context built from `[]` used to segfault hashing a key out of an indexed array's header. if matches!( ctx.raw_value_php_type(options)?.codegen_repr(), PhpType::Array(_) ) { clear_stream_context_options(ctx); return Ok(()); } match ctx.emitter.target.arch { Arch::AArch64 => store_stream_context_options_aarch64(ctx, clear_on_null), Arch::X86_64 => store_stream_context_options_x86_64(ctx, clear_on_null), } Ok(()) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b81f1ede74855fd1787da6c0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:06:17.273Z",
+  "stored_at": "2026-08-22T17:06:17.273Z"
+}

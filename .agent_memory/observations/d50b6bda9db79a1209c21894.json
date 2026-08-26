@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/io/fread.rs')\ns = p.read_text()\nmarker = 'fn emit_fread_linux_x86_64'\nhead, sep, tail = s.partition(marker)\nassert sep\ntail = tail.replace('emitter.instruction(\"sub rsp, 48\");', 'emitter.instruction(\"sub rsp, 64\");', 1)\np.write_text(head + sep + tail)\nprint('x86 frame grown')\nPYEOF\ngrep -n \"sub rsp, 64\" src/codegen_support/runtime/io/fread.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/io/fread.rs')\ns = p.read_text()\nmarker = 'fn emit_fread_linux_x86_64'\nhead, sep, tail = s.partition(marker)\nassert sep\ntail = tail.replace('emi",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/io/fread.rs')\ns = p.read_text()\nmarker = 'fn emit_fread_linux_x86_64'\nhead, sep, tail = s.partition(marker)\nassert sep\ntail = tail.replace('emitter.instruction(\"sub rsp, 48\");', 'emitter.instruction(\"sub rsp, 64\");', 1)\np.write_text(head + sep + tail)\nprint('x86 frame grown')\nPYEOF\ngrep -n \"sub rsp, 64\" src/codegen_support/runtime/io/fread.rs: x86 frame grown 538: emitter.instruction(\"sub rsp, 64\"); // reserve aligned stream, descriptor, and read-result spill slots",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d50b6bda9db79a1209c21894",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:22:03.196Z",
+  "stored_at": "2026-08-23T20:22:03.197Z"
+}

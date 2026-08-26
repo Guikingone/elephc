@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"elephc-phar|staticlib|crate-type\" Cargo.toml | head -20; echo \"=== build.rs? ===\"; ls build.rs 2>/dev/null; rg -rn \"elephc_bridge|bridge\" -g '*.rs' src/codegen_support/link*.rs 2>/dev/null | head -10",
+  "summary": "rg -n \"elephc-phar|staticlib|crate-type\" Cargo.toml | head -20; echo \"=== build.rs? ===\"; ls build.rs 2>/dev/null; rg -rn \"elephc_bridge|bridge\" -g '*.rs' src/codegen_support/link*.rs 2>/dev/null | head -10: phc-builtin-contract\", \"crates/elephc-tls\", \"crates/elephc-pdo\", \"crates/elephc-crypto\", \"crates/elephc-bcmath\",",
+  "text": "rg -n \"elephc-phar|staticlib|crate-type\" Cargo.toml | head -20; echo \"=== build.rs? ===\"; ls build.rs 2>/dev/null; rg -rn \"elephc_bridge|bridge\" -g '*.rs' src/codegen_support/link*.rs 2>/dev/null | head -10: phc-builtin-contract\", \"crates/elephc-tls\", \"crates/elephc-pdo\", \"crates/elephc-crypto\", \"crates/elephc-bcmath\", \"crates/elephc-phar\", \"crates/elephc-tz\", \"crates/elephc-image\", \"crates/elephc-web\", \"crates/elephc-magician\"] 26:default-members = [\".\", \"crates/elephc-builtin-contract\", \"crates/elephc-tls\", \"crates/elephc-pdo\", \"crates/elephc-crypto\", \"crates/elephc-bcmath\", \"crates/elephc-phar\", \"crates/elephc-tz\", \"crates/elephc-image\", \"crates/elephc-web\", \"crates/elephc-magician\"] 61:elephc-phar = { path = \"crates/elephc-phar\" } 70:# Bridge crates are runtime staticlibs, not used by the Rust compiler itself, 73:# build them automatically. Without this, staticlibs are only built by `cargo 80:elephc-phar = { path = \"crates/elephc-phar\" } 101:# replace the feature-built staticlib with the pure-Rust default archive. === build.rs? === (eval):1: no matches found: src/codegen_support/link*.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d9a3941bf934752fabe081ab",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:36:35.300Z",
+  "stored_at": "2026-08-16T15:36:35.301Z"
+}

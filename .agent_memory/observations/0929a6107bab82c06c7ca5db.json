@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el && grep -o '_eir_SplTempFileObject__[A-Za-z]*_entry_' x.s | sort -u; echo '--- v.s (working) ---'; grep -o '_eir_SplTempFileObject__[A-Za-z]*_entry_' v.s | sort -u",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el && grep -o '_eir_SplTempFileObject__[A-Za-z]*_entry_' x.s | sort -u; echo '--- v.s (working) ---'; grep -o '_eir_SplTempFileObject__[A-Za-z]*_ent",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el && grep -o '_eir_SplTempFileObject__[A-Za-z]*_entry_' x.s | sort -u; echo '--- v.s (working) ---'; grep -o '_eir_SplTempFileObject__[A-Za-z]*_entry_' v.s | sort -u: _eir_SplTempFileObject__fwrite_entry_ --- v.s (working) --- _eir_SplTempFileObject__eof_entry_ _eir_SplTempFileObject__fgets_entry_ _eir_SplTempFileObject__fwrite_entry_",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0929a6107bab82c06c7ca5db",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:18:30.591Z",
+  "stored_at": "2026-08-25T14:18:30.592Z"
+}

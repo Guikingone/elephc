@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/csvrows.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/csvrows.php: <?php\nfile_put_contents(\"rows.csv\", \"a,b\\nc,d\\n\");\n$csv = new SplFileObject(\"rows.csv\");\n$csv->setFlags(SplFileObject::READ_CSV);\n$ro",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/csvrows.php: <?php\nfile_put_contents(\"rows.csv\", \"a,b\\nc,d\\n\");\n$csv = new SplFileObject(\"rows.csv\");\n$csv->setFlags(SplFileObject::READ_CSV);\n$rows = [];\nforeach ($csv as $row) {\n    $rows[] = json_encode($row);\n}\necho count($rows), \" \", implode(\" \", $rows), \"\\n\";\nunlink(\"rows.csv\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6879a4a2a0d63e47c184d0e5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:22:41.706Z",
+  "stored_at": "2026-08-24T08:22:41.707Z"
+}

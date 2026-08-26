@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -d /Users/guillaumeloulier/PhpstormProjects/oss/php-src 2>/dev/null; ls -d /private/tmp/claude-501/*/*/scratchpad/php-src 2>/dev/null; find /Users/guillaumeloulier -maxdepth 4 -type d -name \"php-src\" 2>/dev/null | head",
+  "summary": "ls -d /Users/guillaumeloulier/PhpstormProjects/oss/php-src 2>/dev/null; ls -d /private/tmp/claude-501/*/*/scratchpad/php-src 2>/dev/null; find /Users/guillaumeloulier -maxdepth 4 -type d -name \"php-src\" 2>/dev/null | head: (eval):1: no matches found: /private/tmp/claude-501/*/*/scratchpad/php-src /Users/guillaumeloulie",
+  "text": "ls -d /Users/guillaumeloulier/PhpstormProjects/oss/php-src 2>/dev/null; ls -d /private/tmp/claude-501/*/*/scratchpad/php-src 2>/dev/null; find /Users/guillaumeloulier -maxdepth 4 -type d -name \"php-src\" 2>/dev/null | head: (eval):1: no matches found: /private/tmp/claude-501/*/*/scratchpad/php-src /Users/guillaumeloulier/PhpstormProjects/Research/php-src",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f20c6a4857f734860f4d3d7e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:42:20.820Z",
+  "stored_at": "2026-08-18T15:42:20.821Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "./target/debug/deps/codegen_tests-16c45d69d5f633ba codegen::strings 2>&1 | tail -3",
+  "summary": "./target/debug/deps/codegen_tests-16c45d69d5f633ba codegen::strings 2>&1 | tail -3: test result: ok. 328 passed; 0 failed; 0 ignored; 0 measured; 8108 filtered out; finished in 433.62s",
+  "text": "./target/debug/deps/codegen_tests-16c45d69d5f633ba codegen::strings 2>&1 | tail -3: test result: ok. 328 passed; 0 failed; 0 ignored; 0 measured; 8108 filtered out; finished in 433.62s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3141bf963c996ebc5912c36e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T08:04:49.810Z",
+  "stored_at": "2026-08-18T08:04:49.811Z"
+}

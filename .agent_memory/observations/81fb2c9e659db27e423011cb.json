@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '160,185p' tests/error_tests/io_builtins/streams.rs; echo \"=== string ===\"; sed -n '446,470p' tests/error_tests/string_builtins.rs",
+  "summary": "sed -n '160,185p' tests/error_tests/io_builtins/streams.rs; echo \"=== string ===\"; sed -n '446,470p' tests/error_tests/string_builtins.rs: ice 30\", \"%s %d\", $name, $age);` yields `int(2)`, `\"alice\"`, `int(30)`. /// This backend compiled the call, returned the ARRAY `[\"alice\", \"30\"]` as `$n`, and left both /// variables",
+  "text": "sed -n '160,185p' tests/error_tests/io_builtins/streams.rs; echo \"=== string ===\"; sed -n '446,470p' tests/error_tests/string_builtins.rs: ice 30\", \"%s %d\", $name, $age);` yields `int(2)`, `\"alice\"`, `int(30)`. /// This backend compiled the call, returned the ARRAY `[\"alice\", \"30\"]` as `$n`, and left both /// variables untouched — wrong on the return value AND on every assignment, with no diagnostic. /// The by-ref tail cannot be expressed today: `ParamSpec` carries `by_ref`, but the contract's /// `variadic: Some(\"vars\")` is a bare NAME with no by-ref marker. #[test] fn test_error_sscanf_by_ref_vars_form_is_refused() { expect_error( r#\"<?php $name = \"unset\"; $age = -1; sscanf(\"alice 30\", \"%s %d\", $name, $age);\"#, \"sscanf(): the by-ref $vars output form is not supported\", ); } // --- v0.5: I/O function errors --- /// Verifies that `ptr_set()` rejects a string value, since ptr_set only accepts /// int, bool, null, or pointer. This is an I/O function error regression test. #[test] fn test_error_ptr_set_requires_word_value() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "81fb2c9e659db27e423011cb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:31:29.525Z",
+  "stored_at": "2026-08-18T10:31:29.526Z"
+}

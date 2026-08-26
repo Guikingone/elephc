@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r 'foreach ([\"r\",\"rb\",\"r+\",\"w\",\"w+\",\"a\",\"c\"] as $m){$h=fopen(\"php://memory\",$m);echo stream_get_meta_data($h)[\"mode\"],\" \";}\n$t=fopen(\"php://temp\",\"r\");echo stream_get_meta_data($t)[\"mode\"],\" \";\n$o=fopen(\"php://output\",\"w\");echo stream_get_meta_data($o)[\"mode\"],\"\\n\";\n$m=fopen(\"php://memory\",\"w+\");echo stream_get_meta_data($m)[\"stream_type\"],\"/\",stream_get_meta_data($m)[\"wrapper_type\"],\"\\n\";\n$t2=fopen(\"php://temp\",\"w+\");echo stream_get_meta_data($t2)[\"stream_type\"],\"/\",stream_get_meta_data($t2)[\"wrapper_type\"],\"\\n\";\n$d=fopen(\"data://text/plain,hi\",\"r\");print_r(stream_get_meta_data($d));'… [+5 chars truncated]",
+  "summary": "php -n -r 'foreach ([\"r\",\"rb\",\"r+\",\"w\",\"w+\",\"a\",\"c\"] as $m){$h=fopen(\"php://memory\",$m);echo stream_get_meta_data($h)[\"mode\"],\" \";}\n$t=fopen(\"php://temp\",\"r\");echo stream_get_meta_data($t)[\"mode\"],\" \";\n$o=fopen(\"php://output\",\"w\");echo stream_get_meta_data($o)[\"mode\"],\"\\n\";\n$m=fopen(\"php://memory\",\"w+\");echo stream_get",
+  "text": "php -n -r 'foreach ([\"r\",\"rb\",\"r+\",\"w\",\"w+\",\"a\",\"c\"] as $m){$h=fopen(\"php://memory\",$m);echo stream_get_meta_data($h)[\"mode\"],\" \";}\n$t=fopen(\"php://temp\",\"r\");echo stream_get_meta_data($t)[\"mode\"],\" \";\n$o=fopen(\"php://output\",\"w\");echo stream_get_meta_data($o)[\"mode\"],\"\\n\";\n$m=fopen(\"php://memory\",\"w+\");echo stream_get_meta_data($m)[\"stream_type\"],\"/\",stream_get_meta_data($m)[\"wrapper_type\"],\"\\n\";\n$t2=fopen(\"php://temp\",\"w+\");echo stream_get_meta_data($t2)[\"stream_type\"],\"/\",stream_get_meta_data($t2)[\"wrapper_type\"],\"\\n\";\n$d=fopen(\"data://text/plain,hi\",\"r\");print_r(stream_get_meta_data($d));' 2>&1: rb rb w+b w+b w+b a+b rb rb wb MEMORY/PHP TEMP/PHP Array ( [mediatype] => text/plain [base64] => [wrapper_type] => RFC2397 [stream_type] => RFC2397 [mode] => r [unread_bytes] => 0 [seekable] => 1 [uri] => data://text/plain,hi )",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ab2205e2b5750f130385e71b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:51.707Z",
+  "stored_at": "2026-08-14T14:15:51.707Z"
+}

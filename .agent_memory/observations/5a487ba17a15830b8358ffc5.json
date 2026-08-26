@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 1,60p tests/codegen/runtime_reachability.rs",
+  "summary": "sed -n 1,60p tests/codegen/runtime_reachability.rs:  cannot name a /// wrapper and the URL multiplexer's tests provably cannot succeed. Entering at the phar level /// instead takes the URL reader out of the call graph, and with it `socket`/`connect`/`bind` and /// the resolver — measured as 11 distinct syscalls down to",
+  "text": "sed -n 1,60p tests/codegen/runtime_reachability.rs:  cannot name a /// wrapper and the URL multiplexer's tests provably cannot succeed. Entering at the phar level /// instead takes the URL reader out of the call graph, and with it `socket`/`connect`/`bind` and /// the resolver — measured as 11 distinct syscalls down to 7 on `file_get_contents(\"/etc/hosts\")`. /// /// The regression this guards is silent: routing the literal back through the multiplexer keeps /// every behaviour test passing while quietly restoring the whole network stack to any program /// that reads a constant path. #[test] fn test_constant_local_path_omits_the_url_reader() { let dir = make_cli_test_dir(\"elephc_constant_path_reachability\"); let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options( \"<?php echo file_get_contents(\\\"/etc/hosts\\\");\", &dir, 8_388_608, false, false, ); assert!( user_asm.contains(\"__rt_file_get_contents_maybe_phar\"),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5a487ba17a15830b8358ffc5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:40:28.607Z",
+  "stored_at": "2026-08-21T15:40:28.607Z"
+}

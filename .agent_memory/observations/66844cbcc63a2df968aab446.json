@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_sgl_test.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_sgl_test.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'tests/codegen",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_sgl_test.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'tests/codegen/io/streams.rs'\ns = open(p).read()\nanchor = \"/// Verifies removing a `zlib.deflate` STOPS it, and flushes its tail where php flushes it.\"\nadd = '''/// Verifies an INCOMPLETE line is refused and kept on the stream, not handed back.\n///\n/// php's `stream_get_line()` answers `false` when it finds neither the delimiter nor the length cap\n/// and the stream is not at EOF, and the bytes it read stay ON the stream. elephc consumed them and\n/// answered them as a line ph",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "66844cbcc63a2df968aab446",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T16:43:01.022Z",
+  "stored_at": "2026-08-17T16:43:01.024Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '100,150p' src/codegen_support/runtime/io/stream_pending.rs",
+  "summary": "sed -n '100,150p' src/codegen_support/runtime/io/stream_pending.rs: 11, x12\"); // advance the read cursor emitter.instruction(&format!(\"str x11, [x0, #{STREAM_PENDING_POS_OFFSET}]\")); emitter.instruction(&format!(\"ldr x10, [x0, #{STREAM_PENDING_LEN_OFFSET}]\")); emitter.instruction(\"cmp x11, x10\"); emitter.instruction(\"",
+  "text": "sed -n '100,150p' src/codegen_support/runtime/io/stream_pending.rs: 11, x12\"); // advance the read cursor emitter.instruction(&format!(\"str x11, [x0, #{STREAM_PENDING_POS_OFFSET}]\")); emitter.instruction(&format!(\"ldr x10, [x0, #{STREAM_PENDING_LEN_OFFSET}]\")); emitter.instruction(\"cmp x11, x10\"); emitter.instruction(\"b.lt __rt_spt_done\"); // more still held for the next read emitter.label(\"__rt_spt_release\"); emitter.instruction(\"ldr x0, [sp, #0]\"); // the state emitter.instruction(&format!(\"ldr x9, [x0, #{STREAM_PENDING_PTR_OFFSET}]\")); emitter.instruction(&format!(\"str xzr, [x0, #{STREAM_PENDING_PTR_OFFSET}]\")); emitter.instruction(&format!(\"str xzr, [x0, #{STREAM_PENDING_LEN_OFFSET}]\")); emitter.instruction(&format!(\"str xzr, [x0, #{STREAM_PENDING_POS_OFFSET}]\")); emitter.instruction(\"cbz x9, __rt_spt_done\"); emitter.instruction(\"mov x0, x9\"); emitter.instruction(\"bl __rt_heap_free\"); // the holding area is empty again emitter.label(\"__rt_spt_done\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a4e682ee69bebe7943d1bf50",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:27:17.845Z",
+  "stored_at": "2026-08-21T13:27:17.846Z"
+}

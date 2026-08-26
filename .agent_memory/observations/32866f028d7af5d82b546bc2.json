@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/reassign-across-kinds.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/reassign-across-kinds.php: <?php\n// A variable holds whatever was last written to it. Every crossing, and what survives it.\n$v = 1;      ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/reassign-across-kinds.php: <?php\n// A variable holds whatever was last written to it. Every crossing, and what survives it.\n$v = 1;            $v = \"s\";          var_dump($v);\n$v = [1, 2];       var_dump($v, count($v));\n$v = 42;           var_dump($v + 1);\n$v = new stdClass(); $v->p = 7;       var_dump($v->p);\n$v = \"back\";       var_dump(strtoupper($v));\n$v = null;         var_dump($v ?? \"was null\");\n$v = 1.5;          var_dump($v * 2);\n$v = true;         var_dump($v ? \"yes\" : \"no\");\n\necho \"--- inside a function, and across a loop ---\\n\";\nfunction crossing(int $n): string {\n    $x = $n;\n    if ($n > 0) { $x = [\"boxed\", ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "32866f028d7af5d82b546bc2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T16:59:35.970Z",
+  "stored_at": "2026-08-26T16:59:35.971Z"
+}

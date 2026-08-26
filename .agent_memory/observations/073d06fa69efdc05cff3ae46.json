@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat >> src/codegen_support/runtime/emitters/tests.rs <<'RS'\n\n/// Temporary: dumps the full runtime for both arches so the frame-balance analysis can be prototyped.\n#[test]\nfn zz_scratch_dump_runtime() {\n    for (arch, name) in [(Arch::AArch64, \"aarch64\"), (Arch::X86_64, \"x86_64\")] {\n        let mut emitter = Emitter::new(Target::new(Platform::MacOS, arch));\n        emit_runtime(&mut emitter, RuntimeFeatures::all());\n        std::fs::write(format!(\"/tmp/rt_{}.s\", name), emitter.output()).unwrap();\n    }\n}\nRS\nexport CARGO_INCREMENTAL=0; cargo test -p elephc --lib zz_scratch_dump_runtime 2>&1 | t… [+48 chars truncated]",
+  "summary": "cat >> src/codegen_support/runtime/emitters/tests.rs <<'RS'\n\n/// Temporary: dumps the full runtime for both arches so the frame-balance analysis can be prototyped.\n#[test]\nfn zz_scratch_dump_runtime() {\n    for (arch, name) in [(Arch::AArch64, \"aarch64\"), (Arch::X86_64, \"x86_64\")] {\n        let mut emitter = Emitter::n",
+  "text": "cat >> src/codegen_support/runtime/emitters/tests.rs <<'RS'\n\n/// Temporary: dumps the full runtime for both arches so the frame-balance analysis can be prototyped.\n#[test]\nfn zz_scratch_dump_runtime() {\n    for (arch, name) in [(Arch::AArch64, \"aarch64\"), (Arch::X86_64, \"x86_64\")] {\n        let mut emitter = Emitter::new(Target::new(Platform::MacOS, arch));\n        emit_runtime(&mut emitter, RuntimeFeatures::all());\n        std::fs::write(format!(\"/tmp/rt_{}.s\", name), emitter.output()).unwrap();\n    }\n}\nRS\nexport CARGO_INCREMENTAL=0; cargo test -p elephc --lib zz_scratch_dump_runtime 2>&1 | tail -4; wc -l /tmp/rt_aarch64.s /tmp/rt_x86_64.s failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Split it into plain, separate commands and run them from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "073d06fa69efdc05cff3ae46",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:53:20.918Z",
+  "stored_at": "2026-08-21T15:53:20.919Z"
+}

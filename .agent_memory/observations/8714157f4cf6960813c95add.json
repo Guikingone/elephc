@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests codegen::php_tags 2>&1 | tail -4; git status --short -- docs/ scripts/docs/ | head -6",
+  "summary": "cargo test --test codegen_tests codegen::php_tags 2>&1 | tail -4; git status --short -- docs/ scripts/docs/ | head -6: test codegen::php_tags::test_closing_tag_supplies_a_semicolon_only_where_one_belongs ... ok test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 8432 filtered out; finished in 7.24s M scripts/do",
+  "text": "cargo test --test codegen_tests codegen::php_tags 2>&1 | tail -4; git status --short -- docs/ scripts/docs/ | head -6: test codegen::php_tags::test_closing_tag_supplies_a_semicolon_only_where_one_belongs ... ok test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 8432 filtered out; finished in 7.24s M scripts/docs/builtin_registry.json",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8714157f4cf6960813c95add",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:43:55.081Z",
+  "stored_at": "2026-08-17T21:43:55.082Z"
+}

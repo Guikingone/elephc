@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxsegv/set_option_4-arg_alone_run && lldb -b -o run -o \"bt 8\" ./p 2>&1 | grep -E \"frame #\" | head -8",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxsegv/set_option_4-arg_alone_run && lldb -b -o run -o \"bt 8\" ./p 2>&1 | grep -E \"frame #\" | head -8: frame #0: 0x0000000100003a70 p`___lldb_unnamed_",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxsegv/set_option_4-arg_alone_run && lldb -b -o run -o \"bt 8\" ./p 2>&1 | grep -E \"frame #\" | head -8: frame #0: 0x0000000100003a70 p`___lldb_unnamed_symbol_100003a4c + 36",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f09de73f353cfe960c8b1ef2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:16:34.086Z",
+  "stored_at": "2026-08-22T15:16:34.087Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"test_error_enum_method_undefined_variable\" -B12 -A12 tests/error_tests/exceptions_enums_magic.rs",
+  "summary": "grep -n \"test_error_enum_method_undefined_variable\" -B12 -A12 tests/error_tests/exceptions_enums_magic.rs: 538-/// previously bypassed type checking entirely. 539-#[test] 540-fn test_error_enum_method_return_type_mismatch() { 541- expect_error( 542- \"<?php enum E { case A; public function f(): int { return \\\"nope\\\"; } ",
+  "text": "grep -n \"test_error_enum_method_undefined_variable\" -B12 -A12 tests/error_tests/exceptions_enums_magic.rs: 538-/// previously bypassed type checking entirely. 539-#[test] 540-fn test_error_enum_method_return_type_mismatch() { 541- expect_error( 542- \"<?php enum E { case A; public function f(): int { return \\\"nope\\\"; } }\", 543- \"return type expects Int, got Str\", 544- ); 545-} 546- 547-/// Verifies that an undefined variable referenced inside an enum method body is reported. 548-/// Regression test — enum method bodies previously skipped name/variable checking. 549-#[test] 550:fn test_error_enum_method_undefined_variable() { 551- expect_error( 552- \"<?php enum E { case A; public function f(): int { return $missing; } }\", 553- \"Undefined variable: $missing\", 554- ); 555-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3ab8d054b6fe702cfec11326",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:10:53.612Z",
+  "stored_at": "2026-08-20T19:10:53.613Z"
+}

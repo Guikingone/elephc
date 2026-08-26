@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --lib frame_balance 2>&1 | grep -E \"^test |test result|panicked|assert|UNANALYSABLE|__rt_\" | head -30",
+  "summary": "cargo test --lib frame_balance 2>&1 | grep -E \"^test |test result|panicked|assert|UNANALYSABLE|__rt_\" | head -30: measured; 23 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filt",
+  "text": "cargo test --lib frame_balance 2>&1 | grep -E \"^test |test result|panicked|assert|UNANALYSABLE|__rt_\" | head -30: measured; 23 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1192 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 131 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 84 filtered out; finished in 0.00s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "43d73cde8cd08ea4770c06a8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:06:58.515Z",
+  "stored_at": "2026-08-22T09:06:58.516Z"
+}

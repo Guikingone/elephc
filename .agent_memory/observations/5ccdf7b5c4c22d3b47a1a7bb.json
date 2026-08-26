@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build 2>&1 | rg \"^error|^warning\" -A5 | head -8; echo BUILD_DONE",
+  "summary": "cargo build 2>&1 | rg \"^error|^warning\" -A5 | head -8; echo BUILD_DONE: BUILD_DONE",
+  "text": "cargo build 2>&1 | rg \"^error|^warning\" -A5 | head -8; echo BUILD_DONE: BUILD_DONE",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5ccdf7b5c4c22d3b47a1a7bb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:10:57.755Z",
+  "stored_at": "2026-08-16T20:10:57.756Z",
+  "low_signal": true
+}

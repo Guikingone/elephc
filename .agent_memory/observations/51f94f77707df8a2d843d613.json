@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"load_input_and_pattern_args\" -A20 src/codegen/lower_inst/builtins/strings/split.rs | head -60",
+  "summary": "rtk proxy rg -n \"load_input_and_pattern_args\" -A20 src/codegen/lower_inst/builtins/strings/split.rs | head -60: tring_value_to_regs(input, \"rax\", \"rdx\")?; 538- abi::emit_push_reg_pair(ctx.emitter, \"rax\", \"rdx\"); 539- ctx.load_string_value_to_regs(pattern, \"rax\", \"rdx\")?; 540- ctx.emitter.instruction(\"mov rdi, rax\"); //",
+  "text": "rtk proxy rg -n \"load_input_and_pattern_args\" -A20 src/codegen/lower_inst/builtins/strings/split.rs | head -60: tring_value_to_regs(input, \"rax\", \"rdx\")?; 538- abi::emit_push_reg_pair(ctx.emitter, \"rax\", \"rdx\"); 539- ctx.load_string_value_to_regs(pattern, \"rax\", \"rdx\")?; 540- ctx.emitter.instruction(\"mov rdi, rax\"); // pass the pattern pointer as the secondary scanner argument 541- ctx.emitter.instruction(\"mov rsi, rdx\"); // pass the pattern length as the secondary scanner argument 542- abi::emit_pop_reg_pair(ctx.emitter, \"rax\", \"rdx\"); 543- Ok(()) 544-} 545- 546-/// Materializes AArch64 source string and optional chunk length for `str_split()`. 547-pub(super) fn lower_str_split_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { 548- let source = expect_string_operand(ctx, inst, 0, \"str_split\")?; 549- ctx.load_string_value_to_regs(source, \"x1\", \"x2\")?; 550- ctx.emitter.instruction(\"stp x1, x2, [sp, #-16]!\"); // preserve the source string while materializing the chunk length",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "51f94f77707df8a2d843d613",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:18:34.481Z",
+  "stored_at": "2026-08-16T16:18:34.482Z"
+}

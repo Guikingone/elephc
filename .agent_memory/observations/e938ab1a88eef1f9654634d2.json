@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/stream_support.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/stream_support.rs: let ExprKind::StringLiteral(class_name) = &class_arg.kind else {\n        return Ok(());\n    };\n    if stream_registered_class_exists(checker, class_name) {\n     -> let ExprKind::StringL",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/stream_support.rs: let ExprKind::StringLiteral(class_name) = &class_arg.kind else {\n        return Ok(());\n    };\n    if stream_registered_class_exists(checker, class_name) {\n     -> let ExprKind::StringLiteral(class_name) = &class_arg.kind else {\n        return Ok(());\n    };\n    // An EMPTY class name is php's own `ValueError: Argument #2 ($class) must be a non-empty\n    // string`, raised at run time where the caller can catch it. Reporting it here as an\n    // undefined class would refuse the program instead, and name a class nobody wrote.\n    if class_name.is_empty() {\n        return Ok(());\n    }\n    if stream_registered_class_exists(checker, class_",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e938ab1a88eef1f9654634d2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:42:57.835Z",
+  "stored_at": "2026-08-17T08:42:57.836Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/string/str_replace.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/string/str_replace.rs: //! Purpose:\n//! Home of the PHP `str_replace` builtin: its declaration and semantic metadata.\n//!\n//! Called from:\n//! - Checker, EIR, optimizer, ownership, and callable consumers throu",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/string/str_replace.rs: //! Purpose:\n//! Home of the PHP `str_replace` builtin: its declaration and semantic metadata.\n//!\n//! Called from:\n//! - Checker, EIR, optimizer, ownership, and callable consumers through\n//!   `crate::builtins::registry`.\n//!\n//! Key details:\n//! - `$search` and `$replace` are `array|string`; an array `$search` applies its terms in order,\n//!   each to the result of the last, and is lowered over its own runtime helper.\n//! - `$subject` decides the RESULT SHAPE, which is why this builtin needs a `check` hook at all:\n//!   php answers an array for an array subject and a string for a string one",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "012bf9bc4abf6d2933d4b433",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T08:30:40.600Z",
+  "stored_at": "2026-08-18T08:30:40.600Z"
+}

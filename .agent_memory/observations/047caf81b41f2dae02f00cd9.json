@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'diag_line\\|__rt_diag_set_line\\|set_line' src/codegen/ src/codegen_support/abi/ 2>/dev/null | head -10",
+  "summary": "grep -rn 'diag_line\\|__rt_diag_set_line\\|set_line' src/codegen/ src/codegen_support/abi/ 2>/dev/null | head -10 completed",
+  "text": "grep -rn 'diag_line\\|__rt_diag_set_line\\|set_line' src/codegen/ src/codegen_support/abi/ 2>/dev/null | head -10 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "047caf81b41f2dae02f00cd9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:34:45.376Z",
+  "stored_at": "2026-08-25T13:34:45.377Z"
+}

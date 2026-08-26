@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/widen_out_params.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/widen_out_params.py: import pathlib\n\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/widen_out_params.py: import pathlib\n\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/expr/array_builtin_args.rs')\nt = p.read_text()\n\nold = '''/// Creates the variables a builtin's WRITE-ONLY parameters are about to fill in.\n///\n/// `stream_socket_server($address, $errno, $errstr, ...)` names `$errno` and `$errstr` for the\n/// callee to write into, and PHP creates them there rather than reading them: MEASURED on\n/// `php -n` 8.5.6, which raises nothing for either, against the same two names read one line\n/// earlier, which do warn. Without t",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "90df0ea28bad6c687de828e2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:00:28.177Z",
+  "stored_at": "2026-08-20T20:00:28.177Z"
+}

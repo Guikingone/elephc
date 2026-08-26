@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/cmp_streams.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/cmp_streams.py: import re\nimport subprocess\n\nSCRATCH = ('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc'\n           '--cl",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/cmp_streams.py: import re\nimport subprocess\n\nSCRATCH = ('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc'\n           '--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad')\nSRC = SCRATCH + '/php-src'\n\nstub = open(SRC + '/ext/standard/basic_functions.stub.php').read()\nphp = set(re.findall(r'^function (stream_[a-z_0-9]+)', stub, re.M))\nmine = set(open(SCRATCH + '/elephc_streams.txt').read().split())\n\nprint('php  :', len(php))\nprint('mine :', len(mine))\nprint()\nmissing = sorted(php - mine)\nextra = sorted(mine - php)\nprint('MISSING from elephc (%d):'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6b0a4d63230930d8730bd2cc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:36:25.971Z",
+  "stored_at": "2026-08-17T06:36:25.972Z"
+}

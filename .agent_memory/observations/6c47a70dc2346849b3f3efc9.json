@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git show origin/main:src/codegen_support/runtime/emitters/managed.rs | grep -n \"hash_key_compare\" | head -3; echo \"--- et dans platform:\"; git show origin/main:src/codegen_support/runtime/emitters/platform.rs | grep -n \"hash_key_compare\" | head -3",
+  "summary": "git show origin/main:src/codegen_support/runtime/emitters/managed.rs | grep -n \"hash_key_compare\" | head -3; echo \"--- et dans platform:\"; git show origin/main:src/codegen_support/runtime/emitters/platform.rs | grep -n \"hash_key_compare\" | head -3: --- et dans platform:",
+  "text": "git show origin/main:src/codegen_support/runtime/emitters/managed.rs | grep -n \"hash_key_compare\" | head -3; echo \"--- et dans platform:\"; git show origin/main:src/codegen_support/runtime/emitters/platform.rs | grep -n \"hash_key_compare\" | head -3: --- et dans platform:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6c47a70dc2346849b3f3efc9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:51:58.881Z",
+  "stored_at": "2026-08-20T17:51:58.881Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '275,320p' src/types/checker/functions/resolution/call.rs",
+  "summary": "rtk proxy sed -n '275,320p' src/types/checker/functions/resolution/call.rs: lve_declared_param_type_hint( type_ann, decl.span, &format!(\"Function '{}' parameter ${}\", name, decl.params[i]), )?; self.require_compatible_arg_type( &declared_ty, &ty, arg.span, &format!(\"Function '{}' parameter ${}\", name, decl.params[i]), ",
+  "text": "rtk proxy sed -n '275,320p' src/types/checker/functions/resolution/call.rs: lve_declared_param_type_hint( type_ann, decl.span, &format!(\"Function '{}' parameter ${}\", name, decl.params[i]), )?; self.require_compatible_arg_type( &declared_ty, &ty, arg.span, &format!(\"Function '{}' parameter ${}\", name, decl.params[i]), )?; param_types.push((decl.params[i].clone(), declared_ty)); } else if matches!(ty, PhpType::Never) { let param_ty = decl .defaults .get(i) .and_then(|default| default.as_ref()) .map(|default| self.infer_type(default, caller_env)) .transpose()? .unwrap_or(PhpType::Int); param_types.push((decl.params[i].clone(), param_ty)); } else { param_types.push((decl.params[i].clone(), ty.clone())); } } arg_idx = decl.params.len(); } else if arg_idx < decl.params.len() { if ty == PhpType::Callable { if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? { self.callable_param_sigs.insert( (name.to_string(), decl.params[arg_idx].clone()), sig, ); } }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "39f19b15a0abbceaa17c37e0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:41:09.998Z",
+  "stored_at": "2026-08-16T19:41:09.998Z"
+}

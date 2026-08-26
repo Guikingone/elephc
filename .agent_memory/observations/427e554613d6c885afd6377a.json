@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat >> /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/output-diff-sweep-against-php.md <<'EOF'\n\n## 🛠️★★★ 2026-08-20 — le passer de DÉTECTEUR à PORTE DE NON-RÉGRESSION\n\nLe balayage tel quel trouve des bugs mais ne dit pas si MON édition a cassé quelque chose : sur\n204 exemples il reste ~64 `differs` environnementaux dans lesquels une régression se noie.\nDeux ajouts suffisent, tous deux dans `scratchpad/uv/sweep.py` :\n\n1. **Un statut par exemple sérialisé en JSON** (`same` / `differs` / `refused` / `*-timeout`),\n   puis un DIFF contre une lig… [+1229 chars truncated]",
+  "summary": "About to run: cat >> /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/output-diff-sweep-against-php.md <<'EOF' ## 🛠️★★★ 2026-08-20 — le passer de DÉTECTEUR à PORTE",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "427e554613d6c885afd6377a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T21:10:22.649Z",
+  "stored_at": "2026-08-20T21:10:22.650Z"
+}

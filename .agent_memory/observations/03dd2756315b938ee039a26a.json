@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r 'stream_context_set_option(stream_context_create([]), [\"a\"=>1]);' 2>&1 | head -6",
+  "summary": "php -n -r 'stream_context_set_option(stream_context_create([]), [\"a\"=>1]);' 2>&1 | head -6: Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options() instead in Command line code on line 1 Fatal error: Uncaught ValueError: Options should have the form [\"wrappername",
+  "text": "php -n -r 'stream_context_set_option(stream_context_create([]), [\"a\"=>1]);' 2>&1 | head -6: Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options() instead in Command line code on line 1 Fatal error: Uncaught ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value in Command line code:1 Stack trace: #0 Command line code(1): stream_context_set_option(Resource id #4, Array)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "03dd2756315b938ee039a26a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:07:19.211Z",
+  "stored_at": "2026-08-22T15:07:19.212Z"
+}

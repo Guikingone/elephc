@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \"\nimport pathlib\np = pathlib.Path('tests/codegen/io/streams.rs')\nt = p.read_text()\nold = 'class LacksSeekW {\\n    public \\$b = \\\"abcdef\\\";'\nnew = 'class LacksSeekW {\\n    public \\$context;\\n    public \\$b = \\\"abcdef\\\";'\nassert t.count(old) == 1\np.write_text(t.replace(old, new, 1))\nprint('the context property is declared, so php raises no deprecation either')\n\"",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \" import pathlib p = pathlib.Path('tests/codegen/io/streams.rs') t = p.read_text() old = 'cla",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "df1f45eca187629482e38788",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:59:11.028Z",
+  "stored_at": "2026-08-22T20:59:11.028Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"stream_context_get_default\\|default_context\" src/ | head -5",
+  "summary": "grep -rn \"stream_context_get_default\\|default_context\" src/ | head -5: src/ir/runtime_fn.rs:1754: RuntimeFnId::StreamContextGetDefault => \"stream_context_get_default\", src/ir_lower/tests/ownership.rs:126:$source = stream_context_get_default(); src/ir_lower/tests/ownership.rs:128:$copy = stream_context_get_default(); sr",
+  "text": "grep -rn \"stream_context_get_default\\|default_context\" src/ | head -5: src/ir/runtime_fn.rs:1754: RuntimeFnId::StreamContextGetDefault => \"stream_context_get_default\", src/ir_lower/tests/ownership.rs:126:$source = stream_context_get_default(); src/ir_lower/tests/ownership.rs:128:$copy = stream_context_get_default(); src/builtins/io/mod.rs:162:pub mod stream_context_get_default; src/builtins/io/stream_context_get_default.rs:2://! Home of the PHP `stream_context_get_default` builtin: its single-source registry declaration and semantic target.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dce92aaa491c02489761fd85",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:07:28.426Z",
+  "stored_at": "2026-08-21T17:07:28.426Z"
+}

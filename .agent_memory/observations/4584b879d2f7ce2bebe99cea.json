@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '409,435p' src/codegen_support/runtime/resources/stream/aarch64.rs",
+  "summary": "sed -n '409,435p' src/codegen_support/runtime/resources/stream/aarch64.rs: ed chunk size emitter.instruction(\"cbnz x0, __rt_stream_chunk_size_done\"); // return an explicitly configured size emitter.label(\"__rt_stream_chunk_size_default\"); emitter.instruction(\"mov x0, #4096\"); // preserve the current read-loop default e",
+  "text": "sed -n '409,435p' src/codegen_support/runtime/resources/stream/aarch64.rs: ed chunk size emitter.instruction(\"cbnz x0, __rt_stream_chunk_size_done\"); // return an explicitly configured size emitter.label(\"__rt_stream_chunk_size_default\"); emitter.instruction(\"mov x0, #4096\"); // preserve the current read-loop default emitter.label(\"__rt_stream_chunk_size_done\"); emitter.instruction(\"ldr x30, [sp, #8]\"); // restore the caller link register emitter.instruction(\"add sp, sp, #16\"); // release aligned link-register storage emitter.instruction(\"ret\"); // return the effective read-loop chunk size } /// Emits chunk-size replacement keyed by opaque stream state rather than descriptor identity. fn emit_stream_set_chunk_size(emitter: &mut Emitter) { emitter.blank(); emitter.comment(\"--- runtime: replace opaque stream chunk size ---\"); emitter.label_global(\"__rt_stream_set_chunk_size\"); emitter.instruction(\"sub sp, sp, #32\"); // preserve the requested size and caller frame",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4584b879d2f7ce2bebe99cea",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T16:46:06.993Z",
+  "stored_at": "2026-08-17T16:46:06.994Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests test_undeclared_scalar_returns_behave_like_declared_ones 2>&1 | grep -E \"^test |^test result:|left:|right:\" | head -6",
+  "summary": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests test_undeclared_scalar_returns_behave_like_declared_ones 2>&1 | grep -E \"^test |^test result:|left:|right:\" | head -6: test codegen::io::streams::test_undeclared_scalar_returns_behave_like_declared_ones ... ok test result: ok. 1 passed; 0 failed; 0 ignored; ",
+  "text": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests test_undeclared_scalar_returns_behave_like_declared_ones 2>&1 | grep -E \"^test |^test result:|left:|right:\" | head -6: test codegen::io::streams::test_undeclared_scalar_returns_behave_like_declared_ones ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8772 filtered out; finished in 1.63s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a9184b5623d52f0ce4cd3c1a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:37:48.899Z",
+  "stored_at": "2026-08-21T14:37:48.899Z"
+}

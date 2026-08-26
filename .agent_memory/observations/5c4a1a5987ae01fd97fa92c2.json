@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git rev-parse cfb871fd6f; git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:$(git rev-parse cfb871fd6f) 2>&1 | tail -1",
+  "summary": "About to run: git rev-parse cfb871fd6f; git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:$(git rev-parse cfb871fd6f) 2>&1 | tail -1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5c4a1a5987ae01fd97fa92c2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T10:46:03.951Z",
+  "stored_at": "2026-08-16T10:46:03.952Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm12.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm12.php: <?php\n// What php does with bytes that follow a CLOSING enclosure, with and without an escape in play.\n$cases = [\n    \"\\\"ab\\\"cd\\n\",\n ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm12.php: <?php\n// What php does with bytes that follow a CLOSING enclosure, with and without an escape in play.\n$cases = [\n    \"\\\"ab\\\"cd\\n\",\n    \"\\\"ab\\\"cd,e\\n\",\n    \"\\\"ab\\\"\\\"cd\\\"\\n\",\n    \"\\\"a\\\\\\\"\\\"b\\\"\\n\",\n    \"\\\"ab\\\" cd\\n\",\n    \"\\\"ab\\\"\\\"\\n\",\n    \"\\\"ab\\\"c\\\"d\\\"\\n\",\n];\nforeach ($cases as $i => $text) {\n    $h = fopen(\"php://memory\", \"w+\");\n    fwrite($h, $text);\n    rewind($h);\n    echo \"case $i\\n\";\n    while (($row = fgetcsv($h, 0, \",\", \"\\\"\", \"\\\\\")) !== false) {\n        var_dump($row);\n    }\n    fclose($h);\n}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "27de19b1dc3df1e723b2994a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:18:07.826Z",
+  "stored_at": "2026-08-18T09:18:07.826Z"
+}

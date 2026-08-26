@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/ | tail -40; echo \"=== HEADs ===\"; cat /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/.git;",
+  "summary": "About to run: ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/ | tail -40; echo \"=== HEADs ===\"; cat /Users/guillaumeloulier/PhpstormProjects/oss/eleph",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4c0cff4dba4568e45d10a05c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:51.979Z",
+  "stored_at": "2026-08-14T14:11:51.979Z"
+}

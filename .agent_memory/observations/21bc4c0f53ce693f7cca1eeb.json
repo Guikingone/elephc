@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fix_trace_test.py && RUST_MIN_STACK=33554432 CARGO_INCREMENTAL=0 cargo test --test codegen_tests test_a_builtin_fatal_in_main 2>&1 | tail -4",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fix_trace_test.py && RUST_MIN_STACK=33554432 CAR",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fix_trace_test.py && RUST_MIN_STACK=33554432 CARGO_INCREMENTAL=0 cargo test --test codegen_tests test_a_builtin_fatal_in_main 2>&1 | tail -4: the test follows the harness split test codegen::exceptions::test_a_builtin_fatal_in_main_prints_its_trace_despite_user_methods ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8868 filtered out; finished in 0.90s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "21bc4c0f53ce693f7cca1eeb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:51:50.033Z",
+  "stored_at": "2026-08-22T19:51:50.033Z"
+}

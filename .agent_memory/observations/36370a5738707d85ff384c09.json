@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py nonobj_types.php; python3 diff1.py nonobj.php 2>&1 | tail -6",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py nonobj_types.php; python3 diff1.py nonobj.php 2>&1 | tail -6: === php === 0: Call to a member function d() on null 1: Call to a mem",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py nonobj_types.php; python3 diff1.py nonobj.php 2>&1 | tail -6: === php === 0: Call to a member function d() on null 1: Call to a member function d() on false 2: Call to a member function d() on true 3: Call to a member function d() on int 4: Call to a member function d() on float 5: Call to a member function d() on string 6: Call to a member function d() on array === elephc === 0: Call to a member function d() on null 1: Call to a member function d() on null 2: Call to a member function d() on null 3: Call to a member function d() on null 4: Call to a member function d() on null 5: Call to a member function d() on null 6: Call to a member function d() on null --- exit 0 (php 0) --- Fatal error: Uncaught Error: Call to a member function d() on false in <dir>/p.php:5 Stack trace: #0 {main} thrown in <dir>/p.php on line 5 --- exit 255 (php 255) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "36370a5738707d85ff384c09",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T11:23:05.426Z",
+  "stored_at": "2026-08-23T11:23:05.426Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"macro_rules! param\" -A 20 crates/elephc-builtin-contract/src/catalog_surfaces.rs | head -26",
+  "summary": "About to run: grep -n \"macro_rules! param\" -A 20 crates/elephc-builtin-contract/src/catalog_surfaces.rs | head -26",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "642daa7742db2a9e1f0a0aa3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:19:35.557Z",
+  "stored_at": "2026-08-21T12:19:35.557Z"
+}

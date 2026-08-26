@@ -1,0 +1,13 @@
+{
+  "type": "session_end",
+  "summary": "Claude Code session ended; distill durable observations for teammate handoff.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "99545087d9911b10d2e0aa7c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T16:47:03.879Z",
+  "stored_at": "2026-08-15T16:47:03.880Z",
+  "low_signal": true
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fgets_wrapper_bound.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fgets_wrapper_bound.py: \"\"\"`fgets($h, $n)` ignored its bound when the stream is a user-registered wrapper.\n\nMEASURED on `php -n` 8.5.6 against ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fgets_wrapper_bound.py: \"\"\"`fgets($h, $n)` ignored its bound when the stream is a user-registered wrapper.\n\nMEASURED on `php -n` 8.5.6 against a wrapper serving `\"one two three four five six seven\\\\n...\"`:\n`fgets($h, 6)` answers `\"one t\"` — five bytes, php's `$length - 1`. elephc answered the WHOLE line,\n34 bytes, and the next call answered the whole second line. The same call on a plain file and on\n`php://memory` is correct, and the unbounded `fgets($h)` on a wrapper is correct: the bound is\nsimply never consulted on this one path.\n\nThe loop appends until a newline or EOF. It gets php's other stopping condition: the",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fbb3b4e5fb128cfe344a0419",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:59:09.383Z",
+  "stored_at": "2026-08-21T12:59:09.383Z"
+}

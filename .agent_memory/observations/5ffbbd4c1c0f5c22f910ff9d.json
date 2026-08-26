@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "for f in src/types/math_constants.rs src/types/error_constants.rs src/types/ent_constants.rs src/types/zlib_constants.rs src/types/json_constants.rs src/types/session_constants.rs src/types/date_constants.rs src/types/array_constants.rs src/types/string_constants.rs src/types/openssl_constants.rs src/types/preg_constants.rs src/types/stream_constants.rs; do echo \"== $f\"; grep -n \"^use \\|crate::\" \"$f\" | head -4; done 2>&1 | head -60",
+  "summary": "for f in src/types/math_constants.rs src/types/error_constants.rs src/types/ent_constants.rs src/types/zlib_constants.rs src/types/json_constants.rs src/types/session_constants.rs src/types/date_constants.rs src/types/array_constants.rs src/types/string_constants.rs src/types/openssl_constants.rs src/types/preg_constan",
+  "text": "for f in src/types/math_constants.rs src/types/error_constants.rs src/types/ent_constants.rs src/types/zlib_constants.rs src/types/json_constants.rs src/types/session_constants.rs src/types/date_constants.rs src/types/array_constants.rs src/types/string_constants.rs src/types/openssl_constants.rs src/types/preg_constants.rs src/types/stream_constants.rs; do echo \"== $f\"; grep -n \"^use \\|crate::\" \"$f\" | head -4; done 2>&1 | head -60 failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Split it into plain, separate commands and run them from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5ffbbd4c1c0f5c22f910ff9d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:44:45.064Z",
+  "stored_at": "2026-08-22T09:44:45.065Z"
+}

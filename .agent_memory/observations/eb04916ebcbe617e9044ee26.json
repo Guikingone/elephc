@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/work/socket-pair-shapes/php && php -n p.php 2>&1 | cat -n",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/work/socket-pair-shapes/php && php -n p.php 2>&1 | cat -n: 1 bool(true) 2 int(2) 3 bool(true) 4 string(6) \"stream\" 5 bool(false) 6 bool(true) 7 boo",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/work/socket-pair-shapes/php && php -n p.php 2>&1 | cat -n: 1 bool(true) 2 int(2) 3 bool(true) 4 string(6) \"stream\" 5 bool(false) 6 bool(true) 7 bool(false) 8 bool(false) 9 int(0) 10 bool(false) 11 string(14) \"generic_socket\" 12 int(5) 13 string(5) \"ping 14 \" 15 int(6) 16 string(3) \"abc\" 17 string(3) \"def\" 18 int(-1) 19 int(11) 20 bool(false) 21 string(0) \"\" 22 bool(false) 23 int(1) 24 int(1) 25 string(1) \"x\" 26 int(0) 27 int(0) 28 string(0) \"\" 29 bool(true)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eb04916ebcbe617e9044ee26",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:05:14.773Z",
+  "stored_at": "2026-08-26T08:05:14.773Z"
+}

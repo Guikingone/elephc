@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_lowering.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_lowering.py: import pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-si",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_lowering.py: import pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\nf = ROOT / 'src/codegen/lower_inst/builtins/io/stream_options.rs'\nt = f.read_text()\n\nOLD = '''const STREAM_SELECT_NO_STREAM_ARRAYS_MESSAGE: &str = \"No stream arrays were passed\";'''\nNEW = '''const STREAM_SELECT_NO_STREAM_ARRAYS_MESSAGE: &str = \"No stream arrays were passed\";\n\n/// php's wording for an entry that is not a resource at all, beside at least one real stream.\n///\n/// `zend_fetch_resource` says \"argument\" for a value of the wrong TYPE and \"resource\" ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "434cb6b2a475ba4118e92bed",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:23:44.368Z",
+  "stored_at": "2026-08-23T07:23:44.368Z"
+}

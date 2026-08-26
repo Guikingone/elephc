@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scts_emit.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scts_emit.py: \"\"\"Say why the copy refused, at the label where it decides to.\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scts_emit.py: \"\"\"Say why the copy refused, at the label where it decides to.\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\nf = ROOT / 'src/codegen/lower_inst/builtins/io/stream_read_helpers.rs'\nt = f.read_text()\n\nOLD = '''    ctx.emitter.label(seek_failed);\n    emit_stream_copy_frame_leave(ctx);\n    emit_bool_result(ctx, false);\n    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);\n    ctx.emitter.label(boxed_done);\n}'''\nNEW = '''    ctx.emitter.label(seek_failed);\n    emit_stream_copy_seek_refusal(ctx)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bc0026d75733ba320069ee2a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:55:21.004Z",
+  "stored_at": "2026-08-22T20:55:21.005Z"
+}

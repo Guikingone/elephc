@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"sscanf\" docs/php/strings.md docs/php/builtins.md 2>/dev/null | head -8",
+  "summary": "rg -n \"sscanf\" docs/php/strings.md docs/php/builtins.md 2>/dev/null | head -8: docs/php/strings.md:200:| `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %f, %s, %%). Matched fields are returned as substrings (e.g. `%f` yields `\"3.14\"`), mirroring the existing `%d` behavior. Only the two-argumen",
+  "text": "rg -n \"sscanf\" docs/php/strings.md docs/php/builtins.md 2>/dev/null | head -8: docs/php/strings.md:200:| `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %f, %s, %%). Matched fields are returned as substrings (e.g. `%f` yields `\"3.14\"`), mirroring the existing `%d` behavior. Only the two-argument array-returning form is supported: php's by-ref `...$vars` form, which assigns each field through the reference and returns the field count instead, is refused at compile time. | docs/php/builtins.md:465:| [`sscanf()`](./builtins/string/sscanf.md) | `(string $string, string $format, ...$vars): mixed` | `mixed` | ✓ | ✓ |",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "42d178100125a57cb38be975",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:24:13.894Z",
+  "stored_at": "2026-08-17T06:24:13.894Z"
+}

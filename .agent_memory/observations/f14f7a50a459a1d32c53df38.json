@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"sscanf\\|count(\\$parsed)\" examples/string-ops/main.php | head -5; echo \"--- php's own answer ---\"; php -n examples/string-ops/main.php 2>&1 | rg -i \"sscanf\" | head -5",
+  "summary": "grep -n \"sscanf\\|count(\\$parsed)\" examples/string-ops/main.php | head -5; echo \"--- php's own answer ---\"; php -n examples/string-ops/main.php 2>&1 | rg -i \"sscanf\" | head -5: 176:$parsed = sscanf(\"X=42 Y=99\", \"X=%d Y=%d\"); 177:echo \"sscanf count: \" . count($parsed) . \"\\n\"; 178:echo \"sscanf values: \" . $parsed[0] . \", ",
+  "text": "grep -n \"sscanf\\|count(\\$parsed)\" examples/string-ops/main.php | head -5; echo \"--- php's own answer ---\"; php -n examples/string-ops/main.php 2>&1 | rg -i \"sscanf\" | head -5: 176:$parsed = sscanf(\"X=42 Y=99\", \"X=%d Y=%d\"); 177:echo \"sscanf count: \" . count($parsed) . \"\\n\"; 178:echo \"sscanf values: \" . $parsed[0] . \", \" . $parsed[1] . \"\\n\"; --- php's own answer ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f14f7a50a459a1d32c53df38",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T18:18:57.650Z",
+  "stored_at": "2026-08-16T18:18:57.651Z"
+}

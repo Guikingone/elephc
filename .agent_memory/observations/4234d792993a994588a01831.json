@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 165,195p src/codegen_support/platform/mod.rs; echo \"--- exports ---\"; grep -n \"pub use target::\" src/codegen_support/platform/mod.rs",
+  "summary": "sed -n 165,195p src/codegen_support/platform/mod.rs; echo \"--- exports ---\"; grep -n \"pub use target::\" src/codegen_support/platform/mod.rs: #[test] /// \"mov x16, #5\" (macOS openat) emits argument shifts to reorder path/flags/dirfd for Linux's newfstatat. fn test_openat_arg_shift() { let macos_asm = \" mov x16, #5\\n svc",
+  "text": "sed -n 165,195p src/codegen_support/platform/mod.rs; echo \"--- exports ---\"; grep -n \"pub use target::\" src/codegen_support/platform/mod.rs: #[test] /// \"mov x16, #5\" (macOS openat) emits argument shifts to reorder path/flags/dirfd for Linux's newfstatat. fn test_openat_arg_shift() { let macos_asm = \" mov x16, #5\\n svc #0x80\\n\"; let linux_asm = transform_for_linux(macos_asm); assert!(linux_asm.contains(\"mov x3, x2\")); assert!(linux_asm.contains(\"mov x2, x1\")); assert!(linux_asm.contains(\"mov x1, x0\")); assert!(linux_asm.contains(\"mov x0, #-100\")); assert!(linux_asm.contains(\"mov x8, #56\")); } #[test] /// Directory and glob layouts retain their platform-specific offsets. fn test_directory_layout_offsets() { assert_eq!(Platform::MacOS.dirent_name_offset(), 21); assert_eq!(Platform::Linux.dirent_name_offset(), 19); assert_eq!(Platform::MacOS.glob_pathv_offset(), 32); assert_eq!(Platform::Linux.glob_pathv_offset(), 8); } } --- exports --- 15:pub use target::{Arch, Platform, Target};",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4234d792993a994588a01831",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:59:24.132Z",
+  "stored_at": "2026-08-22T08:59:24.133Z"
+}

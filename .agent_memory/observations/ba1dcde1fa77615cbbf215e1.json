@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: emitter.instruction(\"mov QWORD PTR [rbp - 72], 5\");                         // save the stream_type length\n    emitter.label(\"__rt_sgmd_seek_done_x86\");\n    //  -> ",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: emitter.instruction(\"mov QWORD PTR [rbp - 72], 5\");                         // save the stream_type length\n    emitter.label(\"__rt_sgmd_seek_done_x86\");\n    //  -> emitter.instruction(\"mov QWORD PTR [rbp - 72], 5\");                         // save the stream_type length\n    emitter.label(\"__rt_sgmd_seek_done_x86\");\n\n    // php reports `seekable` from the stream KIND, not a live probe — see the AArch64 arm.\n    emitter.instruction(\"mov r10, QWORD PTR [rbp - 88]\");                       // reload the StreamState pointer\n    emitter.instruction(&format!(\"mov r10, QWORD PTR [r10 + {STREAM_BACKEND_KIND_OFFSET}]\")); // what backs the stream\n ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ba1dcde1fa77615cbbf215e1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:27:58.924Z",
+  "stored_at": "2026-08-17T07:27:58.925Z"
+}

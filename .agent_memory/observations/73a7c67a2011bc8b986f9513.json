@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg2.txt 2>&1 | tail -5",
+  "summary": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg2.txt 2>&1 | tail -5: [worktree-streams-csv-signature 62aac2a68] fix(runtime): the x86_64 half of the wrapper read helper was never writ",
+  "text": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg2.txt 2>&1 | tail -5: [worktree-streams-csv-signature 62aac2a68] fix(runtime): the x86_64 half of the wrapper read helper was never written 2 files changed, 169 insertions(+), 94 deletions(-)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "73a7c67a2011bc8b986f9513",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:57:57.992Z",
+  "stored_at": "2026-08-20T20:57:57.993Z"
+}

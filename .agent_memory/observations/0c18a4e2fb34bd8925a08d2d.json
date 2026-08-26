@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,120p' src/codegen/lower_inst/exceptions.rs",
+  "summary": "sed -n '1,120p' src/codegen/lower_inst/exceptions.rs: points span, but a degenerate /// `range($x, $x, $step)` always yields `[$x]` no matter how large the step is, so an /// equal pair short-circuits the check. The unsigned comparison makes `PHP_INT_MIN` /// (whose negation is itself) read as wider than every span ins",
+  "text": "sed -n '1,120p' src/codegen/lower_inst/exceptions.rs: points span, but a degenerate /// `range($x, $x, $step)` always yields `[$x]` no matter how large the step is, so an /// equal pair short-circuits the check. The unsigned comparison makes `PHP_INT_MIN` /// (whose negation is itself) read as wider than every span instead of wrapping back /// into a negative \"magnitude\" that would slip past a signed compare. /// /// The endpoints are ordered before the width is taken, and the subtraction that follows /// is read as unsigned, exactly like php-src's `(zend_ulong) (high - low)`. Taking a /// signed absolute of the raw difference instead would report `range(PHP_INT_MIN, /// PHP_INT_MAX, 2)` as a span of `1` and reject it, where PHP spans `2^64 - 1` and goes on /// to reject the range for its size instead. MagnitudeWithinSpan(&'a str, &'a str, &'a str), } /// Throws a catchable PHP `ValueError` unless the guarded register satisfies `guard`. ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0c18a4e2fb34bd8925a08d2d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:43:29.795Z",
+  "stored_at": "2026-08-24T17:43:29.796Z"
+}

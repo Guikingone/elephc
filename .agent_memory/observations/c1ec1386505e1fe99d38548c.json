@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '13,95p' src/ir_lower/expr/unset.rs",
+  "summary": "sed -n '13,95p' src/ir_lower/expr/unset.rs: ocals are excluded: their /// storage is aliased to a caller whose static type would no longer match after a representation /// change. pub(super) fn unset_array_access_has_local_array_receiver( ctx: &LoweringContext<'_, '_>, array: &Expr, ) -> bool { let ExprKind::Variable(n",
+  "text": "sed -n '13,95p' src/ir_lower/expr/unset.rs: ocals are excluded: their /// storage is aliased to a caller whose static type would no longer match after a representation /// change. pub(super) fn unset_array_access_has_local_array_receiver( ctx: &LoweringContext<'_, '_>, array: &Expr, ) -> bool { let ExprKind::Variable(name) = &array.kind else { return false; }; if ctx.is_ref_bound_local(name) { return false; } matches!( ctx.local_type(name).codegen_repr(), PhpType::AssocArray { .. } | PhpType::Array(_) ) } /// Returns true when an array-access unset receiver is a static ArrayAccess object. pub(super) fn unset_array_access_has_object_receiver( ctx: &LoweringContext<'_, '_>, array: &Expr, ) -> bool { let ty = match &array.kind { ExprKind::Variable(name) => ctx .local_types .get(name) .cloned() .unwrap_or_else(|| infer_expr_type_syntactic(array)), _ => infer_expr_type_syntactic(array), }; type_satisfies_array_access_for_ir(ctx, &ty) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c1ec1386505e1fe99d38548c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:29:06.386Z",
+  "stored_at": "2026-08-26T08:29:06.386Z"
+}

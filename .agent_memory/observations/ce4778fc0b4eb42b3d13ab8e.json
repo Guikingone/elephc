@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"eval_barrier\\|eval barrier\\|saw_eval\\|eval_seen\\|dynamic_variable\" src/ --include=*.rs | head -30",
+  "summary": "About to run: grep -rn \"eval_barrier\\|eval barrier\\|saw_eval\\|eval_seen\\|dynamic_variable\" src/ --include=*.rs | head -30",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ce4778fc0b4eb42b3d13ab8e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:14:41.251Z",
+  "stored_at": "2026-08-20T19:14:41.251Z"
+}

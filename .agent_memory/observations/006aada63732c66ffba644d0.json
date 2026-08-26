@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Monitor",
+  "path": "",
+  "command": "until grep -q \"test result:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_compress.txt 2>/dev/null; do sleep 20; done; grep \"test result:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_compress.txt",
+  "summary": "until grep -q \"test result:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_compress.txt 2>/dev/null; do sleep 20; done; grep \"test result:\" /private/tmp/claude-501/-Users-guillaumeloulier-Php",
+  "text": "until grep -q \"test result:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_compress.txt 2>/dev/null; do sleep 20; done; grep \"test result:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_compress.txt: b5m2fzut8",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "006aada63732c66ffba644d0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:20:58.665Z",
+  "stored_at": "2026-08-21T10:20:58.665Z"
+}

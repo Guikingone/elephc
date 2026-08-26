@@ -1,0 +1,16 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/refwidth.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/refwidth.php: <?php\n// Every ordering of writes through a by-reference variadic, plus a string cell.\nfunction w2(&...$v): void { $v[0] = 1; $v[",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/refwidth.php: <?php\n// Every ordering of writes through a by-reference variadic, plus a string cell.\nfunction w2(&...$v): void { $v[0] = 1; $v[1] = 2; }\n$a = 0; $b = 0; w2($a, $b); echo \"w2: $a,$b\\n\";\n\nfunction w3(&...$v): void { $v[0] = 1; $v[1] = 2; $v[2] = 3; }\n$c = 0; $d = 0; $e = 0; w3($c, $d, $e); echo \"w3: $c,$d,$e\\n\";\n\nfunction wr(&...$v): void { $v[2] = 3; $v[1] = 2; $v[0] = 1; }\n$f = 0; $g = 0; $h = 0; wr($f, $g, $h); echo \"wr: $f,$g,$h\\n\";\n\nfunction wloop(&...$v): void { $n = count($v); for ($i = 0; $i < $n; $i++) { $v[$i] = 10 + $i; } }\n$i1 = 0; $i2 = 0; $i3 = 0; wloop($i1, $i2, $i3); echo \"wloo",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "56c500e50a6b7af3e5a122b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:11:09.514Z",
+  "stored_at": "2026-08-16T17:11:09.515Z",
+  "low_signal": true
+}

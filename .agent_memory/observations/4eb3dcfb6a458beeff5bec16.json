@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nprint(json.dumps(d['summary'],indent=1)[:1500])\nprint('generator:', json.dumps(d['generator'])[:300])\nprint('profile:', json.dumps(d['profile'])[:300])\n\"",
+  "summary": "About to run: python3 -c \" import json d=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json')) print(json.dumps(d['summary'],indent=1)[:1500]) print('generator:', json.dumps(d[",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4eb3dcfb6a458beeff5bec16",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:20:05.094Z",
+  "stored_at": "2026-08-14T14:20:05.094Z"
+}

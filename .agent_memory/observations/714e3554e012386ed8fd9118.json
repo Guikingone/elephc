@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '700,760p' src/codegen/lower_inst/exceptions.rs",
+  "summary": "sed -n '700,760p' src/codegen/lower_inst/exceptions.rs: trace_argument` refuses rather than guessing. break; } } abi::emit_call_label(ctx.emitter, \"__rt_trace_frame_close\"); } /// Renders one call argument into the open trace frame. fn emit_trace_argument(ctx: &mut FunctionContext<'_>, operand: crate::ir::ValueId) -> R",
+  "text": "sed -n '700,760p' src/codegen/lower_inst/exceptions.rs: trace_argument` refuses rather than guessing. break; } } abi::emit_call_label(ctx.emitter, \"__rt_trace_frame_close\"); } /// Renders one call argument into the open trace frame. fn emit_trace_argument(ctx: &mut FunctionContext<'_>, operand: crate::ir::ValueId) -> Result<()> { use crate::types::PhpType; // The runtime tags `__rt_trace_arg` branches on: 0 int, 1 string, 2 float, 3 bool, 4 indexed // array, 5 hash, 6 object, 8 null, 9 resource. A `Mixed` operand carries its own tag and is // unboxed instead of guessed at. // // Every shape is named. A blanket `_ => 9` sent arrays and objects through the RESOURCE // branch, which renders `Resource id #N` where php renders `Array` — and hands // `__rt_resource_id_of` a pointer that is not a resource handle. let tag = match ctx.value_php_type(operand)?.codegen_repr() { PhpType::Str => 1, PhpType::Float => 2, PhpType::Bool | PhpType::False => 3,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "714e3554e012386ed8fd9118",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:20:11.978Z",
+  "stored_at": "2026-08-26T09:20:11.978Z"
+}

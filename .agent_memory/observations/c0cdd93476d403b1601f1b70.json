@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"pub.*fn dynamic_property_hash_offset(\" -A8 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -12",
+  "summary": "rtk proxy grep -rn \"pub.*fn dynamic_property_hash_offset(\" -A8 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -12: phc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/allocation_clone.rs-101-/// Returns property slot offsets whose copied lo",
+  "text": "rtk proxy grep -rn \"pub.*fn dynamic_property_hash_offset(\" -A8 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -12: phc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/allocation_clone.rs-101-/// Returns property slot offsets whose copied low word must be retained for the cloned owner. /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/allocation_clone.rs-102-pub(super) fn cloned_property_retain_offsets(class_info: &ClassInfo) -> Vec<usize> { /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/allocation_clone.rs-103- class_info /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/allocation_clone.rs-104- .properties /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/allocation_clone.rs-105- .iter()",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c0cdd93476d403b1601f1b70",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:09:13.257Z",
+  "stored_at": "2026-08-17T09:09:13.258Z"
+}

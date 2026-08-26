@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs: /// Verifies fgets() raises a TypeError when passed false (e.g., from a failed fopen).\n#[test]\nfn test_fopen_false_stream_use_is_type_error() {\n    let out = co -> /// Verifies fgets() raises",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs: /// Verifies fgets() raises a TypeError when passed false (e.g., from a failed fopen).\n#[test]\nfn test_fopen_false_stream_use_is_type_error() {\n    let out = co -> /// Verifies fgets() raises a TypeError when passed false (e.g., from a failed fopen).\n///\n/// Asserted on `diagnostics`, not `stderr`. php CLI writes an uncaught fatal to STDOUT — MEASURED,\n/// `php -n` puts all 726 bytes of it there and leaves stderr empty — so a test reading `stderr`\n/// asserts on a field that is empty for php as well, and can only ever fail. elephc writes it to\n/// stdout too, which is the half that was already right.\n#[test]\nfn test_fopen_false_stream_u",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5a235c9305be8f9080d5adc7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:48:34.340Z",
+  "stored_at": "2026-08-21T16:48:34.340Z"
+}

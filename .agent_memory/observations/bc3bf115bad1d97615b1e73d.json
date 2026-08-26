@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests -E 'test(test_mysqli_unconnected_ops_raise_error)' --no-capture 2>&1 | sed -n '5,30p'",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests -E 'test(test_mysqli_unconnected_ops_raise_error)' --no-capture 2>&1 | sed -n '5,30p': ing 1 test thread 'codegen::mysqli::test_mysqli_unconn",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests -E 'test(test_mysqli_unconnected_ops_raise_error)' --no-capture 2>&1 | sed -n '5,30p': ing 1 test thread 'codegen::mysqli::test_mysqli_unconnected_ops_raise_error' (50502213) panicked at tests/codegen/support/runner.rs:605:13: linker failed: Undefined symbols for architecture arm64: \"_elephc_phar_delete_url\", referenced from: _eir_shared_mixed_to_string in test.o _eir_shared_mixed_to_string in test.o ld: symbol(s) not found for architecture arm64 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace test codegen::mysqli::test_mysqli_unconnected_ops_raise_error ... FAILED failures: failures: codegen::mysqli::test_mysqli_unconnected_ops_raise_error test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8897 filtered out; finished in 3.65s FAIL [ 3.667s] (1/1) elephc::codegen_tests codegen::mysqli::test_mysqli_unconnected_ops_raise_error Cancelling due to test failure: ──────────── Summary [ 3.717s] 1 test run: 0 passed, 1 failed, 8897 skipped",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bc3bf115bad1d97615b1e73d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:19:41.481Z",
+  "stored_at": "2026-08-23T16:19:41.482Z"
+}

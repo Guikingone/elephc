@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\ntest = '''\n/// Verifies `getCurrentLine()` is php's ALIAS of `fgets()` and therefore CONSUMES the line.\n///\n/// elephc answered the cached current line and left the stream where it was, so\n/// `getCurrentLine()` followed by `fgetc()` read the FIRST line's bytes twice. Measured on\n/// `php -n` 8.5.6 over `\"aa\\\\nbb\\\\n\"`: the line comes back, `key()` advances, the next read\n/// starts at the second line, and once `feof()` holds the call throws like `fgets()` does.\n#[test]\nfn test_spl_file_object_get_current_line_is_an_alias_of_fgets() {\n    let (out, dir) = compile_and_run_in_dir… [+988 chars truncated]",
+  "summary": "python3 - <<'PY'\ntest = '''\n/// Verifies `getCurrentLine()` is php's ALIAS of `fgets()` and therefore CONSUMES the line.\n///\n/// elephc answered the cached current line and left the stream where it was, so\n/// `getCurrentLine()` followed by `fgetc()` read the FIRST line's bytes twice. Measured on\n/// `php -n` 8.5.6 ove",
+  "text": "python3 - <<'PY'\ntest = '''\n/// Verifies `getCurrentLine()` is php's ALIAS of `fgets()` and therefore CONSUMES the line.\n///\n/// elephc answered the cached current line and left the stream where it was, so\n/// `getCurrentLine()` followed by `fgetc()` read the FIRST line's bytes twice. Measured on\n/// `php -n` 8.5.6 over `\"aa\\\\nbb\\\\n\"`: the line comes back, `key()` advances, the next read\n/// starts at the second line, and once `feof()` holds the call throws like `fgets()` does.\n#[test]\nfn test_spl_file_object_get_current_line_is_an_alias_of_fgets() {\n    let (out, dir) = compile_and_run_in_dir(\n        r#\"<?php\nfile_put_contents(\"cur.txt\", \"aa\\\\nbb\\\\n\");\n$f = new SplFileObject(\"cur.txt\", \"r\");\necho json_encode($f->getCurrentLine()), \" key=\", $f->key(), \"\\\\n\";\necho json_encode($f->fgetc()), $f->fgetc(), \"\\\\n\";\n$g = new SplFileObject(\"cur.txt\", \"r\");\n$g->getCurrentLine();\n$g->getCurrentLine();\necho json_encode($g->getCurrentLine()), \" key=\", $g->key(), \"\\\\n\";\ntry {\n    $g->getCurrentLine();\n} catch (\\\\RuntimeException $e) {\n    echo \"THROW \", $e->getMessage(), \"\\\\n\";\n}\nunlink(\"cur.txt\");\n\"#,\n    );\n    assert_eq!(\n        out,\n        \"\\\\\"aa\\\\\\\\n\\\\\" key=1\\\\n\\\\\"b\\\\\"b\\\\n\\\\\"\\\\\" key=3\\\\nTHROW Cannot read from file cur.txt\\\\n\"\n    );\n    let _ = fs::remove_dir_all(&dir);\n}\n'''\np='tests/codegen/spl/filesystem.rs'\ns=open(p).read()\nassert 'get_current_line_is_an_alias' not in s\nopen(p,'w').write(s.rstrip()+'\\n'+test)\nprint('test appended')\nPY\ncargo test --test codegen_tests test_spl_file_object_get_current_line 2>&1 | rg \"^test result|left:|right:|panicked\" -A2 | head -12: test appended test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8398 filtered out; finished in 2.05s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d24dc2fcbb6b1df2650e31cd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T18:44:13.582Z",
+  "stored_at": "2026-08-16T18:44:13.583Z"
+}

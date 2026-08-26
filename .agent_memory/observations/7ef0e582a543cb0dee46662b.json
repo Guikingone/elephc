@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git show origin/main:src/types/checker/type_compat/unions.rs | grep -n 'resource_types_compatible' -A 22 | head -28",
+  "summary": "About to run: git show origin/main:src/types/checker/type_compat/unions.rs | grep -n 'resource_types_compatible' -A 22 | head -28",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7ef0e582a543cb0dee46662b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:11:43.982Z",
+  "stored_at": "2026-08-26T17:11:43.983Z"
+}

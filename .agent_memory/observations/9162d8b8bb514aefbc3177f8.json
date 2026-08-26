@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '3780,3825p' tests/ir_backend_smoke_test.rs",
+  "summary": "sed -n '3780,3825p' tests/ir_backend_smoke_test.rs: Object` uses the emitted Iterator method protocol. #[test] fn ir_backend_handles_spl_file_object_foreach() { let source = r#\"<?php file_put_contents(\"a.txt\", \"one\\ntwo\\n\"); $info = new SplFileInfo(\"a.txt\"); foreach ($info->openFile() as $line => $text) { echo $line; e",
+  "text": "sed -n '3780,3825p' tests/ir_backend_smoke_test.rs: Object` uses the emitted Iterator method protocol. #[test] fn ir_backend_handles_spl_file_object_foreach() { let source = r#\"<?php file_put_contents(\"a.txt\", \"one\\ntwo\\n\"); $info = new SplFileInfo(\"a.txt\"); foreach ($info->openFile() as $line => $text) { echo $line; echo \":\"; echo $text; echo \";\"; } unlink(\"a.txt\"); \"#; assert_eq!( compile_and_run_ir_backend(\"spl_file_object_foreach\", source), \"0:one\\n;1:two\\n;\" ); } /// Verifies `SplFileObject` can expose simple CSV rows through `current()`. #[test] fn ir_backend_handles_spl_file_object_csv_current() { let source = r#\"<?php file_put_contents(\"a.txt\", \"one\\ntwo\\n\"); $csv = new SplFileObject(\"a.txt\"); $csv->setFlags(SplFileObject::READ_CSV); $csv->setCsvControl(\"n\"); $row = $csv->current(); echo $row[0]; echo \":\"; echo $row[1]; unlink(\"a.txt\"); \"#; assert_eq!( compile_and_run_ir_backend(\"spl_file_object_csv_current\", source), \"o:e\\n\" ); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9162d8b8bb514aefbc3177f8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T20:21:50.703Z",
+  "stored_at": "2026-08-14T20:21:50.703Z"
+}

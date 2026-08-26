@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"php://\\|memory\\|temp\\|stdin\\|stdout\\|stderr\\|fd/\" crates/elephc-magician/src/stream_resources.rs | head -30",
+  "summary": "grep -n \"php://\\|memory\\|temp\\|stdin\\|stdout\\|stderr\\|fd/\" crates/elephc-magician/src/stream_resources.rs | head -30 completed",
+  "text": "grep -n \"php://\\|memory\\|temp\\|stdin\\|stdout\\|stderr\\|fd/\" crates/elephc-magician/src/stream_resources.rs | head -30 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "49c27b00ac3cb1fc1cd7fcb9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:23:08.135Z",
+  "stored_at": "2026-08-14T14:23:08.136Z"
+}

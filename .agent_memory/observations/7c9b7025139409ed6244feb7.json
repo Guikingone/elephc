@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "On reprend",
+  "summary": "On reprend",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7c9b7025139409ed6244feb7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T12:05:41.088Z",
+  "stored_at": "2026-08-26T12:05:41.088Z",
+  "low_signal": true
+}

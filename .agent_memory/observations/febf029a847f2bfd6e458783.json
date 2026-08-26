@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dirread3.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dirread3.php: <?php\nmkdir(\"stabledir\");\nvar_dump(file_get_contents(\"stabledir\"));\nvar_dump(copy(\"stabledir\", \"out.txt\"));\n@unlink(\"out.txt\");\nrmdi",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dirread3.php: <?php\nmkdir(\"stabledir\");\nvar_dump(file_get_contents(\"stabledir\"));\nvar_dump(copy(\"stabledir\", \"out.txt\"));\n@unlink(\"out.txt\");\nrmdir(\"stabledir\");\necho \"done\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "febf029a847f2bfd6e458783",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:46:58.335Z",
+  "stored_at": "2026-08-24T13:46:58.335Z"
+}

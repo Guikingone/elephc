@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '40,60p' src/codegen/lower_inst/throwable_methods.rs",
+  "summary": "sed -n '40,60p' src/codegen/lower_inst/throwable_methods.rs: } /// Returns true for method keys supplied by PHP's built-in `Throwable` surface. pub(super) fn is_throwable_standard_method_key(method_key: &str) -> bool { matches!( method_key, \"getmessage\" | \"getcode\" | \"getfile\" | \"getline\" | \"gettrace\" | \"gettraceasstri",
+  "text": "sed -n '40,60p' src/codegen/lower_inst/throwable_methods.rs: } /// Returns true for method keys supplied by PHP's built-in `Throwable` surface. pub(super) fn is_throwable_standard_method_key(method_key: &str) -> bool { matches!( method_key, \"getmessage\" | \"getcode\" | \"getfile\" | \"getline\" | \"gettrace\" | \"gettraceasstring\" | \"getprevious\" | \"__tostring\" ) } /// Returns true when class metadata says the receiver is Throwable-compatible. pub(super) fn is_throwable_like_class(ctx: &FunctionContext<'_>, class_name: &str) -> bool { let class_name = class_name.trim_start_matches('\\\\'); if matches!(class_name, \"Throwable\") {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5d4fb087fd6fcd18a76dd2e4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:48:44.812Z",
+  "stored_at": "2026-08-26T09:48:44.813Z"
+}

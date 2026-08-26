@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dirread2.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dirread2.php: <?php\n$d = sys_get_temp_dir();\nvar_dump(copy($d, \"out.txt\"));\n@unlink(\"out.txt\");\necho \"---\\n\";\n$h = fopen($d, \"r\");\nvar_dump($h);\ni",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dirread2.php: <?php\n$d = sys_get_temp_dir();\nvar_dump(copy($d, \"out.txt\"));\n@unlink(\"out.txt\");\necho \"---\\n\";\n$h = fopen($d, \"r\");\nvar_dump($h);\nif ($h !== false) {\n    var_dump(fread($h, 10));\n    fclose($h);\n}\necho \"---\\n\";\nvar_dump(readfile($d));\necho \"done\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2dde91b9e4ddac4731cbc805",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:34:48.265Z",
+  "stored_at": "2026-08-24T13:34:48.267Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn '__rt_trace_write_block' src/codegen_support/runtime/ | grep -v uncaught_report | head; echo ---; grep -rln 'trace_write_block' src/codegen_support/runtime/",
+  "summary": "grep -rn '__rt_trace_write_block' src/codegen_support/runtime/ | grep -v uncaught_report | head; echo ---; grep -rln 'trace_write_block' src/codegen_support/runtime/: src/codegen_support/runtime/exceptions/trace_buffer.rs:601: emitter.label_global(\"__rt_trace_write_block\"); src/codegen_support/runtime/exceptions/trace_",
+  "text": "grep -rn '__rt_trace_write_block' src/codegen_support/runtime/ | grep -v uncaught_report | head; echo ---; grep -rln 'trace_write_block' src/codegen_support/runtime/: src/codegen_support/runtime/exceptions/trace_buffer.rs:601: emitter.label_global(\"__rt_trace_write_block\"); src/codegen_support/runtime/exceptions/trace_buffer.rs:671: emitter.label_global(\"__rt_trace_write_block\"); --- src/codegen_support/runtime/exceptions/uncaught_report.rs src/codegen_support/runtime/exceptions/trace_buffer.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ec6c58f6eb2d2bb6a586e228",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:44:48.703Z",
+  "stored_at": "2026-08-24T17:44:48.704Z"
+}

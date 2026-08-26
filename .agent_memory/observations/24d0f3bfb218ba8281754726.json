@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"ldr x0, [sp, #8]\");                                    // the caller's request\n    emitter.instruction(\"cmp x0, #1\");\n    emitter.instructi -> emitter.instruc",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"ldr x0, [sp, #8]\");                                    // the caller's request\n    emitter.instruction(\"cmp x0, #1\");\n    emitter.instructi -> emitter.instruction(\"ldr x0, [sp, #8]\");                                    // the caller's request\n    emitter.instruction(\"cmp x0, #1\");\n    emitter.instruction(\"b.lt __rt_fread_syscall_now\");                         // a non-positive request buffers nothing\n    // A top-up already holds part of the answer in the window; the chunked reader starts from\n    // nothing and would lose it, so this read finishes on the descriptor.\n    emitter.instruction(\"ldr x9, [sp, #48]\");    ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "24d0f3bfb218ba8281754726",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:21:04.199Z",
+  "stored_at": "2026-08-23T20:21:04.199Z"
+}

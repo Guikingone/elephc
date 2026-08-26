@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/offmore.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/offmore.php: <?php\nfunction f(): bool { return strlen(\"ab\") === 2; }\n$t = f();\nvar_dump($t[\"any\"]);\n$i = 7;\necho \"sum \", $i[0] ?? 5, \"\\n\";\n$chain ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/offmore.php: <?php\nfunction f(): bool { return strlen(\"ab\") === 2; }\n$t = f();\nvar_dump($t[\"any\"]);\n$i = 7;\necho \"sum \", $i[0] ?? 5, \"\\n\";\n$chain = false;\nvar_dump($chain[1][2]);\necho \"done\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "497c9c8bfa3f53a13d591a83",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:57:08.514Z",
+  "stored_at": "2026-08-24T07:57:08.514Z"
+}

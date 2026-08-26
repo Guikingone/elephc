@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '\\-\\-run\\|\"run\"\\|Run =>' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/cli.rs | head -30",
+  "summary": "grep -n '\\-\\-run\\|\"run\"\\|Run =>' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/cli.rs | head -30 completed",
+  "text": "grep -n '\\-\\-run\\|\"run\"\\|Run =>' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/cli.rs | head -30 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8ca75ebed60406bd8c82b186",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:09.430Z",
+  "stored_at": "2026-08-14T14:11:09.431Z"
+}

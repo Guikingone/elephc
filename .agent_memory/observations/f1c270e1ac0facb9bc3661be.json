@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/traceshapes/top-level_builtin_throw/run && lldb -b -o run -o \"register read lr pc\" -o \"bt\" ./p 2>&1 | tail -20",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/traceshapes/top-level_builtin_throw/run && lldb -b -o run -o \"register read lr pc\" -o \"bt\" ./p 2>&1 | tail -20:  executable set to '/private/tmp/claud",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/traceshapes/top-level_builtin_throw/run && lldb -b -o run -o \"register read lr pc\" -o \"bt\" ./p 2>&1 | tail -20:  executable set to '/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/traceshapes/top-level_builtin_throw/run/p' (arm64). (lldb) run Process 52765 launched: '/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/traceshapes/top-level_builtin_throw/run/p' (arm64) Process 52765 stopped * thread #1, queue = 'com.apple.main-thread', stop reason = EXC_BAD_ACCESS (code=1, address=0x0) frame #0: 0x0000000100003870 p`___lldb_unnamed_symbol_100003840 + 48 p`___lldb_unnamed_symbol_100003840: -> 0x100003870 <+48>: ldrb w14, [x1, x12] 0x100003874 <+52>: strb w14, [x11, x13] 0x100003878 <+56>: add x12, x12, #0x1 0x10000387c <+60>: b 0x100003858 ; <+24> Target 0: (p) stopped.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f1c270e1ac0facb9bc3661be",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:41:19.007Z",
+  "stored_at": "2026-08-22T12:41:19.008Z"
+}

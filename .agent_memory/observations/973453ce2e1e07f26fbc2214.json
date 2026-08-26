@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rln \"sscanf\\|fscanf\" tests/*.rs 2>/dev/null | head -10",
+  "summary": "rtk proxy grep -rln \"sscanf\\|fscanf\" tests/*.rs 2>/dev/null | head -10: tests/ir_backend_smoke_test.rs",
+  "text": "rtk proxy grep -rln \"sscanf\\|fscanf\" tests/*.rs 2>/dev/null | head -10: tests/ir_backend_smoke_test.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "973453ce2e1e07f26fbc2214",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T18:15:58.699Z",
+  "stored_at": "2026-08-16T18:15:58.699Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"seekable\" src/codegen_support/runtime/io/*.rs | grep -i \"label_global\\|__rt_stream\" | head -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"seekable\" src/codegen_support/runtime/io/*.rs | grep -i \"label_global\\|__rt_stream\" | head -8: src/codegen_support/runtime/io/stream_get_meta_data.rs:426:/// Emits `__rt_stream_fd_is_regular(fd) -> 1|0`, the S_ISRE",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"seekable\" src/codegen_support/runtime/io/*.rs | grep -i \"label_global\\|__rt_stream\" | head -8: src/codegen_support/runtime/io/stream_get_meta_data.rs:426:/// Emits `__rt_stream_fd_is_regular(fd) -> 1|0`, the S_ISREG probe behind `seekable`.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "72ead76582ceff2c0bb9fbb1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T19:09:12.713Z",
+  "stored_at": "2026-08-23T19:09:12.714Z"
+}

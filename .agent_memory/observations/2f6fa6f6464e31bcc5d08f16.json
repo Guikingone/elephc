@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>bgc3nbo1k</task-id>\n<tool-use-id>toolu_01DYmfjwWzEuVWtmWBxj8LbZ</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bgc3nbo1k.output</output-file>\n<status>completed</status>\n<summary>Background command \"Sample the 48 remaining failures\" completed (exit code 0)</summary>\n</task-notification>",
+  "summary": "<task-notification> <task-id>bgc3nbo1k</task-id> <tool-use-id>toolu_01DYmfjwWzEuVWtmWBxj8LbZ</tool-use-id> <output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8db",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2f6fa6f6464e31bcc5d08f16",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T14:49:43.306Z",
+  "stored_at": "2026-08-18T14:49:43.306Z",
+  "low_signal": true
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen io:: 2>&1 | tail -25",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen io:: 2>&1 | tail -25: null_value_codegen_tests opcache_env_override_tests opcache_ini_tests opcache_jit_status_tests opcache_manifest_tests opcache_preload_tests opcache_restrict_api_tests opcache_strict_invalidate_tests parser_te",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen io:: 2>&1 | tail -25: null_value_codegen_tests opcache_env_override_tests opcache_ini_tests opcache_jit_status_tests opcache_manifest_tests opcache_preload_tests opcache_restrict_api_tests opcache_strict_invalidate_tests parser_tests php_oracle_manifest_tests php_profile_floor_tests php_profile_independence_tests php_profile_resolve_tests php_profile_session_independence_tests php_version_surface_tests print_r_object_tests print_r_return_mode_heap_tests recursive_return_type_tests resource_id_and_hash_context_tests uncaught_exception_report_tests var_dump_nested_tests var_dump_object_tests var_export_and_strstr_result_tests web_session_tests web_tests",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "81b51d26a088fd2d9da305d9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:24:58.670Z",
+  "stored_at": "2026-08-24T17:24:58.670Z"
+}

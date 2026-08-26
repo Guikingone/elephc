@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"glob(\" tests/codegen/io/*.rs | head; echo \"--- existing glob tests ---\"; grep -rn \"fn test_.*glob\" tests/codegen/io/*.rs | head",
+  "summary": "grep -rln \"glob(\" tests/codegen/io/*.rs | head; echo \"--- existing glob tests ---\"; grep -rn \"fn test_.*glob\" tests/codegen/io/*.rs | head: tests/codegen/io/filesystem.rs tests/codegen/io/streams.rs --- existing glob tests --- tests/codegen/io/filesystem.rs:792:fn test_glob_fn() { tests/codegen/io/filesystem.rs:818:fn ",
+  "text": "grep -rln \"glob(\" tests/codegen/io/*.rs | head; echo \"--- existing glob tests ---\"; grep -rn \"fn test_.*glob\" tests/codegen/io/*.rs | head: tests/codegen/io/filesystem.rs tests/codegen/io/streams.rs --- existing glob tests --- tests/codegen/io/filesystem.rs:792:fn test_glob_fn() { tests/codegen/io/filesystem.rs:818:fn test_glob_stream_wrapper_iterates_matches() { tests/codegen/io/streams.rs:1860:fn test_fopen_on_glob_is_refused_by_the_wrapper_not_the_filesystem() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bd72cb5533c57eb8f1bdf398",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:08:59.036Z",
+  "stored_at": "2026-08-22T09:08:59.037Z"
+}

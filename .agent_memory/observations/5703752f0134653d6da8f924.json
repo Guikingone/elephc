@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,45p' src/codegen_support/runtime/io/filter_param_warning.rs",
+  "summary": "sed -n '1,45p' src/codegen_support/runtime/io/filter_param_warning.rs: VALID_TAIL, }; use crate::codegen_support::{abi, emit::Emitter, platform::Arch}; /// Emits `__rt_filter_param_warning(name_ptr, name_len, prepend)`. /// /// `prepend` selects which function names itself in both headings; the filter name is repeated ",
+  "text": "sed -n '1,45p' src/codegen_support/runtime/io/filter_param_warning.rs: VALID_TAIL, }; use crate::codegen_support::{abi, emit::Emitter, platform::Arch}; /// Emits `__rt_filter_param_warning(name_ptr, name_len, prepend)`. /// /// `prepend` selects which function names itself in both headings; the filter name is repeated in /// each, so it is passed rather than baked in. pub fn emit_filter_param_warning(emitter: &mut Emitter) { match emitter.target.arch { Arch::AArch64 => emit_aarch64(emitter), Arch::X86_64 => emit_x86_64(emitter), } } /// Emits the AArch64 composer. fn emit_aarch64(emitter: &mut Emitter) { emitter.blank(); emitter.comment(\"--- runtime: compose the invalid-filter-parameter warnings ---\"); emitter.label_global(\"__rt_filter_param_warning\"); // Frame: [0]=name ptr [8]=name len [16]=prepend. emitter.instruction(\"sub sp, sp, #48\"); // reserve the composer frame emitter.instruction(\"stp x29, x30, [sp, #32]\"); // save frame pointer and return address",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5703752f0134653d6da8f924",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:56:04.094Z",
+  "stored_at": "2026-08-18T09:56:04.095Z"
+}

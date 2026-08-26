@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"no extra stream_read|extra stream_read|stream_eof before reading\" tests/ | head -5",
+  "summary": "rg -rn \"no extra stream_read|extra stream_read|stream_eof before reading\" tests/ | head -5 completed",
+  "text": "rg -rn \"no extra stream_read|extra stream_read|stream_eof before reading\" tests/ | head -5 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8f596d5dad06fbf329af7fb4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T17:11:35.052Z",
+  "stored_at": "2026-08-17T17:11:35.053Z"
+}

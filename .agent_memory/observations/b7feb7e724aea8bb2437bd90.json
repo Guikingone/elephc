@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target/debug/ 2>/dev/null | head -20; echo \"=== candle ===\"; ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/target/debug/elephc 2>/dev/null; echo \"=== popcorn ===\"; ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/target/debug/elephc 2>/dev/null",
+  "summary": "About to run: ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target/debug/ 2>/dev/null | head -20; echo \"=== candle ===\"; ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kin",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b7feb7e724aea8bb2437bd90",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:16:51.643Z",
+  "stored_at": "2026-08-14T14:16:51.643Z"
+}

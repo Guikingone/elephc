@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_array_filter\\\"\\|__rt_array_filter_refcounted\" src/ | grep -v \"runtime/arrays/array_filter\" | head -5",
+  "summary": "grep -rn \"__rt_array_filter\\\"\\|__rt_array_filter_refcounted\" src/ | grep -v \"runtime/arrays/array_filter\" | head -5: src/codegen/lower_inst/builtins/arrays/filter.rs:147:/// wrapper's own ABI, so `__rt_array_filter` / `__rt_array_filter_refcounted` drive it src/codegen_support/runtime/arrays/filter_truthy.rs:13://! `__",
+  "text": "grep -rn \"__rt_array_filter\\\"\\|__rt_array_filter_refcounted\" src/ | grep -v \"runtime/arrays/array_filter\" | head -5: src/codegen/lower_inst/builtins/arrays/filter.rs:147:/// wrapper's own ABI, so `__rt_array_filter` / `__rt_array_filter_refcounted` drive it src/codegen_support/runtime/arrays/filter_truthy.rs:13://! `__rt_array_filter_refcounted` loops drive them unchanged — no second filter loop exists",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e529936524c348c0b202f3a6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:54:36.939Z",
+  "stored_at": "2026-08-22T11:54:36.940Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '18,26p' src/codegen_support/runtime/data/fixed.rs; echo \"   ...(coupé)...\"; sed -n '66,74p' src/codegen_support/runtime/data/fixed.rs",
+  "summary": "sed -n '18,26p' src/codegen_support/runtime/data/fixed.rs; echo \"   ...(coupé)...\"; sed -n '66,74p' src/codegen_support/runtime/data/fixed.rs: _NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH, OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX, OB_WARN_BAD_CALLBACK_GENERIC, OB",
+  "text": "sed -n '18,26p' src/codegen_support/runtime/data/fixed.rs; echo \"   ...(coupé)...\"; sed -n '66,74p' src/codegen_support/runtime/data/fixed.rs: _NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH, OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX, OB_WARN_BAD_CALLBACK_GENERIC, OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX, PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG, SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG, <<<<<<< HEAD GAI_MSG_MIDDLE, GAI_MSG_PREFIX, SOCKET_GAI_MSG_CAPACITY, DIAG_NEWLINE, DISK_FREE_SPACE_WARNING, DISK_TOTAL_SPACE_WARNING, ...(coupé)... ======= STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX, UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX, UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX, >>>>>>> origin/main }; use super::super::system; use super::RT_DIAG_BUF_BYTES; use crate::codegen_support::data_section::comm_directive;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1403ee4f2e05c084e0d092ce",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:18:43.381Z",
+  "stored_at": "2026-08-20T17:18:43.382Z"
+}

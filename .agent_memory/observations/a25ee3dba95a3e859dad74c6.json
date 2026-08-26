@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn lower_arg_with_signature\" -A15 src/ir_lower/expr/call_arg_coercion.rs",
+  "summary": "About to run: grep -n \"fn lower_arg_with_signature\" -A15 src/ir_lower/expr/call_arg_coercion.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a25ee3dba95a3e859dad74c6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:39:43.815Z",
+  "stored_at": "2026-08-20T20:39:43.816Z"
+}

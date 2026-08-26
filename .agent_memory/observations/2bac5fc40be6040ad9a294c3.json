@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "target/debug/elephc --help 2>&1 | sed -n '30,60p'",
+  "summary": "target/debug/elephc --help 2>&1 | sed -n '30,60p': fine a symbol for `ifdef` conditional compilation --ini KEY=VALUE Bake an INI directive override (repeatable; opcache.* honored) --strict-opcache Throw when opcache_invalidate() targets AOT-frozen code Linking: --link LIB, -l LIB Extra library to link --link-path DIR, ",
+  "text": "target/debug/elephc --help 2>&1 | sed -n '30,60p': fine a symbol for `ifdef` conditional compilation --ini KEY=VALUE Bake an INI directive override (repeatable; opcache.* honored) --strict-opcache Throw when opcache_invalidate() targets AOT-frozen code Linking: --link LIB, -l LIB Extra library to link --link-path DIR, -L DIR Extra library search path --framework NAME macOS framework to link --with-NAME Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, eval, regex, mysqli) Diagnostics: --timings Show a per-phase timing table on stderr --quiet, -q Disable progress lines and colorized output --source-map Emit a .map source map alongside the assembly --debug-info Embed DWARF line info for debuggers --keep-symbols Keep the symbol table (stripped by default; for profilers) Other: -h, --help Print this help and exit -V, --version Print version and exit --mascotte Print an ASCII mascot and a random quote before output",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2bac5fc40be6040ad9a294c3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T16:56:27.899Z",
+  "stored_at": "2026-08-24T16:56:27.900Z"
+}

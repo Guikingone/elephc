@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -i '' 's|pub use trace_buffer::{emit_trace_buffer, TRACE_BUF_BYTES};|pub use trace_buffer::emit_trace_buffer;\\npub(crate) use trace_buffer::TRACE_BUF_BYTES;|' src/codegen_support/runtime/exceptions.rs && cargo build --lib 2>&1 | grep -E \"^error|^warning: unused\" -A 6 | head -20; cargo build --lib 2>&1 | tail -2",
+  "summary": "sed -i '' 's|pub use trace_buffer::{emit_trace_buffer, TRACE_BUF_BYTES};|pub use trace_buffer::emit_trace_buffer;\\npub(crate) use trace_buffer::TRACE_BUF_BYTES;|' src/codegen_support/runtime/exceptions.rs && cargo build --lib 2>&1 | grep -E \"^error|^warning: unused\" -A 6 | head -20; cargo build --lib 2>&1 | tail -2: wa",
+  "text": "sed -i '' 's|pub use trace_buffer::{emit_trace_buffer, TRACE_BUF_BYTES};|pub use trace_buffer::emit_trace_buffer;\\npub(crate) use trace_buffer::TRACE_BUF_BYTES;|' src/codegen_support/runtime/exceptions.rs && cargo build --lib 2>&1 | grep -E \"^error|^warning: unused\" -A 6 | head -20; cargo build --lib 2>&1 | tail -2: warning: unused import: `trace_buffer::TRACE_BUF_BYTES` --> src/codegen_support/runtime/exceptions.rs:28:16 | 28 | pub(crate) use trace_buffer::TRACE_BUF_BYTES; | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ | = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default warning: `elephc` (lib) generated 1 warning (run `cargo fix --lib -p elephc` to apply 1 suggestion) Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.14s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ff2109bcb3abc83b7ccff1da",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:16:28.152Z",
+  "stored_at": "2026-08-22T12:16:28.152Z"
+}

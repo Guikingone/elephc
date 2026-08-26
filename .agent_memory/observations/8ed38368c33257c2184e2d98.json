@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles_file_get_contents 2>&1 | grep -A 5 'panicked' | head -7",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles_file_get_contents 2>&1 | grep -A 5 'panicked' | head -7: thread 'ir_backend_handles_file_get_contents' (62735103) panicked at tests/ir_backend_smoke_test.rs:5861:5: assertion `left == right` failed",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles_file_get_contents 2>&1 | grep -A 5 'panicked' | head -7: thread 'ir_backend_handles_file_get_contents' (62735103) panicked at tests/ir_backend_smoke_test.rs:5861:5: assertion `left == right` failed left: \"\\nWarning: file_get_contents(missing.txt): Failed to open stream: No such file or directory in /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_file_get_contents_warning_2876_1787647221564239000/main.php on line 1\\nafter\" right: \"after\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8ed38368c33257c2184e2d98",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:40:24.436Z",
+  "stored_at": "2026-08-25T08:40:24.436Z"
+}

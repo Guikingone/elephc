@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '353,420p' src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs",
+  "summary": "sed -n '353,420p' src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs: int_result_reg(ctx.emitter), 0); ctx.emitter.label(&finished_label); store_if_result(ctx, inst) } /// Branches to `refused_label` when the stream's WRAPPER has no seek op at all. /// /// php-src refuses such a seek in `php_stream_seek`, befor",
+  "text": "sed -n '353,420p' src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs: int_result_reg(ctx.emitter), 0); ctx.emitter.label(&finished_label); store_if_result(ctx, inst) } /// Branches to `refused_label` when the stream's WRAPPER has no seek op at all. /// /// php-src refuses such a seek in `php_stream_seek`, before any descriptor is touched, and /// `ext/zip`'s entry ops are exactly that shape. elephc serves a zip entry out of a regular /// temp file, which seeks perfectly well, so the refusal can only come from the recorded /// wrapper identity — see `__rt_stream_seek_unsupported` for the measured php lines. /// /// The opaque stream handle is in the integer result register on entry and is left there, so /// the caller's normal path is byte-for-byte what it was for every stream that does seek. fn emit_seek_unsupported_branch(ctx: &mut FunctionContext<'_>, refused_label: &str) { let reg = abi::int_result_reg(ctx.emitter); abi::emit_push_reg(ctx.emitter, reg);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5206735d6786207628dfa654",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:27:08.432Z",
+  "stored_at": "2026-08-25T08:27:08.433Z"
+}

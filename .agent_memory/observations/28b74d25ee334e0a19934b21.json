@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "find src -name \"iconv*\" -o -path \"*stream_filters*iconv*\" | head; grep -rn \"from_sym\" src/codegen_support/stream_filters/iconv* 2>/dev/null | head",
+  "summary": "find src -name \"iconv*\" -o -path \"*stream_filters*iconv*\" | head; grep -rn \"from_sym\" src/codegen_support/stream_filters/iconv* 2>/dev/null | head: pport/stream_filters/iconv.rs src/codegen_support/stream_filters/iconv_write.rs src/codegen_support/stream_filters/iconv_write.rs:40: from_sym: &str, src/codegen_support/st",
+  "text": "find src -name \"iconv*\" -o -path \"*stream_filters*iconv*\" | head; grep -rn \"from_sym\" src/codegen_support/stream_filters/iconv* 2>/dev/null | head: pport/stream_filters/iconv.rs src/codegen_support/stream_filters/iconv_write.rs src/codegen_support/stream_filters/iconv_write.rs:40: from_sym: &str, src/codegen_support/stream_filters/iconv_write.rs:52: from_sym, src/codegen_support/stream_filters/iconv_write.rs:61: from_sym, src/codegen_support/stream_filters/iconv_write.rs:74: from_sym: &str, src/codegen_support/stream_filters/iconv_write.rs:167: abi::emit_symbol_address(emitter, \"x1\", from_sym); // arg 1 = fromcode src/codegen_support/stream_filters/iconv_write.rs:196: from_sym: &str, src/codegen_support/stream_filters/iconv_write.rs:291: abi::emit_symbol_address(emitter, \"rsi\", &from_sym); // arg 1 = fromcode src/codegen_support/stream_filters/iconv.rs:37: from_sym: &str, src/codegen_support/stream_filters/iconv.rs:92: abi::emit_symbol_address(emitter, \"x1\", from_sym); src/codegen_support/stream_filters/iconv.rs:175: from_sym: &str,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "28b74d25ee334e0a19934b21",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:50:25.534Z",
+  "stored_at": "2026-08-18T09:50:25.534Z"
+}

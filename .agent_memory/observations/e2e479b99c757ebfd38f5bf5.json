@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test error_tests test_image_error_cairo_undefined_methods_are_compile_errors 2>&1 | grep \"test result\" | head -1 && cargo test -p elephc-magician --lib 2>&1 | grep -c \"^test .* ok$\"",
+  "summary": "cargo test --test error_tests test_image_error_cairo_undefined_methods_are_compile_errors 2>&1 | grep \"test result\" | head -1 && cargo test -p elephc-magician --lib 2>&1 | grep -c \"^test .* ok$\": test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1291 filtered out; finished in 54.08s 1172",
+  "text": "cargo test --test error_tests test_image_error_cairo_undefined_methods_are_compile_errors 2>&1 | grep \"test result\" | head -1 && cargo test -p elephc-magician --lib 2>&1 | grep -c \"^test .* ok$\": test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1291 filtered out; finished in 54.08s 1172",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e2e479b99c757ebfd38f5bf5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T18:22:59.002Z",
+  "stored_at": "2026-08-14T18:22:59.009Z"
+}

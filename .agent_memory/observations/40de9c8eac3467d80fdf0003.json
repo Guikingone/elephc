@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '26,40p' src/codegen_support/runtime/io/stream_wrapper_register.rs",
+  "summary": "sed -n '26,40p' src/codegen_support/runtime/io/stream_wrapper_register.rs: l and the script location; the /// runtime's other warnings (`fopen()`, `file_get_contents()`) are fixed strings /// without a location, and this follows that convention rather than inventing a /// half-interpolated one. pub(crate) const BAD_PRO",
+  "text": "sed -n '26,40p' src/codegen_support/runtime/io/stream_wrapper_register.rs: l and the script location; the /// runtime's other warnings (`fopen()`, `file_get_contents()`) are fixed strings /// without a location, and this follows that convention rather than inventing a /// half-interpolated one. pub(crate) const BAD_PROTOCOL_WARNING: &str = \"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\n\"; /// Warning PHP emits when the protocol is already registered — including the builtin /// `file://`, which a program could otherwise shadow silently. pub(crate) const DUPLICATE_PROTOCOL_WARNING: &str = \"Warning: stream_wrapper_register(): Protocol is already defined.\\n\"; /// Emits the `__rt_stream_wrapper_register` runtime helper. /// Input: AArch64 x0 = proto ptr, x1 = proto len, x2 = class ptr, x3 = class len, /// x4 = flags. x86_64 uses rdi/rsi/rdx/rcx/r8 for the same values. /// Output: 1 when the registration was stored, 0 when the table is full.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "40de9c8eac3467d80fdf0003",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:54:52.874Z",
+  "stored_at": "2026-08-20T17:54:52.875Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\nd=json.load(open('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json'))\nitems = d if isinstance(d,list) else list(d.values())\nhits=[b.get('canonical_name') for b in items if 'stream_file_dispatch' in str((b.get('lowering') or {}).get('codegen_file'))]\nprint(len(hits), 'builtins documented as living in stream_file_dispatch.rs:', hits[:8])\n\"",
+  "summary": "About to run: python3 -c \" import json d=json.load(open('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json')) items = d if isinstance(d,l",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1b135632ca9efa7a1edb50e6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:35:23.756Z",
+  "stored_at": "2026-08-21T13:35:23.757Z"
+}

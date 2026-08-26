@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '9374,9392p;9460,9470p' tests/codegen/eval.rs",
+  "summary": "sed -n '9374,9392p;9460,9470p' tests/codegen/eval.rs: assert!(!single.success, \"an unparsable fragment must be fatal\"); assert_eq!(single.exit_code, Some(255), \"stderr={}\", single.stderr); assert_eq!(single.stdout, \"kept\"); assert!( single .stderr .contains(\") : eval()'d code on line 1\\n\"), \"the eval location tail is m",
+  "text": "sed -n '9374,9392p;9460,9470p' tests/codegen/eval.rs: assert!(!single.success, \"an unparsable fragment must be fatal\"); assert_eq!(single.exit_code, Some(255), \"stderr={}\", single.stderr); assert_eq!(single.stdout, \"kept\"); assert!( single .stderr .contains(\") : eval()'d code on line 1\\n\"), \"the eval location tail is missing, got stderr={}\", single.stderr ); assert!( single .stderr .starts_with(\"\\nParse error: syntax error, unexpected end of file in \"), \"the parse error lost php's opening, got stderr={:?}\", single.stderr ); assert!( single.stderr.contains(\".php(3) : eval()'d code\"), ); assert_eq!(warning.stdout, \"ok\"); assert!( warning .stderr .contains(\"Warning: define(): Constant already defined\"), \"stderr did not contain eval warning diagnostic: {}\", warning.stderr ); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ac5d7cc80817d30fdc264539",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:17:46.427Z",
+  "stored_at": "2026-08-18T15:17:46.428Z"
+}

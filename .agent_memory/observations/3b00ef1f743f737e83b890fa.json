@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -30 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b0ivtuhsj.output",
+  "summary": "head -30 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b0ivtuhsj.output: ispatch codegen::io::streams::test_wrapper_contract_params_carry_their_documented_types codegen::io::streams::test_wrapper_ftell_repor",
+  "text": "head -30 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b0ivtuhsj.output: ispatch codegen::io::streams::test_wrapper_contract_params_carry_their_documented_types codegen::io::streams::test_wrapper_ftell_reports_phps_position_not_stream_tell codegen::io::streams::test_wrapper_refusal_diagnostics_obey_the_error_suppression_operator codegen::io::streams::test_wrapper_url_stat_absent_field_reads_zero_not_false codegen::io::streams::test_wrapper_without_declared_context_gets_phps_deprecation codegen::io::streams::test_zip_wrapper_reads_entries_and_refuses_like_php codegen::io::streams::test_zip_wrapper_stream_reads_and_refuses_to_seek codegen::io::streams_ext::test_readfile_missing_returns_false codegen::io::streams_ext::test_stream_context_set_options_applies_a_whole_array test result: FAILED. 799 passed; 131 failed; 8 ignored; 0 measured; 7514 filtered out; finished in 260.01s error: test failed, to rerun pass `-p elephc --test codegen_tests` [exited with code 0]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3b00ef1f743f737e83b890fa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:55:22.850Z",
+  "stored_at": "2026-08-18T13:55:22.851Z"
+}

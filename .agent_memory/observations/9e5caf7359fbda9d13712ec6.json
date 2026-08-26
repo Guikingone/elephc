@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/stream_context_probe.py 2>&1 | tail -12",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/stream_context_probe.py 2>&1 | tail -12: case php elephc flat options array Deprecated: Calling stream_context Deprecated: Calling stream_context",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/stream_context_probe.py 2>&1 | tail -12: case php elephc flat options array Deprecated: Calling stream_context Deprecated: Calling stream_context_set_optio well-formed options Deprecated: Calling stream_context Deprecated: Calling stream_context_set_optio create with flat array Fatal error: Uncaught ValueError: Fatal error: Uncaught ValueError: Options sh create well-formed Array ( [http] => Array ( [method] Array ( [http] => Array ( [method] => GET ) three-arg form bool(true) Array ( [http] => Array <-- DIFFERS get_params Array ( [options] => Array ( ) ) Array ( [options] => Array ( ) ) set_params bad bool(true) bool(true) default context Array ( ) Array ( ) 7/8 identical",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9e5caf7359fbda9d13712ec6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:11:32.592Z",
+  "stored_at": "2026-08-22T15:11:32.593Z"
+}

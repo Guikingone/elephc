@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes7; cat glm-5.2-05.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes7; cat glm-5.2-05.php: <?php class F { function stream_open($p,$m){return true;} function stream_write($d){return strlen($d);} function s",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes7; cat glm-5.2-05.php: <?php class F { function stream_open($p,$m){return true;} function stream_write($d){return strlen($d);} function stream_eof(){return true;} function stream_flush(){return false;} // false means flush failed } stream_wrapper_register('f', F::class); $h = fopen('f://x','w'); fwrite($h, \"x\"); fflush($h); // does elephc check return?",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bb1b9de13bf022112ef3fc77",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:37:34.929Z",
+  "stored_at": "2026-08-22T19:37:34.929Z"
+}

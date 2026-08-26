@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '160,200p' src/ir_lower/expr/function_calls.rs",
+  "summary": "sed -n '160,200p' src/ir_lower/expr/function_calls.rs: ome(expr.span), ); } let eval_literal = eval_literal_fragment(canonical, args); emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal) } /// Emits a builtin call and releases owned temporary arguments after the call consumes them. pub(",
+  "text": "sed -n '160,200p' src/ir_lower/expr/function_calls.rs: ome(expr.span), ); } let eval_literal = eval_literal_fragment(canonical, args); emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal) } /// Emits a builtin call and releases owned temporary arguments after the call consumes them. pub(super) fn emit_builtin_call_value( ctx: &mut LoweringContext<'_, '_>, name: &str, operands: Vec<crate::ir::ValueId>, php_type: PhpType, span: Span, eval_literal: Option<&str>, ) -> LoweredValue { if eval_literal.is_none() { if let Some(def) = crate::builtins::registry::lookup(name) { let lowered = crate::builtins::semantics::lower_registry_call( ctx, def, &operands, &php_type, span, ) .unwrap_or_else(|error| { panic!( \"checked builtin {} failed backend-neutral EIR lowering at {}:{}: {}\", def.name, span.line, span.col, error, ) }); let call = LoweredValue { value: lowered.value, ir_type: ctx.builder.value_type(lowered.value), };",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "12fc961fcec49511b9c77abf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:39:07.561Z",
+  "stored_at": "2026-08-18T10:39:07.562Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff src/codegen_support/runtime/emitters/tests.rs",
+  "summary": "About to run: git diff src/codegen_support/runtime/emitters/tests.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6fb5d0ad6099731570e27ab3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:08:31.006Z",
+  "stored_at": "2026-08-21T16:08:31.006Z"
+}

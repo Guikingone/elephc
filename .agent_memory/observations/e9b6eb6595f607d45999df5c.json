@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '52,140p' src/ir_lower/program/spl_discovery.rs",
+  "summary": "sed -n '52,140p' src/ir_lower/program/spl_discovery.rs: ethods, module, class_name); } } Op::DynamicObjectNewWithoutConstructorMixed => { for class_name in module.class_infos.keys() { if !is_dynamic_new_mixed_metadata_candidate(class_name) { continue; } push_builtin_spl_metadata_methods(&mut methods, module, class_name",
+  "text": "sed -n '52,140p' src/ir_lower/program/spl_discovery.rs: ethods, module, class_name); } } Op::DynamicObjectNewWithoutConstructorMixed => { for class_name in module.class_infos.keys() { if !is_dynamic_new_mixed_metadata_candidate(class_name) { continue; } push_builtin_spl_metadata_methods(&mut methods, module, class_name); } } Op::MethodCall | Op::NullsafeMethodCall => { let Some(receiver) = inst.operands.first().copied() else { continue; }; let Some(receiver_ty) = function .value(receiver) .map(|value| value.php_type.codegen_repr()) else { continue; }; let Some(method_name) = string_data_name(module, inst) else { continue; }; let method_key = php_method_key(method_name); match receiver_ty { PhpType::Object(class_name) => { let normalized = class_name.trim_start_matches('\\\\'); push_supported_builtin_spl_method_for_receiver( &mut methods, module, normalized, &method_key, ); } // A Mixed/Union receiver dispatches at runtime over every class whose",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e9b6eb6595f607d45999df5c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:11:07.097Z",
+  "stored_at": "2026-08-25T12:11:07.097Z"
+}

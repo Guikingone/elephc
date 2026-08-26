@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 640,660p src/scanf_prelude.rs; echo \"=== test harness sites ===\"; sed -n 250,256p tests/codegen/support/compiler.rs; sed -n 62,70p src/ir_lower/tests/mod.rs",
+  "summary": "sed -n 640,660p src/scanf_prelude.rs; echo \"=== test harness sites ===\"; sed -n 250,256p tests/codegen/support/compiler.rs; sed -n 62,70p src/ir_lower/tests/mod.rs: :inject_if_used(resolved); let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory); let resolved = elephc::scanf_prelu",
+  "text": "sed -n 640,660p src/scanf_prelude.rs; echo \"=== test harness sites ===\"; sed -n 250,256p tests/codegen/support/compiler.rs; sed -n 62,70p src/ir_lower/tests/mod.rs: :inject_if_used(resolved); let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory); let resolved = elephc::scanf_prelude::inject_if_used(resolved); // `zend_version()`, `php_sapi_name()` and `ini_restore()` are ordinary php-visible functions; // without this the suite could not compile a program that calls one. let resolved = let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory); let ast = crate::dir_prelude::inject_if_used(ast); let ast = crate::gz_prelude::inject_if_used(ast); let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory); let ast = crate::scanf_prelude::inject_if_used(ast); // `zend_version()`, `php_sapi_name()` and `ini_restore()` are ordinary php-visible functions; // the default profile is what a lowering test compiles against. let ast = crate::version_prelude::inject_if_used( ast,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cd42811cd200d4904099c218",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:33:49.284Z",
+  "stored_at": "2026-08-21T16:33:49.284Z"
+}

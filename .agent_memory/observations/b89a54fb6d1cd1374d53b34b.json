@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/unport_reverse_key_sort.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/unport_reverse_key_sort.py: \"\"\"Temporarily lifts the ReverseKeySort port out so it can land as its own commit.\n\nThe two subjects share one file: th",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/unport_reverse_key_sort.py: \"\"\"Temporarily lifts the ReverseKeySort port out so it can land as its own commit.\n\nThe two subjects share one file: the null-receiver work renamed an opcode mentioned in a comment\nthere, and the krsort port adds a dispatch arm and two functions. Re-applied by\n`port_reverse_key_sort.py` immediately after the first commit.\n\"\"\"\nimport pathlib\n\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/expr/array_builtin_args.rs')\nt = p.read_text()\n\narm = '''        crate::builtins::semantics::BuiltinArgumentLowering::ReverseKeySort ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b89a54fb6d1cd1374d53b34b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:32:59.564Z",
+  "stored_at": "2026-08-21T07:32:59.566Z"
+}

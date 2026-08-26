@@ -18,14 +18,15 @@ exhaustive *what*.
 elephc [OPTIONS] <source-file>
 elephc --version
 elephc native <COMMAND> [OPTIONS]
+elephc monitor <PROGRAM> [OPTIONS]
 ```
 
 Except for `--help` and `--version`, exactly one positional argument is required:
 the path to tagged `.php` or tagless `.lfc` source. The binary is written next
 to it, named after the source without its extension.
-Only an exact first argument of `native` selects the package command family. A
-source file literally named `native` must therefore be passed as `./native` or
-by another explicit path.
+Only an exact first argument of `native` or `monitor` selects a subcommand
+family. A source file literally named `native` or `monitor` must therefore be
+passed as `./native` or by another explicit path.
 
 ## Native dependency commands
 
@@ -50,6 +51,161 @@ only through the explicit `native prune` command.
 See [Native dependencies](native-dependencies.md) for project files, cache
 selection, toolchain overrides, and transactional behavior.
 
+## Performance monitoring command
+
+| Command | Arguments and flags | Description |
+|---|---|---|
+| `monitor` | `<program\|source.php> [--html <file>] [--trace <file>] [--assert <expr>] [--assert-file <file>] [--save <file>] [--baseline <file>] [--out <file.speedscope.json>]` | Profile a program built with `--with-monitoring` (a `.php` source is built first): measured per-function time, allocations, retained objects, I/O wait, SQL queries and call counts — exact, not sampled shares. A *service* read over its endpoint answers from the sample ring instead, unless `--exact` is given, which returns the measured table for one completed request (and cannot be combined with the exporters). A binary without the capability is refused. |
+| `monitor <address>` | `<host:port\|http://host\|https://host\|/path/to.sock> [--key <file>] [--out <file>] [--pprof <file>] [--dot <file>] [--html <file>]` | Profile a service that is already running, through its endpoint. Sampled by default; `--exact` returns the measured table for the next request that completes. Needs the build key. |
+| `monitor --attach` | `<pid> [--live] [--duration <seconds>]` | Monitor an already-running local process (and its worker children) instead of spawning one. Sampled, and macOS-only. |
+| `monitor --live` | `<program\|source.php> [--duration <seconds>] [--html <file>] [--serve <host:port>]` | Top-style table refreshed once per window. Sampled, and macOS-only. |
+| `monitor --stitch` | `<log> [<log>...] [--html <file>] [--otlp <endpoint>] [--prometheus <file>]` | Correlate per-request slices from several services into distributed traces, joined by W3C trace id; summarise them per service and route, and export them as OpenTelemetry spans or Prometheus metrics. |
+
+`elephc monitor` runs the program and renders what it measured: a per-function
+cause table with proportion bars (runtime helper time translated to heap
+allocation, Mixed cell boxing, reference counting, ...), and a Speedscope JSON
+with two views — **PHP (helpers folded)** shows only PHP functions and methods,
+with runtime-helper time folded into the calling frame; **Why (runtime)** keeps
+the helper frames, each annotated. In GitHub Actions (when `$GITHUB_STEP_SUMMARY`
+is set) the same report is appended to the job summary as a Markdown table plus a
+Mermaid cause chart.
+
+**Which target, not which mode.** A `.php` source is compiled with
+`--with-monitoring` and read; a binary that carries the capability is read; an
+address is read through the running service's endpoint. The command is the same
+one in every case, and you never choose a mechanism. What the target can answer
+does differ, and in exactly one place: a **program** is measured exactly, while a
+**service** answers from its sample ring — it is serving other traffic, and
+stopping it to instrument one request is not on offer. `--exact` against a
+service asks for the measured per-function table of the next request that
+completes, at that request's expense. A binary built without `--with-monitoring`
+is **refused**, with both remedies printed — there is no reduced fallback,
+because a degraded profile that looks like the real one is worse than none.
+
+Reading a running service (`monitor <address>`) needs the build key: from
+`--key <file>`, the `ELEPHC_PROBE_KEY` hex environment variable, or a `.key`
+sidecar next to the socket. Client and server run a mutual HMAC handshake — no
+secret crosses the connection, a client that cannot prove the key is disconnected
+before any samples are sent, and the client rejects a server that cannot prove
+it, and the profile itself crosses sealed under keys both sides derive from the build key and the two nonces — so a relay that forwards both proofs still receives ciphertext. `https://` is for an endpoint behind a TLS terminator, where the certificate is validated against the system roots first; the probe listener itself speaks the framed protocol, not TLS. Unix
+socket paths are limited to ~104 bytes (`SUN_LEN`), so keep the socket in `/tmp`
+or `/run`. Launching a program locally needs no key at all: `monitor` hands the
+child a control channel on fd 3, and possession of that channel is the credential.
+
+`--pprof <file.pb.gz>` additionally exports the capture as a gzip-compressed
+pprof profile readable by `go tool pprof`, Grafana Pyroscope, and Parca.
+`--dot <file.dot>` and `--html <file.html>` export the capture as a **call
+graph** — one node per PHP function (inclusive and self share, plus the runtime
+causes sampled under it), edges weighted by the samples that took each
+caller→callee call. `--dot` writes Graphviz (`dot -Tsvg call.dot -o call.svg`);
+`--html` writes a self-contained, interactive Blackfire-style page (hover for
+per-function metrics and cause bars, click to isolate a function's callers and
+callees, search, zoom/pan) that opens in any browser with no network access.
+Both flags also apply to a `monitor <address>` capture.
+
+Combined with `--live`, `--html` becomes a **real-time** view: it rewrites the
+page every window and keeps the last 10 captures navigable — a timeline scrubber
+(arrow keys), a follow-latest toggle (`l`), and a diff-vs-previous mode (`d`)
+that outlines functions whose self time grew since the previous frame. The page
+auto-reloads and restores your selected frame, pan, and zoom across reloads, so
+you watch the hot path move phase by phase. The frames are laid out on one
+stable union of every capture, so a node keeps its position as you scrub.
+`--baseline <prior.speedscope.json>` compares this run's per-function shares
+against a previous monitor capture and prints the deltas; with
+`--fail-on-regression <points>` the command exits with status 2 when any
+function's share grew by more than that many percentage points. Compare
+captures of the same kind — a `.php` capture recovers inlined frames that a
+bare-binary capture cannot, and the asymmetry reads as phantom deltas.
+Sampling noise on identical runs measures around ±0.3 points at ~1,500
+samples; thresholds of a few points are well clear of it.
+
+`--live` and `--attach` read a process from the **outside** with `/usr/bin/sample`
+— the only way to look at a program already running under someone else's control,
+with nothing built into it. Their numbers are sampled shares, they cannot see
+time spent blocked on I/O, and they need macOS. On Linux, or for a process that
+does carry the capability, use `monitor <address>`: it answers from the process's
+own sample ring, which does account for I/O wait, and with `--exact` returns the
+measured per-function table for one completed request.
+
+`--live` turns the table into a top-style display refreshed once per window
+(`--duration`, default 3s in live mode): the current window's shares with
+trend arrows against the previous window, the cumulative share alongside, and
+a final cumulative table on exit. `--attach <pid>` monitors a process that is
+already running — Ctrl-C stops monitoring and leaves it running. In both
+modes the target's direct children are discovered each window and merged, so
+a `--web` prefork server is measured across all its workers, not just the
+master. Live mode skips inlined-frame recovery to keep the refresh light. When
+the sampler refuses (it will not read a process it did not spawn without
+elevation), the command says so rather than reporting an empty capture.
+
+When the target is a `.php` source and its `.dSYM` bundle is present, calls
+erased by the inliner reappear as virtual `name (inlined)` frames: the inliner
+preserves the callee's source lines, so a sample inside the caller that
+resolves to a line owned by another function's declaration marks the erased
+call boundary. This recovery is best-effort and silently degrades to plain
+frames without the source or the dSYM.
+
+What the capability buys is **measuring** rather than sampling: exact numbers,
+six dimensions, and true edge counts instead of statistical shares.
+`--assert '<metric>:<function><op><value>'` gates the run — for example
+`--assert 'queries:load_price<=1'` or `--assert 'self_ms:*<250'`. Metrics are
+`calls`, `allocs`, `retained`, `queries`, `self_ms`, `incl_ms`, `wait_ms` and
+`time_pct`; the operator is one of `<=`, `>=`, `==`, `<`, `>`; `*` as the
+function name means the whole run. Any failure exits 2. Repeat the flag for several budgets. A project's
+standing budget lives in a `.elephc` file found by walking up from the source,
+so `--assert` is for one-off checks and the file is for the ones you keep; both
+are reported in the page's ✓ Checks view. `--save <file.json>` writes the exact
+capture and `--baseline <file.json>` reads one back, colouring the graph red and
+green by what grew and shrank between two runs — an A/B whose numbers are
+measured, so a difference of one allocation is real rather than noise.
+`--trace <file.json>` additionally writes a Chrome/Perfetto timeline of every
+call.
+
+A stitched capture opens with a **per-service summary** — request count, p50/p90/
+p95/p99, rate, mean queries per request, and the share of time spent waiting on a
+database. Percentiles are nearest-rank, so each one is a duration some request
+actually took; below 20 requests the report says outright that its upper
+percentiles are that service's slowest requests rather than a distribution. When
+every slice names a route the rows split per endpoint, which is where a slow one
+hides — a service-wide p95 averages it away.
+
+`--otlp <endpoint>` posts those slices to an OTLP/HTTP collector as
+**OpenTelemetry spans**. elephc already carried the W3C trace identity, so a
+service belonged to its caller's trace; this makes it *appear* there rather than
+leaving a gap. Plain HTTP to a local agent (`http://127.0.0.1:4318`) is the
+intended shape — an https endpoint is refused with that advice, keeping a TLS
+stack out of the compiler. A slice with no timestamp is skipped and counted,
+since OTel needs both ends of an interval and epoch 0 would file it under 1970.
+
+Traces only, deliberately. The OTel **Profiles** signal is alpha and its own SIG
+advises against depending on it; it is also unnecessary here, because OTLP
+Profiles round-trips losslessly with pprof and the Collector ships a `pprof`
+receiver — so `--pprof` already puts elephc profiles into an OTel backend:
+
+```yaml
+receivers:
+  pprof:
+    endpoint: 127.0.0.1:4319
+service:
+  pipelines:
+    profiles:
+      receivers: [pprof]
+      exporters: [otlp]
+```
+
+`--prometheus <file>` writes the same per-service stats in the text exposition
+format for a textfile collector — a file rather than an endpoint, because
+`monitor` runs and exits and leaves nothing to scrape. Percentiles are exposed as
+a `summary`, not a histogram: we hold exact per-request values, and buckets would
+invent a resolution the capture does not have.
+
+`--serve <addr>` serves the HTML page over HTTP instead of writing it to disk,
+rewriting it in place as new captures arrive — the page updates without a
+reload, which is what makes `--live --serve` usable on a second monitor.
+`--stitch <log>...` reads the per-request slices that a `--web` binary emits and
+groups them by W3C trace id, so one page shows a request's path across several
+services. See [Profiling](../beyond-php/profiling.md) for both in full.
+
 ## Input and output
 
 | Flag | Values | Default | Description |
@@ -60,6 +216,7 @@ selection, toolchain overrides, and transactional behavior.
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run front-end checks only; write nothing. |
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
+| `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. See [Strict locals mode](#strict-locals-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--keep-symbols` | — | off | Keep the symbol table in the linked executable. It is stripped by default; `--debug-info` also implies keeping it. See [Symbol stripping](#symbol-stripping). |
@@ -332,6 +489,194 @@ Strict mode guarantees that the *constructs* used are PHP-compatible; it does
 not change elephc's static-subset semantics. A strict-valid program can still be
 rejected by the type checker in places where the PHP interpreter would run it.
 
+## Strict locals mode
+
+| Flag | Values | Default | Description |
+|---|---|---|---|
+| `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. |
+
+By default (permissive mode) an **untyped** local variable is allowed to
+change type during its lifetime in three shapes that would otherwise be a
+compile error:
+
+- **`unset()` kill.** `unset($a)` KILLS the binding when BOTH the binding's
+  creating assignment and the `unset($a)` call itself sit at conditional depth
+  0 — each a straight-line statement, not nested inside any
+  `if`/loop/`try`/`switch`/…. The creating assignment can occur anywhere in
+  the body, not only as its first statement; a CONDITIONAL `unset($a)` (one
+  itself nested inside a branch or loop) does not kill, since the branch may
+  never run. The name must also be never reference-aliased. A later read of a
+  killed `$a` is an `Undefined variable: $a` error, and a later assignment
+  binds `$a` fresh, at any type, with no warning. This is
+  **mode-independent** — it behaves identically under `--strict-locals`.
+- **Straight-line retype.** A plain statement-form reassignment at the same
+  eligibility (`$a = 0; $a = "ciao";`, and a compound form that parses as a
+  plain assignment, such as `$x = 1; $x .= "a";`) re-binds the name to a fresh
+  slot of the new type and emits a warning instead of failing:
+  ```text
+  $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
+  ```
+- **Branch-divergent assignment.** `if (…) { $a = 0; } else { $a = "ciao"; }`
+  — and the same shape for a single-branch retype of an outer binding, or a
+  heterogeneous loop-carried local — compiles instead of failing, as
+  whole-frame boxed `Mixed` storage for that local, with a warning:
+  ```text
+  $a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)
+  ```
+  The warning is a performance signal as much as a correctness one: every read
+  of a `Mixed`-storage local goes through boxed dispatch instead of a plain
+  register/stack slot for the rest of the body.
+
+All three shapes require the name to be **never reference-aliased** — no `=&`
+target or source, no `use (&$x)` capture, no by-reference parameter (including
+a variadic `&...$xs`), and neither name a by-reference `foreach` touches:
+`foreach ($arr as &$v)` permanently aliases **both** `$arr`, the container the
+loop holds references into, and `$v`, which *is* one of those references. PHP
+leaves `$v` bound to the last element after the loop ends, so a later
+`$v = "s"` writes straight into `$arr` — which is why `$v = 0; foreach ($arr as
+&$v) {} $v = "s";` stays a hard error in both modes instead of retyping. The
+by-VALUE form copies each element and aliases nothing, so `$arr` and `$v` both
+stay eligible there.
+
+Passing the name to a call aliases it too, whenever elephc cannot see the
+callee's parameter list. An argument bound to a declared `&$p` is the obvious
+case, but so is ANY plain-variable argument of a call whose callee has no
+resolvable signature: a variable function (`$f = "strlen"; $f($a);`), a
+dynamically named method (`$o->$m($a)`), a `call_user_func()` whose target is
+picked at run time, a `callable` parameter elephc could not specialize. Such a
+callee may bind the argument by reference, and the reference outlives the call,
+so the conservative answer is the only sound one. A call elephc CAN resolve
+costs the name nothing: `f($a)`, `$c->m($a)`, `call_user_func('var_dump', $a)`
+and `$a |> strval(...)` all leave a by-value argument fully eligible.
+
+None of the three applies to a name whose storage this body does not own: a name
+this body binds with `global`, a `static` name, or a superglobal or seeded name
+(`$argc`, `$argv`, and the extern C globals, seeded into the top-level scope).
+A **declared type** always stays strict in both modes: a typed local
+(`int $x = 5;`), a type-hinted parameter, and a class property never retype or
+box to `Mixed` — reassigning one incompatibly is a compile error exactly as
+before.
+
+Beyond those shared exclusions the shapes are gated differently:
+
+- The **`unset()` kill** and the **straight-line retype** additionally require
+  the name's current binding to be **unconditional**: the binding and the
+  `unset`/reassignment must both sit at conditional depth 0 — straight-line
+  code that dominates everything after it. That is what makes ending the
+  binding safe, since the store that replaces it definitely runs.
+  Top-level code pulled in with **`require_once`** is not at depth 0: its
+  include guard lowers to a runtime branch, so every TOP-LEVEL statement of the
+  included file sits at conditional depth ≥ 1 and neither shape fires there (an
+  incompatible reassignment among them is the hard error, or the
+  branch-divergent boxing if it qualifies). A FUNCTION, method, or closure body
+  declared in that same file is unaffected: depth is counted per body, so its
+  locals are at depth 0 as usual and both shapes apply to them normally. Plain
+  **`require`** splices the file in with no guard, so even its top-level
+  statements behave exactly like inline code.
+- The **`unset()` kill** additionally stands down at top level for any name
+  some OTHER body's `global` statement declares — a name main itself never
+  declares `global`, and so is not excluded outright above. Such a variable's
+  storage is the program-global symbol other bodies reach, not main's frame
+  slot, so the binding is kept and `unset` is a plain typing no-op on it. The
+  search covers every other function, method, and top-level statement body —
+  exactly the reach the compiler's own lowering has, since both read the same
+  walk. Three positions therefore fall outside it on both sides alike: a
+  `global` written inside a closure body, inside an assignment prelude, or
+  inside an enum method is seen by neither. The straight-line retype is
+  unaffected there and still applies.
+- The **branch-divergent** shape has no such requirement, and could not: it
+  exists precisely for the case where at least one of the two conflicting
+  assignments is inside a branch or loop, as its `if`/`else` example is. It
+  never ends a binding — the local gets one boxed slot for the whole body —
+  so what it requires instead is that every write to the name in the body be
+  syntactically exact evidence: a literal, a scalar cast, or a `.` string
+  concatenation. Any other write shape (`++`/`--`, a `foreach`/`list()`
+  target, an `unset()` mention, `=&`, `global`, or `static`) disqualifies the
+  name from boxing and leaves it on today's hard error. The pre-scan does SKIP
+  an assignment sitting inside a branch guarded by a **non-negated type test on
+  the name itself** (`if (is_string($a)) { $a = "x"; }`): the guard already
+  established the type the assignment writes, so it is not evidence of
+  divergence and does not mark the name.
+
+  Calls are judged more strictly here than by the two kill shapes. This pre-scan
+  runs before inference, so the only callee it can resolve is one it looks up by
+  NAME: every argument — **by value included** — of a method call, a `::` static
+  call, a `new`, a call through a closure variable or an arbitrary expression, or
+  a dynamic `new` disqualifies the local behind it, and so does any argument of a
+  plain function call whose name it cannot resolve. Only a plain call to a KNOWN
+  by-value function, and a pipe into one (`$a |> strval(...)`), leave the
+  argument boxable. So `$c->m($a)` with an ordinary `m(mixed $v)` keeps a
+  branch-divergent `$a` on the hard error, where the identical `f($a)` boxes it.
+
+  A **parameter** is never boxed by this shape at all (it is already bound
+  when the body starts). A by-value closure **capture** is the one pre-bound
+  shape that IS boxed — dropping its mark would strand the value the capture
+  owns — though the warning is withheld where the capture's incoming type
+  already absorbs every assignment, since the advice to compile with
+  `--strict-locals` would be false there.
+
+`--strict-locals` restores the hard error for the two warning shapes above:
+
+```text
+Type error: cannot reassign $a from int to string
+```
+
+`eval()`'d code — whether AOT-lowered from a literal fragment or run through
+the optional Magician interpreter bridge — reads and writes its locals through
+a boxed `Mixed` scope representation rather than a typed frame slot, so it was
+never subject to the monomorphic-local check `--strict-locals` restores.
+`--strict-locals` therefore has no effect inside `eval()` fragments.
+
+A body that **calls** `eval()` anywhere is the other side of that coin: the
+eval scope reaches the surrounding function's locals BY NAME, while the kill
+and the straight-line retype end a binding and give the name a different frame
+slot. Both therefore step aside for the whole body — `unset()` is a plain
+typing no-op there, and an incompatible reassignment is the hard error in both
+modes, whether the `eval()` call sits above or below it. The branch-divergent
+shape is unaffected, because a boxed `Mixed` slot is exactly what the eval
+scope wants:
+
+```php
+$a = 1; unset($a); eval('$a = 5;'); echo $a;   // prints 5 — the binding survives
+$a = "old"; $a = 7; eval('echo $a;');          // Type error: cannot reassign $a
+if ($n > 1) { $b = 1; } else { $b = "z"; }     // still boxed Mixed, still a warning
+eval('echo $b;');
+```
+
+**Two statements at the same position.** elephc files each of these decisions
+against the source position of the statement that triggered it, and a position
+carries no file identity. So when two statements in the compiled program share a
+line *and* column *and* name the same variable — the same line:column in two
+different included files, or one retyping file pulled in twice with plain
+`require`, which splices its statements in again — elephc cannot tell which of
+the two it decided about. Rather than misapply the decision to one of them
+silently, it rejects the program:
+
+```text
+Cannot re-bind $a here: 2 statements in this program sit at line 2 column 1 and name $a. …
+```
+
+The message names both causes because it cannot distinguish them. Keep the two
+assignments type-compatible, or move one statement to a different line or column.
+
+**Migrating.** The `unset()` kill is the one shape that can reject code that
+compiled before. Reading a variable after a straight-line `unset()` of it is now
+`Undefined variable: $a` — in BOTH modes, since the kill is not gated by
+`--strict-locals` — where the read previously saw the nulled slot. That matches
+PHP, which warns on the same read and evaluates it as `null`. The idiomatic
+probe is `isset()` (or `empty()` / `??`), all of which stay legal on an unbound
+name and answer "not set":
+
+```php
+$a = "x"; unset($a);
+echo $a;                            // Undefined variable: $a — compile error
+echo isset($a) ? "set" : "unset";   // fine: prints "unset"
+echo $a ?? "dflt";                  // fine: prints "dflt"
+```
+
+See [The Type Checker](../internals/the-type-checker.md#local-retyping-and-strict-locals-mode)
+for the full mechanism, including which files implement each shape.
+
 ## INI directives
 
 An AOT binary has no `php.ini` to read at startup: its INI surface is compiled
@@ -415,6 +760,9 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | `--timings` | — | off | Print per-phase compiler timings to stderr. |
 | `--quiet` / `-q` | — | off | Disable progress lines and colorized compiler output. |
 | `--gc-stats` | — | off | Print allocation/free counters at exit. |
+| `--counters` | — | off | Embed one BSS call counter per PHP function (a single prologue increment) and print exact `elephc-counters: <name> <count>` lines to stderr at exit. A fully inlined call site keeps its counter at zero, which makes inlining visible by difference. |
+| `--with-monitoring` | — | off | Embed the profiling capability: the exact instrumentation runtime (`elephc-instr`), the in-process sampling probe (`elephc-probe`), the symbol table both read, and a 32-byte build key. **Dormant until asked** — a monitored binary run on its own behaves and prints exactly like one built without it, and turns nothing on until `elephc monitor` connects over its control channel or endpoint, or a signed `X-Elephc-Query` header arrives. When asked, every PHP function is wrapped with `elephc_instr_enter/exit` and the run prints an **exact** (not sampled) profile to stderr: `elephc-instr: <name> calls=N incl_ns=X excl_ns=Y incl_allocs=A excl_allocs=B ...` per function plus `elephc-instr-edge: <caller> -> <callee> count=N ns=Y`. The `*_allocs` are exact per-function heap allocation counts (elephc owns the allocator), `*_io` are exact per-function DB query counts (PDO), so N+1 patterns are detected with certainty, `*_ret` are exact **retained** objects (allocated minus freed, signed) so a function that keeps what it builds is visible as a leak, and `*_wait` are the exact nanoseconds spent blocked inside a driver call, so each function's self time splits into CPU and I/O wait — five cost dimensions alongside time. When any DB queries ran it also prints `elephc-instr-query: <count> <normalized SQL>` per distinct statement (literals collapsed to `?`, so repeated queries aggregate); `elephc monitor --html` turns these into a 🗄 Queries panel, and gates the build against the project's `.elephc` performance budget (found by walking up from the source) plus any `--assert` flags. Inclusive is the outermost activation (recursion-safe), exclusive is inclusive minus callees, and exclusive times sum to the root's inclusive. Costs about **30 ns per profiled call** and nothing while dormant, so what it costs a program is `30 ns × its call count`: on the demo service (135,351 calls in 250 ms) that is +0% dormant, +3% while profiling and +219 KB of binary, while a loop that is almost nothing but calls pays +48%. Benchmarking inside a source checkout shows roughly seven times those figures, because the bridge archive is resolved from the directory the compiler itself lives in and a checkout links the debug build of the runtime. Inlined functions fold into their caller (as with `--counters`). An exception's frames never run their own exit hook, so the runtime's single unwinder reports the throw and they are closed at that instant, in all six dimensions — what a catch handler spends belongs to the handler, not to whatever threw. Per-thread, reporting the main thread at exit. Also writes the build key to a `<binary>.key` sidecar (keep it like a `.env` secret) and prints its public fingerprint; when `ELEPHC_PROBE_ADDR` names a socket path or `host:port` at run time, a background thread serves the profile to `elephc monitor <address>` after a mutual HMAC handshake proving both sides hold the key. Set `ELEPHC_INSTR_TRACE=<path>` at run time (or `elephc monitor --trace <path>`) to also write a Chrome/Perfetto timeline of every call (bounded by `ELEPHC_INSTR_TRACE_MAX`, default 500k). |
+| `--with-monitoring=<names>` | comma list, or `@file` | — | Embed the capability for **only** the named functions; a trailing `*` matches by prefix (`PDOStatement::*`). `@file` reads one name per line, `#` comments allowed. Everything else runs at full speed, which is what makes exact profiling affordable on a service under load: on the demo service, profiling all 35 functions cost +3% while profiling 3 cost +2% (+22% and +6% against a source checkout's debug runtime). The trade is reported rather than hidden — with a subset, an uninstrumented callee's time lands in its instrumented caller's **self**, so self values no longer sum to the root's inclusive, and the run prints `note: selective instrumentation` saying exactly that. |
 | `--heap-debug` | — | off | Enable runtime heap verification (double-free, bad refcount, free-list corruption). |
 | `--help` / `-h` | — | off | Print the compiler help, including the current elephc version, and exit successfully. |
 | `--version` / `-V` | — | off | Print the elephc compiler version and exit successfully. |

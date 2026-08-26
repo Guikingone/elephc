@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'temp' src/codegen_support/runtime/resources/layout.rs | head -20",
+  "summary": "grep -rn 'temp' src/codegen_support/runtime/resources/layout.rs | head -20: src/codegen_support/runtime/resources/layout.rs:177:/// and `php://temp` report a spelling of php-src's own. Deriving it from the descriptor's",
+  "text": "grep -rn 'temp' src/codegen_support/runtime/resources/layout.rs | head -20: src/codegen_support/runtime/resources/layout.rs:177:/// and `php://temp` report a spelling of php-src's own. Deriving it from the descriptor's",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ef5829442f26d69621fb38dd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:43:14.374Z",
+  "stored_at": "2026-08-25T13:43:14.374Z"
+}

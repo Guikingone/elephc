@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "jq -r '.. | objects | select(has(\"name\")) | .name' tests/php_oracle/manifests/streams/php-8.5.6/macos-aarch64/streams-full.json 2>/dev/null | sort -u | head -60",
+  "summary": "jq -r '.. | objects | select(has(\"name\")) | .name' tests/php_oracle/manifests/streams/php-8.5.6/macos-aarch64/streams-full.json 2>/dev/null | sort -u | head -60: AFL_CREATE_OR_KEEP_FILE_FOR_EMPTY_ARCHIVE AFL_IS_TORRENTZIP AFL_RDONLY AFL_WANT_TORRENTZIP BZ2 CHECKCONS CM_BZIP2 CM_DEFAULT CM_DEFLATE CM_DEFLATE64 CM_IMPLOD",
+  "text": "jq -r '.. | objects | select(has(\"name\")) | .name' tests/php_oracle/manifests/streams/php-8.5.6/macos-aarch64/streams-full.json 2>/dev/null | sort -u | head -60: AFL_CREATE_OR_KEEP_FILE_FOR_EMPTY_ARCHIVE AFL_IS_TORRENTZIP AFL_RDONLY AFL_WANT_TORRENTZIP BZ2 CHECKCONS CM_BZIP2 CM_DEFAULT CM_DEFLATE CM_DEFLATE64 CM_IMPLODE CM_LZ77 CM_LZMA CM_LZMA2 CM_PKWARE_IMPLODE CM_PPMD CM_REDUCE_1 CM_REDUCE_2 CM_REDUCE_3 CM_REDUCE_4 CM_SHRINK CM_STORE CM_TERSE CM_WAVPACK CM_XZ CM_ZSTD COMPRESSED CREATE CURRENT_AS_FILEINFO CURRENT_AS_PATHNAME CURRENT_AS_SELF CURRENT_MODE_MASK Core DROP_NEW_LINE Directory DirectoryIterator EM_AES_128 EM_AES_192 EM_AES_256 EM_NONE EM_TRAD_PKWARE EM_UNKNOWN ER_CANCELLED ER_CHANGED ER_CLOSE ER_COMPNOTSUPP ER_COMPRESSED_DATA ER_CRC ER_DATA_LENGTH ER_DELETED ER_ENCRNOTSUPP ER_EOF ER_EXISTS ER_INCONS ER_INTERNAL ER_INUSE ER_INVAL ER_MEMORY ER_MULTIDISK ER_NOENT",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "397de07f6f0cd6324d8446c2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:14:11.838Z",
+  "stored_at": "2026-08-14T14:14:11.838Z"
+}

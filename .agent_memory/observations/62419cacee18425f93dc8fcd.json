@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '140,175p' tests/error_tests/recovery.rs",
+  "summary": "sed -n '140,175p' tests/error_tests/recovery.rs: t] fn test_failed_assignment_preserves_later_real_undefined() { let messages = checker_error_messages( \"<?php $x = 5; $s = [...$x]; echo count($s); echo $undefined_for_real;\", ); assert_eq!( messages.len(), 2, \"expected the spread error plus the genuine undefined-variabl",
+  "text": "sed -n '140,175p' tests/error_tests/recovery.rs: t] fn test_failed_assignment_preserves_later_real_undefined() { let messages = checker_error_messages( \"<?php $x = 5; $s = [...$x]; echo count($s); echo $undefined_for_real;\", ); assert_eq!( messages.len(), 2, \"expected the spread error plus the genuine undefined-variable error, got {:?}\", messages, ); assert!( messages.iter().any(|message| message.contains(\"Spread operator requires an array\")), \"expected the spread diagnostic, got {:?}\", messages, ); assert!( messages.iter().any(|message| message.contains(\"Undefined variable: $undefined_for_real\")), \"a genuinely undefined variable must still be diagnosed, got {:?}\", messages, ); assert!( !messages.iter().any(|message| message.contains(\"Undefined variable: $s\")), \"the recovered target must not be reported as undefined, got {:?}\", messages, ); } /// Regression for #597: a typed local declaration whose initializer fails to type-check binds",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "62419cacee18425f93dc8fcd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:24:40.824Z",
+  "stored_at": "2026-08-20T19:24:40.825Z"
+}

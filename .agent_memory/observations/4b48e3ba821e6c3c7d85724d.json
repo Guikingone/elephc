@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"php://nosuch\\|Invalid php\\|php://bogus\" tests/codegen/io/streams.rs src 2>/dev/null | head -5; echo \"=== data bad base64 test ===\"; grep -n \"base64,!\\|unable to decode\\|data://bogus\" tests/codegen/io/*.rs | head -5",
+  "summary": "grep -rn \"php://nosuch\\|Invalid php\\|php://bogus\" tests/codegen/io/streams.rs src 2>/dev/null | head -5; echo \"=== data bad base64 test ===\"; grep -n \"base64,!\\|unable to decode\\|data://bogus\" tests/codegen/io/*.rs | head -5: === data bad base64 test === tests/codegen/io/files.rs:194:echo var_export(@file_get_contents(",
+  "text": "grep -rn \"php://nosuch\\|Invalid php\\|php://bogus\" tests/codegen/io/streams.rs src 2>/dev/null | head -5; echo \"=== data bad base64 test ===\"; grep -n \"base64,!\\|unable to decode\\|data://bogus\" tests/codegen/io/*.rs | head -5: === data bad base64 test === tests/codegen/io/files.rs:194:echo var_export(@file_get_contents(\"data://bogus\"), true), \"|\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4b48e3ba821e6c3c7d85724d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:20:53.549Z",
+  "stored_at": "2026-08-14T14:20:53.550Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_tests.py && RUST_MIN_STACK=33554432 cargo test --test codegen_tests exceptions::test_uncaught_report 2>&1 | grep -E \"^test |test result|panicked|expected|got:\" | head -12",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_tests.py && RUST_MIN_STACK=33554432 cargo test --test codegen_tests exceptions::test_uncaught_report 2>&1 | grep -E \"^test |test result|pan",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_tests.py && RUST_MIN_STACK=33554432 cargo test --test codegen_tests exceptions::test_uncaught_report 2>&1 | grep -E \"^test |test result|panicked|expected|got:\" | head -12:  tests pinned test codegen::exceptions::test_uncaught_report_carries_phps_stack_trace_block ... FAILED test codegen::exceptions::test_uncaught_report_omits_a_trace_it_cannot_complete ... ok test codegen::exceptions::test_uncaught_report_names_the_raising_builtin_and_its_arguments ... FAILED thread 'codegen::exceptions::test_uncaught_report_carries_phps_stack_trace_block' (40709595) panicked at tests/codegen/exceptions.rs:908:5: expected php's trace block, got: Fatal error: Uncaught RuntimeException: boom in test.php:2 thread 'codegen::exceptions::test_uncaught_report_names_the_raising_builtin_and_its_arguments' (40709596) panicked at tests/codegen/exceptions.rs:928:5: expected the builtin frame with its arguments, got: Fatal error: Uncaught ValueError: Path must not be empty in test.php:2 test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 8847 filtered out; finished in 1.47s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "74a63d7fe77e06407cc791a2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:54:40.718Z",
+  "stored_at": "2026-08-22T12:54:40.719Z"
+}

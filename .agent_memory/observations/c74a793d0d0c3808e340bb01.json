@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1,40p' src/codegen_support/runtime/io/stream_select_cast_warning.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1,40p' src/codegen_support/runtime/io/stream_select_cast_warning.rs: cases distinguishable: the vtable slot is empty in //! exactly the case php names the method. use crate::codegen_support::runtime::data::{ SELECT_C",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1,40p' src/codegen_support/runtime/io/stream_select_cast_warning.rs: cases distinguishable: the vtable slot is empty in //! exactly the case php names the method. use crate::codegen_support::runtime::data::{ SELECT_CAST_UNREPRESENTABLE, WRAPPER_MISSING_HOOK_HEAD_SELECT, WRAPPER_MISSING_HOOK_TAIL_CAST, }; use crate::codegen_support::{abi, emit::Emitter, platform::Arch}; /// The `stream_cast` vtable slot, mirroring `user_wrapper_cast`. const VTABLE_SLOT_CAST: usize = 10; /// Emits `__rt_stream_select_cast_warning(fd)`. /// /// `fd` is the synthetic user-wrapper descriptor the cast refused. A descriptor that resolves to no /// object reports only the second warning, because there is no class left to name. pub fn emit_stream_select_cast_warning(emitter: &mut Emitter) { match emitter.target.arch { Arch::AArch64 => emit_aarch64(emitter), Arch::X86_64 => emit_x86_64(emitter), } } /// The AArch64 composer. fn emit_aarch64(emitter: &mut Emitter) { emitter.blank();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c74a793d0d0c3808e340bb01",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:57:45.322Z",
+  "stored_at": "2026-08-22T17:57:45.322Z"
+}

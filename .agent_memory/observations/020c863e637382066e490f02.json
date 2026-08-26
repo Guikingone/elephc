@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/ctxsingular.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/ctxsingular.php: <?php\n\nclass Thing\n{\n}\n\n$values = [\n    \"int\"    => json_decode(\"1\"),\n    \"float\"  => json_decode(\"1.5\"),\n    \"true\"   => json_de",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/ctxsingular.php: <?php\n\nclass Thing\n{\n}\n\n$values = [\n    \"int\"    => json_decode(\"1\"),\n    \"float\"  => json_decode(\"1.5\"),\n    \"true\"   => json_decode(\"true\"),\n    \"null\"   => json_decode(\"null\"),\n    \"object\" => json_decode('{\"a\":1}'),\n    \"thing\"  => [new Thing(), 1][0],\n];\n\nforeach ($values as $name => $value) {\n    try {\n        stream_context_set_option(stream_context_create(), $value);\n        echo $name, \"/2-arg => ok\\n\";\n    } catch (Throwable $t) {\n        echo $name, \"/2-arg => \", get_class($t), \": \", $t->getMessage(), \"\\n\";\n    }\n}\n\n// And the plural spelling must NOT carry the singular's deprecatio",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "020c863e637382066e490f02",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:52:42.477Z",
+  "stored_at": "2026-08-22T16:52:42.478Z"
+}

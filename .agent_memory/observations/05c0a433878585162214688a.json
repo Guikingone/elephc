@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py: \"\"\"Removes codegen-test scratch directories whose process is gone.\n\nThe harness names each one `elephc_test_<pid>_<thread",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py: \"\"\"Removes codegen-test scratch directories whose process is gone.\n\nThe harness names each one `elephc_test_<pid>_<thread>_<n>` and deletes it on success, so what\naccumulates is the debris of runs that ABORTED — and this session aborted three. 1 576 of them\nwere left behind, several gigabytes on a volume with under 9 GiB free while a suite is running.\n\nThe pid in the name is what makes this safe: another worktree is running its own suite right now,\nand deleting its live directories would break that run. Only directories whose pid is no longer a\nrunning process are removed, so a live run of any",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "05c0a433878585162214688a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:59:32.714Z",
+  "stored_at": "2026-08-21T20:59:32.715Z"
+}

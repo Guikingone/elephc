@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe_preg2.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe_preg2.py: import pathlib, re\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signat",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe_preg2.py: import pathlib, re\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\np = ROOT / \"tests/ir_backend_smoke_test.rs\"\ns = p.read_text()\ns = s[: s.index(\"\\n#[test]\\nfn zz_temp_probe_preg_matches_shape\")]\n\nPHP = r'''<?php\n$ok = preg_match(\"/(a)?(b)/\", \"b\", $undeclared);\nvar_dump($ok, $undeclared);\n$miss = preg_match(\"/zzz/\", \"b\", $nomatch);\nvar_dump($miss, $nomatch);\n$n = preg_match_all(\"/[ab]/\", \"aab\", $all);\nvar_dump($n, $all);\nfunction grab(string $s): array {\n    preg_match(\"/(\\d+)-(\\d+)/\", $s, $parts);\n    return $parts;\n}\nv",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1027a0c30f69487b4a110ba2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:11:23.195Z",
+  "stored_at": "2026-08-25T13:11:23.196Z"
+}

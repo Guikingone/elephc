@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"Input\\|Output\" src/codegen_support/runtime/strings/itoa.rs src/codegen_support/runtime/strings/ftoa.rs | head -8; grep -rn \"fn emit_object_class_name\\|__rt_object_class_name\\|class_name_of\" src/codegen_support/runtime/ | grep label_global | head -4",
+  "summary": "grep -n \"Input\\|Output\" src/codegen_support/runtime/strings/itoa.rs src/codegen_support/runtime/strings/ftoa.rs | head -8; grep -rn \"fn emit_object_class_name\\|__rt_object_class_name\\|class_name_of\" src/codegen_support/runtime/ | grep label_global | head -4: src/codegen_support/runtime/strings/itoa.rs:103:/// Input is ",
+  "text": "grep -n \"Input\\|Output\" src/codegen_support/runtime/strings/itoa.rs src/codegen_support/runtime/strings/ftoa.rs | head -8; grep -rn \"fn emit_object_class_name\\|__rt_object_class_name\\|class_name_of\" src/codegen_support/runtime/ | grep label_global | head -4: src/codegen_support/runtime/strings/itoa.rs:103:/// Input is expected in `rax`; the function returns the string pointer in `rax` and the length src/codegen_support/runtime/strings/ftoa.rs:39:/// # Input src/codegen_support/runtime/strings/ftoa.rs:43:/// # Output src/codegen_support/runtime/strings/ftoa.rs:172:/// # Input src/codegen_support/runtime/strings/ftoa.rs:175:/// # Output src/codegen_support/runtime/strings/ftoa.rs:295:/// Input: AArch64 `d0` / x86_64 `xmm0` = the double to render. src/codegen_support/runtime/strings/ftoa.rs:296:/// Output: AArch64 `x1`/`x2`, x86_64 `rax`/`rdx` = pointer/length inside `_concat_buf`, src/codegen_support/runtime/strings/ftoa.rs:358:/// Input: `xmm0` = the double to render. Output: `rax`/`rdx` = pointer/length.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "648ad9872485acf0239e6919",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:12:09.106Z",
+  "stored_at": "2026-08-22T12:12:09.106Z"
+}

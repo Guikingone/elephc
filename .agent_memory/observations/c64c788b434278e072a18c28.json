@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh run view 31967196830 -R Guikingone/elephc --json status,jobs 2>/dev/null | python3 -c \"\nimport json,sys\nfrom collections import Counter\nd=json.load(sys.stdin)\njobs=d.get('jobs',[])\nprint('CI:', d['status'], len(jobs), dict(Counter(j.get('conclusion') for j in jobs)))\nfails=[j['name'] for j in jobs if j.get('conclusion') not in ('success','skipped',None,'')]\nprint('failing so far:', fails[:6] if fails else 'none')\n\"",
+  "summary": "gh run view 31967196830 -R Guikingone/elephc --json status,jobs 2>/dev/null | python3 -c \"\nimport json,sys\nfrom collections import Counter\nd=json.load(sys.stdin)\njobs=d.get('jobs',[])\nprint('CI:', d['status'], len(jobs), dict(Counter(j.get('conclusion') for j in jobs)))\nfails=[j['name'] for j in jobs if j.get('conclusi",
+  "text": "gh run view 31967196830 -R Guikingone/elephc --json status,jobs 2>/dev/null | python3 -c \"\nimport json,sys\nfrom collections import Counter\nd=json.load(sys.stdin)\njobs=d.get('jobs',[])\nprint('CI:', d['status'], len(jobs), dict(Counter(j.get('conclusion') for j in jobs)))\nfails=[j['name'] for j in jobs if j.get('conclusion') not in ('success','skipped',None,'')]\nprint('failing so far:', fails[:6] if fails else 'none')\n\": CI: queued 126 {'success': 8, 'skipped': 1, '': 117} failing so far: none",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c64c788b434278e072a18c28",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:23:44.536Z",
+  "stored_at": "2026-08-16T19:23:44.537Z"
+}

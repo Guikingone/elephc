@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn scanf_vars_wrappers\" -A 22 src/scanf_prelude.rs | head -26",
+  "summary": "About to run: grep -n \"fn scanf_vars_wrappers\" -A 22 src/scanf_prelude.rs | head -26",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6a90d75812424da082bed15e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:36:51.556Z",
+  "stored_at": "2026-08-22T07:36:51.557Z"
+}

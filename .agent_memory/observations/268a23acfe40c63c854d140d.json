@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams 2>&1 | tail -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams 2>&1 | tail -20: _one ... ok test codegen::io::streams_ext::test_readfile_streams_to_stdout ... ok test codegen::io::streams_ext::test_s",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams 2>&1 | tail -20: _one ... ok test codegen::io::streams_ext::test_readfile_streams_to_stdout ... ok test codegen::io::streams_ext::test_stream_context_set_options_applies_a_whole_array ... ok test codegen::io::streams_ext::test_streams_ext_case_insensitive_calls ... ok test codegen::io::streams_ext::test_streams_ext_namespace_fallback ... ok test codegen::io::streams_ext::test_tmpfile_accepts_empty_spread ... ok test codegen::io::streams_ext::test_tmpfile_clears_stale_eof_for_reused_descriptor ... ok test codegen::io::streams_ext::test_tmpfile_reports_the_file_it_created_as_its_uri ... ok test codegen::io::streams_ext::test_tmpfile_reports_the_php_mode ... ok test codegen::io::streams_ext::test_tmpfile_returns_resource_type ... ok test codegen::io::streams_ext::test_tmpfile_returns_writable_resource ... ok test result: ok. 650 passed; 0 failed; 8 ignored; 0 measured; 8217 filtered out; finished in 186.08s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "268a23acfe40c63c854d140d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:03:05.243Z",
+  "stored_at": "2026-08-22T21:03:05.244Z"
+}

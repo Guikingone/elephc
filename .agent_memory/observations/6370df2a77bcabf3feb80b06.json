@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_zlib_catalog.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_zlib_catalog.py: \"\"\"Declares the four zlib string functions in the shared catalogue, and moves the counters with them.\n\nSignatures follow php 8",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_zlib_catalog.py: \"\"\"Declares the four zlib string functions in the shared catalogue, and moves the counters with them.\n\nSignatures follow php 8.2–8.5. `$data` is declared `string` here even though the prelude spells it\n`mixed`: the catalogue is what the docs and the compatibility table publish, and php documents\n`string`. The prelude's widening is a checker accommodation recorded in its own module doc, not a\nsignature change.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\np = ROOT / 'crates/elephc-builtin-contract/src/cata",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6370df2a77bcabf3feb80b06",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:49:59.259Z",
+  "stored_at": "2026-08-21T14:49:59.260Z"
+}

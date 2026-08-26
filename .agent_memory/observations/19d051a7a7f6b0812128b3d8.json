@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '964,1030p' leak3.s",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '964,1030p' leak3.s: file_owns_done_22 str x0, [sp, #-16]! ldr x0, [x0, #8] bl __rt_stream_own_its_file ldr x0, [sp], #16 _eir_main_tmpfile_o",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '964,1030p' leak3.s: file_owns_done_22 str x0, [sp, #-16]! ldr x0, [x0, #8] bl __rt_stream_own_its_file ldr x0, [sp], #16 _eir_main_tmpfile_owns_done_22: stur x0, [x29, #-8] ; @src line=2 col=1 end=2:3 op=acquire ldur x0, [x29, #-8] str x0, [sp, #-16]! bl __rt_incref ldr x0, [sp], #16 stur x0, [x29, #-16] ; @src line=2 col=1 end=2:3 op=store_local ldur x0, [x29, #-16] stur x0, [x29, #-72] ; @src line=2 col=1 end=2:3 op=release ldur x0, [x29, #-8] bl __rt_decref_mixed ; @src line=3 col=1 end=3:5 op=concat_reset ldur x10, [x29, #-88] adrp x9, _concat_off@PAGE add x9, x9, _concat_off@PAGEOFF str x10, [x9] ; @src line=3 col=6 op=const_str adrp x1, _str_9@PAGE add x1, x1, _str_9@PAGEOFF mov x2, #5 stur x1, [x29, #-32] stur x2, [x29, #-24] ; @src line=3 col=1 end=3:5 op=echo_value ldur x1, [x29, #-32] ldur x2, [x29, #-24] ; echo mov x0, x1 mov x1, x2 bl __rt_stdout_write ; @src line=4 col=1 end=4:7 op=concat_reset",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "19d051a7a7f6b0812128b3d8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:12:41.060Z",
+  "stored_at": "2026-08-23T08:12:41.061Z"
+}

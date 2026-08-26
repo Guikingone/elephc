@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"must be a single character\\|must be empty or a single character\" --include=\"*.rs\" src crates | head -20",
+  "summary": "grep -rn \"must be a single character\\|must be empty or a single character\" --include=\"*.rs\" src crates | head -20: src/codegen_support/runtime/data/mod.rs:25: \"Fatal error: php_uname(): Argument #1 ($mode) must be a single character\\n\";",
+  "text": "grep -rn \"must be a single character\\|must be empty or a single character\" --include=\"*.rs\" src crates | head -20: src/codegen_support/runtime/data/mod.rs:25: \"Fatal error: php_uname(): Argument #1 ($mode) must be a single character\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fd92fcf911eba587f28dcebe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:19:11.452Z",
+  "stored_at": "2026-08-14T14:19:11.452Z"
+}

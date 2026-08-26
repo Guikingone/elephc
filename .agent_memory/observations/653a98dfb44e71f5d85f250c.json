@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_flock_would_block.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_flock_would_block.py: \"\"\"`flock`'s would-block output was stored as a RAW word into a slot that may hold a boxed value.\n\n`flock($h, LOCK_SH, $w",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_flock_would_block.py: \"\"\"`flock`'s would-block output was stored as a RAW word into a slot that may hold a boxed value.\n\n`flock($h, LOCK_SH, $would)` on an undeclared `$would` gives that variable a `mixed` slot holding a\nboxed null. The raw store writes the integer 0 over the box pointer, and reading it back as a boxed\nvalue answers NULL — php answers `int(0)`.\n\nThe socket builtins already solved this: `store_int_output_to_local` boxes when the slot is\n`Mixed`, stores directly when it is `Int`/`Bool`, and REFUSES anything else rather than writing a\nword into a slot that cannot hold one. `flock` was the one by-ref i",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "653a98dfb44e71f5d85f250c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:20:57.762Z",
+  "stored_at": "2026-08-21T16:20:57.763Z"
+}

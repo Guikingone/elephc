@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 465,500p src/types/checker/builtins/callables.rs",
+  "summary": "sed -n 465,500p src/types/checker/builtins/callables.rs: cker.infer_type(object, env)?; let Some(class_name) = checker.invokable_class_for_type(&receiver_ty) else { return Err(CompileError::new( callback.span, \"callable array receiver must be an object\", )); }; infer_instance_method_callable_runtime_return(checker, &cl",
+  "text": "sed -n 465,500p src/types/checker/builtins/callables.rs: cker.infer_type(object, env)?; let Some(class_name) = checker.invokable_class_for_type(&receiver_ty) else { return Err(CompileError::new( callback.span, \"callable array receiver must be an object\", )); }; infer_instance_method_callable_runtime_return(checker, &class_name, method, callback) } CallableTarget::StaticMethod { receiver, method } => { infer_static_method_callable_runtime_return(checker, receiver, method, callback) } CallableTarget::Function(name) => checker .functions .get(name.as_str()) .map(|sig| sig.return_type.clone()) .ok_or_else(|| { CompileError::new( callback.span, &format!(\"Undefined function: {}\", name.as_str()), ) }), } } /// Resolves an instance-method callable return type without checking runtime-only arguments. fn infer_instance_method_callable_runtime_return( checker: &Checker, class_name: &str, method: &str, callback: &Expr, ) -> Result<PhpType, CompileError> {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d08dfb4cb697984501a00503",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:14:11.474Z",
+  "stored_at": "2026-08-22T11:14:11.475Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -A10 \"^=== OUT convert\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/results.txt | tail -8",
+  "summary": "rg -A10 \"^=== OUT convert\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/results.txt | tail -8: Original: Hello World! Encoded: SGVsbG8gV29ybGQh Decoded: Hello World! bool(true) Filter: convert.bas",
+  "text": "rg -A10 \"^=== OUT convert\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/results.txt | tail -8: Original: Hello World! Encoded: SGVsbG8gV29ybGQh Decoded: Hello World! bool(true) Filter: convert.base64-encode Original (hex): 414243ff Encoded: QUJD/w==",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7c4392247080432ef734abbc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:35:26.130Z",
+  "stored_at": "2026-08-17T07:35:26.130Z"
+}

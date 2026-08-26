@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/conversions.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/conversions.rs: /// Emits php's fatal diagnostic for object-to-string casts without `__toString()`.\n#[allow(dead_code)]\nfn emit_missing_tostring_fatal_unused(ctx: &mut Function -> /// Lowers array-",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/conversions.rs: /// Emits php's fatal diagnostic for object-to-string casts without `__toString()`.\n#[allow(dead_code)]\nfn emit_missing_tostring_fatal_unused(ctx: &mut Function -> /// Lowers array-like PHP values to the literal string used by PHP casts.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8d3fc18efc7598346b978490",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:49:34.435Z",
+  "stored_at": "2026-08-23T17:49:34.436Z"
+}

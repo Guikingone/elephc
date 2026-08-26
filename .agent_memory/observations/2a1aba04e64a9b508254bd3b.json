@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"REFUSED\\|refuse\" src/builtins/io/fscanf.rs | head",
+  "summary": "grep -n \"REFUSED\\|refuse\" src/builtins/io/fscanf.rs | head: 16://! - The by-ref `$vars` output form is REFUSED rather than mis-executed, mirroring `sscanf()`. 56:/// Also refuses the by-ref `$vars` output form, which this backend cannot express and",
+  "text": "grep -n \"REFUSED\\|refuse\" src/builtins/io/fscanf.rs | head: 16://! - The by-ref `$vars` output form is REFUSED rather than mis-executed, mirroring `sscanf()`. 56:/// Also refuses the by-ref `$vars` output form, which this backend cannot express and",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a1aba04e64a9b508254bd3b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:32:42.669Z",
+  "stored_at": "2026-08-18T10:32:42.669Z"
+}

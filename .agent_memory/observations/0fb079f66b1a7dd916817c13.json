@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_pufs.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_pufs.txt: fix(streams): php_user_filter::$stream stayed null, so a filter could not reach its own stream\n\nphp publishes `$this->stream` for the DU",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_pufs.txt: fix(streams): php_user_filter::$stream stayed null, so a filter could not reach its own stream\n\nphp publishes `$this->stream` for the DURATION of each `filter()` call and\nnowhere else. Measured on `php -n` 8.5.6: the property is UNSET inside\n`onCreate()`, a live resource inside `filter()`, and NULL again inside\n`onClose()`. elephc left it null throughout, so a filter could not call\n`stream_get_meta_data($this->stream)` — which the manual's own filter example\ndoes.\n\nThe handle travels from the chain node, which knows which stream it filters, to\nthe dispatch two calls down, which does not. A glo",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0fb079f66b1a7dd916817c13",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:52:51.989Z",
+  "stored_at": "2026-08-17T18:52:51.990Z"
+}

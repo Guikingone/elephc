@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"__rt_hash_map\" src/codegen_support/runtime/",
+  "summary": "grep -rln \"__rt_hash_map\" src/codegen_support/runtime/: src/codegen_support/runtime/mod.rs src/codegen_support/runtime/arrays/hash_map.rs",
+  "text": "grep -rln \"__rt_hash_map\" src/codegen_support/runtime/: src/codegen_support/runtime/mod.rs src/codegen_support/runtime/arrays/hash_map.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cd9bb265fd4e1e4da13f5873",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:34:38.644Z",
+  "stored_at": "2026-08-22T11:34:38.644Z"
+}

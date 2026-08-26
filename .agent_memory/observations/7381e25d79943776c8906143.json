@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 4 1 2>&1 | head -85",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 4 1 2>&1 | head -85: ring array is byte equality. /// /// Keys are asserted through `var_dump` and `json_encode`: `array_unique` k",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 4 1 2>&1 | head -85: ring array is byte equality. /// /// Keys are asserted through `var_dump` and `json_encode`: `array_unique` keeps each survivor's /// ORIGINAL key, so the result is sparse and encodes as a JSON object, not a list. #[test] fn test_array_unique_deduplicates_a_string_list_by_value() { let out = compile_and_run( r#\"<?php $u = array_unique([\"pear\", \"apple\", \"pear\", \"fig\", \"apple\"]); var_dump($u); echo json_encode($u), \"\\n\"; $x = \"po\" . \"mme\"; $y = \"pom\" . \"me\"; var_dump(array_unique([$x, $y, \"kiwi\"])); echo count(array_unique([\"a\", \"a\", \"a\"])), \"\\n\"; \"#, ); assert_eq!( out, \"array(3) {\\n [0]=>\\n string(4) \\\"pear\\\"\\n [1]=>\\n string(5) \\\"apple\\\"\\n \\ [3]=>\\n string(3) \\\"fig\\\"\\n}\\n{\\\"0\\\":\\\"pear\\\",\\\"1\\\":\\\"apple\\\",\\\"3\\\":\\\"fig\\\"}\\n\\ array(2) {\\n [0]=>\\n string(5) \\\"pomme\\\"\\n [2]=>\\n string(4) \\\"kiwi\\\"\\n}\\n1\\n\" ); } /// Verifies `sort()` and `rsort()` accept a HASH receiver and renumber it from zero.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7381e25d79943776c8906143",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:31:07.228Z",
+  "stored_at": "2026-08-20T17:31:07.228Z"
+}

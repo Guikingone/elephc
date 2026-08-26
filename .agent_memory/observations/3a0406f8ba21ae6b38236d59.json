@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '9990,10030p' nullprop2.s",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '9990,10030p' nullprop2.s: sub x9, x29, #272 ldr x1, [x9] sub x9, x29, #264 ldr x2, [x9] bl __rt_hash_normalize_key sub x9, x29, #256 ldr x0,",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '9990,10030p' nullprop2.s: sub x9, x29, #272 ldr x1, [x9] sub x9, x29, #264 ldr x2, [x9] bl __rt_hash_normalize_key sub x9, x29, #256 ldr x0, [x9] bl __rt_hash_get cbz x0, _eir_main_isset_hash_missing_394 cmp x3, #8 b.eq _eir_main_isset_hash_missing_394 cmp x3, #7 b.ne _eir_main_isset_hash_concrete_non_null_396 mov x0, x1 cbz x0, _eir_main_isset_hash_missing_394 movz x9, #0xfffe movk x9, #0xffff, lsl #16 movk x9, #0xffff, lsl #32 movk x9, #0x7fff, lsl #48 cmp x0, x9 b.eq _eir_main_isset_hash_missing_394 bl __rt_mixed_unbox cmp x0, #8 b.eq _eir_main_isset_hash_missing_394 _eir_main_isset_hash_concrete_non_null_396: mov x0, #0 b _eir_main_isset_hash_done_395 _eir_main_isset_hash_missing_394: mov x0, #1 _eir_main_isset_hash_done_395: cmp x0, #0 cset x0, eq mov x22, x0 mov x0, x22 cbz x0, 1f b _eir_main_isset_lazy_true_388 1: b _eir_main_isset_lazy_false_386 ; @block name=isset.lazy_true _eir_main_isset_lazy_true_385:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3a0406f8ba21ae6b38236d59",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:53:16.945Z",
+  "stored_at": "2026-08-23T08:53:16.945Z"
+}

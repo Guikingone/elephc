@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/run.py stream_get_meta_data_dir_basic stream_get_meta_data_socket_basic bug65483 convert bug64166 basic 2>&1 | tail -10",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/run.py stream_get_meta_data_dir_basic stream_get_meta_data_socket_basic bug65483 convert bug64166 basic 2>&1 | tail -10: 1/6 basic OUT 2/6 bug6",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/run.py stream_get_meta_data_dir_basic stream_get_meta_data_socket_basic bug65483 convert bug64166 basic 2>&1 | tail -10: 1/6 basic OUT 2/6 bug64166 OUT 3/6 bug65483 OK 4/6 convert OUT 5/6 stream_get_meta_data_dir_basic OUT 6/6 stream_get_meta_data_socket_basic OUT TOTALS: {'OUT': 5, 'OK': 1}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "11ece755bd8447fe1d5c7f57",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:26:01.725Z",
+  "stored_at": "2026-08-17T07:26:01.726Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '40,90p' src/builtins/system/json_decode.rs 2>/dev/null || find src/builtins -name \"json_decode.rs\" -exec sed -n '40,90p' {} \\;",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '40,90p' src/builtins/system/json_decode.rs 2>/dev/null || find src/builtins -name \"json_decode.r",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6affb939b82cb68ed2d03cdb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:05:30.471Z",
+  "stored_at": "2026-08-22T19:05:30.472Z"
+}

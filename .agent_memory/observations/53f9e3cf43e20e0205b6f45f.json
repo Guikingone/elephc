@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/statement_basics.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/statement_basics.rs: /// Emits EIR for `echo`.\npub(super) fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) { -> /// Returns whether the echoed value can be an ARRAY at run time.",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/statement_basics.rs: /// Emits EIR for `echo`.\npub(super) fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) { -> /// Returns whether the echoed value can be an ARRAY at run time.\n///\n/// `echo $a` on an array prints the literal `Array` and raises `Array to string conversion`, so —\n/// like the NaN warning below — the instruction has to admit it may warn for the ` in FILE on\n/// line N` tail to be published. `Iterable` is included because its array arm renders the same\n/// way; `Union` and `Mixed` are covered by the float predicate, which already lists Mixed.\nfn echo_can_convert_an_array",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "53f9e3cf43e20e0205b6f45f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:34:24.864Z",
+  "stored_at": "2026-08-23T16:34:24.864Z"
+}

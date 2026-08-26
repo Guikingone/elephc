@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "awk 'NR>=12435 && NR<=13100' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rt_aarch64.s | grep -nE \"sub sp|add sp|stp x29|ldp x29|\\[sp, #-|\\[sp\\], #|ret$|mov sp\" | head -40",
+  "summary": "awk 'NR>=12435 && NR<=13100' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rt_aarch64.s | grep -nE \"sub sp|add sp|stp x29|ldp x29|\\[sp, #-|\\[sp\\], #|ret$|mov sp\" | head -40:  x29, x30, [sp, #0] 68: s",
+  "text": "awk 'NR>=12435 && NR<=13100' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rt_aarch64.s | grep -nE \"sub sp|add sp|stp x29|ldp x29|\\[sp, #-|\\[sp\\], #|ret$|mov sp\" | head -40:  x29, x30, [sp, #0] 68: sub sp, sp, #16 82: ldp x29, x30, [sp, #0] 83: add sp, sp, #80 84: ret 106: ret 128: ret 133: sub sp, sp, #32 134: stp x29, x30, [sp, #16] 140: ldp x29, x30, [sp, #16] 141: add sp, sp, #32 142: ret 265: sub sp, sp, #96 266: stp x29, x30, [sp, #80] 286: ldp x29, x30, [sp, #80] 287: add sp, sp, #96 290: ldp x29, x30, [sp, #80] 291: add sp, sp, #96 295: sub sp, sp, #80 296: stp x29, x30, [sp, #64] 314: ldp x29, x30, [sp, #64] 315: add sp, sp, #80 318: ldp x29, x30, [sp, #64] 319: add sp, sp, #80 323: sub sp, sp, #64 324: stp x29, x30, [sp, #48] 338: ldp x29, x30, [sp, #48] 339: add sp, sp, #64 342: ldp x29, x30, [sp, #48] 343: add sp, sp, #64 347: sub sp, sp, #80 348: stp x29, x30, [sp, #64] 366: ldp x29, x30, [sp, #64] 367: add sp, sp, #80 370: ldp x29, x30, [sp, #64] 371: add sp, sp, #80 375: sub sp, sp, #80 376: stp x29, x30, [sp, #64] 395: ldp x29, x30, [sp, #64]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1fae659a3b88e9d4131c2d7f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:57:46.583Z",
+  "stored_at": "2026-08-21T15:57:46.583Z"
+}

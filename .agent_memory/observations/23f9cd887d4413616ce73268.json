@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '130,165p' src/codegen/lower_inst/objects/throwable_new.rs",
+  "summary": "sed -n '130,165p' src/codegen/lower_inst/objects/throwable_new.rs: d ctx.emitter.instruction(\"call __rt_object_handle_acquire\"); // bind the new object to its PHP object handle ctx.emitter.instruction(&format!(\"mov r10, {}\", class_id)); // materialize the Throwable runtime class id ctx.emitter.instruction(\"mov QWORD PT",
+  "text": "sed -n '130,165p' src/codegen/lower_inst/objects/throwable_new.rs: d ctx.emitter.instruction(\"call __rt_object_handle_acquire\"); // bind the new object to its PHP object handle ctx.emitter.instruction(&format!(\"mov r10, {}\", class_id)); // materialize the Throwable runtime class id ctx.emitter.instruction(\"mov QWORD PTR [rax], r10\"); // store class id at payload offset zero emit_throwable_creation_line_x86_64(ctx, \"rax\", creation_line); ctx.emitter.instruction(\"mov QWORD PTR [rax + 40], 0\"); // previous defaults to null until constructor init } } } /// Writes an AArch64 Throwable creation line into the payload, via `scratch_reg`. /// /// `payload_reg` holds the freshly allocated payload. The store is UNCONDITIONAL even for line /// `0`: `__rt_heap_alloc` recycles blocks without zeroing them, so an unwritten slot would hand /// `getLine()` whatever the previous owner left behind. pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_aarch64(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "23f9cd887d4413616ce73268",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:23:14.236Z",
+  "stored_at": "2026-08-26T09:23:14.237Z"
+}

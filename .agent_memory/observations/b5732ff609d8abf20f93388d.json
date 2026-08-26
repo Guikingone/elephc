@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh byref_stress 2>&1 | head -20",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh byref_stress 2>&1 | head -20: byref_stress DIFF: 1,14c1 < 1a: 1,2 < 1b: a,b < 2: 11|21|2|[11,21]|32 < 3: 4,8 < 4: 0,3,2,1 < 5a",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh byref_stress 2>&1 | head -20: byref_stress DIFF: 1,14c1 < 1a: 1,2 < 1b: a,b < 2: 11|21|2|[11,21]|32 < 3: 4,8 < 4: 0,3,2,1 < 5a: 3,6 < 5b: 3,6 < 6: 1,2,3 < 7: [\"text\",2,4.5] < 8: 9 < 9: 2,4,{\"x\":2,\"y\":4} < 10: 5,10 < 11: 2,3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b5732ff609d8abf20f93388d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:52:16.298Z",
+  "stored_at": "2026-08-16T19:52:16.298Z"
+}

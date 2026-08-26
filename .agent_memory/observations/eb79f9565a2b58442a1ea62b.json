@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"_swr_bad_proto_msg\\|_swr_dup_proto_msg\" src/ | head",
+  "summary": "grep -rn \"_swr_bad_proto_msg\\|_swr_dup_proto_msg\" src/ | head: src/codegen_support/runtime/data/fixed.rs:736: (\"_swr_bad_proto_msg\", crate::codegen_support::runtime::io::BAD_PROTOCOL_WARNING), src/codegen_support/runtime/data/fixed.rs:737: (\"_swr_dup_proto_msg\", crate::codegen_support::runtime::io::DUPLICATE_PROTOCOL_W",
+  "text": "grep -rn \"_swr_bad_proto_msg\\|_swr_dup_proto_msg\" src/ | head: src/codegen_support/runtime/data/fixed.rs:736: (\"_swr_bad_proto_msg\", crate::codegen_support::runtime::io::BAD_PROTOCOL_WARNING), src/codegen_support/runtime/data/fixed.rs:737: (\"_swr_dup_proto_msg\", crate::codegen_support::runtime::io::DUPLICATE_PROTOCOL_WARNING),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eb79f9565a2b58442a1ea62b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:52:16.152Z",
+  "stored_at": "2026-08-21T16:52:16.154Z"
+}

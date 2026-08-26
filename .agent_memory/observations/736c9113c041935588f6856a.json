@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_step4.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_step4.py: \"\"\"`__rt_glob` stops hard-coding `flags = 0`.\n\nThree things happen to `$flags`, in php's own order — MEASURED on `php -n` 8.5.",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_step4.py: \"\"\"`__rt_glob` stops hard-coding `flags = 0`.\n\nThree things happen to `$flags`, in php's own order — MEASURED on `php -n` 8.5.6:\n\n  1. Any bit outside `GLOB_AVAILABLE_FLAGS` is refused with a warning and `false`. That includes\n     glibc's own `GLOB_BRACE` (1024) and `-1`.\n  2. `GLOB_ONLYDIR` is split off. It is php's private `1 << 30` on EVERY target, matches no libc\n     bit, and php applies it as a filter: `glob(\"d/zz*\", GLOB_NOCHECK|GLOB_ONLYDIR)` answers `[]`,\n     so the pattern libc invents for NOCHECK is filtered too. A symlink to a directory counts,\n     so the test is `stat`, not `ls",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "736c9113c041935588f6856a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:04:26.203Z",
+  "stored_at": "2026-08-22T09:04:26.203Z"
+}

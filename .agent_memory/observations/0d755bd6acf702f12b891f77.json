@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'errno_function' -B 8 src/codegen_support/runtime/io/scandir.rs | head -20",
+  "summary": "grep -n 'errno_function' -B 8 src/codegen_support/runtime/io/scandir.rs | head -20: the thread-local accessor is spelled 34- // differently per platform — the same split `mb_strlen` and the flock helpers already carry. 35: let errno_function = match emitter.platform { -- 128- // the newline, so it serves as the TAIL of",
+  "text": "grep -n 'errno_function' -B 8 src/codegen_support/runtime/io/scandir.rs | head -20: the thread-local accessor is spelled 34- // differently per platform — the same split `mb_strlen` and the flock helpers already carry. 35: let errno_function = match emitter.platform { -- 128- // the newline, so it serves as the TAIL of both and only the beginning differs. The 129- // pre-allocated result array is released and the return slot zeroed: php answers FALSE for 130- // a directory it cannot open, and a null pointer is what the caller's boxing reads as 131- // false — an empty listing here made failure indistinguishable from an empty directory. 132- emitter.label(\"__rt_scandir_open_failed\"); 133- emitter.instruction(\"ldr x0, [sp, #8]\"); // the listing that will never be filled 134- emitter.instruction(\"bl __rt_heap_free\"); 135- emitter.instruction(\"str xzr, [sp, #8]\"); // the caller boxes the null as PHP false 136: emitter.bl_c(errno_function); // x0 = &errno for this thread --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0d755bd6acf702f12b891f77",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:48:29.244Z",
+  "stored_at": "2026-08-24T18:48:29.244Z"
+}

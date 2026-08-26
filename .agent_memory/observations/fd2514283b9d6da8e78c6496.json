@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git show 783c63af1:src/types/array_storage.rs 2>/dev/null | grep -n \"key_preserving_sort_promotes\" -A12",
+  "summary": "About to run: git show 783c63af1:src/types/array_storage.rs 2>/dev/null | grep -n \"key_preserving_sort_promotes\" -A12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fd2514283b9d6da8e78c6496",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:24:06.940Z",
+  "stored_at": "2026-08-21T07:24:06.940Z"
+}

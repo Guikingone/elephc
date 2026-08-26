@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -A200 \"^failures:$\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_with.txt | grep \"^    codegen\" | sed 's/^    codegen::io::streams:://' | sort > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fail_with.txt; head -5 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-… [+240 chars truncated]",
+  "summary": "grep -A200 \"^failures:$\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_with.txt | grep \"^    codegen\" | sed 's/^    codegen::io::streams:://' | sort > /private/tmp/claude-501/-Users-guillaume",
+  "text": "grep -A200 \"^failures:$\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_with.txt | grep \"^    codegen\" | sed 's/^    codegen::io::streams:://' | sort > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fail_with.txt; head -5 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fail_with.txt; wc -l < /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fail_with.txt: test_a_failed_open_inside_stream_open_still_warns_under_a_filter_url test_a_nested_open_does_not_leak_the_filter_suppression_scope test_a_nested_open_does_not_steal_the_outer_filter_chain test_a_nested_open_does_not_steal_the_outer_unresolved_names test_a_nested_open_reports_the_wrapper_s_own_unresolved_names 64",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "70a8718254a7b0a3c6b57cd9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:28:22.086Z",
+  "stored_at": "2026-08-21T09:28:22.086Z"
+}

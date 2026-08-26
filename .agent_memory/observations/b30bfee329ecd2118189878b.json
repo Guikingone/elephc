@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn ir_backend_handles_preg_match_captures' -A 30 tests/ir_backend_smoke_test.rs",
+  "summary": "grep -n 'fn ir_backend_handles_preg_match_captures' -A 30 tests/ir_backend_smoke_test.rs: )/\", \"b\", $matches); 1363-echo $ok; 1364-echo \":\"; 1365-echo count($matches); 1366-echo \":\"; 1367-echo \"[\" . $matches[0] . \"]\"; 1368-echo \"[\" . $matches[1] . \"]\"; 1369-echo \"[\" . $matches[2] . \"]\"; 1370-$matches = [\"old\"]; 1371-$m",
+  "text": "grep -n 'fn ir_backend_handles_preg_match_captures' -A 30 tests/ir_backend_smoke_test.rs: )/\", \"b\", $matches); 1363-echo $ok; 1364-echo \":\"; 1365-echo count($matches); 1366-echo \":\"; 1367-echo \"[\" . $matches[0] . \"]\"; 1368-echo \"[\" . $matches[1] . \"]\"; 1369-echo \"[\" . $matches[2] . \"]\"; 1370-$matches = [\"old\"]; 1371-$miss = preg_match(\"/x/\", \"abc\", $matches); 1372-echo \":\"; 1373-echo $miss; 1374-echo \":\"; 1375-echo count($matches); 1376-\"#; 1377- assert_eq!( 1378- compile_and_run_ir_backend_with_managed_pcre2(\"preg_match_captures\", source), 1379- \"1:3:[b][][b]:0:0\" 1380- ); 1381-} 1382- 1383-/// Verifies `preg_replace_callback()` can call static string user callbacks. 1384-#[test] 1385-fn ir_backend_handles_preg_replace_callback_static_string() { 1386- let source = r#\"<?php 1387-function eir_regex_replace(array $matches): string { 1388- return \"[\" . $matches[0] . \":\" . $matches[1] . \"]\"; 1389-} 1390-echo preg_replace_callback(\"/([a-z])([a-z])/\", \"eir_regex_replace\", \"ab cd\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b30bfee329ecd2118189878b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:00:38.141Z",
+  "stored_at": "2026-08-25T13:00:38.141Z"
+}

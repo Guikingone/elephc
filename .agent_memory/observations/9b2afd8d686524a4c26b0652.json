@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/exactte && php -n p.php >pout.txt 2>perr.txt; echo \"php stdout bytes: $(wc -c < pout.txt)\"; echo \"php stderr bytes: $(wc -c < perr.txt)\"",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/exactte && php -n p.php >pout.txt 2>perr.txt; echo \"php stdout bytes: $(wc -c < pout.txt)\"; echo \"php stderr bytes: $(wc -c < perr.txt)\": php stdout b",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/exactte && php -n p.php >pout.txt 2>perr.txt; echo \"php stdout bytes: $(wc -c < pout.txt)\"; echo \"php stderr bytes: $(wc -c < perr.txt)\": php stdout bytes: 726 php stderr bytes: 0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9b2afd8d686524a4c26b0652",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:47:50.117Z",
+  "stored_at": "2026-08-21T16:47:50.119Z"
+}

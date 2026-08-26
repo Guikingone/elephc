@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport json, pathlib\nD = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv')\nbase = {r['example']: r['status'] for r in json.loads((D / 'sweep_baseline.json').read_text())}\nnow = {r['example']: r['status'] for r in json.loads((D / 'sweep_result.json').read_text())}\nchanged = [(k, base.get(k), v) for k, v in now.items() if base.get(k) != v]\nfor name, was, is_ in sorted(changed):\n    print(f'{name}: {was} -> {is_}')\nprint('total changed:', len(change… [+6 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport json, pathlib\nD = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv')\nbase = {r['example']: r['status'] for r in json.loads((D / 'sweep_baseline.json').read_text())}",
+  "text": "python3 - <<'PY'\nimport json, pathlib\nD = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv')\nbase = {r['example']: r['status'] for r in json.loads((D / 'sweep_baseline.json').read_text())}\nnow = {r['example']: r['status'] for r in json.loads((D / 'sweep_result.json').read_text())}\nchanged = [(k, base.get(k), v) for k, v in now.items() if base.get(k) != v]\nfor name, was, is_ in sorted(changed):\n    print(f'{name}: {was} -> {is_}')\nprint('total changed:', len(changed))\nPY failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree; break it into plain, separate commands. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Run the equivalent from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature without the redirect.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "155682bbd125dc6f67d3bba6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:29:21.033Z",
+  "stored_at": "2026-08-20T20:29:21.033Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/temp-methods.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/temp-methods.php: <?php\n$m = new SplFileObject(\"php://memory\", \"r+\");\necho \"memory eof \", var_export($m->eof(), true), \"\\n\";\necho \"memor",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/temp-methods.php: <?php\n$m = new SplFileObject(\"php://memory\", \"r+\");\necho \"memory eof \", var_export($m->eof(), true), \"\\n\";\necho \"memory ftell \", var_export($m->ftell(), true), \"\\n\";\n\n$t = new SplTempFileObject();\necho \"temp ftell \", var_export($t->ftell(), true), \"\\n\";\necho \"temp key \", var_export($t->key(), true), \"\\n\";\necho \"temp getFlags \", var_export($t->getFlags(), true), \"\\n\";\necho \"temp eof \", var_export($t->eof(), true), \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "379010985ae1be0fbc46bbd3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:48:10.510Z",
+  "stored_at": "2026-08-24T20:48:10.510Z"
+}

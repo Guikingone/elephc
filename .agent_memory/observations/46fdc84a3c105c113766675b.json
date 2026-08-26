@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fread_wrapper_pending.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fread_wrapper_pending.py: \"\"\"A user-wrapper stream's buffered bytes were invisible to `fread`, `fgetc` and\n`stream_get_contents`.\n\nphp keeps wh",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fread_wrapper_pending.py: \"\"\"A user-wrapper stream's buffered bytes were invisible to `fread`, `fgetc` and\n`stream_get_contents`.\n\nphp keeps what a read did not need in the stream's OWN read buffer, and every reader sees it.\n`__rt_fread_raw` drains that buffer — but only PAST the wrapper dispatch, which tail-calls\n`stream_read` and never reaches it. MEASURED on `php -n` 8.5.6 against a wrapper serving\n\"abcdefghij\\\\nklmnopqrst\\\\nuvwxyz\\\\n\": `fgets($h, 6)` then `fread($h, 5)` answers \"abcde\" then\n\"fghij\"; elephc answered \"abcde\" then `\"\"`. `fgetc` answered `false` and `stream_get_contents`\n`\"\"` after the same `fgets`. Th",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "46fdc84a3c105c113766675b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:09:26.689Z",
+  "stored_at": "2026-08-21T13:09:26.690Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction wl2(&...$v): void { for ($i=0;$i<2;$i++) { $v[$i] = 7; } }\\n$a=0;$b=0; wl2($a,$b); echo \"const: $a,$b\\\\n\";\\nfunction wl3(&...$v): void { $k = 0; $v[$k] = 5; $k = 1; $v[$k] = 6; }\\n$c=0;$d=0; wl3($c,$d); echo \"seq: $c,$d\\\\n\";\\nfunction wl4(int $n, &...$v): void { $v[0] = $n; $v[1] = $n + 1; }\\n$e=0;$f=0; wl4(3,$e,$f); echo \"param: $e,$f\\\\n\";\\n' > refwidth2.php && php -n refwidth2.php > rw2_php.txt… [+267 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction wl2(&...$v): void { for ($i=0;$i<2;$i++) { $v[$i] = 7; } }\\n$a=0;$b=0; wl2($a,$b); echo \"const: $a,$b\\\\n\";\\nfunction wl",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction wl2(&...$v): void { for ($i=0;$i<2;$i++) { $v[$i] = 7; } }\\n$a=0;$b=0; wl2($a,$b); echo \"const: $a,$b\\\\n\";\\nfunction wl3(&...$v): void { $k = 0; $v[$k] = 5; $k = 1; $v[$k] = 6; }\\n$c=0;$d=0; wl3($c,$d); echo \"seq: $c,$d\\\\n\";\\nfunction wl4(int $n, &...$v): void { $v[0] = $n; $v[1] = $n + 1; }\\n$e=0;$f=0; wl4(3,$e,$f); echo \"param: $e,$f\\\\n\";\\n' > refwidth2.php && php -n refwidth2.php > rw2_php.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run refwidth2.php >/dev/null 2>&1 && ./refwidth2 > rw2_el.txt 2>&1; diff rw2_php.txt rw2_el.txt && echo \"IDENTICAL\" || echo \"^^DIFF\"; cat rw2_el.txt: 3c3 < param: 3,4 --- > param: 3,0 ^^DIFF const: 7,7 seq: 5,6 param: 3,0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "efa91726c74ad98e7b76908c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:13:52.092Z",
+  "stored_at": "2026-08-16T17:13:52.093Z"
+}

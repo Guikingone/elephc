@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps -o pid,etime,%cpu,comm -p 15801 -p 15852 -p 15904 2>/dev/null; echo \"--- how many children ---\"; pgrep -P 25886 2>/dev/null | wc -l",
+  "summary": "ps -o pid,etime,%cpu,comm -p 15801 -p 15852 -p 15904 2>/dev/null; echo \"--- how many children ---\"; pgrep -P 25886 2>/dev/null | wc -l: PID ELAPSED %CPU COMM --- how many children --- 10",
+  "text": "ps -o pid,etime,%cpu,comm -p 15801 -p 15852 -p 15904 2>/dev/null; echo \"--- how many children ---\"; pgrep -P 25886 2>/dev/null | wc -l: PID ELAPSED %CPU COMM --- how many children --- 10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c0330c1456beb7b3bb173b46",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:58:24.685Z",
+  "stored_at": "2026-08-21T20:58:24.685Z"
+}

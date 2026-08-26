@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_meta.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_meta.txt: fix(streams): three wrappers named the thing backing them instead of themselves\n\nMEASURED on `php -n` 8.5.6, one program, six wrappe",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_meta.txt: fix(streams): three wrappers named the thing backing them instead of themselves\n\nMEASURED on `php -n` 8.5.6, one program, six wrappers — four keys were wrong:\n\n    zlib   wrapper_type  php ZLIB        elephc compress.zlib\n    zlib   stream_type   php ZLIB        elephc STDIO\n    user   stream_type   php user-space  elephc tcp_socket\n    glob   wrapper_type  php glob        elephc plainfile\n\nEach had its own cause, and they are worth keeping apart:\n\n`wrapper_type` for zlib was the SCHEME. php-src labels a wrapper independently of the URL that\nreaches it — `data:` is labelled `RFC2397` and `php:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4e95c00bcf62f3a5eb3eb4b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:38:47.409Z",
+  "stored_at": "2026-08-22T17:38:47.410Z"
+}

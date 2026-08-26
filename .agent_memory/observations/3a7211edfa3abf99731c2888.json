@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git cherry-pick 6d5379fa87 78503c4e6f c8a1f28619 2>&1 | tail -2; git log --format=\"%h %s\" -4 | head -4",
+  "summary": "git cherry-pick 6d5379fa87 78503c4e6f c8a1f28619 2>&1 | tail -2; git log --format=\"%h %s\" -4 | head -4: Date: Sun Aug 16 10:45:04 2026 +0200 8 files changed, 371 insertions(+), 3 deletions(-) cfb871fd6f fix(streams): ftell() on a filtered read reported where the READ-AHEAD stopped, not where php is df603b78f7 fix(strea",
+  "text": "git cherry-pick 6d5379fa87 78503c4e6f c8a1f28619 2>&1 | tail -2; git log --format=\"%h %s\" -4 | head -4: Date: Sun Aug 16 10:45:04 2026 +0200 8 files changed, 371 insertions(+), 3 deletions(-) cfb871fd6f fix(streams): ftell() on a filtered read reported where the READ-AHEAD stopped, not where php is df603b78f7 fix(streams): a write filter's closing flush never happened, and stream_filter_remove() threw its bytes away a40bc32cca fix(strings): implode() had no float renderer at all, and a mixed hash still killed the process 22a97454aa fix(streams): an `e` in an fopen() mode asked for close-on-exec and got a descriptor that survives exec",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3a7211edfa3abf99731c2888",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T08:50:10.449Z",
+  "stored_at": "2026-08-16T08:50:10.450Z"
+}

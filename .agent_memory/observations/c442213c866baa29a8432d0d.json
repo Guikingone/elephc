@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff src/types/checker/inference/expr/effects.rs | rg \"^\\+\" | head -60",
+  "summary": "git diff src/types/checker/inference/expr/effects.rs | rg \"^\\+\" | head -60: o| info.parent.clone()) + } + } + } + + /// Re-types a by-reference ARRAY argument of a STATIC method call. + /// + /// Same rule as the free-function case: a callee that widened the element representation + /// wrote boxed slots into the calle",
+  "text": "git diff src/types/checker/inference/expr/effects.rs | rg \"^\\+\" | head -60: o| info.parent.clone()) + } + } + } + + /// Re-types a by-reference ARRAY argument of a STATIC method call. + /// + /// Same rule as the free-function case: a callee that widened the element representation + /// wrote boxed slots into the caller's storage, and the caller's own type has to follow. + fn widen_by_ref_array_static_arg_types( + &mut self, + owner: Option<&str>, + method: &str, + args: &[Expr], + env: &mut TypeEnv, + ) { + let Some(owner) = owner else { + return; + }; + let key = php_symbol_key(method); + let Some(sig) = self + .classes + .get(owner) + .and_then(|info| info.static_methods.get(&key)) + .cloned() + else { + return; + }; + Self::apply_by_ref_array_arg_types(&sig, args, env); + } + + /// Re-types a by-reference ARRAY argument of an INSTANCE method call. + fn widen_by_ref_array_method_arg_types( + &mut self, + receiver_ty: &PhpType, + method: &str, + args: &[Expr],",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c442213c866baa29a8432d0d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:52:14.976Z",
+  "stored_at": "2026-08-16T20:52:14.976Z"
+}

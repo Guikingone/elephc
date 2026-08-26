@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_unset.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_unset.php: <?php\n// The other close route: the last reference goes away instead of fclose().\n$h = tmpfile();\nfwrite($h, \"seed\");\nfflush($h",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_unset.php: <?php\n// The other close route: the last reference goes away instead of fclose().\n$h = tmpfile();\nfwrite($h, \"seed\");\nfflush($h);\n$uri = stream_get_meta_data($h)[\"uri\"];\necho \"before unset: \", var_export(file_exists($uri), true), \"\\n\";\nunset($h);\necho \"after unset : \", var_export(file_exists($uri), true), \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "19180a2b0fba85a986e1d7e2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:23:07.318Z",
+  "stored_at": "2026-08-23T08:23:07.318Z"
+}

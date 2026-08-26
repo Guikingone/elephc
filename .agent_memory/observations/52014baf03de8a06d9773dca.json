@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub fn compile_and_run\\b\" -A25 tests/codegen/support/runner.rs | head -30",
+  "summary": "grep -n \"pub fn compile_and_run\\b\" -A25 tests/codegen/support/runner.rs | head -30 completed",
+  "text": "grep -n \"pub fn compile_and_run\\b\" -A25 tests/codegen/support/runner.rs | head -30 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "52014baf03de8a06d9773dca",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:56:06.322Z",
+  "stored_at": "2026-08-18T13:56:06.322Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n sopt2.php 2>&1 | sed 's/ in \\/private.*//'; echo \"PHP-EXIT=$?\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o sopt2 sopt2.php 2>&1|tail -1; ./sopt2; echo \"ELEPHC-EXIT=$?\"",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n sopt2.php 2>&1 | sed 's/ in \\/private.*//'; echo \"PHP-EXIT=$?\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n sopt2.php 2>&1 | sed 's/ in \\/private.*//'; echo \"PHP-EXIT=$?\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o sopt2 sopt2.php 2>&1|tail -1; ./sopt2; echo \"ELEPHC-EXIT=$?\": before Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options() instead ValueError: stream_context_set_option(): Argument #3 ($option_name) cannot be null when argument #2 ($wrapper_or_options) is a string after PHP-EXIT=0 Compiled 'sopt2.php' -> 'sopt2' before Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options() instead in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/sopt2.php on line 6 ELEPHC-EXIT=138",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c080d68ae98189783b750bbb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:55:16.742Z",
+  "stored_at": "2026-08-22T18:55:16.742Z"
+}

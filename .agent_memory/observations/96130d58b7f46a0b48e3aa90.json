@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests codegen::io::streams 2>&1 | tail -4",
+  "summary": "cargo test --test codegen_tests codegen::io::streams 2>&1 | tail -4: test codegen::io::streams_ext::test_tmpfile_returns_writable_resource ... ok test result: ok. 587 passed; 0 failed; 8 ignored; 0 measured; 7835 filtered out; finished in 197.63s",
+  "text": "cargo test --test codegen_tests codegen::io::streams 2>&1 | tail -4: test codegen::io::streams_ext::test_tmpfile_returns_writable_resource ... ok test result: ok. 587 passed; 0 failed; 8 ignored; 0 measured; 7835 filtered out; finished in 197.63s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "96130d58b7f46a0b48e3aa90",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T19:47:32.219Z",
+  "stored_at": "2026-08-17T19:47:32.220Z"
+}

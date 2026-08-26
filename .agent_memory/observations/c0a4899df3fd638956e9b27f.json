@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-places-and-empty-arrays-cross-the-boundary.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-places-and-empty-arrays-cross-the-boundary.md: ---\nname: byref-places-and-empty-arrays-cross-the-boundary\ndescription: \"CORRIGÉS: tableau VIDE par référence (SEGV) et PROPRIÉTÉ par référence (refus); + le piè",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-places-and-empty-arrays-cross-the-boundary.md: ---\nname: byref-places-and-empty-arrays-cross-the-boundary\ndescription: \"CORRIGÉS: tableau VIDE par référence (SEGV) et PROPRIÉTÉ par référence (refus); + le piège `Never.codegen_repr() == Void` et un harnais qui masquait les échecs\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\nDeux trous à la même frontière que [[byref-array-param-widening-must-cross-the-boundary]], pris ensuite.\n\n**1. Tableau VIDE par référence.** `$e = []; fill($e);` (le callee fait `$a[] = 1;`) : **SEGFAULT** avant le correctif d'élargissement, sortie VIDE après (count juste, éléments illisibles). 🔴🔑 le rapport d'éla",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c0a4899df3fd638956e9b27f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T21:34:12.096Z",
+  "stored_at": "2026-08-16T21:34:12.097Z"
+}

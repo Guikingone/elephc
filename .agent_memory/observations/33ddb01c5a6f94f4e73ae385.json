@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub(crate) struct ProgramOutput\" -A12 tests/codegen/support/compiler.rs | head -16",
+  "summary": "About to run: grep -n \"pub(crate) struct ProgramOutput\" -A12 tests/codegen/support/compiler.rs | head -16",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "33ddb01c5a6f94f4e73ae385",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:58:22.911Z",
+  "stored_at": "2026-08-18T13:58:22.912Z"
+}

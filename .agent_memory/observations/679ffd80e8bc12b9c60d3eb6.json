@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'method_name_immediate\\|fn.*method.*immediate' src/codegen/lower_inst/method_dispatch.rs | head -5; grep -n 'let method_name' -B 3 -A 3 src/codegen/lower_inst/method_dispatch.rs | head -12",
+  "summary": "grep -rn 'method_name_immediate\\|fn.*method.*immediate' src/codegen/lower_inst/method_dispatch.rs | head -5; grep -n 'let method_name' -B 3 -A 3 src/codegen/lower_inst/method_dispatch.rs | head -12: 12-/// Lowers a direct instance-method call on a statically known object receiver. 13-pub(super) fn lower_method_call(ctx",
+  "text": "grep -rn 'method_name_immediate\\|fn.*method.*immediate' src/codegen/lower_inst/method_dispatch.rs | head -5; grep -n 'let method_name' -B 3 -A 3 src/codegen/lower_inst/method_dispatch.rs | head -12: 12-/// Lowers a direct instance-method call on a statically known object receiver. 13-pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { 14- let object = expect_operand(inst, 0)?; 15: let method_name = method_name_data(ctx, inst)?.to_string(); 16- if let Some((class_name, true)) = objects::nullable_object_receiver_class(ctx, object)? { 17- return lower_nullable_receiver_method_call(ctx, inst, object, &class_name, &method_name); 18- }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "679ffd80e8bc12b9c60d3eb6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:26:26.272Z",
+  "stored_at": "2026-08-26T09:26:26.273Z"
+}

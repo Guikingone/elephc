@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 205,255p tests/codegen/support/projects.rs",
+  "summary": "sed -n 205,255p tests/codegen/support/projects.rs: xterns are merged in exactly once. let resolved = elephc::mysqli_prelude::inject_if_used( resolved, false, elephc::php_version::PhpVersion::default(), &mut prelude_inventory, ); let resolved = elephc::name_resolver::resolve(resolved).expect(\"name resolve failed\"); let ",
+  "text": "sed -n 205,255p tests/codegen/support/projects.rs: xterns are merged in exactly once. let resolved = elephc::mysqli_prelude::inject_if_used( resolved, false, elephc::php_version::PhpVersion::default(), &mut prelude_inventory, ); let resolved = elephc::name_resolver::resolve(resolved).expect(\"name resolve failed\"); let resolved = elephc::autoload::run(resolved, &dir, &autoload_registry).expect(\"autoload failed\"); // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg` // into a hidden variadic parameter plus plain PHP before the optimizer and the checker. let resolved = elephc::func_args::desugar(resolved).expect(\"func_args desugar failed\"); let resolved = elephc::optimize::fold_constants(resolved); let error = match elephc::types::check_with_target(&resolved, target()) { Ok(_) => panic!(\"source unexpectedly passed type checking\"), Err(error) => error.to_string(), }; let _ = fs::remove_dir_all(&dir); error }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ec7d0c26ee94d87e76d89326",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:11:26.511Z",
+  "stored_at": "2026-08-22T13:11:26.511Z"
+}

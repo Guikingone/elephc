@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,140p' src/codegen_support/runtime/strings/concat_scratch.rs",
+  "summary": "sed -n '1,140p' src/codegen_support/runtime/strings/concat_scratch.rs: ::emit_symbol_address(emitter, \"x9\", \"_concat_buf\"); emitter.instruction(\"sub x10, x1, x9\"); // compute the candidate scratch offset of the finished result emitter.instruction(&format!(\"mov x11, #{}\", CONCAT_BUF_CAPACITY)); // load the concat scratc",
+  "text": "sed -n '1,140p' src/codegen_support/runtime/strings/concat_scratch.rs: ::emit_symbol_address(emitter, \"x9\", \"_concat_buf\"); emitter.instruction(\"sub x10, x1, x9\"); // compute the candidate scratch offset of the finished result emitter.instruction(&format!(\"mov x11, #{}\", CONCAT_BUF_CAPACITY)); // load the concat scratch capacity in bytes emitter.instruction(\"cmp x10, x11\"); // is the result outside the shared scratch window (unsigned, so heap pointers wrap high)? emitter.instruction(\"b.hs __rt_concat_publish_done\"); // heap-backed results leave the shared scratch offset untouched emitter.instruction(\"add x10, x10, x2\"); // advance the scratch offset past the bytes this result actually wrote abi::emit_symbol_address(emitter, \"x9\", \"_concat_off\"); emitter.instruction(\"str x10, [x9]\"); // publish the updated concat scratch write offset emitter.label(\"__rt_concat_publish_done\"); emitter.instruction(\"ret\"); // return with the result pointer/length pair untouched",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eb41ad6e7549168705885eab",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:00:50.136Z",
+  "stored_at": "2026-08-24T17:00:50.137Z"
+}

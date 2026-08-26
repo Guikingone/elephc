@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --test error_tests 2>&1 | grep -E \"^error\" -A 6 | head -16; RUST_MIN_STACK=33554432 cargo test --test error_tests 2>&1 | grep -E \"^test result:|^failures:\" -A 8 | tail -14",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --test error_tests 2>&1 | grep -E \"^error\" -A 6 | head -16; RUST_MIN_STACK=33554432 cargo test --test error_tests 2>&1 | grep -E \"^test result:|^failures:\" -A 8 | tail -14: error: test failed, to rerun pass `-p elephc --test error_tests` thread 'io_builtins::filesystem::test_error_glo",
+  "text": "RUST_MIN_STACK=33554432 cargo test --test error_tests 2>&1 | grep -E \"^error\" -A 6 | head -16; RUST_MIN_STACK=33554432 cargo test --test error_tests 2>&1 | grep -E \"^test result:|^failures:\" -A 8 | tail -14: error: test failed, to rerun pass `-p elephc --test error_tests` thread 'io_builtins::filesystem::test_error_glob_wrong_args' (40732448) panicked at tests/error_tests.rs:109:13: Error 'glob() takes 1 or 2 arguments' doesn't contain 'glob() takes exactly 1 argument' note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace ---- io_builtins::streams::test_error_stream_socket_recvfrom_address_not_string stdout ---- -- failures: io_builtins::filesystem::test_error_glob_wrong_args io_builtins::streams::test_error_stream_socket_recvfrom_address_not_string type_system::test_error_type_mismatch_reassign test result: FAILED. 1299 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.60s error: test failed, to rerun pass `-p elephc --test error_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c4077a0e9a90263d008a0482",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:59:14.659Z",
+  "stored_at": "2026-08-22T12:59:14.659Z"
+}

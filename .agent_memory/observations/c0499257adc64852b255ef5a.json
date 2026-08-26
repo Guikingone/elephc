@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 265,300p tools/gen_builtins.rs",
+  "summary": "sed -n 265,300p tools/gen_builtins.rs: mentation spelling for a neutral PHP type. fn type_name(ty: TypeSpec) -> &'static str { match ty { TypeSpec::Int => \"int\", TypeSpec::Float => \"float\", TypeSpec::Str => \"string\", TypeSpec::Bool => \"bool\", TypeSpec::Mixed => \"mixed\", TypeSpec::Void => \"void\", // elephc extensions to",
+  "text": "sed -n 265,300p tools/gen_builtins.rs: mentation spelling for a neutral PHP type. fn type_name(ty: TypeSpec) -> &'static str { match ty { TypeSpec::Int => \"int\", TypeSpec::Float => \"float\", TypeSpec::Str => \"string\", TypeSpec::Bool => \"bool\", TypeSpec::Mixed => \"mixed\", TypeSpec::Void => \"void\", // elephc extensions to the neutral spelling. Without these the generated pages would // document `mixed` for a raw address — the same wrong answer the declaration itself // used to give, moved one step downstream into the docs. TypeSpec::Ptr => \"pointer\", TypeSpec::Callable => \"callable\", } } /// Returns the lowercase documentation spelling for a contract area. fn area_name(area: Area) -> &'static str { match area { Area::String => \"string\", Area::Array => \"array\", Area::Math => \"math\", Area::Io => \"io\", Area::System => \"system\", Area::Types => \"types\", Area::Callables => \"callables\", Area::Spl => \"spl\", Area::Pointers => \"pointers\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c0499257adc64852b255ef5a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:32:17.983Z",
+  "stored_at": "2026-08-22T09:32:17.983Z"
+}

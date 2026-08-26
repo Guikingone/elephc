@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs: /// Size in bytes of one stable filter-state allocation.\npub(crate) const FILTER_STATE_SIZE: u64 = 64; -> /// Size in bytes of one stable filter-state allocation.\npub(crat",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs: /// Size in bytes of one stable filter-state allocation.\npub(crate) const FILTER_STATE_SIZE: u64 = 64; -> /// Size in bytes of one stable filter-state allocation.\npub(crate) const FILTER_STATE_SIZE: u64 = 96;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4fae7c8b157b71275ced7e55",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:55:44.210Z",
+  "stored_at": "2026-08-17T13:55:44.211Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"ArrayToMixed\" -B12 src/ir_lower/stmt/repr_fixpoint.rs | rg -n \"fn |PhpType::Array\" | head -8; echo \"---\"; rtk proxy rg -n \"PhpType::Array\\(_\\) => Some\\(Op::ArrayToMixed\\)\" -B20 src/ir_lower/stmt/repr_fixpoint.rs | head -28",
+  "summary": "rtk proxy rg -n \"ArrayToMixed\" -B12 src/ir_lower/stmt/repr_fixpoint.rs | rg -n \"fn |PhpType::Array\" | head -8; echo \"---\"; rtk proxy rg -n \"PhpType::Array\\(_\\) => Some\\(Op::ArrayToMixed\\)\" -B20 src/ir_lower/stmt/repr_fixpoint.rs | head -28: onversion(name)?.clone()))) 174- .collect() 175-} 176- 177-/// Returns the op t",
+  "text": "rtk proxy rg -n \"ArrayToMixed\" -B12 src/ir_lower/stmt/repr_fixpoint.rs | rg -n \"fn |PhpType::Array\" | head -8; echo \"---\"; rtk proxy rg -n \"PhpType::Array\\(_\\) => Some\\(Op::ArrayToMixed\\)\" -B20 src/ir_lower/stmt/repr_fixpoint.rs | head -28: onversion(name)?.clone()))) 174- .collect() 175-} 176- 177-/// Returns the op that converts a local from its region-entry representation to `target`. 178-/// 179-/// `None` means the storage is already in the target representation (or in one no op moves it out 180-/// of), and hoisting anything would be worse than hoisting nothing: emitting `Op::ArrayToMixed` 181-/// where a hash is what the region actually builds would box the slots of an array the region then 182-/// re-reads as a hash. The decision is `array_storage_conversion` — the SAME predicate the checker 183-/// applies to the type environment — so the element type a callee is compiled for cannot drift from 184-/// the one the caller actually passes. 185-fn conversion_op(entry: &PhpType, target: &PhpType) -> Option<Op> { 186- match array_storage_conversion(Some(entry), target)? { 187: PhpType::Array(_) => Some(Op::ArrayToMixed),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d7020de0d363e6497dbc891a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:34:02.875Z",
+  "stored_at": "2026-08-16T19:34:02.875Z"
+}

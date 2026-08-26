@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"label_global(\\\"__rt_hash_copy\\\")\" src/codegen_support/runtime/; grep -rn \"/// Input\\|/// Output\" -A 1 src/codegen_support/runtime/arrays/hash_copy.rs 2>/dev/null | head -8; grep -rln \"label_global(\\\"__rt_hash_unset\\\")\" src/codegen_support/runtime/",
+  "summary": "grep -rln \"label_global(\\\"__rt_hash_copy\\\")\" src/codegen_support/runtime/; grep -rn \"/// Input\\|/// Output\" -A 1 src/codegen_support/runtime/arrays/hash_copy.rs 2>/dev/null | head -8; grep -rln \"label_global(\\\"__rt_hash_unset\\\")\" src/codegen_support/runtime/: src/codegen_support/runtime/strings/hash_context.rs src/code",
+  "text": "grep -rln \"label_global(\\\"__rt_hash_copy\\\")\" src/codegen_support/runtime/; grep -rn \"/// Input\\|/// Output\" -A 1 src/codegen_support/runtime/arrays/hash_copy.rs 2>/dev/null | head -8; grep -rln \"label_global(\\\"__rt_hash_unset\\\")\" src/codegen_support/runtime/: src/codegen_support/runtime/strings/hash_context.rs src/codegen_support/runtime/arrays/hash_unset.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5ed5e76cbf48589794be81b6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:35:45.946Z",
+  "stored_at": "2026-08-22T11:35:45.947Z"
+}

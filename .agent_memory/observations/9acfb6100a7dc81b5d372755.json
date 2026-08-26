@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps aux | grep \"[e]lephc\" | head -3 | cut -c1-90; echo \"---\"; ps aux | grep \"[c]argo\" | head -3 | cut -c1-90",
+  "summary": "About to run: ps aux | grep \"[e]lephc\" | head -3 | cut -c1-90; echo \"---\"; ps aux | grep \"[c]argo\" | head -3 | cut -c1-90",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9acfb6100a7dc81b5d372755",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:44:32.183Z",
+  "stored_at": "2026-08-22T18:44:32.183Z",
+  "low_signal": true
+}

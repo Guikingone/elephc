@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h / | tail -1; du -sh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad 2>/dev/null; du -sh target/debug 2>/dev/null",
+  "summary": "df -h / | tail -1; du -sh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad 2>/dev/null; du -sh target/debug 2>/dev/null: /dev/disk3s1s1 460Gi 12Gi 3.0Gi 80% 459k 31M 1% / 744M /private/tmp/claude-501/-User",
+  "text": "df -h / | tail -1; du -sh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad 2>/dev/null; du -sh target/debug 2>/dev/null: /dev/disk3s1s1 460Gi 12Gi 3.0Gi 80% 459k 31M 1% / 744M /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad 9.2G target/debug",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dc404c38bbf8aa2657e4cecf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:45:46.986Z",
+  "stored_at": "2026-08-25T14:45:46.986Z"
+}

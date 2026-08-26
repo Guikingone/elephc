@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_objstr.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_objstr.txt: fix(objects): an object with no `__toString` KILLED the process where php raises a catchable Error, and a first-class callable ref",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_objstr.txt: fix(objects): an object with no `__toString` KILLED the process where php raises a catchable Error, and a first-class callable refused to compile at all\n\n    <?php class A {} $o = new A();\n    try { echo $o; } catch (Error $e) { echo \"caught: \", $e->getMessage(), \"\\n\"; }\n    echo \"still running\\n\";\n\n    php    caught: Object of class A could not be converted to string / still running   (exit 0)\n    elephc Fatal error: Object of class A could not be converted to string   on STDERR (exit 1)\n\nThree things were wrong in that one line: the catch never ran, the message went to stderr where\nphp CLI w",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ab10080731132fa37641e657",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T18:20:25.815Z",
+  "stored_at": "2026-08-23T18:20:25.816Z"
+}

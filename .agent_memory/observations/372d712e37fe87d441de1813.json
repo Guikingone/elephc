@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git cherry-pick 140f68fd7a 902eb47f22 e88144046d 2>&1 | tail -3; git log --format=\"%h %s\" -4 | head -4",
+  "summary": "git cherry-pick 140f68fd7a 902eb47f22 e88144046d 2>&1 | tail -3; git log --format=\"%h %s\" -4 | head -4: [worktree-streams-csv-signature 993efaa18f] feat(streams): ssl.peer_fingerprint was accepted and never checked, so a pinned connection was not pinned Date: Sun Aug 16 12:56:23 2026 +0200 11 files changed, 383 inserti",
+  "text": "git cherry-pick 140f68fd7a 902eb47f22 e88144046d 2>&1 | tail -3; git log --format=\"%h %s\" -4 | head -4: [worktree-streams-csv-signature 993efaa18f] feat(streams): ssl.peer_fingerprint was accepted and never checked, so a pinned connection was not pinned Date: Sun Aug 16 12:56:23 2026 +0200 11 files changed, 383 insertions(+), 8 deletions(-) 993efaa18f feat(streams): ssl.peer_fingerprint was accepted and never checked, so a pinned connection was not pinned eadce7e6f7 feat(streams): http_get_last_response_headers() was missing, and $http_response_header never announced its deprecation 52bd5c8d1b fix(streams): http.timeout only saw whole-second strings, and arming it sent the request to stdout bef399fa76 fix(floats): coercing a NAN to a string produced the right bytes and no warning",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "372d712e37fe87d441de1813",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T11:34:05.328Z",
+  "stored_at": "2026-08-16T11:34:05.329Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"DYNAMIC_COMPRESS_WRAPPERS.iter\" -B 6 -A 20 src/codegen/lower_inst/builtins/io/fopen_core.rs | head -40",
+  "summary": "grep -n \"DYNAMIC_COMPRESS_WRAPPERS.iter\" -B 6 -A 20 src/codegen/lower_inst/builtins/io/fopen_core.rs | head -40: / `Failed to open stream: No such file or directory` for the very same URL. 1091: for (prefix, wrapper) in DYNAMIC_COMPRESS_WRAPPERS.iter().copied() { 1092- if let Some(underlying) = path.strip_prefix(prefix",
+  "text": "grep -n \"DYNAMIC_COMPRESS_WRAPPERS.iter\" -B 6 -A 20 src/codegen/lower_inst/builtins/io/fopen_core.rs | head -40: / `Failed to open stream: No such file or directory` for the very same URL. 1091: for (prefix, wrapper) in DYNAMIC_COMPRESS_WRAPPERS.iter().copied() { 1092- if let Some(underlying) = path.strip_prefix(prefix) { 1093- // A mode that is not a compile-time literal reads, which is the overwhelmingly 1094- // common open and what this branch assumed before it knew about `$mode` at all. 1095- let mode_text = match mode { 1096- LiteralOpenMode::Operand(operand) => optional_const_string_operand(ctx, operand)? 1097- .unwrap_or_else(|| \"r\".to_string()), 1098- LiteralOpenMode::ReadOnly => \"r\".to_string(), 1099- }; 1100- emit_literal_compress_wrapper_fopen_result( 1101- ctx, 1102- CompressUnderlying::Literal(underlying), 1103- path, 1104- wrapper, 1105- &mode_text, 1106- )?; 1107- return Ok(()); 1108- } 1109- } 1110- if let Some(fd) = php_standard_stream_fd(path) { 1111- emit_dup_fd_result(ctx, fd);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "72ed486664997742a299d78a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:04:44.369Z",
+  "stored_at": "2026-08-21T12:04:44.370Z"
+}

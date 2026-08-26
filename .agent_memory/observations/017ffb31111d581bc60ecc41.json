@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_context_quad.py')\nt = p.read_text()\nold = \"anchor = 'use crate::codegen_support::emit::Emitter;'\"\nnew = \"anchor = 'use super::MIN_WRAPPER_SCHEME_LEN;'\"\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('anchor corrected')\nPY\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-4… [+70 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "017ffb31111d581bc60ecc41",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:33:02.059Z",
+  "stored_at": "2026-08-21T09:33:02.060Z"
+}

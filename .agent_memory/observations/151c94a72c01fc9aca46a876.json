@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -2; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/prune_stale_deps.py --apply 2>&1 | head -1; df -h /Users/guillaumeloulier 2>&1 | tail -1",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -2; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-st",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -2; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/prune_stale_deps.py --apply 2>&1 | head -1; df -h /Users/guillaumeloulier 2>&1 | tail -1: 23 scratch directories: 0 belong to a LIVE process, 23 are debris removed 23 directories, 0.04 GB 782 superseded artifacts, 2.64 GB /dev/disk3s5 460Gi 422Gi 10Gi 98% 5.6M 110M 5% /System/Volumes/Data",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "151c94a72c01fc9aca46a876",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:54:29.626Z",
+  "stored_at": "2026-08-22T07:54:29.626Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ExprKind::Print\" src/ir_lower/ | head -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ExprKind::Print\" src/ir_lower/ | head -5: src/ir_lower/array_pointer_scan.rs:180: | ExprKind::Print(inner) src/ir_lower/stmt/repr_fixpoint.rs:711: | ExprKind::Print(inner) src/ir_lower/tests/exhaustive.rs:277: expr",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ExprKind::Print\" src/ir_lower/ | head -5: src/ir_lower/array_pointer_scan.rs:180: | ExprKind::Print(inner) src/ir_lower/stmt/repr_fixpoint.rs:711: | ExprKind::Print(inner) src/ir_lower/tests/exhaustive.rs:277: expr(ExprKind::Print(Box::new(str_lit(\"p\")))), src/ir_lower/expr/closures.rs:424: | ExprKind::Print(inner) src/ir_lower/expr/closures.rs:673: | ExprKind::Print(expr)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aad9391934e89e4dbabcf5a5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:36:46.313Z",
+  "stored_at": "2026-08-23T16:36:46.313Z"
+}

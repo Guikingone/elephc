@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -c \"left:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bgc3nbo1k.output 2>/dev/null; grep -E \"left:|right:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bgc3nbo1k.output 2>/dev/null | tail -8",
+  "summary": "grep -c \"left:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bgc3nbo1k.output 2>/dev/null; grep -E \"left:|right:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktree",
+  "text": "grep -c \"left:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bgc3nbo1k.output 2>/dev/null; grep -E \"left:|right:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bgc3nbo1k.output 2>/dev/null | tail -8: 7 left: \"\" right: \"Warning: fopen(definitely_absent_inner7.txt): Failed to open stream: No such file or directory\\n\" left: \"\" right: \"Warning: fopen(): Unable to locate filter \\\"inner.absent\\\"\\nWarning: fopen(): Unable to create filter (inner.absent)\\nWarning: fopen(): Unable to locate filter \\\"outer.absent\\\"\\nWarning: fopen(): Unable to create filter (outer.absent)\\n\" left: \"\" right: \"Warning: fopen(absent_after_t8.txt): Failed to open stream: No such file or directory\\nWarning: fopen(php://filter/read=string.toupper/resource=absent_t8.txt): Failed to open stream: operation failed\\n\" left: \"\" right: \"Warning: fopen(): Unable to locate filter \\\"outer.absent\\\"\\nWarning: fopen(): Unable to create filter (outer.absent)\\n\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "354d97cdfe9e9257cefb97bf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T14:50:11.824Z",
+  "stored_at": "2026-08-18T14:50:11.825Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"stream_select\" src/builtins/ src/codegen/lower_inst/builtins/ | head -5",
+  "summary": "grep -rln \"stream_select\" src/builtins/ src/codegen/lower_inst/builtins/ | head -5: src/builtins/io/stream_select.rs src/builtins/io/mod.rs src/codegen/lower_inst/builtins/io.rs src/codegen/lower_inst/builtins/io/stream_options.rs",
+  "text": "grep -rln \"stream_select\" src/builtins/ src/codegen/lower_inst/builtins/ | head -5: src/builtins/io/stream_select.rs src/builtins/io/mod.rs src/codegen/lower_inst/builtins/io.rs src/codegen/lower_inst/builtins/io/stream_options.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "90af7bbc90fc5a0540c67617",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:48:57.183Z",
+  "stored_at": "2026-08-21T16:48:57.183Z"
+}

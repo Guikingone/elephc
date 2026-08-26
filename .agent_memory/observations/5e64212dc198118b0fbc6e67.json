@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "Eh bah go sur ce qui reste ouvert",
+  "summary": "Eh bah go sur ce qui reste ouvert",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5e64212dc198118b0fbc6e67",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:28:08.412Z",
+  "stored_at": "2026-08-17T09:28:08.414Z",
+  "low_signal": true
+}

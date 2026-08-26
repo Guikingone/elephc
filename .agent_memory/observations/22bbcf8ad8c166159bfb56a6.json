@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -50 src/ir/runtime_fn.rs",
+  "summary": "About to run: head -50 src/ir/runtime_fn.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "22bbcf8ad8c166159bfb56a6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T19:50:21.224Z",
+  "stored_at": "2026-08-18T19:50:21.225Z"
+}

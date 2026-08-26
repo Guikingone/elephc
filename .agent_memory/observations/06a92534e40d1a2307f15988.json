@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"fscanf|getCurrentLine|fgets\" docs/php/spl.md 2>/dev/null | head -10",
+  "summary": "About to run: rg -n \"fscanf|getCurrentLine|fgets\" docs/php/spl.md 2>/dev/null | head -10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "06a92534e40d1a2307f15988",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:24:33.438Z",
+  "stored_at": "2026-08-17T06:24:33.439Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/module.rs')\nt = p.read_text()\nold = \"            declared_trait_source_lines: HashMap::new(),\"\nassert t.count(old) == 1\np.write_text(t.replace(old, old + \"\\n            tentative_return_deprecations: Vec::new(),\", 1))\nprint('module default initialized')\nPYEOF",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/module.rs')\nt = p.read_text()\nold = \"            declared_trait_source_l",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/module.rs')\nt = p.read_text()\nold = \"            declared_trait_source_lines: HashMap::new(),\"\nassert t.count(old) == 1\np.write_text(t.replace(old, old + \"\\n            tentative_return_deprecations: Vec::new(),\", 1))\nprint('module default initialized')\nPYEOF: module default initialized",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f3b1a995b3073e029814deab",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:28:23.473Z",
+  "stored_at": "2026-08-22T18:28:23.474Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -c \"IDENT|DIFF|CRASH|COMPILE|TIMEOUT|PHPFAIL\" \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b8ut0d98p.output\"; rg -o \"(IDENT|DIFF|CRASH\\([0-9]+\\)|COMPILE|TIMEOUT\\(compile\\)|TIMEOUT|PHPFAIL)$\" \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b8ut0d98p.output\" | sort | uniq -c | sort -rn",
+  "summary": "rg -c \"IDENT|DIFF|CRASH|COMPILE|TIMEOUT|PHPFAIL\" \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b8ut0d98p.output\"; rg -o \"(IDENT|DIFF|CRASH\\([0-9]+\\)|COMPILE|TIMEOUT\\(compile\\)|TIMEOUT|PHPFAIL)$\" \"/private/t",
+  "text": "rg -c \"IDENT|DIFF|CRASH|COMPILE|TIMEOUT|PHPFAIL\" \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b8ut0d98p.output\"; rg -o \"(IDENT|DIFF|CRASH\\([0-9]+\\)|COMPILE|TIMEOUT\\(compile\\)|TIMEOUT|PHPFAIL)$\" \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b8ut0d98p.output\" | sort | uniq -c | sort -rn: 52 52 COMPILE",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1c5b3fd0c6d7e463eed2e950",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:39:20.831Z",
+  "stored_at": "2026-08-17T06:39:20.833Z"
+}

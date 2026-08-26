@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build 2>&1 | tail -25",
+  "summary": "cargo build 2>&1 | tail -25: Compiling elephc v0.26.4 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `dev` profile [unoptimized + debuginfo] target(s) in 45.68s",
+  "text": "cargo build 2>&1 | tail -25: Compiling elephc v0.26.4 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `dev` profile [unoptimized + debuginfo] target(s) in 45.68s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f82ea9781becba7a1e81059b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T06:57:52.751Z",
+  "stored_at": "2026-08-21T06:57:52.752Z"
+}

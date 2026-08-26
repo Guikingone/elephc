@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -d /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_* 2>/dev/null | wc -l; du -shc /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_* 2>/dev/null | tail -1",
+  "summary": "About to run: ls -d /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_* 2>/dev/null | wc -l; du -shc /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_* 2>/dev/null | tail -1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "572f7824344354ef79f6bd58",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:00:13.680Z",
+  "stored_at": "2026-08-26T17:00:13.680Z"
+}

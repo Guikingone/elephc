@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '215,262p' src/types/checker/functions/resolution/specialization.rs",
+  "summary": "rtk proxy sed -n '215,262p' src/types/checker/functions/resolution/specialization.rs: R. The `declared_params` gate // below used to exclude it from the very widening machinery that exists to prevent // exactly this, because `array` is, technically, declared. // // `array` is the only PHP hint that resolves to an `Arra",
+  "text": "rtk proxy sed -n '215,262p' src/types/checker/functions/resolution/specialization.rs: R. The `declared_params` gate // below used to exclude it from the very widening machinery that exists to prevent // exactly this, because `array` is, technically, declared. // // `array` is the only PHP hint that resolves to an `Array`/`AssocArray` type, so a // declared parameter currently carrying one can only have come from a generic hint. let declared = stored_sig .declared_params .get(seen_idx) .copied() .unwrap_or(false); let generic_array_param = param_types .get(seen_idx) .is_some_and(|(_, ty)| { matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) }); if seen_idx < regular_param_count && (!declared || generic_array_param) && !matches!(actual_ty, PhpType::Never | PhpType::Callable) && (!matches!(actual_ty, PhpType::Void) || crate::codegen::sentinels::null_repr_is_tagged()) { let key = (name.to_string(), seen_idx); let seen = self.param_specialization_seen.contains(&key);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b13ccb3d734adf3094b0f1d8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:44:14.692Z",
+  "stored_at": "2026-08-16T19:44:14.692Z"
+}

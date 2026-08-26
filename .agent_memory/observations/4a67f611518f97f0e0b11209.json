@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '680,700p' src/types/checker/builtin_spl_classes/regex.rs; echo \"--- 760-800 ---\"; sed -n '760,800p' src/types/checker/builtin_spl_classes/regex.rs",
+  "summary": "sed -n '680,700p' src/types/checker/builtin_spl_classes/regex.rs; echo \"--- 760-800 ---\"; sed -n '760,800p' src/types/checker/builtin_spl_classes/regex.rs:  ), assign_stmt(\"fullOffset\", regex_match_offset_expr(\"searchOffset\", \"subject\")), ]; first_body.push(if_stmt( preg_flag_enabled_expr(\"pregFlags\", PREG_OFFSET_CAPTU",
+  "text": "sed -n '680,700p' src/types/checker/builtin_spl_classes/regex.rs; echo \"--- 760-800 ---\"; sed -n '760,800p' src/types/checker/builtin_spl_classes/regex.rs:  ), assign_stmt(\"fullOffset\", regex_match_offset_expr(\"searchOffset\", \"subject\")), ]; first_body.push(if_stmt( preg_flag_enabled_expr(\"pregFlags\", PREG_OFFSET_CAPTURE), regex_build_offset_row_body(\"firstMatch\"), Some(vec![assign_stmt(\"firstMatch\", var_expr(\"matches\"))]), )); first_body.push(assign_stmt(\"matchSeen\", bool_expr(true))); let mut body = vec![if_stmt(not_expr(var_expr(\"matchSeen\")), first_body, None)]; body.extend(regex_advance_search_offset_body(\"searchOffset\")); body.push(return_stmt(string_expr(\"\"))); body } /// Builds an expression for the current full match offset relative to the subject. fn regex_match_offset_expr(cursor_name: &str, subject_name: &str) -> Expr { binary_expr( var_expr(cursor_name), BinOp::Add, function_call( \"intval\", vec![function_call( \"strpos\", vec![ function_call(\"substr\", vec![var_expr(subject_name), var_expr(cursor_name)]), var_expr(\"fullMatch\"), ],",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4a67f611518f97f0e0b11209",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:38:45.636Z",
+  "stored_at": "2026-08-20T20:38:45.636Z"
+}

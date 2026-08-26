@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"fn test_zip_archive_reads_entries_like_php\" -A60 tests/codegen/io/streams.rs | head -70",
+  "summary": "About to run: rtk proxy rg -n \"fn test_zip_archive_reads_entries_like_php\" -A60 tests/codegen/io/streams.rs | head -70",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4c32bdae3a8099db88321ef6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:43:57.631Z",
+  "stored_at": "2026-08-16T16:43:57.632Z"
+}

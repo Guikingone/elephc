@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_filters.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_filters.rs: super::super::ensure_arg_count(inst, \"stream_filter_register\", 2)?;\n    let filter_name = expect_operand(inst, 0)?;\n    let class_name = expect_operand(inst, 1) -> su",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_filters.rs: super::super::ensure_arg_count(inst, \"stream_filter_register\", 2)?;\n    let filter_name = expect_operand(inst, 0)?;\n    let class_name = expect_operand(inst, 1) -> super::super::ensure_arg_count(inst, \"stream_filter_register\", 2)?;\n    let filter_name = expect_operand(inst, 0)?;\n    let class_name = expect_operand(inst, 1)?;\n    load_string_to_result(ctx, filter_name, \"stream_filter_register filter_name\")?;\n    // php rejects an empty name or class outright, before it looks at the registry at all.\n    // Both are `ValueError`s the caller can catch, so they are raised on the byte length rather\n    // than refused at compile time — the ar",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "61dfb61febfad46f3b1fc811",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:39:43.555Z",
+  "stored_at": "2026-08-17T08:39:43.556Z"
+}

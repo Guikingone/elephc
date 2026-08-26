@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build --lib 2>&1 | grep -E \"^error\" -A 10 | head -30; cargo build --lib 2>&1 | tail -2",
+  "summary": "About to run: cargo build --lib 2>&1 | grep -E \"^error\" -A 10 | head -30; cargo build --lib 2>&1 | tail -2",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "976f8a195ddc39553e3c4f5a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:07:47.742Z",
+  "stored_at": "2026-08-22T11:07:47.742Z",
+  "low_signal": true
+}

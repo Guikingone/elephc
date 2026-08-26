@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_options.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_options.rs: if inst.operands.len() == 5 {\n        let microseconds = expect_operand(inst, 4)?;\n        ctx.load_value_to_result(microseconds)?;\n        super::super::except -> if",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_options.rs: if inst.operands.len() == 5 {\n        let microseconds = expect_operand(inst, 4)?;\n        ctx.load_value_to_result(microseconds)?;\n        super::super::except -> if inst.operands.len() == 5 {\n        let microseconds = expect_operand(inst, 4)?;\n        ctx.load_value_to_result(microseconds)?;\n        super::super::exceptions::emit_value_error_unless(\n            ctx,\n            super::super::exceptions::ValueGuard::SignedAtLeast(result_reg, 0),\n            STREAM_SELECT_NEGATIVE_MICROSECONDS_MESSAGE,\n        );\n        // A null `$seconds` means \"block forever\", and php refuses to pair that with a non-zero\n        // `$microseconds` ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2017ee170af3721926cd0df1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:13:33.222Z",
+  "stored_at": "2026-08-17T09:13:33.222Z"
+}

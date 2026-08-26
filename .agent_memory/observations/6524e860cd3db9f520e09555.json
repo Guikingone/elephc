@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ReturnTypeWillChange\" src --include='*.rs' | head -5; echo \"=== startup diagnostics ===\"; grep -rn \"fn emit_program_prologue\\|program_start_diagnostics\\|emit_startup\" src --include='*.rs' | head -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ReturnTypeWillChange\" src --include='*.rs' | head -5; echo \"=== startup diagnostics ===\"; grep -rn \"fn emit_program_prologue\\|program_start_diagnostics\\|emit_startup\" src --include='*.rs' | head -5: === startup dia",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ReturnTypeWillChange\" src --include='*.rs' | head -5; echo \"=== startup diagnostics ===\"; grep -rn \"fn emit_program_prologue\\|program_start_diagnostics\\|emit_startup\" src --include='*.rs' | head -5: === startup diagnostics ===",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6524e860cd3db9f520e09555",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:21:38.771Z",
+  "stored_at": "2026-08-22T18:21:38.772Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"requires a variable with mixed/union/nullable storage\" src | head",
+  "summary": "grep -rn \"requires a variable with mixed/union/nullable storage\" src | head: src/types/checker/type_compat/declarations.rs:213: \"{} requires a variable with mixed/union/nullable storage when passed by reference\",",
+  "text": "grep -rn \"requires a variable with mixed/union/nullable storage\" src | head: src/types/checker/type_compat/declarations.rs:213: \"{} requires a variable with mixed/union/nullable storage when passed by reference\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d0d660ed19483785ec7e0382",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:39:56.379Z",
+  "stored_at": "2026-08-18T09:39:56.380Z"
+}

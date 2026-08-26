@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"could not be converted to string\" src/ | head -10",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"could not be converted to string\" src/ | head -10: src/codegen/lower_inst/conversions.rs:420: .add_string(b\"Fatal error: Object could not be converted to string\\n\"); src/codegen/lower_inst/conversions.rs:473: \"Obje",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"could not be converted to string\" src/ | head -10: src/codegen/lower_inst/conversions.rs:420: .add_string(b\"Fatal error: Object could not be converted to string\\n\"); src/codegen/lower_inst/conversions.rs:473: \"Object of class {} could not be converted to string\", src/codegen/lower_inst/strings.rs:382: \"Object of class Closure could not be converted to string\", src/codegen/lower_inst/output_values.rs:86: \"Fatal error: Object of class {} could not be converted to string\\n\", src/codegen/lower_inst/output_values.rs:185: \"Object of class Closure could not be converted to string\", src/codegen_support/runtime/data/mod.rs:585: \" could not be converted to string\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca8b3c52a1a0bd82c23e7dbf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:52:40.396Z",
+  "stored_at": "2026-08-23T17:52:40.396Z"
+}

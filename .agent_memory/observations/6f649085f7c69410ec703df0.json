@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg41.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg41.txt: fix(arrays): array_filter() renumbered the survivors, where php keeps their keys\n\n    array_filter([0, 1, 2])       elephc [0=>1, 1=>2] ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg41.txt: fix(arrays): array_filter() renumbered the survivors, where php keeps their keys\n\n    array_filter([0, 1, 2])       elephc [0=>1, 1=>2]        php [1=>1, 2=>2]\n\nMeasured one program per case against `php -n` 8.5.6: 3 of 13 matched. Seven were silent wrong\nanswers and three were compile errors.\n\nThe keys were wrong AS KEYS, not merely in the rendering: `isset($result[0])` answered true where\nphp answers false, and `foreach` yielded 0 and 1 instead of 1 and 2. Nothing was going to report\nit — `json_encode` shows a list whenever the survivors happen to occupy 0..n-1, so half the cases\nlooked righ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6f649085f7c69410ec703df0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:54:23.495Z",
+  "stored_at": "2026-08-22T11:54:23.495Z"
+}

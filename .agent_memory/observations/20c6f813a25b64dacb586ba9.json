@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn prepare_by_ref_null_out_locals\" -A45 src/ir_lower/",
+  "summary": "grep -rn \"fn prepare_by_ref_null_out_locals\" -A45 src/ir_lower/: e), PhpType::Void) { src/ir_lower/expr/call_arg_coercion.rs-84- continue; src/ir_lower/expr/call_arg_coercion.rs-85- } src/ir_lower/expr/call_arg_coercion.rs-86- let local = ctx.load_local(name, Some(arg.span)); src/ir_lower/expr/call_arg_coercion.rs-87- ",
+  "text": "grep -rn \"fn prepare_by_ref_null_out_locals\" -A45 src/ir_lower/: e), PhpType::Void) { src/ir_lower/expr/call_arg_coercion.rs-84- continue; src/ir_lower/expr/call_arg_coercion.rs-85- } src/ir_lower/expr/call_arg_coercion.rs-86- let local = ctx.load_local(name, Some(arg.span)); src/ir_lower/expr/call_arg_coercion.rs-87- // The slot really is converted, not merely re-typed: the callee writes a boxed value src/ir_lower/expr/call_arg_coercion.rs-88- // through the pointer, so what the caller hands over has to already be a Mixed cell. src/ir_lower/expr/call_arg_coercion.rs-89- // This mirrors the `ArrayToMixed` the by-reference array path emits for the same reason. src/ir_lower/expr/call_arg_coercion.rs-90- let boxed = ctx.emit_value( src/ir_lower/expr/call_arg_coercion.rs-91- Op::MixedBox, src/ir_lower/expr/call_arg_coercion.rs-92- vec![local.value], src/ir_lower/expr/call_arg_coercion.rs-93- None, src/ir_lower/expr/call_arg_coercion.rs-94- PhpType::Mixed,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "20c6f813a25b64dacb586ba9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:00:39.647Z",
+  "stored_at": "2026-08-20T20:00:39.648Z"
+}

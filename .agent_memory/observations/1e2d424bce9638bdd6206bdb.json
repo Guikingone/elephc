@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/real_gap.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/real_gap.py: \"\"\"What elephc REALLY resolves, not what its catalogue promises.\n\nThe registry is one source of names; preludes are another (scanf, va",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/real_gap.py: \"\"\"What elephc REALLY resolves, not what its catalogue promises.\n\nThe registry is one source of names; preludes are another (scanf, var_export and pdo all moved\ninto PHP preludes), so a name absent from the registry is not necessarily absent from the\ncompiler. The honest question is whether the CHECKER resolves the name, and it answers many at\nonce: it recovers from errors, so one file naming many candidates yields one `Undefined function:`\nline per genuinely missing name.\n\nCalling each with no arguments is deliberate — a function that EXISTS answers with an arity or\ntype diagnostic, which is ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1e2d424bce9638bdd6206bdb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:06:55.564Z",
+  "stored_at": "2026-08-21T10:06:55.565Z"
+}

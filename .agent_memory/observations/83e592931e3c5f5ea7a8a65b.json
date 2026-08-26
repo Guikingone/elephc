@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"emit_csv_escape_deprecation\\|must be a single character\" src/codegen/lower_inst/builtins/io/stream_file_ops.rs | head -20",
+  "summary": "grep -n \"emit_csv_escape_deprecation\\|must be a single character\" src/codegen/lower_inst/builtins/io/stream_file_ops.rs | head -20: 589: \"{function}(): Argument #{} (${}) must be a single character\", 656: emit_csv_escape_deprecation(ctx, inst, \"fgetcsv\", 4); 713: emit_csv_escape_deprecation(ctx, inst, \"str_getcsv\", 3);",
+  "text": "grep -n \"emit_csv_escape_deprecation\\|must be a single character\" src/codegen/lower_inst/builtins/io/stream_file_ops.rs | head -20: 589: \"{function}(): Argument #{} (${}) must be a single character\", 656: emit_csv_escape_deprecation(ctx, inst, \"fgetcsv\", 4); 713: emit_csv_escape_deprecation(ctx, inst, \"str_getcsv\", 3); 775:fn emit_csv_escape_deprecation( 936: emit_csv_escape_deprecation(ctx, inst, \"fputcsv\", 4);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "83e592931e3c5f5ea7a8a65b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:23:55.476Z",
+  "stored_at": "2026-08-18T09:23:55.476Z"
+}

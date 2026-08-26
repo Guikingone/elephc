@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - 🎯🔴🔴 [AUDIT COMPLET surface streams 2026-08-14](streams-audit-full-surface-2026-08-14.md) — 12 P0 silencieux (STREAM_CLIENT_* permutées · stream_metadata=décal -> - ✅✅🎯 [AUDIT COMPLET surface streams ",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - 🎯🔴🔴 [AUDIT COMPLET surface streams 2026-08-14](streams-audit-full-surface-2026-08-14.md) — 12 P0 silencieux (STREAM_CLIENT_* permutées · stream_metadata=décal -> - ✅✅🎯 [AUDIT COMPLET surface streams 2026-08-14](streams-audit-full-surface-2026-08-14.md) — les 3 clusters TDD LIVRÉS et intégrés (head 84a15fc046 poussé, CI branch d799974214) : CSV (READ_CSV réel, escape sym, 11 ValueError, segfault getCsvControl) · constantes/filtres (STREAM_CLIENT_* 4/1/2, strip_tags retiré, mode=0 déduit, consumed, listes php) · userspace (stream_metadata [Str,Int,Mixed] + marker path-only SANS stream_open — le SIGSEGV avait DEUX causes, mkdir/rmdir/unl",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ea9cbbcba4f5a6a92fb471ba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T18:58:12.691Z",
+  "stored_at": "2026-08-14T18:58:12.691Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"mod resolution\" src/types/checker/functions.rs; grep -n \"mod functions\" src/types/checker/mod.rs",
+  "summary": "grep -n \"mod resolution\" src/types/checker/functions.rs; grep -n \"mod functions\" src/types/checker/mod.rs: 14:mod resolution; 25:mod functions;",
+  "text": "grep -n \"mod resolution\" src/types/checker/functions.rs; grep -n \"mod functions\" src/types/checker/mod.rs: 14:mod resolution; 25:mod functions;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "74bb811aedbb13843d229227",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:29:21.636Z",
+  "stored_at": "2026-08-16T20:29:21.636Z"
+}

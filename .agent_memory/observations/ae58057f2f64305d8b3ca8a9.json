@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py: \"\"\"Every stream function, exercised against `php -n` — output, diagnostics and exit status.\n\nA green test suite proves ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py: \"\"\"Every stream function, exercised against `php -n` — output, diagnostics and exit status.\n\nA green test suite proves the tests pass. This asks the other question: over the SURFACE, where do\nthe two still disagree? Each case is a whole program run under both, and the whole of stdout,\nstderr and the exit code are compared, so a missing warning counts as a divergence just like a\nwrong value.\n\nEach case runs in its OWN directory. php and elephc sharing one working directory once scored a\ncompletely broken write path as 15/15, because the file the reader found had been left there by the\nother eng",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ae58057f2f64305d8b3ca8a9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:44:41.982Z",
+  "stored_at": "2026-08-21T17:44:41.982Z"
+}

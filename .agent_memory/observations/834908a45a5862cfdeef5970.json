@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"expects resource, got\" src/ | head -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"expects resource, got\" src/ | head -5: src/gz_prelude.rs:42://! the stream builtins refuse that with \"expects resource, got int\" — raised in the bodies of src/types/checker/builtins/io/common.rs:38: &format!(\"{}() ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"expects resource, got\" src/ | head -5: src/gz_prelude.rs:42://! the stream builtins refuse that with \"expects resource, got int\" — raised in the bodies of src/types/checker/builtins/io/common.rs:38: &format!(\"{}() expects resource, got {}\", name, actual),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "834908a45a5862cfdeef5970",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:33:51.745Z",
+  "stored_at": "2026-08-23T17:33:51.746Z"
+}

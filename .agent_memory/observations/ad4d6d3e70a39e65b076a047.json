@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && php -n -r '$r=new ReflectionFunction(\"fputcsv\"); echo $r->getReturnType(),\" | \"; foreach($r->getParameters() as $p){ printf(\"%s=%s \", $p->getName(), $p->isDefaultValueAvailable()? var_export($p->getDefaultValue(),true) : \"<req>\"); } echo \"\\n\";'",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && php -n -r '$r=new Reflectio",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ad4d6d3e70a39e65b076a047",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:40:00.880Z",
+  "stored_at": "2026-08-22T06:40:00.881Z"
+}

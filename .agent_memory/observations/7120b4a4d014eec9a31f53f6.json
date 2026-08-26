@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | wc -l; echo \"--- conflits hors docs générées:\"; git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | grep -v \"^docs/internals/builtins/\\|^docs/php/builtins\" | head -30",
+  "summary": "git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | wc -l; echo \"--- conflits hors docs générées:\"; git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | grep -v \"^docs/internals/builtins/\\|^docs/php/builtins\" | head -30: constructor_helpers.rs src/codegen/eval_method_hel",
+  "text": "git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | wc -l; echo \"--- conflits hors docs générées:\"; git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | grep -v \"^docs/internals/builtins/\\|^docs/php/builtins\" | head -30: constructor_helpers.rs src/codegen/eval_method_helpers.rs src/codegen/lower_inst.rs src/codegen/lower_inst/arrays.rs src/codegen/lower_inst/builtins/arrays.rs src/codegen/lower_inst/builtins/arrays/basic.rs src/codegen/lower_inst/builtins/arrays/fill_helpers.rs src/codegen/lower_inst/builtins/arrays/helper_validation.rs src/codegen/lower_inst/builtins/count_empty.rs src/codegen/lower_inst/builtins/io/boxing_helpers.rs src/codegen/lower_inst/builtins/io/filter_helpers.rs src/codegen/lower_inst/builtins/io/fopen_data.rs src/codegen/lower_inst/builtins/io/host_directory_process.rs src/codegen/lower_inst/builtins/io/phar_read.rs src/codegen/lower_inst/builtins/io/resource_handles.rs src/codegen/lower_inst/builtins/io/seek_hash_arch.rs src/codegen/lower_inst/builtins/io/stat_ops.rs src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs src/codegen/lower_inst/builtins/io/stream_file_ops.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7120b4a4d014eec9a31f53f6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T16:55:17.493Z",
+  "stored_at": "2026-08-20T16:55:17.493Z"
+}

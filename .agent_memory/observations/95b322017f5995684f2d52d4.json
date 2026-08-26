@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport json, pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/sweep_result.json')\nfor r in json.loads(p.read_text()):\n    if r['example'] in ('udg-socket', 'udp-socket', 'type-ops'):\n        print('=== ' + r['example'])\n        print('--- php ---'); print(r['php'][:500])\n        print('--- elephc ---'); print(r['elephc'][:500])\n        print()\nPY",
+  "summary": "python3 - <<'PY'\nimport json, pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/sweep_result.json')\nfor r in json.loads(p.read_text()):\n    if r['example'] in ('udg-socket', 'ud",
+  "text": "python3 - <<'PY'\nimport json, pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/sweep_result.json')\nfor r in json.loads(p.read_text()):\n    if r['example'] in ('udg-socket', 'udp-socket', 'type-ops'):\n        print('=== ' + r['example'])\n        print('--- php ---'); print(r['php'][:500])\n        print('--- elephc ---'); print(r['elephc'][:500])\n        print()\nPY: et --- before unset: 42, 7 after unset, is_null: 1, 1 --- settype --- before: 3.14 (double) after settype to integer: 3 (integer) === udg-socket --- php --- Warning: unlink(/tmp/elephc-udg-example.sock): No such file or directory in main.php on line 8 udg sockets opened server received: udg datagram payload udg sockets closed --- elephc --- Warning: Undefined variable $errno in main.php on line 12 Warning: Undefined variable $errstr in main.php on line 12 udg sockets opened server received: udg datagram payload udg sockets closed === udp-socket --- php --- udp sockets opened server received: datagram payload sender address: 127.0.0.1:52982 udp sockets closed --- elephc --- Warning: Undefined variable $errno in main.php on line 9 Warning: Undefined variable $errstr in main.php on line 9 udp sockets opened server received: datagram payload sender address: 127.0.0.1:58628 udp sockets closed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "95b322017f5995684f2d52d4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:55:40.827Z",
+  "stored_at": "2026-08-20T19:55:40.828Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ | head; echo ---; head -30 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh 2>/dev/null",
+  "summary": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ | head; echo ---; head -30 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8",
+  "text": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ | head; echo ---; head -30 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh 2>/dev/null: put would otherwise look like an ordinary difference. ELEPHC=/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 for f in \"$@\"; do php -n \"$f.php\" > \"${f}_p.txt\" 2>&1 rm -f \"./$f\" if ! \"$ELEPHC\" run \"$f.php\" > \"${f}_compile.txt\" 2>&1; then echo \"$f COMPILE FAILED:\"; tail -3 \"${f}_compile.txt\"; continue fi if [[ ! -x \"./$f\" ]]; then echo \"$f NO BINARY:\"; tail -3 \"${f}_compile.txt\"; continue fi \"./$f\" > \"${f}_e.txt\" 2>&1 code=$? if [[ $code -ge 128 && $code -lt 165 ]]; then echo \"$f CRASHED exit=$code\"; continue; fi if diff -q \"${f}_p.txt\" \"${f}_e.txt\" > /dev/null; then echo \"$f IDENTICAL\" else echo \"$f DIFF:\"; diff \"${f}_p.txt\" \"${f}_e.txt\" | head -14 fi done",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f0e2c0bd59cd5a877a97708c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:47:19.469Z",
+  "stored_at": "2026-08-18T15:47:19.469Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '418,445p' src/codegen_support/runtime/resources/stream/x86_64.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '418,445p' src/codegen_support/runtime/resources/stream/x86_64.rs: ); // did the handle resolve to an open stream? emitter.instruction(\"jz __rt_stream_chunk_size_default\"); // invalid handles use the defensive read-lo",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '418,445p' src/codegen_support/runtime/resources/stream/x86_64.rs: ); // did the handle resolve to an open stream? emitter.instruction(\"jz __rt_stream_chunk_size_default\"); // invalid handles use the defensive read-loop fallback emitter.instruction(&format!( \"mov rax, QWORD PTR [rax + {}]\", STREAM_CHUNK_SIZE_OFFSET )); // load the configured state-owned chunk size emitter.instruction(\"test rax, rax\"); // was an explicit size configured? emitter.instruction(\"jnz __rt_stream_chunk_size_done\"); // return the configured size emitter.label(\"__rt_stream_chunk_size_default\"); emitter.instruction(&format!(\"mov eax, {STREAM_DEFAULT_CHUNK_SIZE}\")); // php's default when nothing configured one emitter.label(\"__rt_stream_chunk_size_done\"); emitter.instruction(\"pop rbp\"); // restore the caller frame pointer emitter.instruction(\"ret\"); // return the effective read-loop chunk size } /// Emits x86_64 chunk-size replacement through the authoritative opaque stream state.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8675fdae85b88226ab30eecf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T19:29:26.115Z",
+  "stored_at": "2026-08-23T19:29:26.116Z"
+}

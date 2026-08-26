@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn test_builtin_filter_refuses_a_params_it_cannot_read\" -B 20 -A 25 tests/codegen/io/streams.rs | head -60",
+  "summary": "grep -rn \"fn test_builtin_filter_refuses_a_params_it_cannot_read\" -B 20 -A 25 tests/codegen/io/streams.rs | head -60: reams.rs-3971- fclose($h); tests/codegen/io/streams.rs-3972-} tests/codegen/io/streams.rs-3973-\"#, tests/codegen/io/streams.rs-3974- ); tests/codegen/io/streams.rs-3975- assert_eq!( tests/codegen/io/str",
+  "text": "grep -rn \"fn test_builtin_filter_refuses_a_params_it_cannot_read\" -B 20 -A 25 tests/codegen/io/streams.rs | head -60: reams.rs-3971- fclose($h); tests/codegen/io/streams.rs-3972-} tests/codegen/io/streams.rs-3973-\"#, tests/codegen/io/streams.rs-3974- ); tests/codegen/io/streams.rs-3975- assert_eq!( tests/codegen/io/streams.rs-3976- out, tests/codegen/io/streams.rs-3977- concat!( tests/codegen/io/streams.rs-3978- \"string.toupper null=true int=true none=true arr=true\\n\", tests/codegen/io/streams.rs-3979- \"dechunk null=true int=true none=true arr=true\\n\", tests/codegen/io/streams.rs-3980- \"convert.base64-encode null=false int=false none=true arr=true\\n\", tests/codegen/io/streams.rs-3981- \"convert.base64-decode null=false int=false none=true arr=true\\n\", tests/codegen/io/streams.rs-3982- \"convert.quoted-printable-encode null=false int=false none=true arr=true\\n\", tests/codegen/io/streams.rs-3983- \"convert.quoted-printable-decode null=false int=false none=true arr=true\\n\", tests/codegen/io/streams.rs-3984- )",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f15d0883536c1b10564f4279",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:20:45.239Z",
+  "stored_at": "2026-08-21T11:20:45.239Z",
+  "low_signal": true
+}

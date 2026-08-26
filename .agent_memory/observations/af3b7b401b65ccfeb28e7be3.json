@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '63,132p' src/codegen_support/runtime/arrays/hash_key_compare.rs",
+  "summary": "sed -n '63,132p' src/codegen_support/runtime/arrays/hash_key_compare.rs: h integer spellings overflowed signed 64-bit emitter.instruction(\"cbnz x9, __rt_key_compare_regular_strings_lexical\"); // PHP byte-compares equal finite doubles from two overflow integers emitter.instruction(\"mov x0, #0\"); // equal finite binary64",
+  "text": "sed -n '63,132p' src/codegen_support/runtime/arrays/hash_key_compare.rs: h integer spellings overflowed signed 64-bit emitter.instruction(\"cbnz x9, __rt_key_compare_regular_strings_lexical\"); // PHP byte-compares equal finite doubles from two overflow integers emitter.instruction(\"mov x0, #0\"); // equal finite binary64 values preserve the stable insertion order emitter.instruction(\"b __rt_key_compare_regular_done\"); // return equality without applying a textual tiebreaker emitter.label(\"__rt_key_compare_regular_strings_ordered\"); emitter.instruction(\"cset x9, lt\"); // materialize whether the left numeric key is smaller emitter.instruction(\"cset x10, gt\"); // materialize whether the left numeric key is greater emitter.instruction(\"sub x0, x10, x9\"); // return the normalized numeric string ordering emitter.instruction(\"b __rt_key_compare_regular_done\"); // skip bytewise ordering after numeric comparison emitter.label(\"__rt_key_compare_regular_strings_lexical\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "af3b7b401b65ccfeb28e7be3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:29:14.487Z",
+  "stored_at": "2026-08-21T07:29:14.488Z"
+}

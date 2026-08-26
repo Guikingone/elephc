@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps -eo pid,etime,time,comm | grep codegen_tests | head -2; echo \"--- mémoire:\"; vm_stat | sed -n '2,4p'",
+  "summary": "ps -eo pid,etime,time,comm | grep codegen_tests | head -2; echo \"--- mémoire:\"; vm_stat | sed -n '2,4p': 84241 08:46 10:12.60 target/debug/deps/codegen_tests-16c45d69d5f633ba --- mémoire: Pages free: 14802. Pages active: 263793. Pages inactive: 259583.",
+  "text": "ps -eo pid,etime,time,comm | grep codegen_tests | head -2; echo \"--- mémoire:\"; vm_stat | sed -n '2,4p': 84241 08:46 10:12.60 target/debug/deps/codegen_tests-16c45d69d5f633ba --- mémoire: Pages free: 14802. Pages active: 263793. Pages inactive: 259583.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c318f3b46a99af604dabb541",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T15:49:36.394Z",
+  "stored_at": "2026-08-20T15:49:36.395Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n statorder.php > sop.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o statorder statorder.php 2>&1|tail -1; ./statorder > soe.txt 2>&1; diff sop.txt soe.txt && echo \"IDENTICAL (statorder)\"; echo \"--- wrapper case ---\"; cd statw; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o p… [+120 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n statorder.php > sop.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n statorder.php > sop.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o statorder statorder.php 2>&1|tail -1; ./statorder > soe.txt 2>&1; diff sop.txt soe.txt && echo \"IDENTICAL (statorder)\"; echo \"--- wrapper case ---\"; cd statw; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o p p.php 2>&1|tail -1; php -n p.php > wp.txt 2>&1; ./p > we.txt 2>&1; diff wp.txt we.txt && echo \"IDENTICAL (wrapper stat)\" failed: Exit code 1 Compiled 'statorder.php' -> 'statorder' IDENTICAL (statorder) --- wrapper case --- Compiled 'p.php' -> 'p' 7,30d6 < [1]=> < int(0) < [2]=> < int(0) < [3]=> < int(0) < [4]=> < int(0) < [5]=> < int(0) < [6]=> < int(0) < [7]=> < int(0) < [8]=> < int(0) < [9]=> < int(0) < [10]=> < int(0) < [11]=> < int(0) < [12]=> < int(0) 32a9,10 > [1]=> > int(0) 34a13,14 > [2]=> > int(0) 36a17,18 > [3]=> > int(0) 38a21,22 > [4]=> > int(0) 40a25,26 > [5]=> > int(0) 42a29,30 > [6]=> > int(0) 44a33,34 > [7]=> > int(0) 46a37,38 > [8]=> > int(0) 48a41,42 > [9]=> > int(0) 50a45,46 > [10]=> > int(0) 52a49,50 > [11]=> > int(0) 53a52,53 > int(0) > [12]=>",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "77e536f8bad3d0b2fe97b739",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:23:31.340Z",
+  "stored_at": "2026-08-22T20:23:31.340Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/arrays/hash_filter.rs')\nt = p.read_text()\nold = '''    emitter.instruction(\\\"mov x0, x3\\\");                                          // scalar value, string key\n    emitter.instruction(\\\"mov x9, x1\\\");\n    emitter.instruction(\\\"mov x1, x9\\\");\n    emitter.instruction(\\\"mov x2, x2\\\");\n    emitter.instruction(\\\"cbz x22, __rt_hash_filter_call\\\");'''\nnew = '''    emitter.instruction(\\\"mov x0, x3\\\");                                          // scalar value, string key: x1/x2 already hold it\n    emitter.instruction(\\\"cbz x22, _… [+742 chars truncated]",
+  "summary": "python3 -c \"\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/arrays/hash_filter.rs')\nt = p.read_text()\nold = '''    emitter.instruction(\\\"mov x0, x3\\\");                                          // scalar value, string key\n    emitter.instruction(\\\"mov x9, x1\\\");\n    emitter.instruction(\\\"mov x1, x9\\\");\n   ",
+  "text": "python3 -c \"\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/arrays/hash_filter.rs')\nt = p.read_text()\nold = '''    emitter.instruction(\\\"mov x0, x3\\\");                                          // scalar value, string key\n    emitter.instruction(\\\"mov x9, x1\\\");\n    emitter.instruction(\\\"mov x1, x9\\\");\n    emitter.instruction(\\\"mov x2, x2\\\");\n    emitter.instruction(\\\"cbz x22, __rt_hash_filter_call\\\");'''\nnew = '''    emitter.instruction(\\\"mov x0, x3\\\");                                          // scalar value, string key: x1/x2 already hold it\n    emitter.instruction(\\\"cbz x22, __rt_hash_filter_call\\\");'''\nassert t.count(old) == 1\nt = t.replace(old, new, 1)\nold = '''    emitter.instruction(\\\"mov x0, x3\\\");                                          // scalar value, integer key\n    emitter.instruction(\\\"mov x1, x1\\\");\n    emitter.instruction(\\\"cbz x22, __rt_hash_filter_call\\\");'''\nnew = '''    emitter.instruction(\\\"mov x0, x3\\\");                                          // scalar value, integer key: x1 already holds it\n    emitter.instruction(\\\"cbz x22, __rt_hash_filter_call\\\");'''\nassert t.count(old) == 1\nt = t.replace(old, new, 1)\np.write_text(t)\nprint('redundant moves removed')\n\"; RUST_MIN_STACK=33554432 cargo test --lib frame_balance 2>&1 | grep -E \"^test .*frame|panicked|assert|__rt_hash_filter\" | head -6: redundant moves removed test codegen_support::runtime::emitters::frame_balance_tests::every_runtime_helper_returns_on_a_balanced_stack ... ok",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "105e40fc3515c204d7febad4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:40:02.088Z",
+  "stored_at": "2026-08-22T11:40:02.088Z"
+}

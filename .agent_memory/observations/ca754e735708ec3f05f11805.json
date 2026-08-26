@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"LiteralOpenMode::ReadOnly\" src/ | wc -l; grep -rln \"LiteralOpenMode::ReadOnly\" src/",
+  "summary": "About to run: grep -rn \"LiteralOpenMode::ReadOnly\" src/ | wc -l; grep -rln \"LiteralOpenMode::ReadOnly\" src/",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca754e735708ec3f05f11805",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:16:20.567Z",
+  "stored_at": "2026-08-21T18:16:20.567Z",
+  "low_signal": true
+}

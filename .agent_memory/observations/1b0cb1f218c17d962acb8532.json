@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_timeout_test.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_timeout_test.py: import pathlib\n\np = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'stream",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_timeout_test.py: import pathlib\n\np = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'streams-csv-signature/tests/codegen/io/streams.rs'\n)\nt = p.read_text()\nANCHOR = '''/// `stream_select()` refuses an array holding something that is not a stream, in php's two wordings.'''\nNEW = '''/// `stream_select()` waits the `$microseconds` it was given.\n///\n/// The x86_64 arm spilled `$microseconds` into the same frame slot the pollfd build then used for\n/// its castable tally, and the timeout was computed by reading that slot back — so a call asking\n/// for 300 ms polled fo",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1b0cb1f218c17d962acb8532",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:30:29.294Z",
+  "stored_at": "2026-08-23T07:30:29.294Z"
+}

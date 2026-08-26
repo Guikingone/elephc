@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/call_operands.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/call_operands.rs: /// Moves the canonical integer result register into the target's first argument register. -> /// Resolves a `?int` argument, answering `NULL_SENTINEL` when the value is null.\n///",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/call_operands.rs: /// Moves the canonical integer result register into the target's first argument register. -> /// Resolves a `?int` argument, answering `NULL_SENTINEL` when the value is null.\n///\n/// `resolve_int_operand_to_result` flattens a boxed null to `0` — the same answer a legitimate\n/// `0` gives — which is wrong for every php parameter whose null means \"no bound\":\n/// `fgets($h, null)` reads the whole line and `fwrite($h, $d, null)` writes every byte, while a\n/// `0` raised `Argument #2 ($length) must be greater than 0` and wrote nothing respectively. The\n/// value only reac",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "82522f1b9de3a80237296699",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:12:01.749Z",
+  "stored_at": "2026-08-17T07:12:01.749Z"
+}

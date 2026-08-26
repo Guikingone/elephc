@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib, re\ntargets = {\n    \"src/codegen_support/runtime/io/fgets.rs\": [64, 384, 411],\n    \"src/codegen_support/runtime/io/stream_get_line.rs\": [396, 403],\n}\nfor f, lines in targets.items():\n    p = pathlib.Path(f)\n    src = p.read_text().split(\"\\n\")\n    for ln in lines:\n        line = src[ln - 1]\n        i = line.index(\"); \")\n        head = line[: i + 2]\n        tail = line[i + 2 :].lstrip()\n        pad = 80 - len(head)\n        assert pad >= 1, (f, ln, len(head))\n        src[ln - 1] = head + \" \" * pad + tail\n    p.write_text(\"\\n\".join(src))\nprint(\"aligned\")\nPY\npython3… [+183 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib, re targets = { \"src/codegen_support/runtime/io/fgets.rs\": [64, 384, 411], \"src/codegen_support/runtime/io/stream_get_line.rs\": [396, 403], } for f, lines in targets.it",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1fb3bfbf12162ece104766d8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:37:16.878Z",
+  "stored_at": "2026-08-24T17:37:16.879Z"
+}

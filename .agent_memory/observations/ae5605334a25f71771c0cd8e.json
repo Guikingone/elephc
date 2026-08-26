@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w52; mkdir -p $S/w52; cp $S/probes/file-info-stat-throws.php $S/w52/p.php; cd $S/w52 && php -n p.php 2>&1",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w52; mkdir -p $S/w52; cp $S/probes/file-info-stat-throws.php $S/w52/p.php; cd $S/w52 && php -n p.php 2>&1: size 4 getSize RuntimeExceptio",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w52; mkdir -p $S/w52; cp $S/probes/file-info-stat-throws.php $S/w52/p.php; cd $S/w52 && php -n p.php 2>&1: size 4 getSize RuntimeException: SplFileInfo::getSize(): stat failed for nope.txt getOwner RuntimeException: SplFileInfo::getOwner(): stat failed for nope.txt getGroup RuntimeException: SplFileInfo::getGroup(): stat failed for nope.txt getATime RuntimeException: SplFileInfo::getATime(): stat failed for nope.txt getMTime RuntimeException: SplFileInfo::getMTime(): stat failed for nope.txt getCTime RuntimeException: SplFileInfo::getCTime(): stat failed for nope.txt getPerms RuntimeException: SplFileInfo::getPerms(): stat failed for nope.txt getInode RuntimeException: SplFileInfo::getInode(): stat failed for nope.txt type RuntimeException: SplFileInfo::getType(): Lstat failed for nope.txt",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ae5605334a25f71771c0cd8e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:32:39.791Z",
+  "stored_at": "2026-08-25T09:32:39.791Z"
+}

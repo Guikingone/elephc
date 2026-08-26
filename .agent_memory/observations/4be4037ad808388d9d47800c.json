@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '260,340p' src/ir_lower/expr/array_builtin_args.rs",
+  "summary": "sed -n '260,340p' src/ir_lower/expr/array_builtin_args.rs: ltins::semantics::BuiltinArgumentLowering::OpensslEncrypt => { prepare_openssl_encrypt_tag_local(ctx, args); if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) { lower_positional_builtin_args_with_signature(ctx, sig, args) } el",
+  "text": "sed -n '260,340p' src/ir_lower/expr/array_builtin_args.rs: ltins::semantics::BuiltinArgumentLowering::OpensslEncrypt => { prepare_openssl_encrypt_tag_local(ctx, args); if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) { lower_positional_builtin_args_with_signature(ctx, sig, args) } else { lower_args_with_signature(ctx, sig, args) } } crate::builtins::semantics::BuiltinArgumentLowering::ArraySplice if !args.iter().any(is_spread_arg) => { lower_array_splice_args(ctx, sig, args) } _ if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) => { if let Some(values) = lower_write_only_variadic_builtin_args(ctx, &canonical, sig, args) { return values; } let mut values = lower_positional_builtin_args_with_signature(ctx, sig, args); // Named/spread spellings skip the wrap and fail the consumer's own gate loudly at // compile time — an honest refusal, where the wrap's absence at RUN time would",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4be4037ad808388d9d47800c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:18:00.551Z",
+  "stored_at": "2026-08-20T19:18:00.552Z"
+}

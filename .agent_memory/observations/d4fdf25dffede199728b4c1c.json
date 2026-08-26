@@ -1,0 +1,16 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs: stream_wrapper_register(\"w\", \"W\");\n$h = fopen(\"w://x\", \"r\");\necho $h === false ? \"false\" : \"resource\";\nfclose($h);\n\"#,\n    );\n    assert!(out.success, \"program  -> stream_wrapper_register(\"ww",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs: stream_wrapper_register(\"w\", \"W\");\n$h = fopen(\"w://x\", \"r\");\necho $h === false ? \"false\" : \"resource\";\nfclose($h);\n\"#,\n    );\n    assert!(out.success, \"program  -> stream_wrapper_register(\"ww\", \"W\");\n$h = fopen(\"ww://x\", \"r\");\necho $h === false ? \"false\" : \"resource\";\nfclose($h);\n\"#,\n    );\n    assert!(out.success, \"program failed: {}\", out.stderr);\n    assert_eq!(out.stdout, \"resource\");\n    assert!(\n        !out.diagnostics.contains(\"dynamic property\"),\n        \"a declared $context must not be deprecated as invented, got diagnostics={}\",\n        out.diagnostics\n    );\n}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d4fdf25dffede199728b4c1c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:00:44.413Z",
+  "stored_at": "2026-08-21T17:00:44.413Z",
+  "low_signal": true
+}

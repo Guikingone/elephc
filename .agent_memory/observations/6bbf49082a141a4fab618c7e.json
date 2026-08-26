@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"ctx.emitter.label(&fail)\" -A 8 src/codegen/lower_inst/builtins/io/filter_helpers.rs | head -12; grep -n \"fn emit_null_mixed\\|emit_false_mixed\\|emit_bool_mixed\" src/codegen/lower_inst/builtins/io/*.rs | head -5",
+  "summary": "grep -n \"ctx.emitter.label(&fail)\" -A 8 src/codegen/lower_inst/builtins/io/filter_helpers.rs | head -12; grep -n \"fn emit_null_mixed\\|emit_false_mixed\\|emit_bool_mixed\" src/codegen/lower_inst/builtins/io/*.rs | head -5: 531: ctx.emitter.label(&fail); 532- abi::emit_release_temporary_stack(ctx.emitter, 16); // drop the ",
+  "text": "grep -n \"ctx.emitter.label(&fail)\" -A 8 src/codegen/lower_inst/builtins/io/filter_helpers.rs | head -12; grep -n \"fn emit_null_mixed\\|emit_false_mixed\\|emit_bool_mixed\" src/codegen/lower_inst/builtins/io/*.rs | head -5: 531: ctx.emitter.label(&fail); 532- abi::emit_release_temporary_stack(ctx.emitter, 16); // drop the parked stream handle 533- // php-src names the filter it could not find. Returning false silently left a 534- // misspelled name indistinguishable from one that attached. 535- emit_missing_filter_warning(ctx, filter, prepend)?; 536- emit_boxed_bool(ctx, false); 537- ctx.emitter.label(&done); 538- Ok(()) 539-} -- 586: ctx.emitter.label(&fail); 587- abi::emit_release_temporary_stack(ctx.emitter, 16); src/codegen/lower_inst/builtins/io/filter_helpers.rs:637:pub(super) fn emit_null_mixed(ctx: &mut FunctionContext<'_>) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6bbf49082a141a4fab618c7e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:43:24.526Z",
+  "stored_at": "2026-08-17T14:43:24.526Z"
+}

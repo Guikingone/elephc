@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '30,90p' src/codegen/lower_inst/builtins/io/fopen_data.rs",
+  "summary": "sed -n '30,90p' src/codegen/lower_inst/builtins/io/fopen_data.rs: 8], r9\"); // preserve the stream handle ctx.emitter.instruction(&format!(\"mov rdi, {filter_id}\")); // built-in filter id ctx.emitter.instruction(\"xor esi, esi\"); // built-ins carry no user-filter object ctx.emitter.instruction(&format!(\"mov rdx, {mode_bi",
+  "text": "sed -n '30,90p' src/codegen/lower_inst/builtins/io/fopen_data.rs: 8], r9\"); // preserve the stream handle ctx.emitter.instruction(&format!(\"mov rdi, {filter_id}\")); // built-in filter id ctx.emitter.instruction(\"xor esi, esi\"); // built-ins carry no user-filter object ctx.emitter.instruction(&format!(\"mov rdx, {mode_bits}\")); // direction bits from the URL ctx.emitter.instruction(\"xor ecx, ecx\"); // built-ins retain no params value abi::emit_call_label(ctx.emitter, \"__rt_filter_create\"); ctx.emitter.instruction(\"mov QWORD PTR [rsp + 16], rax\"); // preserve the filter handle if mode_bits & 1 != 0 { ctx.emitter.instruction(\"mov rdi, QWORD PTR [rsp + 8]\"); // stream handle ctx.emitter.instruction(\"mov rsi, QWORD PTR [rsp + 16]\"); // filter handle ctx.emitter.instruction(&format!(\"mov rdx, {STREAM_READ_FILTER_HEAD_OFFSET}\")); ctx.emitter.instruction(\"xor ecx, ecx\"); // append at the chain tail abi::emit_call_label(ctx.emitter, \"__rt_stream_filter_link\"); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4e56837190c5b025bb26737d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:42:59.919Z",
+  "stored_at": "2026-08-21T09:42:59.920Z"
+}

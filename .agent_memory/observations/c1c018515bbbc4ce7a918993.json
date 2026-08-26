@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py: #!/usr/bin/env python3\n\"\"\"Dumps every remaining CODE conflict, compactly, so many can be judged in one read.\n\nGenerated builtin doc",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py: #!/usr/bin/env python3\n\"\"\"Dumps every remaining CODE conflict, compactly, so many can be judged in one read.\n\nGenerated builtin docs and the generated registry are excluded: they are resolved by RERUNNING\ntheir generator, and including their 531 hunks would bury the ones that need judgement.\n\"\"\"\nimport pathlib\nimport subprocess\nimport sys\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nGENERATED = ('docs/internals/builtins/', 'docs/php/builtins', 'scripts/docs/builtin_registry.json')\n\nstatus = subprocess.run(['git', 'status', ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c1c018515bbbc4ce7a918993",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T16:58:41.232Z",
+  "stored_at": "2026-08-20T16:58:41.233Z"
+}

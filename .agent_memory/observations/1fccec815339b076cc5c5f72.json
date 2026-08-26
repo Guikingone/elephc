@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'label_global' src/codegen_support/runtime/exceptions/trace_buffer.rs | head -20; echo '=== callers ==='; grep -rn '__rt_trace_' src/codegen/ | head -20",
+  "summary": "About to run: grep -n 'label_global' src/codegen_support/runtime/exceptions/trace_buffer.rs | head -20; echo '=== callers ==='; grep -rn '__rt_trace_' src/codegen/ | head -20",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1fccec815339b076cc5c5f72",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:20:06.644Z",
+  "stored_at": "2026-08-26T09:20:06.645Z"
+}

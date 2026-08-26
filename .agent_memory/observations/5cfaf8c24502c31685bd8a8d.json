@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fopen_slot.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fopen_slot.py: \"\"\"Two owners for one stack slot in `__rt_fopen`'s wrapper dispatch, and a SIGSEGV between them.\n\n`[sp, #56]` holds the `stream_",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fopen_slot.py: \"\"\"Two owners for one stack slot in `__rt_fopen`'s wrapper dispatch, and a SIGSEGV between them.\n\n`[sp, #56]` holds the `stream_open` boxed-result flag, stored before the handle-slot scan and\nreloaded just before the call. The filter-suppression stand-down, added later, parks the caller's\nsuppression depth in the SAME slot — its comment calls it \"the dispatch scratch's spare slot\" —\nbetween that store and that reload.\n\nSo the flag the dispatch reads is the suppression DEPTH:\n\n  - opening a wrapper directly, depth 0, reads as \"not boxed\" and works by accident;\n  - opening one through `php://fil",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5cfaf8c24502c31685bd8a8d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:49:23.676Z",
+  "stored_at": "2026-08-21T09:49:23.677Z"
+}

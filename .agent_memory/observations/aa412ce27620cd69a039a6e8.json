@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"__rt_key_compare_exact_decimal_integers\" src/codegen_support/runtime/arrays/hash_key_compare.rs | head; echo \"--- def ---\"; grep -n 'label_global(\"__rt_key_compare_exact_decimal_integers\")' -A45 src/codegen_support/runtime/arrays/hash_key_compare.rs | head -50",
+  "summary": "grep -n \"__rt_key_compare_exact_decimal_integers\" src/codegen_support/runtime/arrays/hash_key_compare.rs | head; echo \"--- def ---\"; grep -n 'label_global(\"__rt_key_compare_exact_decimal_integers\")' -A45 src/codegen_support/runtime/arrays/hash_key_compare.rs | head -50: instruction(\"b __rt_key_compare_exact_decimal_don",
+  "text": "grep -n \"__rt_key_compare_exact_decimal_integers\" src/codegen_support/runtime/arrays/hash_key_compare.rs | head; echo \"--- def ---\"; grep -n 'label_global(\"__rt_key_compare_exact_decimal_integers\")' -A45 src/codegen_support/runtime/arrays/hash_key_compare.rs | head -50: instruction(\"b __rt_key_compare_exact_decimal_done\"); // return the exact signed ordering 625- emitter.label(\"__rt_key_compare_exact_decimal_both_overflow\"); 626- emitter.instruction(\"mov x0, #3\"); // request PHP's numeric comparison and equal-double lexical tiebreak 627- emitter.instruction(\"b __rt_key_compare_exact_decimal_done\"); // return the dedicated overflow-pair classification 628- emitter.label(\"__rt_key_compare_exact_decimal_noninteger\"); 629- emitter.instruction(\"mov x0, #2\"); // request the ordinary numeric-or-lexical fallback 630- emitter.label(\"__rt_key_compare_exact_decimal_done\"); -- 738: emitter.label_global(\"__rt_key_compare_exact_decimal_integers\"); 739- emitter.instruction(\"sub rsp, 56\"); // reserve parse metadata while preserving SysV call alignment 740- emitter.instruction(\"mov QWORD PTR [rsp + 24], rdx\"); // preserve the right spelling pointer across the left parse",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aa412ce27620cd69a039a6e8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:28:49.378Z",
+  "stored_at": "2026-08-21T07:28:49.378Z"
+}

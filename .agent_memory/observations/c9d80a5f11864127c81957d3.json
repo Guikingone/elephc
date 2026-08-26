@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '%s\\n' '<?php' '$exact = fopen(\"php://memory\", \"w+\");' 'fwrite($exact, \"abc\");' 'rewind($exact);' 'echo fread($exact, 3), \"|\", var_export(feof($exact), true), \"\\n\";' 'echo var_export(fread($exact, 1), true), \"|\", var_export(feof($exact), true), \"\\n\";' 'fclose($exact);' '$short = fopen(\"php://memory\", \"w+\");' 'fwrite($short, \"x\");' 'rewind($short);' 'echo fread($short, 2), \"|\", var_export(feof($short), true), \"\\n\";' 'f… [+43 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '%s\\n' '<?php' '$exac",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c9d80a5f11864127c81957d3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:43:48.476Z",
+  "stored_at": "2026-08-23T20:43:48.478Z"
+}

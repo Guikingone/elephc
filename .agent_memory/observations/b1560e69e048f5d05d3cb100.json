@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/probes.py 2>&1",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/probes.py 2>&1: E REFUSED: error[1:45]: Cannot index non-array === coalesce_index DIFFERS --- php --- Warning: Undefined variable $b in coalesce_",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/probes.py 2>&1: E REFUSED: error[1:45]: Cannot index non-array === coalesce_index DIFFERS --- php --- Warning: Undefined variable $b in coalesce_index.php on line 1 Deprecated: Using null as an array offset is deprecated, use an empty string instead in coalesce_index.php on line 1 string(1) \"d\" --- elephc --- Warning: Undefined variable $b in coalesce_index.php on line 1 string(1) \"d\" === empty_index DIFFERS --- php --- Warning: Undefined variable $b in empty_index.php on line 1 Deprecated: Using null as an array offset is deprecated, use an empty string instead in empty_index.php on line 1 bool(true) --- elephc --- Warning: Undefined variable $b in empty_index.php on line 1 bool(true) === unset_index SAME === isset_two_args SAME === coalesce_default SAME === isset_method_recv DIFFERS --- php --- bool(false) --- elephc --- COMPILE REFUSED: error[1:51]: Property access requires an object or typed pointer",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b1560e69e048f5d05d3cb100",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:20:49.804Z",
+  "stored_at": "2026-08-20T19:20:49.805Z"
+}

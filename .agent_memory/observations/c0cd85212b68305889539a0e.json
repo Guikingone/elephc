@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"prelude\" src/builtins/semantics.rs 2>/dev/null | head -8; grep -rn \"Prelude\" src/builtins/*.rs crates/elephc-builtin-contract/src/*.rs 2>/dev/null | head -12",
+  "summary": "grep -rn \"prelude\" src/builtins/semantics.rs 2>/dev/null | head -8; grep -rn \"Prelude\" src/builtins/*.rs crates/elephc-builtin-contract/src/*.rs 2>/dev/null | head -12: ome(AotSignatureOverrideReason::PreludeSignatureSubset), crates/elephc-builtin-contract/src/aot_profile.rs:90: Some(AotSignatureOverrideReason::Prelude",
+  "text": "grep -rn \"prelude\" src/builtins/semantics.rs 2>/dev/null | head -8; grep -rn \"Prelude\" src/builtins/*.rs crates/elephc-builtin-contract/src/*.rs 2>/dev/null | head -12: ome(AotSignatureOverrideReason::PreludeSignatureSubset), crates/elephc-builtin-contract/src/aot_profile.rs:90: Some(AotSignatureOverrideReason::PreludeSignatureSubset) crates/elephc-builtin-contract/src/catalog_surfaces.rs:92: PreludeProvided, crates/elephc-builtin-contract/src/catalog_surfaces.rs:149: PreludeProvided, crates/elephc-builtin-contract/src/catalog_surfaces.rs:158: PreludeProvided, crates/elephc-builtin-contract/src/catalog_surfaces.rs:170: PreludeProvided, crates/elephc-builtin-contract/src/catalog_surfaces.rs:183: PreludeProvided, crates/elephc-builtin-contract/src/spec.rs:48: PreludeProvided, crates/elephc-builtin-contract/src/support.rs:37: Prelude, crates/elephc-builtin-contract/src/support.rs:127: BuiltinKind::PreludeProvided => BackendImplementation::Prelude, crates/elephc-builtin-contract/src/support.rs:305: BackendSupport::Implemented(BackendImplementation::Prelude)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c0cd85212b68305889539a0e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:18:18.081Z",
+  "stored_at": "2026-08-21T12:18:18.081Z"
+}

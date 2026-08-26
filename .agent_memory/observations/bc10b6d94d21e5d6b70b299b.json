@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"fn by_ref_array_arg_needs_mixed_storage\" -A40 src/ir_lower/expr/call_arg_coercion.rs | head -50",
+  "summary": "rtk proxy rg -n \"fn by_ref_array_arg_needs_mixed_storage\" -A40 src/ir_lower/expr/call_arg_coercion.rs | head -50: lts and variadic tail packing. 239-pub(super) fn lower_args_with_signature( 240- ctx: &mut LoweringContext<'_, '_>, 241- sig: Option<&FunctionSig>, 242- args: &[Expr], 243-) -> Vec<crate::ir::ValueId> { 244",
+  "text": "rtk proxy rg -n \"fn by_ref_array_arg_needs_mixed_storage\" -A40 src/ir_lower/expr/call_arg_coercion.rs | head -50: lts and variadic tail packing. 239-pub(super) fn lower_args_with_signature( 240- ctx: &mut LoweringContext<'_, '_>, 241- sig: Option<&FunctionSig>, 242- args: &[Expr], 243-) -> Vec<crate::ir::ValueId> { 244- let Some(sig) = sig else { 245- return lower_args(ctx, args); 246- }; 247- let literal_bound = rewrite_literal_param_bindings(sig, args); 248- let args = literal_bound.as_deref().unwrap_or(args); 249- if crate::types::call_args::has_named_args(args) { 250- let operands = lower_named_args_with_signature(ctx, sig, args); 251- return coerce_operands_to_params(ctx, sig, operands); 252- } 253- if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args) { 254- return coerce_operands_to_params(ctx, sig, operands); 255- } 256- let static_spread_args = if has_static_call_spread_args(args) { 257- Some(expand_static_call_spread_args(args)) 258- } else { 259- None 260- };",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bc10b6d94d21e5d6b70b299b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:29:38.665Z",
+  "stored_at": "2026-08-16T19:29:38.665Z"
+}

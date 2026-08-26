@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git checkout -- src/ir_lower/context.rs src/ir_lower/stmt/loops.rs; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test loop_edge_store_leak_tests --no-fail-fast --final-status-level fail 2>&1 | tail -14",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git checkout -- src/ir_lower/context.rs src/ir_lower/stmt/loops.rs; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test loop_edge_store_leak_tests --no-fail-fast --final-status-level fail 2>&1 | tail -14:  `",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git checkout -- src/ir_lower/context.rs src/ir_lower/stmt/loops.rs; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test loop_edge_store_leak_tests --no-fail-fast --final-status-level fail 2>&1 | tail -14:  `left == right` failed: elephc_leak_for_cond: 2000 iterations left 6000 live blocks where 10 left 30 — the loop leaks one allocation per iteration left: 30 right: 6000 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace ──────────── Summary [ 13.205s] 7 tests run: 2 passed, 5 failed, 0 skipped FAIL [ 8.608s] (2/7) elephc::loop_edge_store_leak_tests a_byte_at_a_time_fgetc_loop_reads_a_900k_file FAIL [ 12.135s] (3/7) elephc::loop_edge_store_leak_tests object_assigned_in_a_while_condition_does_not_grow_the_heap FAIL [ 12.403s] (4/7) elephc::loop_edge_store_leak_tests assignment_in_a_do_while_condition_does_not_grow_the_heap FAIL [ 12.932s] (6/7) elephc::loop_edge_store_leak_tests assignment_in_a_while_condition_does_not_grow_the_heap FAIL [ 13.202s] (7/7) elephc::loop_edge_store_leak_tests assignment_in_a_for_condition_does_not_grow_the_heap error: test run failed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f5f316a3ad685d7753e4b799",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T15:51:04.318Z",
+  "stored_at": "2026-08-23T15:51:04.319Z"
+}

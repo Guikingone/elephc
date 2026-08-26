@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Read",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md",
+  "command": "",
+  "summary": "About to run: Read",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cc831616d8a5c8b5c1bc75a9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:24:00.988Z",
+  "stored_at": "2026-08-17T06:24:00.989Z",
+  "low_signal": true
+}

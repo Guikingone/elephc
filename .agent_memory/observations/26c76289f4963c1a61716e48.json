@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '30,50p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/data_stream_dynamic.rs",
+  "summary": "rtk proxy sed -n '30,50p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/data_stream_dynamic.rs: ok_x86_64(emitter); emit_x86_64(emitter); } } } /// `__rt_data_stream_dynamic(x0 = uri, x1 = length) -> x0 = descriptor, or -1`. fn emit_aarch64(em",
+  "text": "rtk proxy sed -n '30,50p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/data_stream_dynamic.rs: ok_x86_64(emitter); emit_x86_64(emitter); } } } /// `__rt_data_stream_dynamic(x0 = uri, x1 = length) -> x0 = descriptor, or -1`. fn emit_aarch64(emitter: &mut Emitter) { emitter.blank(); emitter.comment(\"--- runtime: open a run-time data:// URI ---\"); emitter.label_global(\"__rt_data_stream_dynamic\"); // Frame: [0]=cursor [8]=remaining [16]=comma offset [24]=uri ptr [32]=uri len // [40]=reason ptr [48]=reason len [64]/[72]=linkage. // // The URI is kept WHOLE from entry because every refusal below names it: php prints // `fopen(<the uri>): Failed to open stream: <reason>`, and by the time a refusal is reached // the cursor has been advanced past the scheme. emitter.instruction(\"sub sp, sp, #80\"); // reserve the decode frame emitter.instruction(\"stp x29, x30, [sp, #64]\"); // save frame pointer and return address emitter.instruction(\"add x29, sp, #64\"); // establish the helper frame pointer",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "26c76289f4963c1a61716e48",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:00:42.248Z",
+  "stored_at": "2026-08-17T12:00:42.248Z"
+}

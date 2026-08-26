@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git branch --show-current | cat; grep -n \"assert!(\\s*$\" -A 8 tests/codegen/exceptions.rs | sed -n '1,12p'; sed -n 590,615p tests/codegen/exceptions.rs",
+  "summary": "About to run: git branch --show-current | cat; grep -n \"assert!(\\s*$\" -A 8 tests/codegen/exceptions.rs | sed -n '1,12p'; sed -n 590,615p tests/codegen/exceptions.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a032e63532fee117ef1bdb14",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:47:32.927Z",
+  "stored_at": "2026-08-22T12:47:32.927Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'previous defaults to null' src/codegen_support/runtime/spl/fixed_array.rs src/codegen_support/runtime/spl/doubly_linked_list.rs | head; echo '--- x86 shape ---'; sed -n '1456,1478p' src/codegen_support/runtime/spl/fixed_array.rs",
+  "summary": "grep -n 'previous defaults to null' src/codegen_support/runtime/spl/fixed_array.rs src/codegen_support/runtime/spl/doubly_linked_list.rs | head; echo '--- x86 shape ---'; sed -n '1456,1478p' src/codegen_support/runtime/spl/fixed_array.rs: (\"mov QWORD PTR [rax], r10\"); // store class id at object header abi::emit_symbol",
+  "text": "grep -n 'previous defaults to null' src/codegen_support/runtime/spl/fixed_array.rs src/codegen_support/runtime/spl/doubly_linked_list.rs | head; echo '--- x86 shape ---'; sed -n '1456,1478p' src/codegen_support/runtime/spl/fixed_array.rs: (\"mov QWORD PTR [rax], r10\"); // store class id at object header abi::emit_symbol_address(emitter, \"r10\", message_symbol); // materialize static exception message pointer emitter.instruction(\"mov QWORD PTR [rax + 8], r10\"); // store static exception message pointer emitter.instruction(&format!(\"mov QWORD PTR [rax + 16], {}\", message_len)); // store static exception message length emitter.instruction(\"mov QWORD PTR [rax + 24], 0\"); // exception code defaults to zero emitter.instruction(\"mov QWORD PTR [rax + 40], 0\"); // previous defaults to null abi::emit_store_reg_to_symbol(emitter, \"rax\", \"_exc_value\", 0); // publish the active exception object emitter.instruction(\"mov rsp, rbp\"); // release helper frame before throwing emitter.instruction(\"pop rbp\"); // restore caller frame pointer before throwing emitter.instruction(\"jmp __rt_throw_current\"); // enter the standard exception unwinder }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7253d95f1735e827bf2499b5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:31:13.631Z",
+  "stored_at": "2026-08-26T07:31:13.632Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"fpassthru\" src/codegen_support/runtime/io src/codegen/lower_inst/builtins/io 2>/dev/null | head -5",
+  "summary": "About to run: grep -rln \"fpassthru\" src/codegen_support/runtime/io src/codegen/lower_inst/builtins/io 2>/dev/null | head -5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5744353a8bd88d9bb843ad6a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:23:00.302Z",
+  "stored_at": "2026-08-21T13:23:00.303Z"
+}

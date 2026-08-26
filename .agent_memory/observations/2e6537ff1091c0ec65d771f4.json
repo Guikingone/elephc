@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"glob\" src/codegen/lower_inst/builtins/io/host_directory_process.rs | head -12",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"glob\" src/codegen/lower_inst/builtins/io/host_directory_process.rs | head -12: src/codegen/lower_inst/builtins/io/host_directory_process.rs:384:/// Lowers `readdir(dir_handle)` for libc, glob, and userspace-wrapper",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"glob\" src/codegen/lower_inst/builtins/io/host_directory_process.rs | head -12: src/codegen/lower_inst/builtins/io/host_directory_process.rs:384:/// Lowers `readdir(dir_handle)` for libc, glob, and userspace-wrapper handles. src/codegen/lower_inst/builtins/io/host_directory_process.rs:407:/// Lowers `closedir(dir_handle)` for libc, glob, and userspace-wrapper handles. src/codegen/lower_inst/builtins/io/host_directory_process.rs:435:/// Lowers `rewinddir(dir_handle)` for libc, glob, and userspace-wrapper handles.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2e6537ff1091c0ec65d771f4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:35:28.821Z",
+  "stored_at": "2026-08-22T17:35:28.821Z"
+}

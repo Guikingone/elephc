@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('src/codegen/lower_inst/builtins/isset.rs')\nt = p.read_text()\nOLD = '''        // A tag-7 entry whose cell pointer is php null must not be read. Null is TWO values here —\n        // a zero pointer and the in-band sentinel — and a property declared without a default\n        // carries the sentinel, so `isset(get_object_vars($o)[\"a\"])` dereferenced\n        // `0x7ffffffffffffffe` and SEGFAULTED on a class as ordinary as `class One { public $a; }`.… [+694 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('src/codegen/lower_inst/builtins/isset.rs')\nt = p.read_text()\nOLD = '''        // A tag-7 entry whose cell pointer is php null must not be read. Null is TWO values here —\n    ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('src/codegen/lower_inst/builtins/isset.rs')\nt = p.read_text()\nOLD = '''        // A tag-7 entry whose cell pointer is php null must not be read. Null is TWO values here —\n        // a zero pointer and the in-band sentinel — and a property declared without a default\n        // carries the sentinel, so `isset(get_object_vars($o)[\"a\"])` dereferenced\n        // `0x7ffffffffffffffe` and SEGFAULTED on a class as ordinary as `class One { public $a; }`.\n        crate::codegen_support::sentinels::emit_branch_if_null_container(\n            ctx.emitter, \"x0\", \"x9\", missing,\n        );\n'''\nassert t.count(OLD) == 1\nt = t.replace(OLD, '', 1)\nOLD = '''        // See the AArch64 counterpart: a null cell pointer is php null, not a cell to read, and\n        // null is both the zero pointer and the in-band sentinel.\n        crate::codegen_support::sentinels::emit_branch_if_null_container(\n            ctx.emitter, \"rax\", \"r10\", missing,\n        );\n'''\nassert t.count(OLD) == 1\np.write_text(t.replace(OLD, '', 1))\nprint('the per-site guards go: the callee answers for every caller')\nPY\nCARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo build 2>&1 | tail -4: the per-site guards go: the callee answers for every caller Compiling elephc v0.26.5 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 21s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7494bc3841bf8576da05a4c8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:59:32.870Z",
+  "stored_at": "2026-08-23T08:59:32.871Z"
+}

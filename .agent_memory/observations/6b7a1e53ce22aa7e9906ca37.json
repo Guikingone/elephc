@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scheme_rule.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scheme_rule.py: \"\"\"What is php's rule for a user wrapper's SCHEME, and does elephc follow it?\n\nSixty-five stream tests register the scheme `\"w\"`, w",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scheme_rule.py: \"\"\"What is php's rule for a user wrapper's SCHEME, and does elephc follow it?\n\nSixty-five stream tests register the scheme `\"w\"`, which `php -n` 8.5.6 registers happily and\nthen never resolves. If that is a length rule, every one of those tests describes something php\nrefuses.\n\"\"\"\nimport pathlib, subprocess\n\nD = pathlib.Path(__file__).parent / 'streams'\nD.mkdir(exist_ok=True)\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nELEPHC = ROOT / 'target/debug/elephc'\n\nBODY = ('<?php class W { public $context;'\n        ' public functio",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6b7a1e53ce22aa7e9906ca37",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:10:55.916Z",
+  "stored_at": "2026-08-21T09:10:55.917Z"
+}

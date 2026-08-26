@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log --oneline a38e51fc9~1..HEAD | cat; echo \"--- diff size ---\"; git diff --stat a38e51fc9~1..HEAD | tail -3",
+  "summary": "git log --oneline a38e51fc9~1..HEAD | cat; echo \"--- diff size ---\"; git diff --stat a38e51fc9~1..HEAD | tail -3: eafa07b29 WIP: scalar reassignment widening (temporary) 445251516 feat(exceptions): php's Stack trace: block, when the frame list is provably complete ab65a74cc fix(arrays): array_filter() renumbered the su",
+  "text": "git log --oneline a38e51fc9~1..HEAD | cat; echo \"--- diff size ---\"; git diff --stat a38e51fc9~1..HEAD | tail -3: eafa07b29 WIP: scalar reassignment widening (temporary) 445251516 feat(exceptions): php's Stack trace: block, when the frame list is provably complete ab65a74cc fix(arrays): array_filter() renumbered the survivors, where php keeps their keys b2d52ae07 fix(callables): a builtin the program names is now callable through a variable 836d4b08a fix(arrays): sort() refused a Mixed element, so a readdir loop would not compile 05262d2bc fix(types): eval() could not resolve 149 constants the compiler declares, and E_ALL was wrong a38e51fc9 fix(io): glob() had no $flags, and php's flag values are the bits of no libc --- diff size --- tests/error_tests/type_system.rs | 10 +- tools/gen_builtins.rs | 7 +- 90 files changed, 3254 insertions(+), 435 deletions(-)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2574bb3da74f0ac1ddd6bdd3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T14:57:25.431Z",
+  "stored_at": "2026-08-22T14:57:25.431Z"
+}

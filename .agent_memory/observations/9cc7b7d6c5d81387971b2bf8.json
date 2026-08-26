@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm09 rm10 2>&1",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm09 rm10 2>&1: rm09 DIFF: 4c4 < string(4) \"a\\\"b\" --- > string(3) \"a\"b\" 8c8 < string(4) \"a\\\"b\" --- > string(3) \"a\"b\" 40c40 < string(",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm09 rm10 2>&1: rm09 DIFF: 4c4 < string(4) \"a\\\"b\" --- > string(3) \"a\"b\" 8c8 < string(4) \"a\\\"b\" --- > string(3) \"a\"b\" 40c40 < string(3) \"x\\\"\" --- > string(2) \"x\"\" 46c46 < string(3) \"x\\\"\" rm10 DIFF: 0a1 > Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change 1a3 > Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change 2a5 > Deprecated: fputcsv(): the $escape parameter must be provided as its default value will change 3a7 > Deprecated: str_getcsv(): the $escape parameter must be provided as its default value will change",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9cc7b7d6c5d81387971b2bf8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:14:26.798Z",
+  "stored_at": "2026-08-18T09:14:26.799Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fgets_bound_wrapper.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fgets_bound_wrapper.py: \"\"\"Does `fgets($h, $n)` honour its bound when the stream is a USER-REGISTERED wrapper?\n\nThe chunk-rule sweep showed `fgets(",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fgets_bound_wrapper.py: \"\"\"Does `fgets($h, $n)` honour its bound when the stream is a USER-REGISTERED wrapper?\n\nThe chunk-rule sweep showed `fgets($h, 6)` answering 1000 bytes where php answers 5 — not a\nrequest-pattern difference but a WRONG VALUE, and a silent one: the call returns a string, just\nfar too much of it. php bounds a line at `$length - 1` bytes on every stream kind.\n\nCompared against the same call on a plain FILE and on `php://memory`, so the answer separates\n\"fgets ignores its bound\" from \"fgets ignores its bound through a wrapper\".\n\"\"\"\nimport pathlib, subprocess\n\nD = pathlib.Path(__file__).parent / 'f",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7d426dd75e5b54d1ba733d82",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:57:42.599Z",
+  "stored_at": "2026-08-21T12:57:42.600Z"
+}

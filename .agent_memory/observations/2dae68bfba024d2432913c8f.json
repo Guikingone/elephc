@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && sed 's/^    codegen::io::streams:://' io_zl2_names.txt | sort",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && sed 's/^    codegen::io::streams:://' io_zl2_names.txt | sort: ispatch test_user_filter_4arg_brigade_transforms_via_while_loop test_user_filter_bas",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && sed 's/^    codegen::io::streams:://' io_zl2_names.txt | sort: ispatch test_user_filter_4arg_brigade_transforms_via_while_loop test_user_filter_base_class_declares_filtername_and_stream test_user_filter_inherited_properties test_user_filter_psfs_err_fatal test_user_filter_psfs_feed_me test_user_filter_psfs_feed_me_buffers_across_dispatches test_user_filter_psfs_pass_on_control test_user_filter_stream_property_is_live_during_filter test_user_stream_filter_params_are_exposed_on_this test_user_stream_filter_read_transforms_payload test_user_stream_filter_registered_class_is_case_insensitive test_user_stream_filter_write_transforms_payload test_wrapper_scheme_acceptance_matches_php test_write_filter_is_flushed_when_the_stream_is_closed test_zip_archive_encrypted_and_directory_entries test_zip_archive_extract_to_matches_php test_zip_archive_open_flag_matrix_matches_php test_zip_archive_reads_entries_like_php test_zip_archive_stat_index_reports_php_fields",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2dae68bfba024d2432913c8f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:14:22.162Z",
+  "stored_at": "2026-08-21T15:14:22.162Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"label_global\" src/codegen_support/runtime/io/stat.rs | head -20; echo \"--- shared stat call? ---\"; grep -n \"fn emit_.*stat_call\\|fn emit_stat_\" src/codegen_support/runtime/io/stat.rs | head -6",
+  "summary": "grep -n \"label_global\" src/codegen_support/runtime/io/stat.rs | head -20; echo \"--- shared stat call? ---\"; grep -n \"fn emit_.*stat_call\\|fn emit_stat_\" src/codegen_support/runtime/io/stat.rs | head -6: 39: emitter.label_global(\"__rt_file_exists\"); 67: emitter.label_global(\"__rt_is_file\"); 106: emitter.label_global(\"__",
+  "text": "grep -n \"label_global\" src/codegen_support/runtime/io/stat.rs | head -20; echo \"--- shared stat call? ---\"; grep -n \"fn emit_.*stat_call\\|fn emit_stat_\" src/codegen_support/runtime/io/stat.rs | head -6: 39: emitter.label_global(\"__rt_file_exists\"); 67: emitter.label_global(\"__rt_is_file\"); 106: emitter.label_global(\"__rt_is_dir\"); 145: emitter.label_global(\"__rt_is_readable\"); 175: emitter.label_global(\"__rt_is_writable\"); 205: emitter.label_global(\"__rt_filesize\"); 244: emitter.label_global(\"__rt_filemtime\"); 287: emitter.label_global(\"__rt_file_exists\"); 298: emitter.label_global(\"__rt_is_file\"); 317: emitter.label_global(\"__rt_is_dir\"); 336: emitter.label_global(\"__rt_is_readable\"); 341: emitter.label_global(\"__rt_is_writable\"); 346: emitter.label_global(\"__rt_filesize\"); 366: emitter.label_global(\"__rt_filemtime\"); --- shared stat call? --- 279:fn emit_stat_linux_x86_64(emitter: &mut Emitter) { 391:fn emit_linux_stat_call(emitter: &mut Emitter, frame_size: usize) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cce0b5e713c5001256447265",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:23:44.605Z",
+  "stored_at": "2026-08-22T08:23:44.606Z"
+}

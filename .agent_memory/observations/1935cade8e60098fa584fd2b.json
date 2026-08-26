@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo nextest run --test error_tests --no-fail-fast 2>&1 | grep -E \"FAIL |Summary\" | head -2; cargo nextest run --test nan_string_coercion_tests --no-fail-fast 2>&1 | grep -E \"FAIL |Summary\" | head -2; cargo test -p elephc-magician --lib 2>&1 | grep \"test result\" | head -1",
+  "summary": "cargo nextest run --test error_tests --no-fail-fast 2>&1 | grep -E \"FAIL |Summary\" | head -2; cargo nextest run --test nan_string_coercion_tests --no-fail-fast 2>&1 | grep -E \"FAIL |Summary\" | head -2; cargo test -p elephc-magician --lib 2>&1 | grep \"test result\" | head -1: Summary [ 60.448s] 1294 tests run: 1294 passe",
+  "text": "cargo nextest run --test error_tests --no-fail-fast 2>&1 | grep -E \"FAIL |Summary\" | head -2; cargo nextest run --test nan_string_coercion_tests --no-fail-fast 2>&1 | grep -E \"FAIL |Summary\" | head -2; cargo test -p elephc-magician --lib 2>&1 | grep \"test result\" | head -1: Summary [ 60.448s] 1294 tests run: 1294 passed, 0 skipped Summary [ 5.827s] 9 tests run: 9 passed, 0 skipped test result: ok. 1191 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1935cade8e60098fa584fd2b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T10:45:59.161Z",
+  "stored_at": "2026-08-16T10:45:59.162Z"
+}

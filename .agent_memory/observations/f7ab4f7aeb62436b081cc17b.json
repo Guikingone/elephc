@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '210,220p;320,330p;1002,1012p;1212,1222p;1314,1324p' src/ir_lower/function.rs",
+  "summary": "sed -n '210,220p;320,330p;1002,1012p;1212,1222p;1314,1324p' src/ir_lower/function.rs: , ======= &check_result.local_bind_kill_sites, &check_result.local_retype_sites, &check_result.mixed_storage_store_sites, >>>>>>> origin/main name.clone(), constants, &check_result.loop_storage_types, &check_result.string_incdec_local",
+  "text": "sed -n '210,220p;320,330p;1002,1012p;1212,1222p;1314,1324p' src/ir_lower/function.rs: , ======= &check_result.local_bind_kill_sites, &check_result.local_retype_sites, &check_result.mixed_storage_store_sites, >>>>>>> origin/main name.clone(), constants, &check_result.loop_storage_types, &check_result.string_incdec_locals, <<<<<<< HEAD &check_result.widened_scalar_locals, ======= &check_result.local_bind_kill_sites, &check_result.local_retype_sites, &check_result.mixed_storage_store_sites, >>>>>>> origin/main function_name.clone(), constants, parent.loop_storage_types, parent.string_incdec_locals, <<<<<<< HEAD parent.widened_scalar_locals, ======= parent.bind_kill_sites, parent.retype_sites, parent.mixed_storage_store_sites, >>>>>>> origin/main loop_storage_scope, &parent.constants, loop_storage_types, string_incdec_locals, <<<<<<< HEAD widened_scalar_locals, ======= bind_kill_sites, retype_sites, mixed_storage_store_sites, >>>>>>> origin/main loop_storage_scope, constants,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f7ab4f7aeb62436b081cc17b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:08:06.871Z",
+  "stored_at": "2026-08-26T17:08:06.871Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/codegen_support/runtime/io/filter_params.rs src/codegen_support/runtime/io/stream_filter.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/emitters/platform.rs src/codegen_support/runtime/resources/layout.rs src/codegen_support/runtime/resources/filter.rs src/codegen/lower_inst/builtins/io/filter_helpers.rs tests/codegen/io/streams.rs && git status --short | head -15",
+  "summary": "git add src/codegen_support/runtime/io/filter_params.rs src/codegen_support/runtime/io/stream_filter.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/emitters/platform.rs src/codegen_support/runtime/resources/layout.rs src/codegen_support/runtime/resources/f",
+  "text": "git add src/codegen_support/runtime/io/filter_params.rs src/codegen_support/runtime/io/stream_filter.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/emitters/platform.rs src/codegen_support/runtime/resources/layout.rs src/codegen_support/runtime/resources/filter.rs src/codegen/lower_inst/builtins/io/filter_helpers.rs tests/codegen/io/streams.rs && git status --short | head -15: M .codebase-memory/artifact.json M .codebase-memory/graph.db.zst M src/codegen/lower_inst/builtins/io/filter_helpers.rs M src/codegen_support/runtime/data/fixed.rs M src/codegen_support/runtime/emitters/platform.rs A src/codegen_support/runtime/io/filter_params.rs M src/codegen_support/runtime/io/mod.rs M src/codegen_support/runtime/io/stream_filter.rs M src/codegen_support/runtime/resources/filter.rs M src/codegen_support/runtime/resources/layout.rs M tests/codegen/io/streams.rs ?? .agent_memory/",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "706721078330f6e68c088485",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:35:37.504Z",
+  "stored_at": "2026-08-17T14:35:37.505Z"
+}

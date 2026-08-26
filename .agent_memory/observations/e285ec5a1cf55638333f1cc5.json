@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs: /// Verifies fgets() TypeError reports the actual runtime type when a non-stream is passed.\n#[test]\nfn test_stream_type_error_reports_runtime_string_type() {\n   -> /// Verifies fgets() TypeEr",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs: /// Verifies fgets() TypeError reports the actual runtime type when a non-stream is passed.\n#[test]\nfn test_stream_type_error_reports_runtime_string_type() {\n   -> /// Verifies fgets() TypeError reports the actual runtime type when a non-stream is passed.\n///\n/// The `mixed` round trip is the point: the checker cannot refuse this statically, so the refusal\n/// has to happen at RUN time, which is where php does it too. MEASURED across `string`, `int`,\n/// `null`, `false` and `array`, elephc reproduces php's message word for word.\n///\n/// Asserted on `diagnostics` for the reason spelled out on\n/// [`test_fopen_false_stream_use_is_type_err",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e285ec5a1cf55638333f1cc5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:48:44.534Z",
+  "stored_at": "2026-08-21T16:48:44.534Z"
+}

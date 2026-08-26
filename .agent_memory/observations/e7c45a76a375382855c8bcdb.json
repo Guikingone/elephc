@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "awk 'NR>=430' src/codegen_support/runtime/io/user_filter_brigade.rs | grep -n \"rbp - 96\\|rbp - 104\\|rbp - 112\\|rbp - 120\" | head -8",
+  "summary": "awk 'NR>=430' src/codegen_support/runtime/io/user_filter_brigade.rs | grep -n \"rbp - 96\\|rbp - 104\\|rbp - 112\\|rbp - 120\" | head -8: 6: // [rbp - 112] walk-state save slots 112: emitter.instruction(\"mov QWORD PTR [rbp - 96], rax\"); // the PSFS code outlives the clear 114: emitter.instruction(\"mov rax, QWORD PTR [rbp - ",
+  "text": "awk 'NR>=430' src/codegen_support/runtime/io/user_filter_brigade.rs | grep -n \"rbp - 96\\|rbp - 104\\|rbp - 112\\|rbp - 120\" | head -8: 6: // [rbp - 112] walk-state save slots 112: emitter.instruction(\"mov QWORD PTR [rbp - 96], rax\"); // the PSFS code outlives the clear 114: emitter.instruction(\"mov rax, QWORD PTR [rbp - 96]\"); // and comes back for the store below 154: emitter.instruction(\"mov QWORD PTR [rbp - 96], r12\"); // save callee-saved regs 155: emitter.instruction(\"mov QWORD PTR [rbp - 104], r13\"); // store runtime value 156: emitter.instruction(\"mov QWORD PTR [rbp - 112], r14\"); // store runtime value 157: emitter.instruction(\"mov QWORD PTR [rbp - 120], r15\"); // store runtime value 204: emitter.instruction(\"mov r12, QWORD PTR [rbp - 96]\"); // restore callee-saved regs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e7c45a76a375382855c8bcdb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:34:14.507Z",
+  "stored_at": "2026-08-17T18:34:14.508Z"
+}

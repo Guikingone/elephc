@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git commit -q -F - <<'MSG'\nfix(spl): `$obj->$name()` on a builtin class had no body to reach\n\nMEASURED: a loop over method NAMES died where php answers every one.\n\n    $i = new SplFileInfo(\"f.txt\");\n    foreach ([\"getFilename\", \"getSize\"] as $call) { $i->$call(); }\n\n    php    : f.txt, 4\n    elephc : Fatal error: callable array did not resolve to an invokable target\n\nThe same loop worked as soon as each name had ALSO been called statically somewhere\nin the program. That is what said the dispatch ladder is bounded not by the names a\nprogram mentions but by the BODIES that were emitted — the lad… [+1464 chars truncated]",
+  "summary": "About to run: git commit -q -F - <<'MSG' fix(spl): `$obj->$name()` on a builtin class had no body to reach MEASURED: a loop over method NAMES died where php answers every one. $i = new SplFileInfo(\"f.txt\"); foreach",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6aa942e652f2aeb5c887dff6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:30:20.640Z",
+  "stored_at": "2026-08-25T12:30:20.641Z"
+}

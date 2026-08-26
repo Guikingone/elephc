@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport re\np='src/types/checker/mod.rs'\ns=open(p).read()\nold = \"\"\"    /// Functions whose body is currently being checked.\"\"\"\nnew = \"\"\"    /// Functions whose signature is being re-resolved because their body widened a\n    /// by-reference array parameter. The set bounds that re-entry to one pass: `array<mixed>`\n    /// is the top of the element lattice, so a second pass cannot widen again.\n    pub resolving_by_ref_widening: HashSet<String>,\n    /// Functions whose body is currently being checked.\"\"\"\nassert s.count(old)==1\ns=s.replace(old,new)\nopen(p,'w').write(s)\nprint('field… [+109 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport re\np='src/types/checker/mod.rs'\ns=open(p).read()\nold = \"\"\"    /// Functions whose body is currently being checked.\"\"\"\nnew = \"\"\"    /// Functions whose signature is being re-resolved because their body widened a\n    /// by-reference array parameter. The set bounds that re-entry to one pass: `arra",
+  "text": "python3 - <<'PY'\nimport re\np='src/types/checker/mod.rs'\ns=open(p).read()\nold = \"\"\"    /// Functions whose body is currently being checked.\"\"\"\nnew = \"\"\"    /// Functions whose signature is being re-resolved because their body widened a\n    /// by-reference array parameter. The set bounds that re-entry to one pass: `array<mixed>`\n    /// is the top of the element lattice, so a second pass cannot widen again.\n    pub resolving_by_ref_widening: HashSet<String>,\n    /// Functions whose body is currently being checked.\"\"\"\nassert s.count(old)==1\ns=s.replace(old,new)\nopen(p,'w').write(s)\nprint('field added')\nPY\nrtk proxy rg -n \"resolving_functions: HashSet::new\\(\\)\" src/types/checker/driver/init.rs | head -2: field added 148: resolving_functions: HashSet::new(),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bc2be9e1db828d287345c1f2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:03:39.694Z",
+  "stored_at": "2026-08-16T20:03:39.694Z"
+}

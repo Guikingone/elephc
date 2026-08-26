@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn collect' src/prelude_prune/usage.rs | head -5; echo '--- method usage ---'; grep -rn 'methods' src/prelude_prune/usage.rs | head -10",
+  "summary": "grep -rn 'fn collect' src/prelude_prune/usage.rs | head -5; echo '--- method usage ---'; grep -rn 'methods' src/prelude_prune/usage.rs | head -10: src/prelude_prune/usage.rs:255:pub(crate) fn collect(program: &[Stmt]) -> Usage { --- method usage --- src/prelude_prune/usage.rs:3://! classes and methods it can reach, the",
+  "text": "grep -rn 'fn collect' src/prelude_prune/usage.rs | head -5; echo '--- method usage ---'; grep -rn 'methods' src/prelude_prune/usage.rs | head -10: src/prelude_prune/usage.rs:255:pub(crate) fn collect(program: &[Stmt]) -> Usage { --- method usage --- src/prelude_prune/usage.rs:3://! classes and methods it can reach, the string literals it carries, and whether it does src/prelude_prune/usage.rs:62: pub(crate) methods: HashSet<String>, src/prelude_prune/usage.rs:152: probe(\"get_class_methods\", 0, None), src/prelude_prune/usage.rs:207: usage.methods.insert(php_symbol_key(name)); src/prelude_prune/usage.rs:497: methods, src/prelude_prune/usage.rs:511: for method in methods { src/prelude_prune/usage.rs:520: methods, src/prelude_prune/usage.rs:526: methods, src/prelude_prune/usage.rs:533: for method in methods { src/prelude_prune/usage.rs:540: StmtKind::EnumDecl { cases, methods, constants, .. } => {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "305833a37649e0b69fb2147a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:50:14.173Z",
+  "stored_at": "2026-08-24T20:50:14.174Z"
+}

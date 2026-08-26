@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py named_probes8/kimi-k3-27.php 2>&1 | tail -14",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py named_probes8/kimi-k3-27.php 2>&1 | tail -14: Stack trace: #0 <dir>/p.php(2): DirectoryIterator->__construct('dtest') #1 {main} thr",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py named_probes8/kimi-k3-27.php 2>&1 | tail -14: Stack trace: #0 <dir>/p.php(2): DirectoryIterator->__construct('dtest') #1 {main} thrown in <dir>/p.php on line 2 === elephc === Warning: scandir(dtest): Failed to open directory: No such file or directory Warning: scandir(): (errno 2): No such file or directory Fatal error: Uncaught UnexpectedValueException: DirectoryIterator::__construct(dtest): Failed to open directory: No such file or directory Stack trace: #0 {main} --- exit 255 (php 255) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "06039d64ceab6a758f3af752",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:17:03.249Z",
+  "stored_at": "2026-08-23T12:17:03.250Z"
+}

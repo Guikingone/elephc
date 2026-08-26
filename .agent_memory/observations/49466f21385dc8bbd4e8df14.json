@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/measure.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/measure.py: import pathlib, subprocess\n\nD = pathlib.Path(__file__).parent\nCASES = {\n    'ord_undefined':      '<?php var_dump(ord($undeclared));',\n",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/measure.py: import pathlib, subprocess\n\nD = pathlib.Path(__file__).parent\nCASES = {\n    'ord_undefined':      '<?php var_dump(ord($undeclared));',\n    'eval_barrier':       \"<?php echo $created; eval('$created = 1;'); echo $created;\",\n    'enum_method':        '<?php enum E { case A; public function f(): int { return $missing; } } var_dump(E::A->f());',\n    'list_unpack_null':   '<?php [$a, $b] = $missing; var_dump($a, $b);',\n    'list_unpack_scalar': '<?php [$a, $b] = 42; var_dump($a, $b);',\n    'spread_then_undef':  '<?php $x = 5; $s = [...$x]; echo count($s); echo $undefined_for_real;',\n    'method_sco",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "49466f21385dc8bbd4e8df14",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:13:01.218Z",
+  "stored_at": "2026-08-20T19:13:01.218Z"
+}

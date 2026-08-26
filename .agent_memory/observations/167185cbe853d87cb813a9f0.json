@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o t t.php >/dev/null 2>&1 && ./t",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o t t.php >/dev/null 2>&1 && ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o t t.php >/dev/null 2>&1 && ./t: == fread whole == memory read5='abcde' eof=false temp read5='abcde' eof=false plain read5='abcde' eof=false == fread past == memory read8='abcde' eof=true temp read8='abcde' eof=true plain read8='abcde' eof=true == fgetc to the last byte == memory c2='b' eof=false temp c2='b' eof=false plain c2='b' eof=false == stream_get_line to the last line == memory l2='bb' eof=false temp l2='bb' eof=false plain l2='bb' eof=false == fgets past the chunk size == memory l1len=9001 eof=false l2='tail ' eof=false temp l1len=9001 eof=false l2='tail ' eof=true plain l1len=9001 eof=false l2='tail ' eof=false == fseek back after eof == memory eofAfterLast=false eofAfterSeek=false temp eofAfterLast=true eofAfterSeek=false plain eofAfterLast=false eofAfterSeek=false == ftell after the last line == memory tell=5 unread=0 temp tell=5 unread=0 plain tell=5 unread=0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "167185cbe853d87cb813a9f0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:49:09.530Z",
+  "stored_at": "2026-08-25T13:49:09.530Z"
+}

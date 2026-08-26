@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n sel2.php 2>&1 | head -25",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n sel2.php 2>&1 | head -25:  keeps write: n=2 read=1 write=1 c filtered: Warning: stream_select(): Cannot cast a filtered stream on this s",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n sel2.php 2>&1 | head -25:  keeps write: n=2 read=1 write=1 c filtered: Warning: stream_select(): Cannot cast a filtered stream on this system in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel2.php on line 44 ValueError: No stream arrays were passed d output: Warning: stream_select(): Cannot represent a stream of type Output as a select()able descriptor in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel2.php on line 53 ValueError: No stream arrays were passed e closed: ValueError: No stream arrays were passed f null-sec with usec: ValueError: stream_select(): Argument #5 ($microseconds) must be null when argument #4 ($seconds) is null g string keys: n=1 keys=alpha",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0d03de9fa5d685d42b37542c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:34:49.256Z",
+  "stored_at": "2026-08-17T06:34:49.257Z"
+}

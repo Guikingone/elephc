@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn spl_file_object_current_body' -A 25 src/types/checker/builtin_spl_classes/filesystem.rs | head -30",
+  "summary": "grep -n 'fn spl_file_object_current_body' -A 25 src/types/checker/builtin_spl_classes/filesystem.rs | head -30: y_access(this_expr(), \"csvRecords\"), 1439- file_line_number_expr(), 1440- )), 1441- ], 1442- None, 1443- ), 1444- return_stmt(spl_file_object_drop_new_line_expr(file_current_line_expr())), 1445- ] 1446-} 1447",
+  "text": "grep -n 'fn spl_file_object_current_body' -A 25 src/types/checker/builtin_spl_classes/filesystem.rs | head -30: y_access(this_expr(), \"csvRecords\"), 1439- file_line_number_expr(), 1440- )), 1441- ], 1442- None, 1443- ), 1444- return_stmt(spl_file_object_drop_new_line_expr(file_current_line_expr())), 1445- ] 1446-} 1447- 1448-/// Builds the READ_CSV record cache, one record per `fgetcsv()` php would perform. 1449-/// 1450-/// Lines are accumulated until the enclosures balance, so a quoted field holding newlines 1451-/// stays one field of one record; `str_getcsv()` then applies the very rules the compiled 1452-/// `fgetcsv()` applies, including php's `[null]` for a line that was nothing but its 1453-/// terminator. The cache is rebuilt only when the controls or the line storage changed. 1454-fn spl_file_object_csv_build_body() -> Vec<Stmt> { 1455- vec![ 1456- property_assign_stmt(this_expr(), \"csvRecords\", empty_array_expr()), 1457- property_assign_stmt(this_expr(), \"csvBlank\", empty_array_expr()),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "acfa372ac22b2ac8af6b3a6b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:23:04.811Z",
+  "stored_at": "2026-08-24T20:23:04.811Z"
+}

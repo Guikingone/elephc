@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git stash list | head -1; git checkout -q 151bb7bbc -- src/codegen/lower_inst/exceptions.rs src/codegen/context.rs src/codegen/lower_inst/builtins/io/resource_handles.rs && export CARGO_INCREMENTAL=0 && cargo test -p elephc --test codegen_tests -- regressions::mixed_method_dispatch::test_mixed_receiver_non_object_fatals 2>&1 | tail -6",
+  "summary": "git stash list | head -1; git checkout -q 151bb7bbc -- src/codegen/lower_inst/exceptions.rs src/codegen/context.rs src/codegen/lower_inst/builtins/io/resource_handles.rs && export CARGO_INCREMENTAL=0 && cargo test -p elephc --test codegen_tests -- regressions::mixed_method_dispatch::test_mixed_receiver_non_object_fatal",
+  "text": "git stash list | head -1; git checkout -q 151bb7bbc -- src/codegen/lower_inst/exceptions.rs src/codegen/context.rs src/codegen/lower_inst/builtins/io/resource_handles.rs && export CARGO_INCREMENTAL=0 && cargo test -p elephc --test codegen_tests -- regressions::mixed_method_dispatch::test_mixed_receiver_non_object_fatals 2>&1 | tail -6: stash@{0}: On reconcile/dirname-symfony: batchC-wip-1785481981 failures: codegen::regressions::mixed_method_dispatch::test_mixed_receiver_non_object_fatals test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8831 filtered out; finished in 1.89s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dd94d41824018c1dff86f8d2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:22:04.858Z",
+  "stored_at": "2026-08-22T07:22:04.859Z"
+}

@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "On prend le but que tu viens de mesurer",
+  "summary": "On prend le but que tu viens de mesurer",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6f52b26ead4ca70cbfe3bf4a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:25:45.905Z",
+  "stored_at": "2026-08-16T19:25:45.907Z",
+  "low_signal": true
+}

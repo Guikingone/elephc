@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '230,300p' src/codegen/lower_inst/builtins/io.rs",
+  "summary": "sed -n '230,300p' src/codegen/lower_inst/builtins/io.rs: and including the fall-through label; the caller places the returned /// done-label AFTER its plain reader, so the streamed result skips it. A URL that names no /// usable filter falls through WITH the swapped resource, which is the unfiltered open php /// perfor",
+  "text": "sed -n '230,300p' src/codegen/lower_inst/builtins/io.rs: and including the fall-through label; the caller places the returned /// done-label AFTER its plain reader, so the streamed result skips it. A URL that names no /// usable filter falls through WITH the swapped resource, which is the unfiltered open php /// performs for the same URL. fn emit_dynamic_php_filter_read_route( ctx: &mut FunctionContext<'_>, prefix_symbol: &str, prefix_text: &str, callee: &str, ) -> Result<String> { let fall_through = ctx.next_label(\"fgc_dynf_plain\"); let done = ctx.next_label(\"fgc_dynf_done\"); let try_data = ctx.next_label(\"fgc_dynf_try_data\"); let try_http = ctx.next_label(\"fgc_dynf_try_http\"); let open_file = ctx.next_label(\"fgc_dynf_file\"); let boxed = ctx.next_label(\"fgc_dynf_boxed\"); // The full URL is what php names in the failure warning, and the parse is about to swap the // registers to the RESOURCE, so the pair is saved first. Every exit releases it.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4b2cb0954a0c7429d95a7493",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:11:57.476Z",
+  "stored_at": "2026-08-21T10:11:57.476Z"
+}

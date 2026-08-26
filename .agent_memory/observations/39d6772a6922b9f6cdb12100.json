@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/class-constant-is-not-a-string-literal-for-reachability.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/class-constant-is-not-a-string-literal-for-reachability.md: ---\nname: class-constant-is-not-a-string-literal-for-reachability\ndescription: \"🔴🔴 SILENT: `Foo::class` n'est PAS `Op::ConstStr` ⇒ l'analyse d'atteignabil",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/class-constant-is-not-a-string-literal-for-reachability.md: ---\nname: class-constant-is-not-a-string-literal-for-reachability\ndescription: \"🔴🔴 SILENT: `Foo::class` n'est PAS `Op::ConstStr` ⇒ l'analyse d'atteignabilité ne le voit pas, la classe perd ses MÉTADONNÉES et l'enregistrement de wrapper/filtre réussit puis ne marche jamais\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\n```php\nclass MemWrapper { /* stream_open, stream_read, stream_eof, stream_stat */ }\nvar_dump(stream_wrapper_register('memw', MemWrapper::class));  // true DANS LES DEUX\nvar_dump(in_array('memw', stream_get_wrappers()));             // true DANS LES DEUX\nvar_dump(fopen('memw:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "39d6772a6922b9f6cdb12100",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:52:32.405Z",
+  "stored_at": "2026-08-17T09:52:32.405Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn lower_hash_unset' -A 40 src/codegen/lower_inst/ | head -50",
+  "summary": "grep -rn 'fn lower_hash_unset' -A 40 src/codegen/lower_inst/ | head -50: hashes.rs-369-pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { src/codegen/lower_inst/hashes.rs-370- let hash = expect_operand(inst, 0)?; src/codegen/lower_inst/hashes.rs-371- let value = expect_op",
+  "text": "grep -rn 'fn lower_hash_unset' -A 40 src/codegen/lower_inst/ | head -50: hashes.rs-369-pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { src/codegen/lower_inst/hashes.rs-370- let hash = expect_operand(inst, 0)?; src/codegen/lower_inst/hashes.rs-371- let value = expect_operand(inst, 1)?; src/codegen/lower_inst/hashes.rs-372- let hash_ty = ctx.value_php_type(hash)?; src/codegen/lower_inst/hashes.rs-373- require_hash(hash_ty.clone(), inst)?; src/codegen/lower_inst/hashes.rs-374- let storage_value_ty = assoc_resource_storage_value_type(&hash_ty) src/codegen/lower_inst/hashes.rs-375- .map_or_else(|| assoc_value_type(&hash_ty, inst), Ok)?; src/codegen/lower_inst/hashes.rs-376- // RAW, not `value_php_type`: that one erases a resource to an int before the guard can see it, src/codegen/lower_inst/hashes.rs-377- // and the guard is what decides the entry's runtime TAG. src/codegen/lower_inst/hashes.rs-378- let value_ty =",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fba4d23219b5a5e0d44ed603",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:26:04.027Z",
+  "stored_at": "2026-08-26T08:26:04.028Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/wrapper-context-quad-shared-with-the-boxed-mask.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/wrapper-context-quad-shared-with-the-boxed-mask.md: ---\nname: wrapper-context-quad-shared-with-the-boxed-mask\ndescription: Deux branches ont ajouté UN quad au même endroit de la vtable — le merge a gardé celui d'am",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/wrapper-context-quad-shared-with-the-boxed-mask.md: ---\nname: wrapper-context-quad-shared-with-the-boxed-mask\ndescription: Deux branches ont ajouté UN quad au même endroit de la vtable — le merge a gardé celui d'amont et fopen lisait toujours l'adresse comme la sienne\nmetadata:\n  type: feedback\n---\n\nTroisième instance du défaut de [[declared-variant-with-no-consumer]], et la plus dangereuse.\n\nLes deux branches ont ajouté **un quad final** après les pointeurs de méthode d'une vtable de\nwrapper : cette branche l'offset d'octet d'une propriété `public $context;` déclarée, amont un\nmasque de bits des slots dont la méthode rend un Mixed boxé. Le mer",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9bd9f1b806fc6b2931c9be21",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:39:30.494Z",
+  "stored_at": "2026-08-21T09:39:30.495Z"
+}

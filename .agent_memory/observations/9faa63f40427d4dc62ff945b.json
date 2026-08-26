@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/run_named.py 2>&1 | head -120",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/run_named.py 2>&1 | head -120: ypeError: stream_",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/run_named.py 2>&1 | head -120: ypeError: stream_context_set_default(): Argument #1 ($options) must be of type array, stdClass given elephc: ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value ### kimi-k2.7-code-29 php : TypeError: stream_context_get_default(): Argument #1 ($options) must be of type ?array, stdClass given elephc: ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value ### kimi-k2.7-code-32 php : 1 elephc: 0 php : 1 elephc: 0 php : 2 elephc: 0 php : Warning: file_get_contents(): AppW::stream_stat is not implemented! in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormPro elephc: <missing> ... --- REFUSED --- kimi-k2.7-code-18 error[5:29]: Undefined function: str_rot13 kimi-k2.7-code-22 error[2:52]: Undefined function: getmypid kimi-k2.7-code-33 error[5:22]: Undefined function: str_rot13 kimi-k2.7-code-36 error[2:40]: Undefined function: getmypid",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9faa63f40427d4dc62ff945b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:51:15.061Z",
+  "stored_at": "2026-08-22T16:51:15.062Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '17093,17120p' tests/codegen/io/streams.rs",
+  "summary": "sed -n '17093,17120p' tests/codegen/io/streams.rs: 20)\\n\", \"literal read of computed write: string(20) \\\"second second second\\\"\\n\", \"compressed: bool(true)\\n\", ) ); let _ = fs::remove_dir_all(&dir); /// Verifies a wrapper declaring the PHP manual's `stream_read(): string|false` returns its /// actual bytes. /// /// A w",
+  "text": "sed -n '17093,17120p' tests/codegen/io/streams.rs: 20)\\n\", \"literal read of computed write: string(20) \\\"second second second\\\"\\n\", \"compressed: bool(true)\\n\", ) ); let _ = fs::remove_dir_all(&dir); /// Verifies a wrapper declaring the PHP manual's `stream_read(): string|false` returns its /// actual bytes. /// /// A wrapper method is called through the ABI its own return type produces: `: string` hands /// back the raw pointer/length pair, while the manual's union has codegen representation /// `Mixed` and hands back a single boxed cell. The runtime helper read the pair either way, so /// the documented signature yielded the right LENGTH and the wrong bytes — `fread()` answered /// five spaces where PHP answers \"hello\". Every other wrapper test in this file declares /// `: string`, so the suite pinned the limitation and not one of them could fail on this. #[test] fn test_wrapper_stream_read_declared_string_or_false_returns_its_bytes() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f289ec46e9a9ca04ebc75b56",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:07:55.548Z",
+  "stored_at": "2026-08-20T18:07:55.548Z"
+}

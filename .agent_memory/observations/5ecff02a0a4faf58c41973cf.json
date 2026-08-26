@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'STREAM_WRAPPER_ID_OFFSET' src/ | grep -v layout.rs | head -15",
+  "summary": "grep -rn 'STREAM_WRAPPER_ID_OFFSET' src/ | grep -v layout.rs | head -15: t/runtime/io/stream_record_meta.rs:16: STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_OFFSET, src/codegen_support/runtime/io/stream_record_meta.rs:154: \"str x11, [x9, #{}]\", STREAM_WRAPPER_ID_OFFSET src/codegen_support/runtime/io/",
+  "text": "grep -rn 'STREAM_WRAPPER_ID_OFFSET' src/ | grep -v layout.rs | head -15: t/runtime/io/stream_record_meta.rs:16: STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_OFFSET, src/codegen_support/runtime/io/stream_record_meta.rs:154: \"str x11, [x9, #{}]\", STREAM_WRAPPER_ID_OFFSET src/codegen_support/runtime/io/stream_record_meta.rs:300: \"mov QWORD PTR [r10 + {}], rax\", STREAM_WRAPPER_ID_OFFSET src/codegen_support/runtime/io/fwrite.rs:20: STREAM_WRAPPER_ID_OFFSET, src/codegen_support/runtime/io/fwrite.rs:385: emitter.instruction(&format!(\"ldr x9, [x0, #{STREAM_WRAPPER_ID_OFFSET}]\")); // which wrapper opened it src/codegen_support/runtime/io/fwrite.rs:742: \"mov r9, QWORD PTR [rax + {STREAM_WRAPPER_ID_OFFSET}]\" src/codegen_support/runtime/io/stream_get_meta_data.rs:19: STREAM_WRAPPER_ID_OFFSET, src/codegen_support/runtime/io/stream_get_meta_data.rs:119: emitter.instruction(&format!(\"ldr x9, [x9, #{STREAM_WRAPPER_ID_OFFSET}]\")); // which wrapper opened it",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5ecff02a0a4faf58c41973cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:43:55.580Z",
+  "stored_at": "2026-08-25T13:43:55.581Z"
+}

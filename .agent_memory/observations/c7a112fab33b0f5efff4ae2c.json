@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git cherry-pick 530afd4253 2>&1 | tail -2; git log --format=\"%h %s\" -2",
+  "summary": "git cherry-pick 530afd4253 2>&1 | tail -2; git log --format=\"%h %s\" -2: Date: Sun Aug 16 14:26:30 2026 +0200 26 files changed, 542 insertions(+), 86 deletions(-) 4c8140cdf5 fix(streams): readdir()/rewinddir()/closedir() refused php's optional handle, so the last-opened form did not compile 993efaa18f feat(streams): ssl",
+  "text": "git cherry-pick 530afd4253 2>&1 | tail -2; git log --format=\"%h %s\" -2: Date: Sun Aug 16 14:26:30 2026 +0200 26 files changed, 542 insertions(+), 86 deletions(-) 4c8140cdf5 fix(streams): readdir()/rewinddir()/closedir() refused php's optional handle, so the last-opened form did not compile 993efaa18f feat(streams): ssl.peer_fingerprint was accepted and never checked, so a pinned connection was not pinned",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c7a112fab33b0f5efff4ae2c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T12:44:03.027Z",
+  "stored_at": "2026-08-16T12:44:03.027Z"
+}

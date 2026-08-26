@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '308,360p' src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs",
+  "summary": "sed -n '308,360p' src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs: et stream = expect_operand(inst, 0)?; load_open_stream_handle_to_result(ctx, stream, \"rewind\")?; let refused_label = ctx.next_label(\"rewind_no_seek\"); let finished_label = ctx.next_label(\"rewind_no_seek_done\"); emit_seek_unsupported_branch(ct",
+  "text": "sed -n '308,360p' src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs: et stream = expect_operand(inst, 0)?; load_open_stream_handle_to_result(ctx, stream, \"rewind\")?; let refused_label = ctx.next_label(\"rewind_no_seek\"); let finished_label = ctx.next_label(\"rewind_no_seek_done\"); emit_seek_unsupported_branch(ctx, &refused_label); let success_label = ctx.next_label(\"rewind_success\"); let done_label = ctx.next_label(\"rewind_done\"); match ctx.emitter.target.arch { Arch::AArch64 => lower_rewind_aarch64(ctx, &success_label, &done_label), Arch::X86_64 => lower_rewind_x86_64(ctx, &success_label, &done_label), } emit_clear_append_skip(ctx, stream, \"rewind\")?; abi::emit_jump(ctx.emitter, &finished_label); ctx.emitter.label(&refused_label); emit_static_diag_warning(ctx, \"Warning: rewind(): Stream does not support seeking\\n\"); abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0); ctx.emitter.label(&finished_label); store_if_result(ctx, inst)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "91e877fa4e8fad38ff811450",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:09:57.822Z",
+  "stored_at": "2026-08-21T14:09:57.823Z"
+}

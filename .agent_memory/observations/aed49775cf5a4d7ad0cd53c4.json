@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_path_is_wrapper\" src/codegen/lower_inst/builtins/io/*.rs src/codegen_support/runtime/io/*.rs | wc -l; echo \"--- dispatchers ---\"; grep -rn \"pub(super) fn emit_.*_wrapper_dispatch\\|fn lower_.*_with_wrapper\" src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs | head -12",
+  "summary": "grep -rn \"__rt_path_is_wrapper\" src/codegen/lower_inst/builtins/io/*.rs src/codegen_support/runtime/io/*.rs | wc -l; echo \"--- dispatchers ---\"; grep -rn \"pub(super) fn emit_.*_wrapper_dispatch\\|fn lower_.*_with_wrapper\" src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs | head -12: r) fn lower_filesize_with_wrappe",
+  "text": "grep -rn \"__rt_path_is_wrapper\" src/codegen/lower_inst/builtins/io/*.rs src/codegen_support/runtime/io/*.rs | wc -l; echo \"--- dispatchers ---\"; grep -rn \"pub(super) fn emit_.*_wrapper_dispatch\\|fn lower_.*_with_wrapper\" src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs | head -12: r) fn lower_filesize_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs:389:pub(super) fn lower_is_file_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs:405:pub(super) fn emit_is_file_wrapper_dispatch(ctx: &mut FunctionContext<'_>) { src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs:458:pub(super) fn emit_mkdir_wrapper_dispatch( src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs:560:pub(super) fn emit_single_path_wrapper_dispatch( src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs:573:pub(super) fn emit_single_path_wrapper_dispatch_with_options( src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs:727:pub(super) fn lower_rename_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aed49775cf5a4d7ad0cd53c4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:23:28.503Z",
+  "stored_at": "2026-08-22T08:23:28.504Z"
+}

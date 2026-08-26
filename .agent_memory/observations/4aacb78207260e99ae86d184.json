@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "echo \"=== files with user_wrapper/userspace in name ===\" && find . -path ./target -prune -o -type f \\( -name \"*user_wrapper*\" -o -name \"*userspace*\" -o -name \"*user_filter*\" -o -name \"*stream_wrapper*\" -o -name \"*stream_filter*\" \\) -print 2>/dev/null | grep -v \"^./target\" | sort",
+  "summary": "About to run: echo \"=== files with user_wrapper/userspace in name ===\" && find . -path ./target -prune -o -type f \\( -name \"*user_wrapper*\" -o -name \"*userspace*\" -o -name \"*user_filter*\" -o -name \"*stream_wrapper*",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4aacb78207260e99ae86d184",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:10:39.082Z",
+  "stored_at": "2026-08-14T14:10:39.082Z"
+}

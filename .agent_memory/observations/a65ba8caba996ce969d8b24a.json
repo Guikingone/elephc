@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/gencurated.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/gencurated.php: <?php\n// Curates php -n 8.5.6's sscanf() answers, one case per rule the AOT engine must reproduce.\n$cases = [\n    // -- convers",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/gencurated.php: <?php\n// Curates php -n 8.5.6's sscanf() answers, one case per rule the AOT engine must reproduce.\n$cases = [\n    // -- conversions and their PHP types --\n    [\"42\", \"%d\", \"%d yields an int, not the matched string\"],\n    [\"-42\", \"%d\", \"a leading minus belongs to the number\"],\n    [\"+42\", \"%d\", \"a leading plus is accepted and dropped\"],\n    [\"  42\", \"%d\", \"%d skips leading whitespace\"],\n    [\"\\t\\n 42\", \"%d\", \"every whitespace byte is skipped, not just spaces\"],\n    [\"42abc\", \"%d\", \"the scan stops at the first non-digit\"],\n    [\"0777\", \"%d\", \"%d is decimal: leading zeros do not select octal\"],\n ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a65ba8caba996ce969d8b24a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:24:19.548Z",
+  "stored_at": "2026-08-16T16:24:19.548Z"
+}

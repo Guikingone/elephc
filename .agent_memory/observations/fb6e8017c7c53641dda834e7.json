@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'pending\\|__rt_fread\\|syscall\\|label_global\\|label(' src/codegen_support/runtime/io/stream_get_line.rs | head -40",
+  "summary": "grep -n 'pending\\|__rt_fread\\|syscall\\|label_global\\|label(' src/codegen_support/runtime/io/stream_get_line.rs | head -40: sgl_filtered_byte\"); 214: emitter.instruction(\"bl __rt_fread\"); // x1 = chunk ptr, x2 = len 227: // (a SEPARATE buffer from _concat_buf, which each __rt_fread result may 230: emitter.label(\"__rt_sg",
+  "text": "grep -n 'pending\\|__rt_fread\\|syscall\\|label_global\\|label(' src/codegen_support/runtime/io/stream_get_line.rs | head -40: sgl_filtered_byte\"); 214: emitter.instruction(\"bl __rt_fread\"); // x1 = chunk ptr, x2 = len 227: // (a SEPARATE buffer from _concat_buf, which each __rt_fread result may 230: emitter.label(\"__rt_sgl_wrapper_entry\"); 233: emitter.label(\"__rt_sgl_wrapper_loop\"); 245: emitter.instruction(\"bl __rt_fread\"); // x1 = chunk ptr, x2 = len 269: emitter.label(\"__rt_sgl_wrapper_cmp\"); 278: emitter.label(\"__rt_sgl_wrapper_matched\"); 284: emitter.label(\"__rt_stream_get_line_eof\"); 289: emitter.label(\"__rt_stream_get_line_done\"); 303: emitter.label_global(\"__rt_stream_get_line\"); 328: emitter.label(\"__rt_sgl_unfiltered_x86\"); 330: emitter.label(\"__rt_sgl_filter_probed_x86\"); 353: emitter.instruction(\"jb __rt_sgl_no_pending_x86\"); // a wrapper drains per byte in its loop 354: emitter.label(\"__rt_sgl_drain_entry_x86\"); 358: emitter.instruction(\"call __rt_stream_pending_take\"); // rax = how many came back",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fb6e8017c7c53641dda834e7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:17:10.174Z",
+  "stored_at": "2026-08-24T17:17:10.175Z"
+}

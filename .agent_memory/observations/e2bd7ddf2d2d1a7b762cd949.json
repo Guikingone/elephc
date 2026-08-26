@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git checkout -q 8db8271c4; RUST_MIN_STACK=33554432 cargo test --test codegen_tests preg_match_ 2>&1 | tail -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git checkout -q 8db8271c4; RUST_MIN_STACK=33554432 cargo test --test codegen_tests preg_match_ 2>&1 | tail -5: codegen::system::test_preg_match_unmatched_interior_capture_is_empty test result: FAILED. 18 passed; 5 failed; 0 ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git checkout -q 8db8271c4; RUST_MIN_STACK=33554432 cargo test --test codegen_tests preg_match_ 2>&1 | tail -5: codegen::system::test_preg_match_unmatched_interior_capture_is_empty test result: FAILED. 18 passed; 5 failed; 0 ignored; 0 measured; 8768 filtered out; finished in 6.94s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e2bd7ddf2d2d1a7b762cd949",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:20:46.029Z",
+  "stored_at": "2026-08-22T17:20:46.030Z"
+}

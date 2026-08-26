@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/ir_lower/stmt/static_property_helpers.rs\")\ns = p.read_text()\nold = \"pub(super) fn object_property_type(\"\nnew = \"pub(crate) fn object_property_type(\"\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nq = pathlib.Path(\"src/ir_lower/expr/unset.rs\")\nt = q.read_text()\nt = t.replace(\n    \"crate::ir_lower::stmt::object_property_type(ctx, object_value.value, property)\",\n    \"crate::ir_lower::stmt::static_property_helpers::object_property_type(\\n            ctx,\\n            object_value.value,\\n            property,\\n        )\",\n)\nq.write_… [+101 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/ir_lower/stmt/static_property_helpers.rs\")\ns = p.read_text()\nold = \"pub(super) fn object_property_type(\"\nnew = \"pub(crate) fn object_property_type(\"\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nq = pathlib.Path(\"src/ir_lower/expr/unset.rs\")\nt = q.read_",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/ir_lower/stmt/static_property_helpers.rs\")\ns = p.read_text()\nold = \"pub(super) fn object_property_type(\"\nnew = \"pub(crate) fn object_property_type(\"\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nq = pathlib.Path(\"src/ir_lower/expr/unset.rs\")\nt = q.read_text()\nt = t.replace(\n    \"crate::ir_lower::stmt::object_property_type(ctx, object_value.value, property)\",\n    \"crate::ir_lower::stmt::static_property_helpers::object_property_type(\\n            ctx,\\n            object_value.value,\\n            property,\\n        )\",\n)\nq.write_text(t)\nprint(\"visibility widened\")\nPY\ngrep -n 'mod static_property_helpers' src/ir_lower/stmt/mod.rs: visibility widened 61:mod static_property_helpers;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3938c51b41eed0472015362f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:27:56.993Z",
+  "stored_at": "2026-08-26T08:27:56.994Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub\" src/ir_lower/ownership.rs | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub\" src/ir_lower/ownership.rs | head -20: 20:pub(crate) fn acquire_if_refcounted( 51:pub(crate) fn acquire_lifetime_pin_if_refcounted( 71:pub(crate) fn release_if_owned(ctx: &mut LoweringContext<'_, '_>, value: Low",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub\" src/ir_lower/ownership.rs | head -20: 20:pub(crate) fn acquire_if_refcounted( 51:pub(crate) fn acquire_lifetime_pin_if_refcounted( 71:pub(crate) fn release_if_owned(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Option<Span>) { 87:pub(crate) fn collect_cycles(ctx: &mut LoweringContext<'_, '_>, span: Option<Span>) { 98:pub(crate) fn may_require_release(ownership: Ownership) -> bool {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e4ed25a30a4b436fe86ef45c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:50:40.797Z",
+  "stored_at": "2026-08-23T12:50:40.798Z"
+}

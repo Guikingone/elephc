@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cd $S/work/eof-after-last-line/php && php -n p.php; echo \"=== elephc ===\"; cd $S/work/eof-after-last-line/elephc && ./p",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cd $S/work/eof-after-last-line/php && php -n p.php; echo \"=== elephc ===\"; cd $S/work/eof-after-last-line/elephc && ./p: file l1='a ' eof=false fil",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; cd $S/work/eof-after-last-line/php && php -n p.php; echo \"=== elephc ===\"; cd $S/work/eof-after-last-line/elephc && ./p: file l1='a ' eof=false file l2='bb ' eof=false file l3=false eof=true mem l1='a ' eof=false mem l2='bb ' eof=false mem l3=false eof=true temp l1='a ' eof=false temp l2='bb ' eof=true === elephc === file l1='a ' eof=false file l2='bb ' eof=false file l3=false eof=true mem l1='a ' eof=false mem l2='bb ' eof=false mem l3=false eof=true temp l1='a ' eof=false temp l2='bb ' eof=false",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6fd0109b255fbf2784bbf60d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:57:17.717Z",
+  "stored_at": "2026-08-24T20:57:17.717Z"
+}

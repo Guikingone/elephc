@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - ✅✅ [MERGE origin/main `7cbffdd92e`](streams-branch-merge-origin-main-contract-port.md) -> - 🔴★★★ [DEUX voies de dispatch, UNE arche câblée](two-dispatches-one-arch-loses-the-diagnostic.md) `dd9717c1f",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - ✅✅ [MERGE origin/main `7cbffdd92e`](streams-branch-merge-origin-main-contract-port.md) -> - 🔴★★★ [DEUX voies de dispatch, UNE arche câblée](two-dispatches-one-arch-loses-the-diagnostic.md) `dd9717c1f0` — le test COMPTAIT les occurrences (2 attendues, 1 sur x86); un test de PRÉSENCE serait passé. 🛠️ vérif sans docker: `dump_x86_runtime` + grep des labels.\n- ✅✅ [MERGE origin/main `7cbffdd92e`](streams-branch-merge-origin-main-contract-port.md)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ecd71851b385669fdd10c299",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T13:09:42.123Z",
+  "stored_at": "2026-08-16T13:09:42.125Z"
+}

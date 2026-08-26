@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git show origin/main:src/codegen_support/runtime/io/stream_wrapper_register.rs 2>/dev/null | sed -n 88,120p | grep -nE \"dup|cmp|b\\.|label|ldrb\" | head -16",
+  "summary": "git show origin/main:src/codegen_support/runtime/io/stream_wrapper_register.rs 2>/dev/null | sed -n 88,120p | grep -nE \"dup|cmp|b\\.|label|ldrb\" | head -16: ed end to end 12: emitter.instruction(\"cmp x13, x1\"); // same length as the protocol being registered? 13: emitter.instruction(\"b.ne __rt_swr_scan_next\"); // differ",
+  "text": "git show origin/main:src/codegen_support/runtime/io/stream_wrapper_register.rs 2>/dev/null | sed -n 88,120p | grep -nE \"dup|cmp|b\\.|label|ldrb\" | head -16: ed end to end 12: emitter.instruction(\"cmp x13, x1\"); // same length as the protocol being registered? 13: emitter.instruction(\"b.ne __rt_swr_scan_next\"); // different length — cannot be the same protocol 15: emitter.label(\"__rt_swr_cmp\"); 16: emitter.instruction(\"cmp x14, x1\"); // compared every byte? 17: emitter.instruction(\"b.ge __rt_swr_dupproto\"); // identical protocol — PHP refuses to redefine it 18: emitter.instruction(\"ldrb w15, [x12, x14]\"); // stored protocol byte 19: emitter.instruction(\"ldrb w16, [x0, x14]\"); // candidate protocol byte 20: emitter.instruction(\"cmp w15, w16\"); // do the bytes match? 21: emitter.instruction(\"b.ne __rt_swr_scan_next\"); // differs — not the same protocol 23: emitter.instruction(\"b __rt_swr_cmp\"); // continue comparing 24: emitter.label(\"__rt_swr_free\"); 26: emitter.instruction(\"b.ne __rt_swr_scan_next\"); // already remembered an earlier free slot",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "36588298ff26af6a2afea74c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:14:14.072Z",
+  "stored_at": "2026-08-21T19:14:14.073Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/file_on_wrapper.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/file_on_wrapper.py: \"\"\"`file()` on a user wrapper answers false where every other reader answers bytes.\n\nThe other seven readers — fread, fgets, fg",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/file_on_wrapper.py: \"\"\"`file()` on a user wrapper answers false where every other reader answers bytes.\n\nThe other seven readers — fread, fgets, fgetc, stream_get_contents, stream_get_line,\nfile_get_contents, fpassthru — all reach the wrapper. `file()` warns \"Failed to open stream\" and\nanswers false, and the warning names `file_get_contents`, not itself.\n\nThe probe asks the question per WRAPPER kind as well as per reader, because a reader that opens by\na different route may reach one wrapper and not another — which is how the last reader×wrapper gap\nhid.\n\"\"\"\nimport pathlib, subprocess, shutil\n\nD = pathlib.Path(__",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f4ca59576c8a7ee7d15b86d1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:50:26.126Z",
+  "stored_at": "2026-08-21T17:50:26.127Z"
+}

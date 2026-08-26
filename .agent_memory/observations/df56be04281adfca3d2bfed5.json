@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '165,225p' tests/codegen/control_flow/branches_and_loops.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '165,225p' tests/codegen/control_flow/branches_and_loops.rs: z/Buzz/FizzBuzz/decimal output. #[test] fn test_fizzbuzz() { let source = r#\"<?php $i = 1; while ($i <= 15) { if ($i % 15 == 0) { echo \"FizzBuzz\\n\"; } elsei",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '165,225p' tests/codegen/control_flow/branches_and_loops.rs: z/Buzz/FizzBuzz/decimal output. #[test] fn test_fizzbuzz() { let source = r#\"<?php $i = 1; while ($i <= 15) { if ($i % 15 == 0) { echo \"FizzBuzz\\n\"; } elseif ($i % 3 == 0) { echo \"Fizz\\n\"; } elseif ($i % 5 == 0) { echo \"Buzz\\n\"; } else { echo $i; echo \"\\n\"; } $i = $i + 1; } \"#; let out = compile_and_run(source); assert_eq!( out, \"1\\n2\\nFizz\\n4\\nBuzz\\nFizz\\n7\\n8\\nFizz\\nBuzz\\n11\\nFizz\\n13\\n14\\nFizzBuzz\\n\" ); } // --- Increment/Decrement --- /// Verifies for loop with ++$i post-increment in update expression prints 01234. #[test] fn test_for_with_increment() { let out = compile_and_run(\"<?php for ($i = 0; $i < 5; $i++) { echo $i; }\"); assert_eq!(out, \"01234\"); } /// Verifies pre-increment (++$i) updates before the loop body echo, producing 123. #[test] fn test_while_with_pre_increment() { let out = compile_and_run(\"<?php $i = 0; while ($i < 3) { ++$i; echo $i; }\"); assert_eq!(out, \"123\"); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "df56be04281adfca3d2bfed5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:14:49.153Z",
+  "stored_at": "2026-08-23T13:14:49.153Z"
+}

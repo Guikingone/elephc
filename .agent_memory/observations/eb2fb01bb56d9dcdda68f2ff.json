@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git checkout --ours -- src/codegen_support/runtime/io/stream_wrapper_register.rs && git add src/codegen_support/runtime/io/stream_wrapper_register.rs && grep -c \"^<<<<<<<\\|^>>>>>>>\" src/codegen_support/runtime/io/stream_wrapper_register.rs; echo \"--- markers above should be 0 ---\"",
+  "summary": "git checkout --ours -- src/codegen_support/runtime/io/stream_wrapper_register.rs && git add src/codegen_support/runtime/io/stream_wrapper_register.rs && grep -c \"^<<<<<<<\\|^>>>>>>>\" src/codegen_support/runtime/io/stream_wrapper_register.rs; echo \"--- markers above should be 0 ---\": 0 --- markers above should be 0 ---",
+  "text": "git checkout --ours -- src/codegen_support/runtime/io/stream_wrapper_register.rs && git add src/codegen_support/runtime/io/stream_wrapper_register.rs && grep -c \"^<<<<<<<\\|^>>>>>>>\" src/codegen_support/runtime/io/stream_wrapper_register.rs; echo \"--- markers above should be 0 ---\": 0 --- markers above should be 0 ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eb2fb01bb56d9dcdda68f2ff",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:38:20.213Z",
+  "stored_at": "2026-08-22T06:38:20.213Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/arraytag.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/arraytag.php: <?php\n// Which of these arrays carries a RESOURCE element tag?\n$a = [fopen(__FILE__, \"rb\")];\n$b = [tmpfile()];\n$c = [fopen(__FILE__,",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/arraytag.php: <?php\n// Which of these arrays carries a RESOURCE element tag?\n$a = [fopen(__FILE__, \"rb\")];\n$b = [tmpfile()];\n$c = [fopen(__FILE__, \"rb\"), \"x\"];\nvar_dump($a);\nvar_dump($b);\nvar_dump($c);\n$w = null; $e = null;\n$n = stream_select($a, $w, $e, 0);\necho \"select over fopen(): int($n)\\n\";\n$n2 = stream_select($b, $w, $e, 0);\necho \"select over tmpfile(): int($n2)\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6f58a5152504907dadda9cfd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:38:11.526Z",
+  "stored_at": "2026-08-23T07:38:11.526Z"
+}

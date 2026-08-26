@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sgl4.php','w').write('''<?php\n$p = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nstream_set_blocking($p[0], false);\nfwrite($p[1], \"abc\");\nvar_dump(stream_get_line($p[0], 100, \"\\\\n\"));\nvar_dump(fread($p[0], 10));\nfclose($p[0]); fclose($p[1]);\n$q = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nstream_set_blocking($q[0], false);\nfwrite($q[1], \"abc\");\nvar_dump(stream_get_line… [+121 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY' open('",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bfcf082790d4e3499ba3721a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:56:12.376Z",
+  "stored_at": "2026-08-17T15:56:12.376Z"
+}

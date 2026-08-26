@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_copydir.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_copydir.py: import pathlib\n\nroot = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-sign",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_copydir.py: import pathlib\n\nroot = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\n\n# ------------------------------------------------------------ the message\np = root / \"src/codegen_support/runtime/data/mod.rs\"\ns = p.read_text()\nold = '''pub(crate) const ARRAY_TO_STRING_MSG: &str = \"Warning: Array to string conversion\\\\n\";'''\nnew = '''pub(crate) const ARRAY_TO_STRING_MSG: &str = \"Warning: Array to string conversion\\\\n\";\n/// php's own refusal when `copy()` is handed a DIRECTORY to read.\n///\n/// php-src checks this before it opens anything, ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3f6435323f61f6b766900cfa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:35:44.541Z",
+  "stored_at": "2026-08-24T13:35:44.541Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build --example gen_builtins 2>&1 | rg \"^error|^warning\" -A5 | head -20; echo BUILT",
+  "summary": "cargo build --example gen_builtins 2>&1 | rg \"^error|^warning\" -A5 | head -20; echo BUILT: BUILT",
+  "text": "cargo build --example gen_builtins 2>&1 | rg \"^error|^warning\" -A5 | head -20; echo BUILT: BUILT",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "06c4421f12619fb1d9418302",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:24:44.025Z",
+  "stored_at": "2026-08-16T17:24:44.026Z"
+}

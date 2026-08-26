@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o copywrap copywrap.php 2>&1|tail -1; ./copywrap 2>&1 | sed 's| in /private.*||'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o copywrap copywrap.php 2>&1|tail -",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o copywrap copywrap.php 2>&1|tail -1; ./copywrap 2>&1 | sed 's| in /private.*||': Compiled 'copywrap.php' -> 'copywrap' Warning: file_get_contents(data://text/plain,hello): Failed to open stream: No such file or directory bool(false) string(0) \"\" Warning: file_put_contents(php://filter/write=string.rot13/resource=c.txt): Failed to open stream: No such file or directory bool(false) bool(false) Warning: file_get_contents(php://filter/read=string.toupper/resource=b.txt): Failed to open stream: No such file or directory bool(false) string(0) \"\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a0e7231b7e9a19446a6b45c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:47:50.214Z",
+  "stored_at": "2026-08-22T19:47:50.215Z"
+}

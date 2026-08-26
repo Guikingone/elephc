@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps aux | grep -E '[c]argo|[r]ustc|[e]lephc' | awk '{print $2, $3, $11, $12}' | head -10; df -h / | tail -1",
+  "summary": "ps aux | grep -E '[c]argo|[r]ustc|[e]lephc' | awk '{print $2, $3, $11, $12}' | head -10; df -h / | tail -1: 35229 84.4 /Users/guillaumeloulier/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc --crate-name 93492 84.0 target/debug/elephc --web 35180 74.1 /Users/guillaumeloulier/.local/bin/codebase-memory-mcp cli ",
+  "text": "ps aux | grep -E '[c]argo|[r]ustc|[e]lephc' | awk '{print $2, $3, $11, $12}' | head -10; df -h / | tail -1: 35229 84.4 /Users/guillaumeloulier/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc --crate-name 93492 84.0 target/debug/elephc --web 35180 74.1 /Users/guillaumeloulier/.local/bin/codebase-memory-mcp cli 35207 0.0 /Users/guillaumeloulier/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test 35208 0.0 /bin/zsh -c 35205 0.0 /bin/zsh -c /dev/disk3s1s1 460Gi 12Gi 6.1Gi 66% 459k 64M 1% /",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9bb560525817273419fe93cd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:01:06.545Z",
+  "stored_at": "2026-08-26T17:01:06.546Z"
+}

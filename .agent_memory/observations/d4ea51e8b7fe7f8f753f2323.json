@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: emitter.instruction(\"mov x5, #1\");                                          // value tag = string\n    emitter.instruction(\"b __rt_sgmd_uri_put\");                -> ",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: emitter.instruction(\"mov x5, #1\");                                          // value tag = string\n    emitter.instruction(\"b __rt_sgmd_uri_put\");                -> emitter.instruction(\"mov x5, #1\");                                          // value tag = string\n    emit_hash_put_aarch64(emitter, \"_meta_key_uri\", 3);\n    emitter.label(\"__rt_sgmd_uri_absent\");                                      // pathless stream: the key is simply not there\n}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d4ea51e8b7fe7f8f753f2323",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:01:07.612Z",
+  "stored_at": "2026-08-17T07:01:07.613Z"
+}

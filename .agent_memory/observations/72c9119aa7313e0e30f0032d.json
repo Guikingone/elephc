@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"STREAM_SERVER_BIND\" src/ | grep -v stream_constants.rs | head",
+  "summary": "About to run: grep -rn \"STREAM_SERVER_BIND\" src/ | grep -v stream_constants.rs | head",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "72c9119aa7313e0e30f0032d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:48:43.329Z",
+  "stored_at": "2026-08-22T09:48:43.330Z"
+}

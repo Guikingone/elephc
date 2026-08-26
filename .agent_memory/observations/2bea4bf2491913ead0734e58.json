@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '480,505p' src/ir_lower/context.rs",
+  "summary": "sed -n '480,505p' src/ir_lower/context.rs: (crate) fn intern_class_name(&mut self, value: &str) -> DataId { self.data.intern_class_name(value) } /// Returns the current known PHP type for a local or `Mixed` when unknown. pub(crate) fn local_type(&self, name: &str) -> PhpType { self.local_types .get(name) .cloned() .unw",
+  "text": "sed -n '480,505p' src/ir_lower/context.rs: (crate) fn intern_class_name(&mut self, value: &str) -> DataId { self.data.intern_class_name(value) } /// Returns the current known PHP type for a local or `Mixed` when unknown. pub(crate) fn local_type(&self, name: &str) -> PhpType { self.local_types .get(name) .cloned() .unwrap_or(PhpType::Mixed) } /// Records a foreach loop-key local whose source is a concretely-indexed /// array, so its runtime key is always an integer (see `foreach_int_key_locals`). pub(crate) fn mark_foreach_int_key(&mut self, name: &str) { self.foreach_int_key_locals.insert(name.to_string()); } /// Returns true when `name` is a foreach loop key known to hold an integer at /// runtime despite its Mixed EIR type, so an indexed write can safely coerce it /// to int instead of promoting the destination to a hash. pub(crate) fn is_foreach_int_key(&self, name: &str) -> bool { self.foreach_int_key_locals.contains(name) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2bea4bf2491913ead0734e58",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:11:41.758Z",
+  "stored_at": "2026-08-18T10:11:41.759Z"
+}

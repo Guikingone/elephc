@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls tests/ | head -30",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls tests/ | head -30: array_flip_assoc_tests.rs array_map_result_heap_tests.rs array_result_type_tests.rs array_set_op_key_preservation_tests.rs builtin_parity_tests.rs cdylib_tests.rs codegen codegen_tests.rs compiler_deter",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls tests/ | head -30: array_flip_assoc_tests.rs array_map_result_heap_tests.rs array_result_type_tests.rs array_set_op_key_preservation_tests.rs builtin_parity_tests.rs cdylib_tests.rs codegen codegen_tests.rs compiler_determinism_tests.rs compiler_security_limits_tests.rs error_class_hierarchy_tests.rs error_tests error_tests.rs eval_object_handle_tests.rs eval_resource_id_tests.rs eval_string_interpolation_tests.rs extension_loaded_tests.rs fixtures foreach_non_iterable_tests.rs fresh_result_ownership_leak_tests.rs function_exists_tests.rs inlined_callee_local_leak_tests.rs ir_backend_smoke_test.rs lexer_tests lexer_tests.rs nan_bool_coercion_tests.rs nan_string_coercion_tests.rs native_pcre2_shim_tests.rs null_coalesce_merge_tests.rs null_value_codegen_tests.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f1154d1a21c9546b07360313",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:01:48.214Z",
+  "stored_at": "2026-08-23T13:01:48.215Z"
+}

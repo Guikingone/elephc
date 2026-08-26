@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/wire_ctxshape.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/wire_ctxshape.py: import os\nimport re\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n# 1. r",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/wire_ctxshape.py: import os\nimport re\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n# 1. register the runtime module\np = 'src/codegen_support/runtime/io/mod.rs'\ns = open(p).read()\nassert 'mod stream_context_shape;' not in s\nm = re.search(r'^mod fd_set_append;$', s, re.M)\nassert m\ns = s[:m.start()] + 'mod stream_context_shape;\\n' + s[m.start():]\nm2 = re.search(r'^pub\\(crate\\) use fd_set_append::emit_fd_set_append;$', s, re.M)\nassert m2\ns = s[:m2.start()] + 'pub(crate) use stream_context_shape::emit_stream_context_options_shape_ok;\\n' + s[m2.start():]\nop",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "be5dbbe2e645a12ac62e76b9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T10:07:02.576Z",
+  "stored_at": "2026-08-17T10:07:02.576Z"
+}

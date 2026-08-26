@@ -1,0 +1,16 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/r5.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/r5.php: <?php\n$path = __DIR__ . \"/lines.txt\";\n$h = fopen($path, \"r\");\n$n = 0;\n$t = microtime(true);\nwhile (($l = fgets($h)) !== false) {\n   ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/r5.php: <?php\n$path = __DIR__ . \"/lines.txt\";\n$h = fopen($path, \"r\");\n$n = 0;\n$t = microtime(true);\nwhile (($l = fgets($h)) !== false) {\n    $n++;\n    if ($n % 5000 === 0) {\n        echo $n, \" \", (int)((microtime(true) - $t) * 1000000), \"us\\n\";\n        $t = microtime(true);\n    }\n}\nfclose($h);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "066d3eb284199c4eb5fec5ad",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:01:09.432Z",
+  "stored_at": "2026-08-24T17:01:09.432Z",
+  "low_signal": true
+}

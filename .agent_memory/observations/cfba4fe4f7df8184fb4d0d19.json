@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"TypeSpec::Void\\b\" src/ crates/ | grep -v \"catalog_data.rs\" | grep -v \"catalog_surfaces.rs\" | head -12",
+  "summary": "grep -rn \"TypeSpec::Void\\b\" src/ crates/ | grep -v \"catalog_data.rs\" | grep -v \"catalog_surfaces.rs\" | head -12: src/builtins/docs.rs:35: TypeSpec::Void => \"void\".to_string(), src/builtins/convert.rs:31: TypeSpec::Void => PhpType::Void, src/builtins/convert.rs:82: assert_eq!(type_spec_to_php(&TypeSpec::Void), PhpType::",
+  "text": "grep -rn \"TypeSpec::Void\\b\" src/ crates/ | grep -v \"catalog_data.rs\" | grep -v \"catalog_surfaces.rs\" | head -12: src/builtins/docs.rs:35: TypeSpec::Void => \"void\".to_string(), src/builtins/convert.rs:31: TypeSpec::Void => PhpType::Void, src/builtins/convert.rs:82: assert_eq!(type_spec_to_php(&TypeSpec::Void), PhpType::Void);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cfba4fe4f7df8184fb4d0d19",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:27:27.389Z",
+  "stored_at": "2026-08-21T17:27:27.389Z"
+}

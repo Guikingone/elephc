@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"expect_data(inst)\" -A 3 src/codegen/lower_inst/strings.rs | head -12",
+  "summary": "grep -rn \"expect_data(inst)\" -A 3 src/codegen/lower_inst/strings.rs | head -12: src/codegen/lower_inst/strings.rs:28: let data_id = expect_data(inst)?; src/codegen/lower_inst/strings.rs-29- let (label, len) = ctx.intern_string_data(data_id)?; src/codegen/lower_inst/strings.rs-30- let (ptr_reg, len_reg) = abi::string_re",
+  "text": "grep -rn \"expect_data(inst)\" -A 3 src/codegen/lower_inst/strings.rs | head -12: src/codegen/lower_inst/strings.rs:28: let data_id = expect_data(inst)?; src/codegen/lower_inst/strings.rs-29- let (label, len) = ctx.intern_string_data(data_id)?; src/codegen/lower_inst/strings.rs-30- let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter); src/codegen/lower_inst/strings.rs-31- abi::emit_symbol_address(ctx.emitter, ptr_reg, &label); -- src/codegen/lower_inst/strings.rs:38: let data_id = expect_data(inst)?; src/codegen/lower_inst/strings.rs-39- let class_name = ctx src/codegen/lower_inst/strings.rs-40- .module src/codegen/lower_inst/strings.rs-41- .data",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "37ad7ccdc7d31bce4d515921",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T19:53:11.019Z",
+  "stored_at": "2026-08-18T19:53:11.019Z"
+}

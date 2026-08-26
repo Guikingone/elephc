@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --lib 2>&1 | rg \"^test result|FAILED\" | head -5; cargo test --test error_tests 2>&1 | rg \"^test result|FAILED\" | head -3",
+  "summary": "cargo test --lib 2>&1 | rg \"^test result|FAILED\" | head -5; cargo test --test error_tests 2>&1 | rg \"^test result|FAILED\" | head -3: test result: ok. 1315 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 72.31s test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in ",
+  "text": "cargo test --lib 2>&1 | rg \"^test result|FAILED\" | head -5; cargo test --test error_tests 2>&1 | rg \"^test result|FAILED\" | head -3: test result: ok. 1315 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 72.31s test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s test io_builtins::streams::test_error_fwrite_wrong_args ... FAILED test result: FAILED. 1294 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 43.88s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d06657fdb38dbfbb060f3ae2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:43:16.576Z",
+  "stored_at": "2026-08-17T07:43:16.577Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/phpwrap_full.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/phpwrap_full.php: <?php\n// Every php:// sub-stream, through the one-shot writer and the one-shot reader.\nforeach ([\"php://output\", \"php://stdout\",",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/phpwrap_full.php: <?php\n// Every php:// sub-stream, through the one-shot writer and the one-shot reader.\nforeach ([\"php://output\", \"php://stdout\", \"php://stderr\", \"php://memory\", \"php://temp\",\n          \"php://input\"] as $u) {\n    echo \"W \", str_pad($u, 14);\n    $n = @file_put_contents($u, \"[$u]\");\n    var_dump($n);\n}\nforeach ([\"php://memory\", \"php://temp\", \"php://input\", \"php://output\", \"php://stdout\"] as $u) {\n    echo \"R \", str_pad($u, 14);\n    $s = @file_get_contents($u);\n    var_dump($s);\n}\n// And whether the writer goes through the output buffer.\nob_start();\necho \"a\";\nfile_put_contents(\"php://output\", \"b\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "baf9e420ca3c130fdde50a32",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:17:51.127Z",
+  "stored_at": "2026-08-22T21:17:51.128Z"
+}

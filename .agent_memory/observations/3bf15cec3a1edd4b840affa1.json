@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - ✅ [stat = CHOIX DE TRIADE](php-permission-rule-is-triad-selection.md) · [ABI de wrapper = son TYPE DE RETOUR](wrapper-method-abi-follows-its-return-type.md) · -> - ✅ [ZÉRO PHP parsé à la compilation]",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - ✅ [stat = CHOIX DE TRIADE](php-permission-rule-is-triad-selection.md) · [ABI de wrapper = son TYPE DE RETOUR](wrapper-method-abi-follows-its-return-type.md) · -> - ✅ [ZÉRO PHP parsé à la compilation](php-parsed-at-compile-time-reaches-zero.md) · 🎯 [hot-reload spec v2](hot-reload-feasibility-measurements.md) PR #680 (goulot `as`) · 🎯🔴 [94 % de l'ASM = métadonnées](emitted-asm-is-metadata-not-php-code.md) · [`mixed $callback` = échelle RECOPIÉE par site](mixed-callable-ladder-is-inlined-per-call-site.md) · [les OUTILS qui lisent un fichier comme du TEXTE font partie de son INTERFACE](rust-synthetic-class-conversion-campaign.md).\n- Fiche",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3bf15cec3a1edd4b840affa1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:41:05.590Z",
+  "stored_at": "2026-08-23T13:41:05.590Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "pkill -f \"cargo-nextest\" 2>/dev/null; sleep 1; pgrep -f \"cargo-nextest\" >/dev/null && echo STILL || echo STOPPED; rtk proxy rg -n \"getCurrentLine|SplFileObject\" tests/php_oracle_manifest_tests.rs | head -8",
+  "summary": "pkill -f \"cargo-nextest\" 2>/dev/null; sleep 1; pgrep -f \"cargo-nextest\" >/dev/null && echo STILL || echo STOPPED; rtk proxy rg -n \"getCurrentLine|SplFileObject\" tests/php_oracle_manifest_tests.rs | head -8: STOPPED 180: .expect(\"SplFileObject manifest\"); 183: .expect(\"SplFileObject methods\") 186: .expect(\"SplFileObject",
+  "text": "pkill -f \"cargo-nextest\" 2>/dev/null; sleep 1; pgrep -f \"cargo-nextest\" >/dev/null && echo STILL || echo STOPPED; rtk proxy rg -n \"getCurrentLine|SplFileObject\" tests/php_oracle_manifest_tests.rs | head -8: STOPPED 180: .expect(\"SplFileObject manifest\"); 183: .expect(\"SplFileObject methods\") 186: .expect(\"SplFileObject::getCurrentLine manifest\"); 187: assert_eq!(current_line[\"alias_of\"], \"SplFileObject::fgets\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3752d9c82fab092477eb62e1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T18:57:32.308Z",
+  "stored_at": "2026-08-16T18:57:32.308Z"
+}

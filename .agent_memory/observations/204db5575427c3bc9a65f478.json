@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc 2>&1|tail -1; echo \"=== stream_type in the meta helper:\"; rg -n \"stream_type|__rt_stream_type_name|generic_socket|SOCKET\" src/codegen_support/runtime/io/stream_get_meta_data.rs | head -20",
+  "summary": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc 2>&1|tail -1; echo \"=== stream_type in the meta helper:\"; rg -n \"stream_type|__rt_stream_type_name|generic_socket|SOCKET\" src/codegen_support/runtime/io/stream_get_meta_data.rs | head -20: ack above still ",
+  "text": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc 2>&1|tail -1; echo \"=== stream_type in the meta helper:\"; rg -n \"stream_type|__rt_stream_type_name|generic_socket|SOCKET\" src/codegen_support/runtime/io/stream_get_meta_data.rs | head -20: ack above still 198: // stream_type, mode, unread_bytes, seekable — and finally `uri`. elephc had `unread_bytes` 199: // third and `stream_type` ahead of `wrapper_type`. Measured key-by-key on `php -n` 8.5.6. 232: emit_set_str_slots(emitter, \"_meta_key_stream_type\", 11, 56, 64); 446:/// `php://`, the same discriminator `__rt_stream_type_name` uses — `t` is `temp` and nothing 683: emitter.instruction(\"mov QWORD PTR [rbp - 64], r10\"); // save the stream_type pointer 684: emitter.instruction(\"mov QWORD PTR [rbp - 72], 10\"); // save the stream_type length 690: emitter.instruction(\"mov QWORD PTR [rbp - 64], r10\"); // save the stream_type pointer 691: emitter.instruction(\"mov QWORD PTR [rbp - 72], 5\"); // save the stream_type length 696: emitter.instruction(\"call __rt_stream_type_name\"); // rax = name or 0, rdx = length 824: emit_set_str_slots_x86(emitter, \"_meta_key_stream_type\", 11, 64, 72);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "204db5575427c3bc9a65f478",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:12:27.250Z",
+  "stored_at": "2026-08-17T13:12:27.252Z"
+}

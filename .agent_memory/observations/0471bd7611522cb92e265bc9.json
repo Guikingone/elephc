@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxmixed && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxmixed && printf '%s\\n' '<?php' '$o = json_decode(\"[]\", true);' '$c = stream_context_create($o);' 'stream_context_set_option($c, \"http\", \"method\", \"POST\");' 'echo \"survived-mixed\";' > p.php && php -n p.php 2>&1 | head -2; echo \"=== elephc =… [+218 chars truncated]",
+  "summary": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxmixed && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79",
+  "text": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxmixed && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxmixed && printf '%s\\n' '<?php' '$o = json_decode(\"[]\", true);' '$c = stream_context_create($o);' 'stream_context_set_option($c, \"http\", \"method\", \"POST\");' 'echo \"survived-mixed\";' > p.php && php -n p.php 2>&1 | head -2; echo \"=== elephc ===\"; rm -rf run && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php 2>&1 | tail -1 && mkdir -p run && cp p run/p && cd run && ./p; echo \"|exit $?\": survived-mixed=== elephc === Compiled 'p.php' -> 'p' Fatal error: Uncaught ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxmixed/p.php:3 Stack trace: #0 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxmixed/p.php(3): stream_context_create(Array) #1 {main} thrown in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxmixed/p.php on line 3 |exit 255",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0471bd7611522cb92e265bc9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:39:45.648Z",
+  "stored_at": "2026-08-22T15:39:45.649Z"
+}

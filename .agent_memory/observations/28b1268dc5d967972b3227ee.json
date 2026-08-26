@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '147,182p' tests/codegen/support/compiler.rs",
+  "summary": "rtk proxy sed -n '147,182p' tests/codegen/support/compiler.rs:  heap_debug: bool, null_repr: elephc::codegen::NullRepr, with_regex: bool, php_version: elephc::php_version::PhpVersion, ) -> (String, String, TestLinkRequirements) { let (user_asm, runtime_asm, link_requirements) = try_compile_source_to_asm_with_defines_re",
+  "text": "rtk proxy sed -n '147,182p' tests/codegen/support/compiler.rs:  heap_debug: bool, null_repr: elephc::codegen::NullRepr, with_regex: bool, php_version: elephc::php_version::PhpVersion, ) -> (String, String, TestLinkRequirements) { let (user_asm, runtime_asm, link_requirements) = try_compile_source_to_asm_with_defines_repr( source, dir, defines, heap_size, gc_stats, heap_debug, null_repr, with_regex, php_version, ); ( user_asm.expect(\"EIR backend codegen failed for codegen fixture\"), runtime_asm, link_requirements, ) } /// Compiles a snippet and returns the EIR backend's diagnostic text, asserting that the /// backend refused the program. /// /// Backend refusals (`unsupported EIR backend feature: …`) are raised after type checking, /// so `tests/error_tests.rs` — which stops at the checker — cannot observe them. Use this /// for shapes elephc deliberately declines to compile. pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "28b1268dc5d967972b3227ee",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:51:43.734Z",
+  "stored_at": "2026-08-16T17:51:43.735Z"
+}

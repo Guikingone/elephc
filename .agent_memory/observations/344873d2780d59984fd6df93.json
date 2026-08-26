@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff docs/php/compatibility.md | head -30",
+  "summary": "git diff docs/php/compatibility.md | head -30: diff --git a/docs/php/compatibility.md b/docs/php/compatibility.md index 2d3a20ecc1..95216481aa 100644 --- a/docs/php/compatibility.md +++ b/docs/php/compatibility.md @@ -10,7 +10,7 @@ sidebar: Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 inter",
+  "text": "git diff docs/php/compatibility.md | head -30: diff --git a/docs/php/compatibility.md b/docs/php/compatibility.md index 2d3a20ecc1..95216481aa 100644 --- a/docs/php/compatibility.md +++ b/docs/php/compatibility.md @@ -10,7 +10,7 @@ sidebar: Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions). -Overall builtin coverage: **483 / 2030** (24%). +Overall builtin coverage: **484 / 2030** (24%). ## Builtin coverage by PHP module @@ -55,7 +55,7 @@ Overall builtin coverage: **483 / 2030** (24%). | `sockets` | 1 / 37 | 3% | 1 | 1 | | `sodium` | 0 / 110 | 0% | 0 | 0 | | `spl` | 15 / 15 | 100% | 15 | 15 | -| `standard` | 373 / 542 | 69% | 373 | 348 | +| `standard` | 374 / 542 | 69% | 374 | 348 | | `sysvmsg` | 0 / 7 | 0% | 0 | 0 | | `sysvsem` | 0 / 4 | 0% | 0 | 0 | | `sysvshm` | 0 / 7 | 0% | 0 | 0 |",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "344873d2780d59984fd6df93",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T12:15:11.669Z",
+  "stored_at": "2026-08-15T12:15:11.670Z"
+}

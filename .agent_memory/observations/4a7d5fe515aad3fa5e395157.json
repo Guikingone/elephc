@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gz_wrapper_under_elephc.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gz_wrapper_under_elephc.py: \"\"\"Does elephc already answer the `compress.zlib://` half of every `gz*` pair the way php does?\n\n`gz_equivalence.py` me",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gz_wrapper_under_elephc.py: \"\"\"Does elephc already answer the `compress.zlib://` half of every `gz*` pair the way php does?\n\n`gz_equivalence.py` measured, in php itself, that all 15 members of the family ARE the plain\nstream API over that wrapper. So a prelude spelling `gzread` as `fread` inherits whatever elephc\nalready answers for the wrapper — which makes THAT the thing to measure before writing one.\n\nTwo columns per case:\n  wrapper — elephc's answer to the `compress.zlib://` spelling, against php's.\n  gz      — elephc's answer to the `gz*` spelling today, to record the starting point.\n\nA `DIFFERS` in the wrapper colu",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4a7d5fe515aad3fa5e395157",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:42:09.326Z",
+  "stored_at": "2026-08-21T10:42:09.327Z"
+}

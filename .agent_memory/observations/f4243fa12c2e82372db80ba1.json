@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_scanf.txt 2>&1 | tail -3",
+  "summary": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_scanf.txt 2>&1 | tail -3: [worktree-streams-csv-signature 0b68da9f4] feat(streams): sscanf()/fscanf() accept php's by-reference $vars outp",
+  "text": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_scanf.txt 2>&1 | tail -3: [worktree-streams-csv-signature 0b68da9f4] feat(streams): sscanf()/fscanf() accept php's by-reference $vars output form 13 files changed, 940 insertions(+), 58 deletions(-)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f4243fa12c2e82372db80ba1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:16:19.799Z",
+  "stored_at": "2026-08-18T11:16:19.800Z"
+}

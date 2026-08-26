@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,60p' src/dir_prelude.rs",
+  "summary": "sed -n '1,60p' src/dir_prelude.rs: nd php's //! methods throw `TypeError: Directory::read(): cannot use Directory resource after it has been //! closed`, where the underlying builtin reports the closed handle in its own words. The VALUES //! — `Directory|false`, `$path`, `$handle`, the readdir-order listing, `read()`'s",
+  "text": "sed -n '1,60p' src/dir_prelude.rs: nd php's //! methods throw `TypeError: Directory::read(): cannot use Directory resource after it has been //! closed`, where the underlying builtin reports the closed handle in its own words. The VALUES //! — `Directory|false`, `$path`, `$handle`, the readdir-order listing, `read()`'s `string|false`, //! `rewind()`/`close()` returning null — all match. mod detect; /// The elephc-PHP directory prelude: the `Directory` class and the `dir()` function. pub(crate) const DIR_PRELUDE_SRC: &str = r#\"<?php final class Directory { public string $path = ''; public mixed $handle = null; public static bool $__elephc_opening = false; public function __construct() { if (!Directory::$__elephc_opening) { throw new \\Error('Cannot directly construct Directory, use dir() instead'); } } public function read(): string|false { $handle = $this->handle; return readdir($handle); } public function rewind(): void {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ebb69f677ae21cf746bee04d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:39:47.655Z",
+  "stored_at": "2026-08-16T15:39:47.656Z"
+}

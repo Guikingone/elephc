@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/byrefmsg.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/byrefmsg.txt: fix(checker): a by-reference array parameter widened the CALLER's storage without telling it, so ordinary PHP printed addresses\n\n```php\n",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/byrefmsg.txt: fix(checker): a by-reference array parameter widened the CALLER's storage without telling it, so ordinary PHP printed addresses\n\n```php\nfunction f(array &$a): void { foreach ($a as $k => $x) { $a[$k] = $x * 2; } }\n$arr = [1, 2, 3]; f($arr); var_dump($arr);\n```\n\nphp answers `[2, 4, 6]`. elephc answered three ADDRESSES — `int(4329438416)`,\n`int(4329438608)`, `int(4329438720)` — in silence, on a shape as common as PHP\ngets. Measured radius before the fix: arrays of ints, int-valued associative\narrays, the same body reached through a method, and an untyped `&$a`; string,\nfloat and already-mixed ar",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bf43c391ee1864c9c29b47f2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:25:52.627Z",
+  "stored_at": "2026-08-16T20:25:52.627Z"
+}

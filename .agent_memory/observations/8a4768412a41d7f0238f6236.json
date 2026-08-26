@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,60p' src/codegen_support/runtime/system/preg_split.rs",
+  "summary": "sed -n '1,60p' src/codegen_support/runtime/system/preg_split.rs:  = regmatches_ptr_off + 8; let pattern_ptr_off = nmatch_off + 8; let pattern_len_off = pattern_ptr_off + 8; let subject_ptr_off = pattern_len_off + 8; let subject_len_off = subject_ptr_off + 8; let limit_off = subject_len_off + 8; let preg_flags_off = lim",
+  "text": "sed -n '1,60p' src/codegen_support/runtime/system/preg_split.rs:  = regmatches_ptr_off + 8; let pattern_ptr_off = nmatch_off + 8; let pattern_len_off = pattern_ptr_off + 8; let subject_ptr_off = pattern_len_off + 8; let subject_len_off = subject_ptr_off + 8; let limit_off = subject_len_off + 8; let preg_flags_off = limit_off + 8; let regex_flags_off = preg_flags_off + 8; let pattern_cstr_off = regex_flags_off + 8; let array_ptr_off = pattern_cstr_off + 8; let subject_cstr_off = array_ptr_off + 8; let current_cstr_off = subject_cstr_off + 8; let current_elephc_off = current_cstr_off + 8; let split_count_off = current_elephc_off + 8; let piece_ptr_off = split_count_off + 8; let piece_len_off = piece_ptr_off + 8; let piece_offset_off = piece_len_off + 8; let pair_ptr_off = piece_offset_off + 8; let mixed_ptr_off = pair_ptr_off + 8; let capture_idx_off = mixed_ptr_off + 8; let stack_size = (capture_idx_off + 32 + 15) & !15; let save_off = stack_size - 16;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8a4768412a41d7f0238f6236",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:37:20.221Z",
+  "stored_at": "2026-08-16T15:37:20.221Z"
+}

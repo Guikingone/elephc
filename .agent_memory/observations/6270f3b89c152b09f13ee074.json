@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1560,1585p' tests/ir_backend_smoke_test.rs",
+  "summary": "sed -n '1560,1585p' tests/ir_backend_smoke_test.rs: /// Verifies `unset($local)` writes PHP null into local slots on the EIR backend. #[test] fn ir_backend_handles_unset_locals() { for (name, source, expected) in [ ( \"unset_int_local\", \"<?php $x = 42; unset($x); echo is_null($x) ? 'null' : 'value';\", \"null\", ), ( \"unse",
+  "text": "sed -n '1560,1585p' tests/ir_backend_smoke_test.rs: /// Verifies `unset($local)` writes PHP null into local slots on the EIR backend. #[test] fn ir_backend_handles_unset_locals() { for (name, source, expected) in [ ( \"unset_int_local\", \"<?php $x = 42; unset($x); echo is_null($x) ? 'null' : 'value';\", \"null\", ), ( \"unset_multiple_locals\", \"<?php $a = 1; $b = 'owned' . $argc; unset($a, $b); echo is_null($a) ? 'A' : 'a'; echo is_null($b) ? 'B' : 'b';\", \"AB\", ), ] { assert_eq!(compile_and_run_ir_backend(name, source), expected); } } /// Verifies `--gc-stats` is honored by the EIR backend main epilogue. #[test] fn ir_backend_emits_gc_stats_when_requested() { let run = compile_ir_backend_and_run_with_compile_args( \"gc_stats\", \"<?php echo \\\"ok\\\";\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6270f3b89c152b09f13ee074",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:45:07.565Z",
+  "stored_at": "2026-08-25T08:45:07.566Z"
+}

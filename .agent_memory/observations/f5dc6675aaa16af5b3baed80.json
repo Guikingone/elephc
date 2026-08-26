@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git log --oneline -4 -- src/codegen_support/runtime/io/stream_select.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git log --oneline -4 -- src/codegen_support/runtime/io/stream_select.rs: 9cd2d922d fix(streams): stream_select() reported a php://memory stream READY, where php refuses it d63b3f446 fix(streams): stream_select() threw withou",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git log --oneline -4 -- src/codegen_support/runtime/io/stream_select.rs: 9cd2d922d fix(streams): stream_select() reported a php://memory stream READY, where php refuses it d63b3f446 fix(streams): stream_select() threw without saying which stream it could not represent 3fb364c2a fix(streams): stream_select() SEGFAULTED on a closed stream, and answered a count where php throws 9a4d1e939 fix(streams): stream_select() crashed on a null set, and FILE_APPEND truncated",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f5dc6675aaa16af5b3baed80",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:31:24.367Z",
+  "stored_at": "2026-08-23T07:31:24.368Z"
+}

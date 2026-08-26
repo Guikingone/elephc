@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nfor x in d['drifts']:\n    if x['category']=='function-signature' and x['symbol'] in ('stream_socket_client','stream_socket_accept','stream_context_create','stream_filter_append','fopen'):\n        e=x['elephc']['signature']; p=x['php']['signature']\n        print(x['symbol'])\n        print('  elephc:', [(q['name'],q.get('type'),q.get('optional'),q.get('by_reference')) for q in e['parameters']], '->', e['return_type'])\n        print('  php   :', [(q['name'],q.get('type'),q.get('o… [+85 chars truncated]",
+  "summary": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nfor x in d['drifts']:\n    if x['category']=='function-signature' and x['symbol'] in ('stream_socket_client','stream_socket_accept','stream_context_create','stream_filter_append','fopen'):\n        e=x['",
+  "text": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nfor x in d['drifts']:\n    if x['category']=='function-signature' and x['symbol'] in ('stream_socket_client','stream_socket_accept','stream_context_create','stream_filter_append','fopen'):\n        e=x['elephc']['signature']; p=x['php']['signature']\n        print(x['symbol'])\n        print('  elephc:', [(q['name'],q.get('type'),q.get('optional'),q.get('by_reference')) for q in e['parameters']], '->', e['return_type'])\n        print('  php   :', [(q['name'],q.get('type'),q.get('optional'),q.get('by_reference')) for q in p['parameters']], '->', p['return_type'])\n\": False, False), ('filter_name', 'string', False, False), ('mode', 'int', True, False), ('params', 'mixed', True, False)] -> None stream_socket_accept elephc: [('socket', 'mixed', False, False), ('timeout', 'mixed', True, False), ('peer_name', 'mixed', True, True)] -> mixed php : [('socket', None, False, False), ('timeout', '?float', True, False), ('peer_name', None, True, True)] -> None stream_socket_client elephc: [('address', 'string', False, False), ('error_code', 'mixed', True, True), ('error_message', 'mixed', True, True), ('timeout', 'mixed', True, False), ('flags', 'int', True, False), ('context', 'mixed', True, False), ('peername', 'mixed', True, False)] -> mixed php : [('address', 'string', False, False), ('error_code', None, True, True), ('error_message', None, True, True), ('timeout', '?float', True, False), ('flags', 'int', True, False), ('context', None, True, False)] -> None",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c32800184c04477b625d98f8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:21:24.101Z",
+  "stored_at": "2026-08-14T14:21:24.102Z"
+}

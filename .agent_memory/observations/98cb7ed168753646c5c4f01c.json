@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -d /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target 2>&1; find /Users/guillaumeloulier/PhpstormProjects/oss/elephc -maxdepth 6 -name \"elephc\" -type f 2>/dev/null | head -5",
+  "summary": "ls -d /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target 2>&1; find /Users/guillaumeloulier/PhpstormProjects/oss/elephc -maxdepth 6 -name \"elephc\" -type f 2>/dev/null | head -5: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-",
+  "text": "ls -d /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target 2>&1; find /Users/guillaumeloulier/PhpstormProjects/oss/elephc -maxdepth 6 -name \"elephc\" -type f 2>/dev/null | head -5: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/target/debug/elephc /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/target/debug/elephc",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "98cb7ed168753646c5c4f01c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:09.302Z",
+  "stored_at": "2026-08-14T14:11:09.303Z"
+}

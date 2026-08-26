@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eval_chunks.sh",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eval_chunks.sh: #!/bin/zsh\n# `codegen::eval::` alone is 972 tests, each compiling AND linking a PHP program. Run whole, it\n# outlives the background-t",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eval_chunks.sh: #!/bin/zsh\n# `codegen::eval::` alone is 972 tests, each compiling AND linking a PHP program. Run whole, it\n# outlives the background-task horizon and gets killed with nothing written — four times so far.\n# Split by name prefix so every chunk finishes in a few minutes, and RESUME: a chunk already in\n# the verdict file is skipped.\n#\n# The last chunk is defined by EXCLUSION (--skip of every prefix above it) so no test can fall\n# between the named ones. Their counts are summed at the end against the 972 the binary lists,\n# which is what turns \"looks covered\" into \"is covered\".\ncd /Users/guillaumel",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "251cd4527ae99524ce62a2fb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T15:40:41.578Z",
+  "stored_at": "2026-08-20T15:40:41.579Z"
+}

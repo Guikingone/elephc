@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub\" src/codegen_support/runtime/strings/nan_string_coercion_warning.rs | head; echo \"--- callers:\"; grep -rn \"_diag_nan_coerced_string\\|nan_coerced_string\" src/ | grep -v \"nan_string_coercion_warning.rs\" | head",
+  "summary": "grep -n \"pub\" src/codegen_support/runtime/strings/nan_string_coercion_warning.rs | head; echo \"--- callers:\"; grep -rn \"_diag_nan_coerced_string\\|nan_coerced_string\" src/ | grep -v \"nan_string_coercion_warning.rs\" | head: 48:pub const NAN_STRING_COERCION_MESSAGES: &[(&str, &str)] = &[( 78:pub fn nan_string_coercion_war",
+  "text": "grep -n \"pub\" src/codegen_support/runtime/strings/nan_string_coercion_warning.rs | head; echo \"--- callers:\"; grep -rn \"_diag_nan_coerced_string\\|nan_coerced_string\" src/ | grep -v \"nan_string_coercion_warning.rs\" | head: 48:pub const NAN_STRING_COERCION_MESSAGES: &[(&str, &str)] = &[( 78:pub fn nan_string_coercion_warning_enabled() -> bool { 91:pub fn emit_nan_string_coercion_warning(emitter: &mut Emitter) { 197:pub fn emit_nan_string_coercion_probe(emitter: &mut Emitter, skip_label: &str) { --- callers: src/codegen_support/runtime/data/fixed.rs:764: // -- PHP 8.5's NAN-to-string coercion warning, shared with `__rt_warn_nan_coerced_string` --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6bb3d3ebc88b63b629f1063d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:49:29.254Z",
+  "stored_at": "2026-08-18T20:49:29.255Z"
+}

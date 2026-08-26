@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_success_msg.py\ngrep -rn \"\\.success, \\\"[^\\\"]*\\\", [a-z_]*\\.diagnostics\" tests/codegen/ | wc -l",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_success_msg.py\ngrep -rn \"\\.success, \\\"[^\\\"]*\\\", [a-z_]*\\.diagnostics\" tests/codegen/ | wc -l: restored stderr in 64 success-assertion messages a",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_success_msg.py\ngrep -rn \"\\.success, \\\"[^\\\"]*\\\", [a-z_]*\\.diagnostics\" tests/codegen/ | wc -l: restored stderr in 64 success-assertion messages across 12 files 0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1a540fff88d1ef8da4201583",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:38:28.670Z",
+  "stored_at": "2026-08-18T15:38:28.671Z"
+}

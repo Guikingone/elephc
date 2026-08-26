@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockt1.php','w').write('''<?php\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\n$m = stream_get_meta_data($pair[0]);\nvar_dump(array_key_exists(\"wrapper_type\", $m), array_key_exists(\"uri\", $m), $m[\"stream_type\"]);\n$path = \"sockmeta.sock\";\n$srv = stream_socket_server(\"unix://\" . $path);\n$m2 = stream_get_meta_data($srv);\nvar_dump(array_key_exists(\"wrapper_type\", $m2), $m2[\"uri\"], $… [+513 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockt1.php','w').write('''<?php\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\n$m = stream_get_meta_",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockt1.php','w').write('''<?php\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\n$m = stream_get_meta_data($pair[0]);\nvar_dump(array_key_exists(\"wrapper_type\", $m), array_key_exists(\"uri\", $m), $m[\"stream_type\"]);\n$path = \"sockmeta.sock\";\n$srv = stream_socket_server(\"unix://\" . $path);\n$m2 = stream_get_meta_data($srv);\nvar_dump(array_key_exists(\"wrapper_type\", $m2), $m2[\"uri\"], $m2[\"stream_type\"]);\n$cli = stream_socket_client(\"unix://\" . $path);\n$m3 = stream_get_meta_data($cli);\nvar_dump(array_key_exists(\"wrapper_type\", $m3), $m3[\"uri\"]);\n$acc = stream_socket_accept($srv);\n$m4 = stream_get_meta_data($acc);\nvar_dump(array_key_exists(\"wrapper_type\", $m4), array_key_exists(\"uri\", $m4), $m4[\"stream_type\"]);\nfclose($acc); fclose($cli); fclose($srv); fclose($pair[0]); fclose($pair[1]);\nunlink($path);\n''')\nPY\nzsh difftests.sh sockt1 2>&1 | head -12; echo \"=== php output:\"; cat sockt1_p.txt: sockt1 IDENTICAL === php output: bool(false) bool(false) string(14) \"generic_socket\" bool(false) string(20) \"unix://sockmeta.sock\" string(11) \"unix_socket\" bool(false) string(20) \"unix://sockmeta.sock\" bool(false) bool(false) string(11) \"unix_socket\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bb0f03852e876e187fe751e2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:45:15.221Z",
+  "stored_at": "2026-08-17T13:45:15.221Z"
+}

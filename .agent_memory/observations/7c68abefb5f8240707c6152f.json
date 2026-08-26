@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_feof_wrapper_pending.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_feof_wrapper_pending.py: \"\"\"`feof()` reported EOF on a wrapper that was still HOLDING bytes.\n\nphp's `feof()` is false while the stream's read b",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_feof_wrapper_pending.py: \"\"\"`feof()` reported EOF on a wrapper that was still HOLDING bytes.\n\nphp's `feof()` is false while the stream's read buffer has anything left, because the next read\nwill answer from it. elephc's wrapper branch tail-calls `stream_eof()`, which reports the\nWRAPPER's position — already past the buffered bytes. MEASURED on `php -n` 8.5.6: after\n`fgets($h, 4)` on a wrapper serving \"aa,bb,cc\\\\n…\", `feof($h)` is `false` and the next `fgets`\nanswers \"bb,cc\\\\n\"; elephc said `true`. `fpassthru($h)` then answered `int(0)` instead of writing\nthe remaining 22 bytes, for the same reason.\n\nThe buffer is prob",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7c68abefb5f8240707c6152f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:19:28.307Z",
+  "stored_at": "2026-08-21T13:19:28.308Z"
+}

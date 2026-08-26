@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"RuntimeFnId::Fscanf\\|RuntimeFnId::Fpassthru\\|RuntimeFnId::Ftruncate\\|RuntimeFnId::Fstat\\|RuntimeFnId::Fflush\\|RuntimeFnId::Fsync\\|RuntimeFnId::Fdatasync\\|RuntimeFnId::Tmpfile\\|RuntimeFnId::Tempnam\\|RuntimeFnId::Umask\\|RuntimeFnId::Popen\\|RuntimeFnId::Pclose\\|RuntimeFnId::Rewinddir\\|RuntimeFnId::Copy\\b\" src/ir/runtime_fn.rs | head -30",
+  "summary": "About to run: grep -rn \"RuntimeFnId::Fscanf\\|RuntimeFnId::Fpassthru\\|RuntimeFnId::Ftruncate\\|RuntimeFnId::Fstat\\|RuntimeFnId::Fflush\\|RuntimeFnId::Fsync\\|RuntimeFnId::Fdatasync\\|RuntimeFnId::Tmpfile\\|RuntimeFnId::T",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fc6867e752d8ff216e379e88",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:17:37.549Z",
+  "stored_at": "2026-08-14T14:17:37.549Z",
+  "low_signal": true
+}

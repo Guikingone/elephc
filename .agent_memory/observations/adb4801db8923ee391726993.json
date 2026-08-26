@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"stderr\" docs/php/functions.md docs/internals/the-runtime.md docs/php/streams.md",
+  "summary": "grep -n \"stderr\" docs/php/functions.md docs/internals/the-runtime.md docs/php/streams.md: nless suppression is active | `x1`/`x2` = message string | — | docs/internals/the-runtime.md:488:| `__rt_stack_overflow` | Write `Fatal error: Maximum call stack size reached. Infinite recursion?` to stderr and exit with status 25",
+  "text": "grep -n \"stderr\" docs/php/functions.md docs/internals/the-runtime.md docs/php/streams.md: nless suppression is active | `x1`/`x2` = message string | — | docs/internals/the-runtime.md:488:| `__rt_stack_overflow` | Write `Fatal error: Maximum call stack size reached. Infinite recursion?` to stderr and exit with status 255 | — | does not return | docs/internals/the-runtime.md:521:The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`, which reads the published `_exc_value` and writes `Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stderr before exiting with status 255. The class name comes from `_class_name_entries`, the message from payload offsets 8/16, the line from the payload's creation-line slot (`THROWABLE_CREATION_LINE_OFFSET`, formatted through `__rt_itoa`), and the file from `_script_source_file`. An empty message drops the `\": \"` separator, and a zero line drops the whole ` in <file>:<line>` suffix, both matching reference PHP.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "adb4801db8923ee391726993",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:39:25.214Z",
+  "stored_at": "2026-08-18T15:39:25.215Z"
+}

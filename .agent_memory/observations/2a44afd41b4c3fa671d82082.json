@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_ftostr_warn.py\ncargo test --test codegen_tests -- codegen::math::functions::test_fmod_preserves_negative_zero_like_php codegen::numeric_scalars::test_echo_float_uses_php_precision_14_gcvt_layout codegen::type_builtins::float_checks::test_nan_constant --exact 2>&1 | tail -12",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_ftostr_warn.py\ncargo test --test codegen_tests -- codegen::math::functions::test_fmod_preserves_negative_zero_like_php codegen::numeric_scalars:",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_ftostr_warn.py\ncargo test --test codegen_tests -- codegen::math::functions::test_fmod_preserves_negative_zero_like_php codegen::numeric_scalars::test_echo_float_uses_php_precision_14_gcvt_layout codegen::type_builtins::float_checks::test_nan_constant --exact 2>&1 | tail -12: FToStr / MixedCastString now declare MAY_WARN left: \"\\nWarning: unexpected NAN value was coerced to string\\nNAN\" right: \"NAN\" failures: codegen::math::functions::test_fmod_preserves_negative_zero_like_php codegen::numeric_scalars::test_echo_float_uses_php_precision_14_gcvt_layout codegen::type_builtins::float_checks::test_nan_constant test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 8450 filtered out; finished in 1.73s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a44afd41b4c3fa671d82082",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:51:13.987Z",
+  "stored_at": "2026-08-18T20:51:13.988Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,120p' src/types/checker/builtins/out_params.rs",
+  "summary": "sed -n '1,120p' src/types/checker/builtins/out_params.rs: iter().find(|param| param.name == name), ), _ => (arg, def.spec.params.get(index)), }; let Some(param) = param.filter(|param| param.writes.is_some()) else { continue; }; if matches!(target.kind, ExprKind::Variable(_) | ExprKind::Null) { continue; } return Err(cr",
+  "text": "sed -n '1,120p' src/types/checker/builtins/out_params.rs: iter().find(|param| param.name == name), ), _ => (arg, def.spec.params.get(index)), }; let Some(param) = param.filter(|param| param.writes.is_some()) else { continue; }; if matches!(target.kind, ExprKind::Variable(_) | ExprKind::Null) { continue; } return Err(crate::errors::CompileError::new( target.span, &format!( \"{}() parameter ${} must be passed a variable\", builtin_name.trim_start_matches('\\\\'), param.name ), )); } Ok(()) } /// One argument a builtin only writes, resolved to the variable it defines. pub(crate) struct WriteOnlyArg { /// Position in the call's argument list, which is what an inference loop skips. pub index: usize, /// The variable the call defines. pub variable: String, /// The type it holds once the call returns. pub written: PhpType, /// Span of the variable, so a reassignment diagnostic points at the argument. pub span: crate::span::Span, } #[cfg(test)] mod tests {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c3c04c70ec8ffddcbdde3e47",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:34:05.768Z",
+  "stored_at": "2026-08-18T09:34:05.769Z"
+}

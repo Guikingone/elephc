@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '625,690p' src/codegen_support/runtime/io/fread.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '625,690p' src/codegen_support/runtime/io/fread.rs: g emitter.instruction(\"mov rdi, QWORD PTR [rbp - 8]\"); // the opaque stream handle emitter.instruction(\"call __rt_stream_state\"); // only a stream with a STATE can h",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '625,690p' src/codegen_support/runtime/io/fread.rs: g emitter.instruction(\"mov rdi, QWORD PTR [rbp - 8]\"); // the opaque stream handle emitter.instruction(\"call __rt_stream_state\"); // only a stream with a STATE can hold a surplus emitter.instruction(\"test rax, rax\"); emitter.instruction(\"jz __rt_fread_syscall_now_x86\"); emitter.instruction(\"mov rdi, QWORD PTR [rbp - 32]\"); // the resolved backend descriptor emitter.instruction(\"call __rt_stream_fd_is_regular\"); // S_ISREG: leave sockets, pipes and ttys alone emitter.instruction(\"test rax, rax\"); emitter.instruction(\"jz __rt_fread_syscall_now_x86\"); emitter.instruction(\"mov rdi, QWORD PTR [rbp - 8]\"); // the opaque stream handle emitter.instruction(\"call __rt_stream_chunk_size\"); // rax = what php would ask for emitter.instruction(\"cmp QWORD PTR [rbp - 16], rax\"); // the caller's request against it emitter.instruction(\"jge __rt_fread_syscall_now_x86\"); // at least a chunk: read exactly it",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "248ff00caf6c1193ae8308ca",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:22:29.770Z",
+  "stored_at": "2026-08-23T20:22:29.770Z"
+}

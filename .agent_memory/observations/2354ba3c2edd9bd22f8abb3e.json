@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1020,1050p' tests/codegen/support/runner.rs",
+  "summary": "About to run: sed -n '1020,1050p' tests/codegen/support/runner.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2354ba3c2edd9bd22f8abb3e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:35:03.622Z",
+  "stored_at": "2026-08-24T19:35:03.624Z"
+}

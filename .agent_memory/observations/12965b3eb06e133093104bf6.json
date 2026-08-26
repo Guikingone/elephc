@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1975,2020p' src/codegen_support/runtime/data/fixed.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1975,2020p' src/codegen_support/runtime/data/fixed.rs: ded: String = name.chars().chain(std::iter::repeat('\\0')).take(8).collect(); out.push_str(&format!(\" .ascii {:?}\\n\", padded)); out.push_str(&format!(\" .byte {}\\n",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '1975,2020p' src/codegen_support/runtime/data/fixed.rs: ded: String = name.chars().chain(std::iter::repeat('\\0')).take(8).collect(); out.push_str(&format!(\" .ascii {:?}\\n\", padded)); out.push_str(&format!(\" .byte {}\\n\", name.len())); out.push_str(&format!(\" .byte {}\\n\", action)); out.push_str(&format!(\" .byte {}\\n\", u8::from(*prefix))); out.push_str(\" .byte 0, 0, 0, 0, 0\\n\"); } // Terminator: a zero name length ends the walk. out.push_str(\" .byte 0, 0, 0, 0, 0, 0, 0, 0\\n\"); out.push_str(\" .byte 0, 0, 0, 0, 0, 0, 0, 0\\n\"); out } /// Emit the mutable globals backing `spl_autoload_extensions` runtime /// read/write. Initialised to point at the default \".inc,.php\" string so /// PHP programs see PHP's documented default before any explicit set. fn emit_spl_autoload_extensions_data() -> String { let default = \".inc,.php\"; let mut out = String::new(); out.push_str(\".globl _spl_autoload_exts_default\\n\"); out.push_str(\"_spl_autoload_exts_default:\\n\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "12965b3eb06e133093104bf6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:04:44.749Z",
+  "stored_at": "2026-08-24T13:04:44.749Z"
+}

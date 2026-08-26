@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_nulltest.py; python3 -c \"\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io.rs')\ns = p.read_text()\nold = '#[path = \\\"io/copy_dynamic_filter.rs\\\"]\\nmod copy_dynamic_filter;'\nnew = old + '\\n#[path = \\\"io/null_stream_argument.rs\\\"]\\n… [+323 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_nulltest.py; python3 -c \"\nimport pathlib\np",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_nulltest.py; python3 -c \"\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io.rs')\ns = p.read_text()\nold = '#[path = \\\"io/copy_dynamic_filter.rs\\\"]\\nmod copy_dynamic_filter;'\nnew = old + '\\n#[path = \\\"io/null_stream_argument.rs\\\"]\\nmod null_stream_argument;'\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nprint('registered')\n\"; CARGO_PROFILE_DEV_DEBUG=false CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::io::null_stream_argument)' 2>&1 | tail -10: closedir expectation corrected to php's own registered Finished `test` profile [unoptimized] target(s) in 16.97s ──────────── Nextest run ID db63e6e9-e1f5-4035-9674-7fcdb50761e8 with nextest profile: default Starting 4 tests across 1 binary (8935 tests skipped) PASS [ 1.243s] (1/4) elephc::codegen_tests codegen::io::null_stream_argument::test_an_uncaught_null_stream_argument_matches_phps_report PASS [ 1.648s] (2/4) elephc::codegen_tests codegen::io::null_stream_argument::test_closedir_keeps_its_deprecation_and_its_own_wording PASS [ 2.024s] (3/4) elephc::codegen_tests codegen::io::null_stream_argument::test_a_null_stream_argument_is_a_catchable_type_error PASS [ 2.333s] (4/4) elephc::codegen_tests codegen::io::null_stream_argument::test_the_type_error_names_the_parameter_php_names ──────────── Summary [ 2.387s] 4 tests run: 4 passed, 8935 skipped",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "da48e96e46cd351be3782118",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:00:39.618Z",
+  "stored_at": "2026-08-24T13:00:39.619Z"
+}

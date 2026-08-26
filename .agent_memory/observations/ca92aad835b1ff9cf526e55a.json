@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 1330,1360p src/codegen_support/runtime/data/fixed.rs",
+  "summary": "sed -n 1330,1360p src/codegen_support/runtime/data/fixed.rs: _prepend\", FILTER_PARAM_CREATE_PREPEND_HEAD), (\"_diag_fp_create_tail\", FILTER_PARAM_CREATE_TAIL), ] { out.push_str(&format!( \".globl {symbol}\\n{symbol}:\\n .ascii \\\"{}\\\"\\n\", text.replace('\\\\', \"\\\\\\\\\").replace('\"', \"\\\\\\\"\").replace('\\n', \"\\\\n\") )); } // _user_fi",
+  "text": "sed -n 1330,1360p src/codegen_support/runtime/data/fixed.rs: _prepend\", FILTER_PARAM_CREATE_PREPEND_HEAD), (\"_diag_fp_create_tail\", FILTER_PARAM_CREATE_TAIL), ] { out.push_str(&format!( \".globl {symbol}\\n{symbol}:\\n .ascii \\\"{}\\\"\\n\", text.replace('\\\\', \"\\\\\\\\\").replace('\"', \"\\\\\\\"\").replace('\\n', \"\\\\n\") )); } // _user_filter_current_stream: the stream a `filter()` call is running FOR, or zero outside // one. php publishes `$this->stream` for the DURATION of each call and nowhere else — measured // on `php -n` 8.5.6 it is UNSET in `onCreate()`, a live resource in `filter()`, and NULL again // in `onClose()` — so the handle travels here rather than being retained on the instance. // _zlib_flush_fn: the address of the inline `Z_SYNC_FLUSH` helper the deflate attachment // publishes, or zero when no such filter was ever attached. `fflush()` calls through it, which // is what keeps libz pay-for-use: the helper is part of the attachment, so a program that",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca92aad835b1ff9cf526e55a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:58:13.661Z",
+  "stored_at": "2026-08-22T08:58:13.662Z"
+}

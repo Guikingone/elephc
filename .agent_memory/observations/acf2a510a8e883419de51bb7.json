@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"test_error_stream_socket_recvfrom_address_not_string\" -A 12 tests/error_tests/io_builtins/streams.rs | head -16; grep -n \"test_error_type_mismatch_reassign\" -A 8 tests/error_tests/type_system.rs | head -10",
+  "summary": "grep -n \"test_error_stream_socket_recvfrom_address_not_string\" -A 12 tests/error_tests/io_builtins/streams.rs | head -16; grep -n \"test_error_type_mismatch_reassign\" -A 8 tests/error_tests/type_system.rs | head -10: 870:fn test_error_stream_socket_recvfrom_address_not_string() { 871- expect_error( 872- \"<?php $n = 1; s",
+  "text": "grep -n \"test_error_stream_socket_recvfrom_address_not_string\" -A 12 tests/error_tests/io_builtins/streams.rs | head -16; grep -n \"test_error_type_mismatch_reassign\" -A 8 tests/error_tests/type_system.rs | head -10: 870:fn test_error_stream_socket_recvfrom_address_not_string() { 871- expect_error( 872- \"<?php $n = 1; stream_socket_recvfrom(STDIN, 32, 0, $n);\", 873- \"cannot reassign $n from int to string\", 874- ); 875-} 876- 877-/// Verifies the invalid-call diagnostic for error stream socket get name wrong args. 878-#[test] 879-fn test_error_stream_socket_get_name_wrong_args() { 880- expect_error( 881- \"<?php stream_socket_get_name(STDIN);\", 882- \"stream_socket_get_name() takes exactly 2 arguments\", 140:fn test_error_type_mismatch_reassign() { 141- expect_error(\"<?php $x = 42; $x = \\\"hello\\\";\", \"cannot reassign $x\"); 142-} 143- 144-/// Verifies that arithmetic on a string operand produces an error. 145-/// Input: `$x = \"hi\"; echo $x + 1;` — string is not numeric. 146-#[test] 147-fn test_error_arithmetic_on_string() { 148- expect_error(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "acf2a510a8e883419de51bb7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:59:37.776Z",
+  "stored_at": "2026-08-22T12:59:37.776Z"
+}

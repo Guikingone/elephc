@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/trace_call_sites.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/trace_call_sites.py: \"\"\"Passes the completeness override at each of the three call sites.\n\nThe lowered path knows whether it is inside `main`; the",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/trace_call_sites.py: \"\"\"Passes the completeness override at each of the three call sites.\n\nThe lowered path knows whether it is inside `main`; the runtime unwinder does not and keeps\ndeferring to the module flag, which is exactly what that flag is for.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\n\n# --- the lowered path -------------------------------------------------------------------------\np = ROOT / 'src/codegen/lower_inst/exceptions.rs'\nt = p.read_text()\n\nOLD = '''            abi::emit_load_int_immediate(ctx.emitte",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2dbd6b14d009397376a13739",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:40:10.588Z",
+  "stored_at": "2026-08-22T19:40:10.588Z"
+}

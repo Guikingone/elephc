@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '750,800p' src/codegen/lower_inst/builtins/io/phar_read.rs",
+  "summary": "sed -n '750,800p' src/codegen/lower_inst/builtins/io/phar_read.rs:  through the same // write-and-count tail the filter route uses, placed AFTER the ordinary dispatch so the // ordinary result jumps over it. Without this the URL reached the dispatch as a filename, // where `fopen()` on the identical string decompresses",
+  "text": "sed -n '750,800p' src/codegen/lower_inst/builtins/io/phar_read.rs:  through the same // write-and-count tail the filter route uses, placed AFTER the ordinary dispatch so the // ordinary result jumps over it. Without this the URL reached the dispatch as a filename, // where `fopen()` on the identical string decompresses. let compress_bytes = if optional_const_string_operand(ctx, path)?.is_none() { let landing = ctx.next_label(\"readfile_dyn_compress_bytes\"); super::emit_dynamic_compress_read_route(ctx, path, \"readfile\", &landing)?; Some(landing) } else { None }; emit_readfile_wrapper_dispatch(ctx)?; if let Some(landing) = compress_bytes { let after = ctx.next_label(\"readfile_dyn_compress_after\"); abi::emit_jump(ctx.emitter, &after); ctx.emitter.label(&landing); super::wrapper_dispatch::emit_readfile_bytes_tail(ctx, \"readfile_dyn_compress\"); ctx.emitter.label(&after); } box_readfile_result(ctx); finish_fopen_context_scope(ctx); store_if_result(ctx, inst) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "befcdb139f2951a3c727215d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:35:05.141Z",
+  "stored_at": "2026-08-24T18:35:05.141Z"
+}

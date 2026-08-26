@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/exceptions/uncaught_report.rs\")\ns = p.read_text()\na = '''/// Byte length of the constant fallback message, kept in sync with `data::fixed`.\nconst UNCAUGHT_FALLBACK_LEN: i64 = 32;\n'''\nb = '''/// Byte length of the constant fallback message, kept in sync with `data::fixed`.\nconst UNCAUGHT_FALLBACK_LEN: i64 = 32;\n\n/// Byte length of `\"\\\\nNext \"`, the introducer php puts before every link after the first.\nconst UNCAUGHT_NEXT_LEN: i64 = 6;\n\n/// Offset of a compact Throwable's `previous` slot — see `sentinels`, which lays… [+255 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path(\"src/codegen_support/runtime/exceptions/uncaught_report.rs\") s = p.read_text() a = '''/// Byte length of the constant fallback message, kept in sync wi",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "95483644b38b9e052adb0997",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:46:58.172Z",
+  "stored_at": "2026-08-24T17:46:58.173Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_stderr.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_stderr.py: import re, pathlib, sys\n\nroot = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-sig",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_stderr.py: import re, pathlib, sys\n\nroot = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests')\nKINDS = (\"Warning: \", \"Notice: \", \"Deprecated: \")\n\nchanged_files = 0\nchanged_sites = 0\n\nfor path in sorted(root.rglob('*.rs')):\n    text = path.read_text()\n    if 'out.stderr' not in text and 'output.stderr' not in text:\n        continue\n    lines = text.split('\\n')\n    out = []\n    i = 0\n    n = len(lines)\n    while i < n:\n        line = lines[i]\n        if '.stderr' not in line:\n            out.append(line)\n            i += 1\n            continue\n ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8492886efeaa01c720208879",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T14:21:16.843Z",
+  "stored_at": "2026-08-18T14:21:16.843Z"
+}

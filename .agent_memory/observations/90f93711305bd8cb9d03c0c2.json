@@ -1,0 +1,13 @@
+{
+  "type": "session_end",
+  "summary": "Subagent finished; distill durable observations from the subagent run.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "90f93711305bd8cb9d03c0c2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:08:03.493Z",
+  "stored_at": "2026-08-22T20:08:03.494Z",
+  "low_signal": true
+}

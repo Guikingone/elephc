@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/output_values.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/output_values.rs: /// Emits PHP's fatal diagnostic for object-to-string conversion without `__toString()`.\npub(super) fn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_> -> /// Emits php's",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/output_values.rs: /// Emits PHP's fatal diagnostic for object-to-string conversion without `__toString()`.\npub(super) fn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_> -> /// Emits php's `Error` for an object-to-string conversion on a class without `__toString()`.\n///\n/// php raises a CATCHABLE `Error`, so `try { echo $o; } catch (Error $e)` runs its catch and the\n/// program continues with exit 0. This used to write `Fatal error: …` straight to stderr and\n/// `exit(1)`: the catch never ran, the message went to the wrong stream — php CLI prints\n/// diagnostics on stdout, through the output buffer — and the status was 1 where php's uncaught\n///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b493aa4777e16451fdcbd089",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:52:58.129Z",
+  "stored_at": "2026-08-23T17:52:58.130Z"
+}

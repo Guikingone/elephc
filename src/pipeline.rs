@@ -45,6 +45,8 @@ pub(crate) fn compile(config: CliConfig) {
         filename,
         heap_size,
         gc_stats,
+        counters,
+        instrument,
         heap_debug,
         strict_opcache,
         emit_ir,
@@ -66,6 +68,7 @@ pub(crate) fn compile(config: CliConfig) {
         extra_frameworks,
         defines,
         strict_php,
+        strict_locals,
         web,
         web_isolation,
         with_crates,
@@ -484,7 +487,8 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
-    let mut check_result = match types::check_with_target(&ast, target) {
+    let check_options = types::CheckOptions { strict_locals };
+    let mut check_result = match types::check_with_target_and_options(&ast, target, check_options) {
         Ok(result) => result,
         Err(e) => {
             crate::progress::clear();
@@ -534,22 +538,32 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("opt-prop");
     let phase_started = Instant::now();
     let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new(&ast);
-    let ast = post_typecheck_optimizer.propagate(ast);
+    // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
+    // lowering a concrete type the checker never approved for that name, so the pass is told which
+    // names those are and refuses to record a fact for them.
+    let ast = post_typecheck_optimizer.propagate(ast, check_result.mixed_storage_local_names());
     timings.record_since("opt-prop", phase_started);
 
     crate::progress::phase("opt-post");
     let phase_started = Instant::now();
-    let ast = post_typecheck_optimizer.prune(ast);
+    // Pruning and normalization both run the single-case switch rewrite, which materializes the
+    // default body into BOTH branches of the synthesized `if` with the original's spans. The
+    // checker's local-binding decisions are keyed BY SPAN, so these phases are told which spans
+    // carry one and the rewrite vetoes itself rather than duplicating a decision.
+    let ast = post_typecheck_optimizer.prune(ast, check_result.local_binding_decision_spans());
     timings.record_since("opt-post", phase_started);
 
     crate::progress::phase("opt-norm");
     let phase_started = Instant::now();
-    let ast = post_typecheck_optimizer.normalize(ast);
+    let ast = post_typecheck_optimizer.normalize(ast, check_result.local_binding_decision_spans());
     timings.record_since("opt-norm", phase_started);
 
     crate::progress::phase("dce");
     let phase_started = Instant::now();
-    let ast = post_typecheck_optimizer.eliminate_dead_code(ast);
+    // Tail-sinking clones the tail of an `if`/`switch`/`try` into every branch, and a clone keeps
+    // the original's spans — the same span-keyed hazard, in the other pass that clones.
+    let ast = post_typecheck_optimizer
+        .eliminate_dead_code(ast, check_result.local_binding_decision_spans());
     timings.record_since("dce", phase_started);
 
     crate::progress::phase("decl-reach");
@@ -624,6 +638,8 @@ pub(crate) fn compile(config: CliConfig) {
         emit,
         heap_size,
         gc_stats,
+        counters,
+        instrument,
         heap_debug,
         exported_functions: &exported_functions,
         regalloc_linear,

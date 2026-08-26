@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"FILTER_PARAM_INVALID_APPEND_HEAD\" src/codegen_support/runtime/data/ | head -3; echo ---; sed -n 60,110p src/codegen_support/runtime/diagnostics.rs",
+  "summary": "grep -rn \"FILTER_PARAM_INVALID_APPEND_HEAD\" src/codegen_support/runtime/data/ | head -3; echo ---; sed -n 60,110p src/codegen_support/runtime/diagnostics.rs:  would stamp it three times. The pieces land in `_rt_diag_buf` and go out together. emitter.instruction(\"stp x29, x30, [sp, #-32]!\"); // this helper now CALLS, so",
+  "text": "grep -rn \"FILTER_PARAM_INVALID_APPEND_HEAD\" src/codegen_support/runtime/data/ | head -3; echo ---; sed -n 60,110p src/codegen_support/runtime/diagnostics.rs:  would stamp it three times. The pieces land in `_rt_diag_buf` and go out together. emitter.instruction(\"stp x29, x30, [sp, #-32]!\"); // this helper now CALLS, so it needs a frame emitter.instruction(\"add x29, sp, #0\"); emitter.instruction(\"str x1, [sp, #16]\"); // the piece pointer emitter.instruction(\"str x2, [sp, #24]\"); // and its length abi::emit_symbol_address(emitter, \"x9\", \"_rt_diag_buf_len\"); emitter.instruction(\"ldr x10, [x9]\"); // bytes already buffered abi::emit_symbol_address(emitter, \"x11\", \"_rt_diag_buf\"); emitter.instruction(\"mov x12, #0\"); // index into the incoming piece emitter.label(\"__rt_diag_append_loop\"); emitter.instruction(\"cmp x12, x2\"); emitter.instruction(\"b.ge __rt_diag_append_done\"); emitter.instruction(\"add x13, x10, x12\"); // where this byte would land emitter.instruction(&format!(\"mov x14, #{}\", RT_DIAG_BUF_BYTES - 1)); emitter.instruction(\"cmp x13, x14\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a5f489091cb22c64585782a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:57:58.727Z",
+  "stored_at": "2026-08-22T08:57:58.728Z"
+}

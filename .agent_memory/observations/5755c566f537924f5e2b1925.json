@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn ir_backend_rejects_false_fstat_handles' -A 20 tests/ir_backend_smoke_test.rs | head -24",
+  "summary": "About to run: grep -n 'fn ir_backend_rejects_false_fstat_handles' -A 20 tests/ir_backend_smoke_test.rs | head -24",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5755c566f537924f5e2b1925",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:34:02.190Z",
+  "stored_at": "2026-08-25T08:34:02.190Z"
+}

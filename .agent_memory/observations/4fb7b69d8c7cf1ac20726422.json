@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fgets_chunk_x86.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fgets_chunk_x86.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/co",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_fgets_chunk_x86.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen_support/runtime/io/fgets.rs'\ns = open(p).read()\n\nold = '''    emitter.label(\"__rt_fgets_wrapper_loop_x86\");\n    emitter.instruction(\"mov rdi, QWORD PTR [rbp - 56]\");                       // reload the wrapper fd\n    emitter.instruction(\"call __rt_feof\");                                      // check stream_eof FIRST (rax = 1 at EOF)\n    emitter.instruction(\"test rax, rax\");                                       // at EOF?\n    emitter.instruction(\"jnz __rt_fgets_w",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4fb7b69d8c7cf1ac20726422",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T17:39:00.785Z",
+  "stored_at": "2026-08-17T17:39:00.786Z"
+}

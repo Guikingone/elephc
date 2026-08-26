@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"sscanf\" tests/codegen/strings/formatting.rs | head -20",
+  "summary": "rtk proxy rg -n \"sscanf\" tests/codegen/strings/formatting.rs | head -20: 160:/// Tests sscanf with %d parsing an integer from a formatted string. 162:fn test_sscanf_int() { 165:$result = sscanf(\"Age: 25\", \"Age: %d\"); 172:/// Tests sscanf with %s parsing a word from a formatted string. 174:fn test_sscanf_string() { 177:",
+  "text": "rtk proxy rg -n \"sscanf\" tests/codegen/strings/formatting.rs | head -20: 160:/// Tests sscanf with %d parsing an integer from a formatted string. 162:fn test_sscanf_int() { 165:$result = sscanf(\"Age: 25\", \"Age: %d\"); 172:/// Tests sscanf with %s parsing a word from a formatted string. 174:fn test_sscanf_string() { 177:$result = sscanf(\"Name: Alice\", \"Name: %s\"); 184:/// Tests sscanf with multiple format specifiers (%s and %d) parsing two values into an array. 186:fn test_sscanf_multiple() { 189:$result = sscanf(\"John 30\", \"%s %d\"); 196:/// sscanf %f yields a FLOAT, so echoing it prints php's float rendering. 198:fn test_sscanf_float() { 201:$r = sscanf(\"Pi: 3.14\", \"Pi: %f\"); 210:/// This assertion used to read `-2.5e3`, the matched slice the old `__rt_sscanf` assembly 215:fn test_sscanf_float_negative_and_exponent() { 218:$r = sscanf(\"-2.5e3\", \"%f\"); 227:fn test_sscanf_float_mixed_with_string_and_int() { 230:$r = sscanf(\"alice 1.5 30\", \"%s %f %d\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a26674a0836448cfddce3b5c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:27:35.392Z",
+  "stored_at": "2026-08-16T16:27:35.392Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '691,760p' src/types/checker/stmt_check/assignments/properties.rs",
+  "summary": "sed -n '691,760p' src/types/checker/stmt_check/assignments/properties.rs: Mixed), }; } let merged_key = if matches!(elem_ty, PhpType::Never) { normalized_idx_ty.clone() } else { merge_array_key_types(PhpType::Int, normalized_idx_ty.clone()) }; let merged_value = if matches!(elem_ty, PhpType::Never) { val_ty.clone() } e",
+  "text": "sed -n '691,760p' src/types/checker/stmt_check/assignments/properties.rs: Mixed), }; } let merged_key = if matches!(elem_ty, PhpType::Never) { normalized_idx_ty.clone() } else { merge_array_key_types(PhpType::Int, normalized_idx_ty.clone()) }; let merged_value = if matches!(elem_ty, PhpType::Never) { val_ty.clone() } else if elem_ty == val_ty { elem_ty.clone() } else { checker .merge_array_element_type(elem_ty, val_ty) .unwrap_or(PhpType::Mixed) }; PhpType::AssocArray { key: Box::new(merged_key), value: Box::new(merged_value), } } /// Updates the in-memory type of an object property after an array operation. /// /// Writes the updated type back to `checker.classes` only if the property has no declared type, /// or if the update satisfies `declared_generic_array_can_use_assoc_storage` (permits converting /// a `Mixed` element array to `AssocArray` storage when appropriate). fn update_object_property_type( checker: &mut Checker, class_name: &str, property: &str,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1993403c1475f7de536b5c8e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:55:34.378Z",
+  "stored_at": "2026-08-26T07:55:34.378Z"
+}

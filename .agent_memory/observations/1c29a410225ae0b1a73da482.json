@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -B 30 'internal: true' crates/elephc-builtin-contract/src/catalog_data.rs | grep 'name: \"' | head -10",
+  "summary": "grep -B 30 'internal: true' crates/elephc-builtin-contract/src/catalog_data.rs | grep 'name: \"' | head -10: name: \"__elephc_callable_ptr\", name: \"value\", name: \"__elephc_class_has_constructor\", name: \"class\", name: \"day\", name: \"year\", name: \"__elephc_hash_ctx_copy\", name: \"context\", name: \"context\", name: \"binary\",",
+  "text": "grep -B 30 'internal: true' crates/elephc-builtin-contract/src/catalog_data.rs | grep 'name: \"' | head -10: name: \"__elephc_callable_ptr\", name: \"value\", name: \"__elephc_class_has_constructor\", name: \"class\", name: \"day\", name: \"year\", name: \"__elephc_hash_ctx_copy\", name: \"context\", name: \"context\", name: \"binary\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1c29a410225ae0b1a73da482",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:40:38.857Z",
+  "stored_at": "2026-08-25T14:40:38.857Z"
+}

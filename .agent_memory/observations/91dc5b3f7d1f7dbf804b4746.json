@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dynamic_throw_x86.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dynamic_throw_x86.py: \"\"\"The x86_64 half of the located dynamic report.\"\"\"\nimport pathlib\n\np = pathlib.Path(\n    '/Users/guillaumeloulier/Phpstorm",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dynamic_throw_x86.py: \"\"\"The x86_64 half of the located dynamic report.\"\"\"\nimport pathlib\n\np = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'streams-csv-signature/src/codegen/lower_inst/exceptions.rs'\n)\nt = p.read_text()\nOLD = '''            ctx.emitter.instruction(\"mov rsp, r15\");                            // restore the entry rsp so the message stack slots stay addressable\n            abi::emit_symbol_address(ctx.emitter, \"rsi\", &prefix_label);'''\nNEW = '''            ctx.emitter.instruction(\"mov rsp, r15\");                            // restore the entry rsp so ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "91dc5b3f7d1f7dbf804b4746",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T10:56:44.136Z",
+  "stored_at": "2026-08-23T10:56:44.136Z"
+}

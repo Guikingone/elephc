@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '478,530p' src/codegen_support/runtime/io/stream_get_meta_data.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '478,530p' src/codegen_support/runtime/io/stream_get_meta_data.rs: pare-and-branch chain: each comparison branches to a label that is // emitted after all comparisons, so the fall-through goes to the next // compariso",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '478,530p' src/codegen_support/runtime/io/stream_get_meta_data.rs: pare-and-branch chain: each comparison branches to a label that is // emitted after all comparisons, so the fall-through goes to the next // comparison rather than into the literal-load block. for (id, _) in wrappers.iter().enumerate() { let label = format!(\"__rt_sgmd_wid_{}\", id); emitter.instruction(&format!(\"cmp w7, #{}\", id)); // compare wrapper id emitter.instruction(&format!(\"b.eq {}\", label)); // branch to the matching literal load } // Fallback for unknown ids: use plainfile (same as id 0). abi::emit_symbol_address(emitter, \"x3\", \"_meta_wrapper_plainfile\"); // fallback wrapper name emitter.instruction(\"mov x4, #9\"); // plainfile length emitter.instruction(\"mov x5, #1\"); // value tag = string emitter.instruction(\"b __rt_sgmd_wtype_put\"); // jump to the shared hash insert // Literal-load blocks (emitted after the compare chain). for (id, (sym, len)) in wrappers.iter().enumerate() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e6491e7ac32439518b900cd1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:39:04.665Z",
+  "stored_at": "2026-08-22T16:39:04.665Z"
+}

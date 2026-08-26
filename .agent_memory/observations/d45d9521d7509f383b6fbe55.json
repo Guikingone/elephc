@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 4000 python3 run.py 2>&1 | grep -E '^### '",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 4000 python3 run.py 2>&1 | grep -E '^### ': ### eof-after-last-line (exit php=0 elephc=0) ### file-info-queries (exit php=255 elephc=0) ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 4000 python3 run.py 2>&1 | grep -E '^### ': ### eof-after-last-line (exit php=0 elephc=0) ### file-info-queries (exit php=255 elephc=0) ### file-object-flags (exit php=0 elephc=0) ### file-object-seek-key (exit php=0 elephc=0) ### file-put-contents-stream (exit php=0 elephc=0) ### is-uploaded-and-realpath (exit php=0 elephc=0) ### iterable-echo (exit php=0 elephc=0) ### spl-file-object-streams (exit php=0 elephc=0)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d45d9521d7509f383b6fbe55",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:21:40.904Z",
+  "stored_at": "2026-08-25T09:21:40.904Z"
+}

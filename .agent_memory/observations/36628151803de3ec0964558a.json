@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_constant_values.py && cargo build --lib 2>&1 | grep -E \"^error\" -A 8 | head -20; cargo build --lib 2>&1 | tail -2",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_constant_values.py && cargo build --lib 2>&1 | grep -E \"^error\" -A 8 | head -20; cargo build --lib 2>&1 | tail -2: php_constants.rs: E_ALL is",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_constant_values.py && cargo build --lib 2>&1 | grep -E \"^error\" -A 8 | head -20; cargo build --lib 2>&1 | tail -2: php_constants.rs: E_ALL is php's 30719 error_constants.rs: the comment no longer asserts the old mask php_constants.rs: ARRAY_FILTER_USE_VALUE is not a php constant names.rs: the name is no longer recognised array_constants.rs: the test pins the absence both wrong declarations corrected Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.83s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "36628151803de3ec0964558a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:55:51.077Z",
+  "stored_at": "2026-08-22T09:55:51.078Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_located.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_located.py: import pathlib\n\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/co",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_located.py: import pathlib\n\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs')\nt = p.read_text()\n\n# 1. Signature and doc.\nold_sig = 'pub(crate) fn split_php_diagnostics(stdout: &str, script_path: &str) -> (String, String) {'\nnew_sig = '''/// Splits php's diagnostics out of a program's stdout, returning\n/// `(program_output, messages, located_messages)`.\n///\n/// `messages` carries the wording alone, which is what almost every assertion wants. The third\n/// string keeps php's full line — ` in <file> on line <n>` inc",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3ce1a37f853ae38ef8c36ef4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:25:14.810Z",
+  "stored_at": "2026-08-18T15:25:14.811Z"
+}

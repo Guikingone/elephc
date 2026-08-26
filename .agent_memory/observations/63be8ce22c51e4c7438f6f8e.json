@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: ## Open bugs / gaps (no fix yet — actionable)\n- 🔴🔴★★★ [SILENT: clé entière NON LITTÉRALE dans un tableau vide → liste DENSE](empty-array-nonliteral-int-key-dens -> ## Open bugs / gaps (no fix yet — act",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: ## Open bugs / gaps (no fix yet — actionable)\n- 🔴🔴★★★ [SILENT: clé entière NON LITTÉRALE dans un tableau vide → liste DENSE](empty-array-nonliteral-int-key-dens -> ## Open bugs / gaps (no fix yet — actionable)\n- 🔴🔴🔴★★★ [SILENT: `$x=null; f($x)` avec `&$a` ne REÇOIT JAMAIS l'écriture](byref-out-param-write-never-reaches-a-null-caller.md) — l'idiome out-param de php; `if ($x===null)` part à l'envers. 🔑 l'EIR est IDENTIQUE au cas qui marche; le chemin TABLEAUX existe déjà et s'arrête sur `if !matches!(param_ty, Array)`.\n- 🔴🔴★★★ [SILENT: clé entière NON LITTÉRALE dans un tableau vide → liste DENSE](empty-array-nonliteral-int-key-densifies.m",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "63be8ce22c51e4c7438f6f8e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:44:44.303Z",
+  "stored_at": "2026-08-18T09:44:44.303Z"
+}

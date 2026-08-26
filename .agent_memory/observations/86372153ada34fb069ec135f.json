@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_stream_context_set_option_two_arg_deprecation\" -A 12 src/codegen/lower_inst/builtins/io/stream_context.rs; echo \"=== full 2-arg branch ===\"; sed -n '447,520p' src/codegen/lower_inst/builtins/io/stream_context.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_stream_context_set_option_two_arg_deprecation\" -A 12 src/codegen/lower_inst/builtins/io/stream_context.rs; echo \"=== full 2-arg branch ===\"; sed -n '447,520p' src/codegen/lower_inst/builtins/io/stream_contex",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_stream_context_set_option_two_arg_deprecation\" -A 12 src/codegen/lower_inst/builtins/io/stream_context.rs; echo \"=== full 2-arg branch ===\"; sed -n '447,520p' src/codegen/lower_inst/builtins/io/stream_context.rs: itter, &named); ctx.emitter.label(&refuse); super::super::exceptions::emit_value_error( ctx, STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL, ); ctx.emitter.label(&named); } let context = expect_operand(inst, 0)?; clear_stream_context_options(ctx); restore_stream_context_from_handle(ctx, context)?; retain_stream_context_options_scratch(ctx); lower_stream_context_set_option_4(ctx, inst)?; abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); update_stream_context_state_from_handle(ctx, context)?; abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); } _ => emit_bool_result(ctx, true), } store_if_result(ctx, inst) } /// Lowers the three-argument `stream_context_set_option()` form, which php mostly REFUSES. /// /// MEASURED on `php -n` 8.5.6 — three of the four shapes are a `ValueError`, and the fourth is /// the two-argument merge spelled with an explicit `null`: ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "86372153ada34fb069ec135f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:06:36.942Z",
+  "stored_at": "2026-08-22T17:06:36.942Z"
+}

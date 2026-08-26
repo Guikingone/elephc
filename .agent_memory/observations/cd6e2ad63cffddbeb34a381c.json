@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction q1(&...$v): void { $v[0] = 1; $v[2] = 3; }\\n$a=0;$b=0;$c=0; q1($a,$b,$c); echo \"q1: $a,$b,$c\\\\n\";\\nfunction q2(&...$v): void { $v[2] = 3; $v[0] = 1; }\\n$d=0;$e=0;$f=0; q2($d,$e,$f); echo \"q2: $d,$e,$f\\\\n\";\\nfunction q3(&...$v): void { $v[1] = 2; $v[2] = 3; }\\n$g=0;$h=0;$i=0; q3($g,$h,$i); echo \"q3: $g,$h,$i\\\\n\";\\nfunction q4(&...$v): void { $v[0] = 1; echo \"inside: \", $v[0], \"\\\\n\"; $v[1] = 2; }\\n… [+243 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction q1(&...$v): void { $v[0] = 1; $v[2] = 3; }\\n$a=0;$b=0;$c=0; q1($a,$b,$c); echo \"q1: $a,$b,$c\\\\n\";\\nfunction q2(&...$v):",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction q1(&...$v): void { $v[0] = 1; $v[2] = 3; }\\n$a=0;$b=0;$c=0; q1($a,$b,$c); echo \"q1: $a,$b,$c\\\\n\";\\nfunction q2(&...$v): void { $v[2] = 3; $v[0] = 1; }\\n$d=0;$e=0;$f=0; q2($d,$e,$f); echo \"q2: $d,$e,$f\\\\n\";\\nfunction q3(&...$v): void { $v[1] = 2; $v[2] = 3; }\\n$g=0;$h=0;$i=0; q3($g,$h,$i); echo \"q3: $g,$h,$i\\\\n\";\\nfunction q4(&...$v): void { $v[0] = 1; echo \"inside: \", $v[0], \"\\\\n\"; $v[1] = 2; }\\n$j=0;$k=0; q4($j,$k); echo \"q4: $j,$k\\\\n\";\\n' > d3.php && php -n d3.php && echo \"=== elephc ===\" && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run d3.php 2>&1|head -3 && ./d3: q1: 1,0,3 q2: 1,0,3 q3: 0,2,3 inside: 1 q4: 1,2 === elephc === Compiled 'd3.php' -> 'd3' q1: 1,0,3 q2: 1,0,3 q3: 0,0,3 inside: 1 q4: 0,2",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cd6e2ad63cffddbeb34a381c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:58:27.711Z",
+  "stored_at": "2026-08-16T15:58:27.711Z"
+}

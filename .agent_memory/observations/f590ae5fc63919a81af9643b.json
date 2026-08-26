@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/context.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/context.rs: loop_stack: self.loop_stack.clone(),\n            finally_stack: self.finally_stack.clone(), -> loop_stack: self.loop_stack.clone(),\n            loop_edge_depth: self.loop_edge_depth,\n            ",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/context.rs: loop_stack: self.loop_stack.clone(),\n            finally_stack: self.finally_stack.clone(), -> loop_stack: self.loop_stack.clone(),\n            loop_edge_depth: self.loop_edge_depth,\n            finally_stack: self.finally_stack.clone(),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f590ae5fc63919a81af9643b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:57:10.122Z",
+  "stored_at": "2026-08-23T12:57:10.123Z"
+}

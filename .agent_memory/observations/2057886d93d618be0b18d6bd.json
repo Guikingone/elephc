@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '596,616p' src/codegen_support/runtime/io/stream_select.rs",
+  "summary": "sed -n '596,616p' src/codegen_support/runtime/io/stream_select.rs: eam (or -1) emitter.instruction(\"mov rdi, rax\"); // cast result is a resource handle emitter.instruction(\"call __rt_stream_fd\"); // resolve it to its backend descriptor emitter.instruction(\"mov rdx, rax\"); // adopt the resolved descriptor emitter.instru",
+  "text": "sed -n '596,616p' src/codegen_support/runtime/io/stream_select.rs: eam (or -1) emitter.instruction(\"mov rdi, rax\"); // cast result is a resource handle emitter.instruction(\"call __rt_stream_fd\"); // resolve it to its backend descriptor emitter.instruction(\"mov rdx, rax\"); // adopt the resolved descriptor emitter.instruction(\"mov r11, QWORD PTR [rbp - 2120]\"); // reload the array pointer emitter.instruction(\"mov rdi, QWORD PTR [rbp - 2128]\"); // reload the section length emitter.instruction(\"mov rsi, QWORD PTR [rbp - 2136]\"); // reload the element index emitter.instruction(\"mov r12, QWORD PTR [rbp - 2144]\"); // reload the value_type tag emitter.instruction(\"mov r14, QWORD PTR [rbp - 2152]\"); // reload the running pollfd index emitter.label(&cast_done_l); // -- store the pollfd entry at pollfds[r14] (even for fd=-1 so indices stay aligned) -- emitter.instruction(\"mov rax, r14\"); // pollfd index emitter.instruction(\"shl rax, 3\"); // byte offset = index * 8",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2057886d93d618be0b18d6bd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:09:42.468Z",
+  "stored_at": "2026-08-17T18:09:42.468Z"
+}

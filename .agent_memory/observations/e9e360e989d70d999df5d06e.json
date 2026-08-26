@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '646,656p' src/ir/instr.rs",
+  "summary": "sed -n '646,656p' src/ir/instr.rs: | FunctionVariantMark | TryPushHandler | TryPopHandler => E::WRITES_GLOBAL, IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL, IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT, ConcatReset => E::WRITE",
+  "text": "sed -n '646,656p' src/ir/instr.rs: | FunctionVariantMark | TryPushHandler | TryPopHandler => E::WRITES_GLOBAL, IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL, IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT, ConcatReset => E::WRITES_GLOBAL, Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL, InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP, MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e9e360e989d70d999df5d06e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:50:08.875Z",
+  "stored_at": "2026-08-18T20:50:08.876Z"
+}

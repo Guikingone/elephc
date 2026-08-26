@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --lib frame_balance 2>&1 | grep -E \"^test .*frame|panicked|assert\" | head -4; cargo build --bin elephc 2>&1 | tail -1",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --lib frame_balance 2>&1 | grep -E \"^test .*frame|panicked|assert\" | head -4; cargo build --bin elephc 2>&1 | tail -1: Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.98s",
+  "text": "RUST_MIN_STACK=33554432 cargo test --lib frame_balance 2>&1 | grep -E \"^test .*frame|panicked|assert\" | head -4; cargo build --bin elephc 2>&1 | tail -1: Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.98s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "562f13c300a07f4c9f04f731",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:28:28.599Z",
+  "stored_at": "2026-08-22T15:28:28.600Z"
+}

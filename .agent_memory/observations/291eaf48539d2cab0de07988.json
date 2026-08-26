@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -ln \"stream_socket_server|stream_socket_client\" src/codegen/lower_inst/builtins/io/ | head; echo \"=== record_meta calls in socket lowerings:\"; rg -n \"__rt_stream_record_meta\" src/codegen/lower_inst/builtins/io/*.rs | head -20",
+  "summary": "rg -ln \"stream_socket_server|stream_socket_client\" src/codegen/lower_inst/builtins/io/ | head; echo \"=== record_meta calls in socket lowerings:\"; rg -n \"__rt_stream_record_meta\" src/codegen/lower_inst/builtins/io/*.rs | head -20: src/codegen/lower_inst/builtins/io/stream_sockets.rs src/codegen/lower_inst/builtins/io/st",
+  "text": "rg -ln \"stream_socket_server|stream_socket_client\" src/codegen/lower_inst/builtins/io/ | head; echo \"=== record_meta calls in socket lowerings:\"; rg -n \"__rt_stream_record_meta\" src/codegen/lower_inst/builtins/io/*.rs | head -20: src/codegen/lower_inst/builtins/io/stream_sockets.rs src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs === record_meta calls in socket lowerings: src/codegen/lower_inst/builtins/io/boxing_helpers.rs:725: abi::emit_call_label(ctx.emitter, \"__rt_stream_record_meta\"); src/codegen/lower_inst/builtins/io/boxing_helpers.rs:736: abi::emit_call_label(ctx.emitter, \"__rt_stream_record_meta\"); src/codegen/lower_inst/builtins/io/boxing_helpers.rs:759: abi::emit_call_label(ctx.emitter, \"__rt_stream_record_meta\"); src/codegen/lower_inst/builtins/io/boxing_helpers.rs:770: abi::emit_call_label(ctx.emitter, \"__rt_stream_record_meta\"); src/codegen/lower_inst/builtins/io/boxing_helpers.rs:835: abi::emit_call_label(ctx.emitter, \"__rt_stream_record_meta\"); src/codegen/lower_inst/builtins/io/boxing_helpers.rs:846: abi::emit_call_label(ctx.emitter, \"__rt_stream_record_meta\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "291eaf48539d2cab0de07988",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:17:31.812Z",
+  "stored_at": "2026-08-17T13:17:31.812Z"
+}

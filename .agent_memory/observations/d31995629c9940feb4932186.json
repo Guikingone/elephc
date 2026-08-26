@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn array_offset_get_body' -A 25 src/types/checker/builtin_spl_classes/storage.rs",
+  "summary": "About to run: grep -n 'fn array_offset_get_body' -A 25 src/types/checker/builtin_spl_classes/storage.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d31995629c9940feb4932186",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:39:43.606Z",
+  "stored_at": "2026-08-25T14:39:43.606Z"
+}

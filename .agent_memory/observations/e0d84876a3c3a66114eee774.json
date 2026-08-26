@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg18.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg18.txt: feat(streams): a wrapper is asked for a whole chunk, as php asks its own sources\n\nphp never asks a stream's source for exactly what the ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg18.txt: feat(streams): a wrapper is asked for a whole chunk, as php asks its own sources\n\nphp never asks a stream's source for exactly what the caller wants. It asks for a whole chunk —\n8192 by default — and keeps the surplus in the stream's read buffer, where the next reader finds\nit. MEASURED with a wrapper that logs every `stream_read($count)`: `fread($h, 5)` makes php call\n`stream_read(8192)` ONCE and answer five bytes, and the next `fread($h, 5)` answers from the buffer\nwith no call at all. elephc called `stream_read(5)` twice. `fgetc()` asked for 1 where php asks\n8192, and a bounded `stream_get_",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e0d84876a3c3a66114eee774",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:04:44.299Z",
+  "stored_at": "2026-08-21T14:04:44.299Z"
+}

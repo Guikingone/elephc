@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '253,300p' src/types/schema.rs | grep -E 'pub |///' | head -30",
+  "summary": "sed -n '253,300p' src/types/schema.rs | grep -E 'pub |///' | head -30: ss constants carrying `#[\\Deprecated]`, keyed /// by the case-sensitive constant name. An empty string means no reason. pub constant_deprecations: HashMap<String, String>, /// PHP 8.3 declared types for constants declared directly on this class-like",
+  "text": "sed -n '253,300p' src/types/schema.rs | grep -E 'pub |///' | head -30: ss constants carrying `#[\\Deprecated]`, keyed /// by the case-sensitive constant name. An empty string means no reason. pub constant_deprecations: HashMap<String, String>, /// PHP 8.3 declared types for constants declared directly on this class-like symbol. pub constant_types: HashMap<String, TypeExpr>, /// Class constant visibilities keyed by case-sensitive constant name. pub constant_visibilities: HashMap<String, Visibility>, /// Class constants declared with PHP 8.1+ `final`, keyed by constant name. pub final_constants: HashSet<String>, /// Names of PHP 8 attributes attached to this class declaration, in /// source order. Name resolution stores canonical class-like text without /// a synthetic leading backslash, matching `ReflectionAttribute::getName()`. /// Reflection helpers read this list during codegen when materializing /// attribute-name arrays and `ReflectionAttribute` objects.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9933f83b41946127943c1ef9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:30:13.829Z",
+  "stored_at": "2026-08-26T07:30:13.829Z"
+}

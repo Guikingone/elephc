@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 96,135p src/codegen_support/runtime/io/stream_wrapper_register.rs",
+  "summary": "sed -n 96,135p src/codegen_support/runtime/io/stream_wrapper_register.rs: n and fail emitter.instruction(\"cmp w6, #90\"); // 'A'..'Z' emitter.instruction(\"b.le __rt_swr_chk_next\"); // uppercase letters are accepted — next byte emitter.instruction(\"cmp w6, #97\"); // punctuation between 'Z' and 'a' emitter.instruction(\"b.",
+  "text": "sed -n 96,135p src/codegen_support/runtime/io/stream_wrapper_register.rs: n and fail emitter.instruction(\"cmp w6, #90\"); // 'A'..'Z' emitter.instruction(\"b.le __rt_swr_chk_next\"); // uppercase letters are accepted — next byte emitter.instruction(\"cmp w6, #97\"); // punctuation between 'Z' and 'a' emitter.instruction(\"b.lt __rt_swr_badproto\"); // outside PHP's scheme alphabet — warn and fail emitter.instruction(\"cmp w6, #122\"); // 'a'..'z' emitter.instruction(\"b.gt __rt_swr_badproto\"); // above 'z' — warn and fail emitter.label(\"__rt_swr_chk_next\"); emitter.instruction(\"add x5, x5, #1\"); // advance the byte index emitter.instruction(\"b __rt_swr_chk\"); // keep validating // -- one pass over _user_wrappers: reject a duplicate, remember the first free slot -- emitter.label(\"__rt_swr_scan_start\"); abi::emit_symbol_address(emitter, \"x4\", \"_user_wrappers\"); >>>>>>> origin/main emitter.instruction(\"mov x5, #0\"); // wrapper slot index emitter.label(\"__rt_swr_dup_scan\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ac86e8cf9b283410ef6cb6f3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:38:08.041Z",
+  "stored_at": "2026-08-22T06:38:08.042Z"
+}

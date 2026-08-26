@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_test.py\ncargo test --test codegen_tests -- codegen::io::streams::test_http_response_header_deprecation --exact 2>&1 | tail -20",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_test.py\ncargo test --test codegen_tests -- codegen::io::streams::test_http_response_header_deprecation --exact 2>&1 | tail -20: test added Compi",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_test.py\ncargo test --test codegen_tests -- codegen::io::streams::test_http_response_header_deprecation --exact 2>&1 | tail -20: test added Compiling elephc v0.26.3 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `test` profile [unoptimized + debuginfo] target(s) in 12.64s Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-16c45d69d5f633ba) running 0 tests test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8453 filtered out; finished in 0.00s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dea9cf922292b741f87f23b2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:26:41.024Z",
+  "stored_at": "2026-08-18T15:26:41.025Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test -p elephc --test codegen_tests io::streams::test_zip_archive 2>&1 | tail -25",
+  "summary": "cargo test -p elephc --test codegen_tests io::streams::test_zip_archive 2>&1 | tail -25: hc-pdo) Compiling elephc-image v0.1.0 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/crates/elephc-image) Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 55s Running t",
+  "text": "cargo test -p elephc --test codegen_tests io::streams::test_zip_archive 2>&1 | tail -25: hc-pdo) Compiling elephc-image v0.1.0 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/crates/elephc-image) Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 55s Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-d468f4b4b84961b3) running 6 tests test codegen::io::streams::test_zip_archive_open_flag_matrix_matches_php ... ok test codegen::io::streams::test_zip_archive_encrypted_and_directory_entries ... ok test codegen::io::streams::test_zip_archive_extract_to_matches_php ... ok test codegen::io::streams::test_zip_archive_reads_entries_like_php ... ok test codegen::io::streams::test_zip_archive_extract_to_cannot_escape_the_destination ... ok test codegen::io::streams::test_zip_archive_stat_index_reports_php_fields ... ok test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 8776 filtered out; finished in 3.26s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "19bca02585a44bc72314a427",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:32:21.827Z",
+  "stored_at": "2026-08-21T15:32:21.827Z"
+}

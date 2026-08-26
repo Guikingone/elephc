@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_unser_at_ref_boxed\" -B 3 src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs | head -12",
+  "summary": "grep -rn \"__rt_unser_at_ref_boxed\" -B 3 src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs | head -12: system/unserialize/decoder_x86_64.rs-648- emitter.instruction(\"cmp QWORD PTR [rax], 6\"); // does the alias point at an object? src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs:649: emitte",
+  "text": "grep -rn \"__rt_unser_at_ref_boxed\" -B 3 src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs | head -12: system/unserialize/decoder_x86_64.rs-648- emitter.instruction(\"cmp QWORD PTR [rax], 6\"); // does the alias point at an object? src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs:649: emitter.instruction(\"jne __rt_unser_at_ref_boxed\"); // non-objects need no retain -- src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs-651- emitter.instruction(\"mov rax, QWORD PTR [rax + 8]\"); // move the object pointer into incref's x86_64 input register src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs-652- emitter.instruction(\"call __rt_incref\"); // retain the shared object before the source box releases it src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs-653- emitter.instruction(\"mov rax, QWORD PTR [rbp - 72]\"); // reload the fresh box src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs:654: emitter.label(\"__rt_unser_at_ref_boxed\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8126e436e5e3a10f7ed6bc22",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:41:46.236Z",
+  "stored_at": "2026-08-20T17:41:46.237Z"
+}

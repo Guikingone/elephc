@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filterkeys && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filterkeys && printf '%s\\n' '<?php' 'print_r(array_filter([0, 1, 2], fn($v) => (bool) $v));' 'function keep($v) { return (bool) $v; }' 'print_r(array_filter([0, 1, 2], \"keep\"));' 'print_r(array_filter([0, 1, 2]));' > p.php && php -n p.php |… [+248 chars truncated]",
+  "summary": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filterkeys && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f",
+  "text": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filterkeys && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filterkeys && printf '%s\\n' '<?php' 'print_r(array_filter([0, 1, 2], fn($v) => (bool) $v));' 'function keep($v) { return (bool) $v; }' 'print_r(array_filter([0, 1, 2], \"keep\"));' 'print_r(array_filter([0, 1, 2]));' > p.php && php -n p.php | tr -d \" \\n\" && echo \"\" && rm -rf run && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php 2>&1 | tail -1 && mkdir -p run && cp p run/p && cd run && ./p | tr -d \" \\n\" && echo \"\": Array([1]=>1[2]=>2)Array([1]=>1[2]=>2)Array([1]=>1[2]=>2) Compiled 'p.php' -> 'p' Array([0]=>1[1]=>2)Array([0]=>1[1]=>2)Array([0]=>1[1]=>2)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "107df10094cd1169d30f51cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:19:08.026Z",
+  "stored_at": "2026-08-22T11:19:08.026Z"
+}

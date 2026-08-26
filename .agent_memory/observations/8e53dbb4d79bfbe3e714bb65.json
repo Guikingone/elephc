@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"label_global(\\\"__rt_fwrite\\\")\" -A 25 src/codegen_support/runtime/io/fwrite.rs | head -30",
+  "summary": "grep -n \"label_global(\\\"__rt_fwrite\\\")\" -A 25 src/codegen_support/runtime/io/fwrite.rs | head -30: fd` passes a 80- // non-handle through untouched and `__rt_stream_tls_session` reports no 81- // session for it, which is exactly the plain-write path the internal 82- // callers want. 83- emitter.instruction(\"sub sp, sp,",
+  "text": "grep -n \"label_global(\\\"__rt_fwrite\\\")\" -A 25 src/codegen_support/runtime/io/fwrite.rs | head -30: fd` passes a 80- // non-handle through untouched and `__rt_stream_tls_session` reports no 81- // session for it, which is exactly the plain-write path the internal 82- // callers want. 83- emitter.instruction(\"sub sp, sp, #80\"); // frame for the saved write state 84- emitter.instruction(\"stp x29, x30, [sp, #64]\"); // save frame pointer and return address 85- emitter.instruction(\"add x29, sp, #64\"); // establish the helper frame pointer 86- emitter.instruction(\"str x0, [sp, #24]\"); // save the incoming handle or raw descriptor 87- emitter.instruction(\"str x1, [sp, #8]\"); // save the payload pointer 88- emitter.instruction(\"str x2, [sp, #16]\"); // save the payload length 89- emitter.instruction(\"mov x9, #-1\"); // no append accounting unless the mode says otherwise -- 390: emitter.label_global(\"__rt_fwrite\"); 391- 392- // Frame (rbp-relative): [-8]=fd [-16]=pointer [-24]=length [-32]=handle",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e53dbb4d79bfbe3e714bb65",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T16:46:45.949Z",
+  "stored_at": "2026-08-17T16:46:45.949Z"
+}

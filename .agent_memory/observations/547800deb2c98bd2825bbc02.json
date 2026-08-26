@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"_stream_filter_pending\\|filter_pending\\|_stream_read_buf\" src/codegen_support/runtime/ | head -8",
+  "summary": "About to run: grep -rn \"_stream_filter_pending\\|filter_pending\\|_stream_read_buf\" src/codegen_support/runtime/ | head -8",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "547800deb2c98bd2825bbc02",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:32:09.411Z",
+  "stored_at": "2026-08-21T18:32:09.412Z"
+}

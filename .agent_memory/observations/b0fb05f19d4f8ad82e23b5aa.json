@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ | head -30",
+  "summary": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ | head -30: add_coding_type.py add_frame_gate.py add_glob_flags.py add_gz_catalog.py add_gz_transcribe_dump.py add_location_test.py add_lowering_gate",
+  "text": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ | head -30: add_coding_type.py add_frame_gate.py add_glob_flags.py add_gz_catalog.py add_gz_transcribe_dump.py add_location_test.py add_lowering_gate.py add_new_tests.py add_numeric_labels.py add_permanent_oracles.py add_plain_files_guard.py add_probe_tests.py add_scanf_transcribe_dump.py add_scratch_dump.py add_unregister_test.py add_write_tests.py add_zlib_catalog.py add_zlib_string_fns.py advance_bounded.py advance_sgc.py advance_wrapper_pos.py afk afprobe after_names.txt alias_targets.py arg_null_literal arg_null_literal.php arg_null_literal.s arg_null_var arg_null_var.php",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b0fb05f19d4f8ad82e23b5aa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:41:36.513Z",
+  "stored_at": "2026-08-22T17:41:36.514Z"
+}

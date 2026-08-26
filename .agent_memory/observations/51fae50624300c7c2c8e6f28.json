@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"resolve_nullable_int_operand_to_result\" src | head -20",
+  "summary": "grep -rn \"resolve_nullable_int_operand_to_result\" src | head -20: src/codegen/lower_inst/call_operands.rs:96:pub(in crate::codegen) fn resolve_nullable_int_operand_to_result( src/codegen/lower_inst/builtins/io.rs:26:use super::super::{resolve_int_operand_to_result, resolve_nullable_int_operand_to_result}; src/codegen/l",
+  "text": "grep -rn \"resolve_nullable_int_operand_to_result\" src | head -20: src/codegen/lower_inst/call_operands.rs:96:pub(in crate::codegen) fn resolve_nullable_int_operand_to_result( src/codegen/lower_inst/builtins/io.rs:26:use super::super::{resolve_int_operand_to_result, resolve_nullable_int_operand_to_result}; src/codegen/lower_inst/builtins/io/stream_file_ops.rs:334: resolve_nullable_int_operand_to_result(ctx, length, \"fwrite length\")?; src/codegen/lower_inst/builtins/io/stream_file_ops.rs:350: resolve_nullable_int_operand_to_result(ctx, length, \"fwrite length\")?; src/codegen/lower_inst/builtins/io/stream_file_ops.rs:469: resolve_nullable_int_operand_to_result(ctx, length, \"fgets length\")?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "51fae50624300c7c2c8e6f28",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:45:28.883Z",
+  "stored_at": "2026-08-21T10:45:28.884Z"
+}

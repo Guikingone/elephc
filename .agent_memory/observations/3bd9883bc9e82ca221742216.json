@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "until ! pgrep -f \"cargo build\" >/dev/null 2>&1; do sleep 20; done; echo \"=== REBUILD FINISHED ===\"; cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bx518buxk.output\" 2>/dev/null | tail -12",
+  "summary": "About to run: until ! pgrep -f \"cargo build\" >/dev/null 2>&1; do sleep 20; done; echo \"=== REBUILD FINISHED ===\"; cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3bd9883bc9e82ca221742216",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:45:07.258Z",
+  "stored_at": "2026-08-17T12:45:07.258Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"try_body\\b\" src/types/checker/stmt_check.rs src/types/checker/stmt_check/*.rs 2>/dev/null | head -8; grep -rln \"StmtKind::Try\" src/ | grep -v ir_lower | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"try_body\\b\" src/types/checker/stmt_check.rs src/types/checker/stmt_check/*.rs 2>/dev/null | head -8; grep -rln \"StmtKind::Try\" src/ | grep -v ir_lower | head: src/types/checker/stmt_check/control_flow.rs:515: try_b",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"try_body\\b\" src/types/checker/stmt_check.rs src/types/checker/stmt_check/*.rs 2>/dev/null | head -8; grep -rln \"StmtKind::Try\" src/ | grep -v ir_lower | head: src/types/checker/stmt_check/control_flow.rs:515: try_body, src/types/checker/stmt_check/control_flow.rs:520: for s in try_body { src/termination.rs src/synthetic_class.rs src/web_prelude.rs src/scanf_prelude/detect.rs src/hash_prelude/detect.rs src/name_resolver/statements/rewrite.rs src/types/return_alias.rs src/types/checker/loop_storage.rs src/types/checker/stmt_check.rs src/types/checker/stmt_check/control_flow.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ebcb049eca2681497b15b8f7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:47:42.219Z",
+  "stored_at": "2026-08-23T17:47:42.219Z"
+}

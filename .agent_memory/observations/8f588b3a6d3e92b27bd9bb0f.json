@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -60 src/codegen_support/runtime/io/unknown_wrapper_warning.rs; echo \"=== PHP ===\"; php -n -r 'fopen(\"bogus://x\",\"r\");' 2>&1; php -n -r 'fopen(\"php://nosuch\",\"r\");' 2>&1; php -n -r 'fopen(\"php://filter/read=no.such/resource=data://text/plain,hi\",\"r\");' 2>&1",
+  "summary": "head -60 src/codegen_support/runtime/io/unknown_wrapper_warning.rs; echo \"=== PHP ===\"; php -n -r 'fopen(\"bogus://x\",\"r\");' 2>&1; php -n -r 'fopen(\"php://nosuch\",\"r\");' 2>&1; php -n -r 'fopen(\"php://filter/read=no.such/resource=data://text/plain,hi\",\"r\");' 2>&1: , #0]\"); // the caller's name emitter.instruction(\"str x2",
+  "text": "head -60 src/codegen_support/runtime/io/unknown_wrapper_warning.rs; echo \"=== PHP ===\"; php -n -r 'fopen(\"bogus://x\",\"r\");' 2>&1; php -n -r 'fopen(\"php://nosuch\",\"r\");' 2>&1; php -n -r 'fopen(\"php://filter/read=no.such/resource=data://text/plain,hi\",\"r\");' 2>&1: , #0]\"); // the caller's name emitter.instruction(\"str x2, [sp, #16]\"); // the path being opened // -- measure the NUL-terminated path -- emitter.instruction(\"mov x3, #0\"); emitter.label(\"__rt_uww_len\"); emitter.instruction(\"ldrb w11, [x2, x3]\"); emitter.instruction(\"cbz w11, __rt_uww_len_done\"); === PHP === Warning: fopen(): Unable to find the wrapper \"bogus\" - did you forget to enable it when you configured PHP? in Command line code on line 1 Warning: fopen(bogus://x): Failed to open stream: No such file or directory in Command line code on line 1 Warning: fopen(): Invalid php:// URL specified in Command line code on line 1 Warning: fopen(php://nosuch): Failed to open stream: operation failed in Command line code on line 1 Warning: fopen(): Unable to locate filter \"no.such\" in Command line code on line 1 Warning: fopen(): Unable to create filter (no.such) in Command line code on line 1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8f588b3a6d3e92b27bd9bb0f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:13:38.049Z",
+  "stored_at": "2026-08-14T14:13:38.050Z"
+}

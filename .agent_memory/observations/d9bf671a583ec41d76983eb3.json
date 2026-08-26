@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_b64wrap.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_b64wrap.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen_su",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_b64wrap.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen_support/runtime/io/stream_filter.rs'\ns = open(p).read()\n\nHELPER = '''\n/// Copies `scratch[0..x6]` into the buffer at `x1`, breaking lines at the published `line-length`.\n///\n/// On entry `x4` is the scratch base and `x6` the encoded length; on exit `x2` is the length\n/// actually WRITTEN, which exceeds `x6` whenever a break was inserted. `x1` is the caller's own\n/// buffer: every caller of `__rt_apply_stream_filter` hands it one sized for the worst-case growth\n///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d9bf671a583ec41d76983eb3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:06:29.611Z",
+  "stored_at": "2026-08-17T14:06:29.612Z"
+}

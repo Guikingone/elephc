@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '352,420p' src/types/checker/functions/resolution/specialization.rs | rg -n \"changed|re-resolve|resolve_function_signature|return\" | head -12",
+  "summary": "rtk proxy sed -n '352,420p' src/types/checker/functions/resolution/specialization.rs | rg -n \"changed|re-resolve|resolve_function_signature|return\" | head -12: 18: changed = true; 23: Ok(changed.then_some(param_types)) 39: return false;",
+  "text": "rtk proxy sed -n '352,420p' src/types/checker/functions/resolution/specialization.rs | rg -n \"changed|re-resolve|resolve_function_signature|return\" | head -12: 18: changed = true; 23: Ok(changed.then_some(param_types)) 39: return false;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dafdb3b310675e1b3d93b577",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:02:36.032Z",
+  "stored_at": "2026-08-16T20:02:36.032Z"
+}

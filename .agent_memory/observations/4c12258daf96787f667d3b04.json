@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn emit_readfile_wrapper_dispatch\" -A20 src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null | head -24",
+  "summary": "grep -n \"fn emit_readfile_wrapper_dispatch\" -A20 src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null | head -24: lower_inst/builtins/io/wrapper_dispatch.rs-53- match ctx.emitter.target.arch { src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs-54- Arch::AArch64 => { src/codegen/lower_inst/builtins/io/wrapper_dispatc",
+  "text": "grep -n \"fn emit_readfile_wrapper_dispatch\" -A20 src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null | head -24: lower_inst/builtins/io/wrapper_dispatch.rs-53- match ctx.emitter.target.arch { src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs-54- Arch::AArch64 => { src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs-55- ctx.emitter.instruction(\"sub sp, sp, #16\"); // reserve path scratch storage across the wrapper probe src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs-56- ctx.emitter.instruction(\"str x1, [sp, #0]\"); // preserve the readfile path pointer src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs-57- ctx.emitter.instruction(\"str x2, [sp, #8]\"); // preserve the readfile path length src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs-58- ctx.emitter.instruction(\"mov x0, x1\"); // pass the path pointer to the wrapper-scheme probe src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs-59- ctx.emitter.instruction(\"mov x1, x2\"); // pass the path length to the wrapper-scheme probe",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4c12258daf96787f667d3b04",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:31:09.391Z",
+  "stored_at": "2026-08-21T10:31:09.391Z"
+}

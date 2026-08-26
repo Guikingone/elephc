@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn '__elephc_scanf' src/ | grep -v test | head -8",
+  "summary": "grep -rn '__elephc_scanf' src/ | grep -v test | head -8: src/scanf_prelude.rs:10://! emits a direct call to `__elephc_scanf` / `__elephc_fscanf`. src/scanf_prelude.rs:62://! tracks and `__elephc_scanf_ref()` now returns beside the values. Input exhausted before any src/scanf_prelude.rs:77:function __elephc_scanf_is_spa",
+  "text": "grep -rn '__elephc_scanf' src/ | grep -v test | head -8: src/scanf_prelude.rs:10://! emits a direct call to `__elephc_scanf` / `__elephc_fscanf`. src/scanf_prelude.rs:62://! tracks and `__elephc_scanf_ref()` now returns beside the values. Input exhausted before any src/scanf_prelude.rs:77:function __elephc_scanf_is_space(string $c): bool src/scanf_prelude.rs:82:function __elephc_scanf_digit_value(string $c): int src/scanf_prelude.rs:97:function __elephc_scanf_unsigned_negative(string $digits): string src/scanf_prelude.rs:122:function __elephc_scanf_unsigned(string $digits, int $sign): int|string src/scanf_prelude.rs:142: return __elephc_scanf_unsigned_negative($normalized); src/scanf_prelude.rs:154:function __elephc_scanf_int(string $s, int $si, int $sl, int $width, string $conv): array",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c88e457d239f4c4892ab2fa7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:34:00.352Z",
+  "stored_at": "2026-08-25T12:34:00.353Z"
+}

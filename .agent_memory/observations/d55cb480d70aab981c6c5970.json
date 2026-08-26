@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '245,300p' src/codegen_support/runtime/data/fixed.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '245,300p' src/codegen_support/runtime/data/fixed.rs: \"_uwmh_head_filectime\", WRAPPER_MISSING_HOOK_HEAD_FILECTIME), (\"_uwmh_head_filetype\", WRAPPER_MISSING_HOOK_HEAD_FILETYPE), (\"_uwmh_head_fileperms\", WRAPPER_MISSING",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '245,300p' src/codegen_support/runtime/data/fixed.rs: \"_uwmh_head_filectime\", WRAPPER_MISSING_HOOK_HEAD_FILECTIME), (\"_uwmh_head_filetype\", WRAPPER_MISSING_HOOK_HEAD_FILETYPE), (\"_uwmh_head_fileperms\", WRAPPER_MISSING_HOOK_HEAD_FILEPERMS), (\"_uwmh_head_fileowner\", WRAPPER_MISSING_HOOK_HEAD_FILEOWNER), (\"_uwmh_head_filegroup\", WRAPPER_MISSING_HOOK_HEAD_FILEGROUP), (\"_uwmh_head_fileinode\", WRAPPER_MISSING_HOOK_HEAD_FILEINODE), (\"_uwmh_head_stat\", WRAPPER_MISSING_HOOK_HEAD_STAT), (\"_uwmh_head_lstat\", WRAPPER_MISSING_HOOK_HEAD_LSTAT), (\"_uwmh_tail_url_stat\", WRAPPER_MISSING_HOOK_TAIL_URL_STAT), (\"_stat_failed_tail\", STAT_FAILED_TAIL), (\"_lstat_failed_tail\", LSTAT_FAILED_TAIL), (\"_filetype_unknown_head\", FILETYPE_UNKNOWN_HEAD), (\"_filetype_unknown_tail\", FILETYPE_UNKNOWN_TAIL), (\"_scandir_open_warn_head\", SCANDIR_OPEN_WARNING_HEAD), (\"_scandir_open_warn_mid\", SCANDIR_OPEN_WARNING_MIDDLE), (\"_scandir_errno_warn_head\", SCANDIR_ERRNO_WARNING_HEAD),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d55cb480d70aab981c6c5970",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:53:14.844Z",
+  "stored_at": "2026-08-22T20:53:14.845Z"
+}

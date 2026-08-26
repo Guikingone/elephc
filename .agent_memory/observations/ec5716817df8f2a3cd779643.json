@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub struct Span\" -A 15 src/span.rs | head -22",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub struct Span\" -A 15 src/span.rs | head -22: 29:pub struct Span { 30- pub line: u32, 31- pub col: u32, 32- pub end_line: u32, 33- pub end_col: u32, 34-} 35- 36-impl Span { 37- /// Creates a point span from one-bas",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub struct Span\" -A 15 src/span.rs | head -22: 29:pub struct Span { 30- pub line: u32, 31- pub col: u32, 32- pub end_line: u32, 33- pub end_col: u32, 34-} 35- 36-impl Span { 37- /// Creates a point span from one-based line and column coordinates. 38- /// The end position equals the start (extent unknown). 39- pub fn new(line: u32, col: u32) -> Self { 40- Self { 41- line, 42- col, 43- end_line: line, 44- end_col: col,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ec5716817df8f2a3cd779643",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:43:03.450Z",
+  "stored_at": "2026-08-23T16:43:03.450Z"
+}

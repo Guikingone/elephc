@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build --bin elephc 2>&1 | tail -1; mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxmixed2 && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctxmixed2 && printf '%s\\n' '<?php' '$e = json_decode(\"[]\", true);' '$c = stream_context_create($e);' 'stream_context_set_option($c, \"http\", \"method\", \"POST\");' 'print_r(stream_context_get_options($c))… [+593 chars truncated]",
+  "summary": "About to run: cargo build --bin elephc 2>&1 | tail -1; mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b91e4b65e303edb6c3663c32",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:43:03.432Z",
+  "stored_at": "2026-08-22T15:43:03.433Z"
+}

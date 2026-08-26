@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '2600,2660p' tests/codegen/io/streams.rs",
+  "summary": "sed -n '2600,2660p' tests/codegen/io/streams.rs: ke any bad fopen(). let out = compile_and_run( r#\"<?php $d = fopen(\"data://no-comma-here\", \"r\"); echo is_bool($d) ? \"false\" : \"resource\";\"#, ); assert_eq!(out, \"false\"); } /// One PHAR entry for the test builder: archive name, recorded uncompressed /// size, the bytes as",
+  "text": "sed -n '2600,2660p' tests/codegen/io/streams.rs: ke any bad fopen(). let out = compile_and_run( r#\"<?php $d = fopen(\"data://no-comma-here\", \"r\"); echo is_bool($d) ? \"false\" : \"resource\";\"#, ); assert_eq!(out, \"false\"); } /// One PHAR entry for the test builder: archive name, recorded uncompressed /// size, the bytes as stored in the data section, and the entry flag word. struct TestPharEntry<'a> { name: &'a str, uncompressed_size: u32, stored: &'a [u8], flags: u32, } // Precomputed bzip2 blob for `\"bzip2-compressed phar entry. \"` repeated eight // times. bzip2-rs is decode-only, so tests keep this stable fixture inline. const BZIP2_PHAR_BLOB: &[u8] = &[ 0x42, 0x5a, 0x68, 0x39, 0x31, 0x41, 0x59, 0x26, 0x53, 0x59, 0x61, 0x39, 0xa6, 0xe8, 0x00, 0x00, 0x1f, 0x99, 0x80, 0x40, 0x03, 0x10, 0x00, 0x3e, 0x63, 0xdc, 0x30, 0x20, 0x00, 0x70, 0x53, 0x09, 0xa6, 0x80, 0xd3, 0x10, 0x2a, 0xa8, 0x0c, 0x43, 0x46, 0x1a, 0x9b, 0x0b, 0x0a, 0x0e, 0x46, 0x45,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "12dd75c92c20a186c7a306dd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:20:51.867Z",
+  "stored_at": "2026-08-14T14:20:51.868Z"
+}

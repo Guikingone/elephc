@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"mod runtime\" src/codegen_support/mod.rs | head -3; grep -n \"mod codegen_support\" src/lib.rs | head -3",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"mod runtime\" src/codegen_support/mod.rs | head -3; grep -n \"mod codegen_support\" src/lib.rs | head -3: 32:pub(crate) mod runtime; 33:mod runtime_features; 20:pub mod codegen_support;",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"mod runtime\" src/codegen_support/mod.rs | head -3; grep -n \"mod codegen_support\" src/lib.rs | head -3: 32:pub(crate) mod runtime; 33:mod runtime_features; 20:pub mod codegen_support;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f1a6679fe6123e0538cd4be3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:29:15.364Z",
+  "stored_at": "2026-08-23T16:29:15.366Z"
+}

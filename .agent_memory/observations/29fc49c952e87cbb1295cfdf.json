@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"__rt_diag_warning\" src/codegen/ | wc -l; echo \"--- call sites:\"; grep -rc \"__rt_diag_warning\" src/codegen/ | grep -v \":0$\" | sort -t: -k2 -rn | head -15",
+  "summary": "grep -rln \"__rt_diag_warning\" src/codegen/ | wc -l; echo \"--- call sites:\"; grep -rc \"__rt_diag_warning\" src/codegen/ | grep -v \":0$\" | sort -t: -k2 -rn | head -15: 13 --- call sites: src/codegen/lower_inst/builtins/io/fopen_core.rs:14 src/codegen/lower_inst/builtins/io/stat_wrapper_dispatch.rs:8 src/codegen/lower_inst",
+  "text": "grep -rln \"__rt_diag_warning\" src/codegen/ | wc -l; echo \"--- call sites:\"; grep -rc \"__rt_diag_warning\" src/codegen/ | grep -v \":0$\" | sort -t: -k2 -rn | head -15: 13 --- call sites: src/codegen/lower_inst/builtins/io/fopen_core.rs:14 src/codegen/lower_inst/builtins/io/stat_wrapper_dispatch.rs:8 src/codegen/lower_inst/builtins/io/phar_write.rs:6 src/codegen/lower_inst/builtins/io.rs:6 src/codegen/lower_inst/objects/mixed_property_reads.rs:2 src/codegen/lower_inst/objects/dynamic_property_read_entry.rs:2 src/codegen/lower_inst/builtins/scalar_metadata.rs:1 src/codegen/lower_inst/builtins/io/stream_file_ops.rs:1 src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs:1 src/codegen/lower_inst/builtins/io/stream_context.rs:1 src/codegen/lower_inst/builtins/io/host_directory_process.rs:1 src/codegen/lower_inst.rs:1 src/codegen/block_emit.rs:1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "29fc49c952e87cbb1295cfdf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:55:51.734Z",
+  "stored_at": "2026-08-18T20:55:51.735Z"
+}

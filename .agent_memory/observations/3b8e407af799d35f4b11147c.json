@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh run list -R Guikingone/elephc --branch ci/streams-csv-fullci -L 5 --json databaseId,workflowName,headSha,status,conclusion,createdAt",
+  "summary": "About to run: gh run list -R Guikingone/elephc --branch ci/streams-csv-fullci -L 5 --json databaseId,workflowName,headSha,status,conclusion,createdAt",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3b8e407af799d35f4b11147c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:29:04.909Z",
+  "stored_at": "2026-08-16T15:29:04.910Z"
+}

@@ -387,14 +387,36 @@ impl Checker {
     /// Temporarily replaces the checker's active ref params, globals, and statics stacks with
     /// the given values while running `f`. Saves and restores all state afterward to avoid
     /// leaking context across nested checks.
+    ///
+    /// `typed_param_names` seeds the body's declared-type exclusion set with the parameters
+    /// that carry a type hint: a declared type is a contract, so those locals are never
+    /// kill/retype eligible. `param_names` is every parameter, typed or not, and seeds their
+    /// binding depth at 0 (see [`Checker::enter_local_binding_scope`]). The rest of the
+    /// per-body local-binding eligibility state (conditional depth, binding depths, reference
+    /// aliases, `static` names) is reset here too — it describes one frame and must not leak
+    /// between caller and callee.
+    ///
+    /// `body` is the statement list `f` is about to check. It is taken so the mixed-storage
+    /// pre-scan can run here, once the per-body state is installed and before any statement is
+    /// checked: the scan's decision has to be in place at each marked local's FIRST store, where
+    /// the slot's type is fixed. The freshly seeded `local_binding_depth` is exactly this body's
+    /// parameter set, which the scan excludes from marking wholesale — a parameter's storage is
+    /// already `mixed` by call-site specialization, or a declared contract, so marking would take
+    /// credit for storage this feature did not create.
     pub(crate) fn with_local_storage_context<T, F>(
         &mut self,
         ref_param_names: Vec<String>,
+        param_names: Vec<String>,
+        typed_param_names: Vec<String>,
+        pre_bound_own_storage: std::collections::HashMap<String, crate::types::PhpType>,
+        body: &[crate::parser::ast::Stmt],
         f: F,
     ) -> Result<T, CompileError>
     where
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
+        let saved_local_binding_scope =
+            self.enter_local_binding_scope(param_names, typed_param_names);
         let saved_ref_params = self.active_ref_params.clone();
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();
@@ -415,6 +437,20 @@ impl Checker {
         // `global_env`, so null-probe roots found here must not be deferred against it.
         self.null_probe_scope_is_top_level = false;
 
+        // Runs on the state installed above, and reads exactly one piece of it: the
+        // `local_binding_depth` map `enter_local_binding_scope` has just filled with this body's
+        // parameters, which is how EVERY parameter — typed or not, by reference or by value — is
+        // kept unmarked. It also records here whether the body calls `eval()` anywhere, which
+        // `Checker::local_binding_is_killable` then consults for the whole body.
+        //
+        // `pre_bound_own_storage` is what this body's OWN frame already holds on entry — a
+        // closure's by-value captures, and the parameters — with the type each arrives with. NOT
+        // the body's incoming environment: a closure body starts from a clone of the whole
+        // enclosing scope, and keying on that silenced fresh closure locals that merely shared a
+        // name with something outside. A marked name from this map is announced only when
+        // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
+        self.run_mixed_storage_scan(body, &pre_bound_own_storage);
+
         let result = f(self);
 
         self.active_ref_params = saved_ref_params;
@@ -425,6 +461,7 @@ impl Checker {
         self.break_continue_depth = saved_break_continue_depth;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
         self.null_probe_scope_is_top_level = saved_null_probe_scope_is_top_level;
+        self.exit_local_binding_scope(saved_local_binding_scope);
 
         result
     }

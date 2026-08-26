@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='tests/error_tests/io_builtins/streams.rs'\ns=open(p).read()\nold='''/// Verifies fwrite() produces correct error when called with only one argument.\n#[test]\nfn test_error_fwrite_wrong_args() {\n    expect_error(\"<?php fwrite(1);\", \"fwrite() takes exactly 2 arguments\");\n}'''\nnew='''/// Verifies fwrite() produces correct error when called with only one argument.\n///\n/// The arity is 2 OR 3: php's signature is `fwrite($stream, string $data, ?int $length = null)`,\n/// and the third argument caps the write. php reports the shortfall at run time as\n/// `ArgumentCountError: fwrite()… [+407 chars truncated]",
+  "summary": "python3 - <<'PY'\np='tests/error_tests/io_builtins/streams.rs'\ns=open(p).read()\nold='''/// Verifies fwrite() produces correct error when called with only one argument.\n#[test]\nfn test_error_fwrite_wrong_args() {\n    expect_error(\"<?php fwrite(1);\", \"fwrite() takes exactly 2 arguments\");\n}'''\nnew='''/// Verifies fwrite()",
+  "text": "python3 - <<'PY'\np='tests/error_tests/io_builtins/streams.rs'\ns=open(p).read()\nold='''/// Verifies fwrite() produces correct error when called with only one argument.\n#[test]\nfn test_error_fwrite_wrong_args() {\n    expect_error(\"<?php fwrite(1);\", \"fwrite() takes exactly 2 arguments\");\n}'''\nnew='''/// Verifies fwrite() produces correct error when called with only one argument.\n///\n/// The arity is 2 OR 3: php's signature is `fwrite($stream, string $data, ?int $length = null)`,\n/// and the third argument caps the write. php reports the shortfall at run time as\n/// `ArgumentCountError: fwrite() expects at least 2 arguments, 1 given`; elephc refuses it at\n/// compile time, as it does for every builtin arity.\n#[test]\nfn test_error_fwrite_wrong_args() {\n    expect_error(\"<?php fwrite(1);\", \"fwrite() takes 2 or 3 arguments\");\n}'''\nassert s.count(old)==1\nopen(p,'w').write(s.replace(old,new))\nprint(\"updated\")\nPY\ncargo test --test error_tests test_error_fwrite 2>&1 | rg \"^test result|FAILED\" | head -3 failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree; break it into plain, separate commands. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Run the equivalent from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature without the redirect.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0ff04c743868ad4b8aac16fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:43:55.667Z",
+  "stored_at": "2026-08-17T07:43:55.667Z"
+}

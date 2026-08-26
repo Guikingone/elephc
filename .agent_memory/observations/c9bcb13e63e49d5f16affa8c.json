@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '65,80p' src/types/checker/builtin_spl_classes/zip.rs; echo \"=== all names it inserts ===\"; grep -n \"\\\"ZipArchive\\\"\\|insert(\" src/types/checker/builtin_spl_classes/zip.rs | head -6",
+  "summary": "sed -n '65,80p' src/types/checker/builtin_spl_classes/zip.rs; echo \"=== all names it inserts ===\"; grep -n \"\\\"ZipArchive\\\"\\|insert(\" src/types/checker/builtin_spl_classes/zip.rs | head -6: /// Unix modification timestamp, already converted from the DOS fields. const FIELD_MTIME: i64 = 6; /// The entry name, last so a `",
+  "text": "sed -n '65,80p' src/types/checker/builtin_spl_classes/zip.rs; echo \"=== all names it inserts ===\"; grep -n \"\\\"ZipArchive\\\"\\|insert(\" src/types/checker/builtin_spl_classes/zip.rs | head -6: /// Unix modification timestamp, already converted from the DOS fields. const FIELD_MTIME: i64 = 6; /// The entry name, last so a `\\0` inside it survives the bounded split. const FIELD_NAME: i64 = 7; /// Inserts the supported ZIP classes into the builtin metadata registry. pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) { class_map.insert( \"ZipArchive\".to_string(), FlattenedClass { name: \"ZipArchive\".to_string(), span: crate::span::Span::dummy(), extends: None, implements: vec![\"Countable\".to_string()], is_abstract: false, is_final: false, === all names it inserts === 72: class_map.insert( 73: \"ZipArchive\".to_string(), 75: name: \"ZipArchive\".to_string(), 123:/// Measured with `(new ReflectionClass(\"ZipArchive\"))->getConstants()` on",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c9bcb13e63e49d5f16affa8c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:16:19.858Z",
+  "stored_at": "2026-08-21T15:16:19.859Z"
+}

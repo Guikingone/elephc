@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'user_wrapper_metadata\\|STREAM_WRAPPER_METADATA\\|metadata_slot\\|__rt_user_wrapper_path_op\\|STREAM_WRAPPER_.*_SLOT' src/codegen/lower_inst/builtins/io/*.rs src/codegen_support/runtime/io/user_wrapper_path_op.rs | head -60",
+  "summary": "grep -n 'user_wrapper_metadata\\|STREAM_WRAPPER_METADATA\\|metadata_slot\\|__rt_user_wrapper_path_op\\|STREAM_WRAPPER_.*_SLOT' src/codegen/lower_inst/builtins/io/*.rs src/codegen_support/runtime/io/user_wrapper_path_op.rs | head -60: :emit_call_label(ctx.emitter, \"__rt_user_wrapper_path_op\"); src/codegen/lower_inst/builtin",
+  "text": "grep -n 'user_wrapper_metadata\\|STREAM_WRAPPER_METADATA\\|metadata_slot\\|__rt_user_wrapper_path_op\\|STREAM_WRAPPER_.*_SLOT' src/codegen/lower_inst/builtins/io/*.rs src/codegen_support/runtime/io/user_wrapper_path_op.rs | head -60: :emit_call_label(ctx.emitter, \"__rt_user_wrapper_path_op\"); src/codegen/lower_inst/builtins/io/touch_pathinfo.rs:86: abi::emit_call_label(ctx.emitter, \"__rt_user_wrapper_path_op\"); src/codegen_support/runtime/io/user_wrapper_path_op.rs:3://! `__rt_user_wrapper_path_op` (a generic single-path helper backing src/codegen_support/runtime/io/user_wrapper_path_op.rs:31:/// Emits `__rt_user_wrapper_path_op(path_ptr, path_len, slot, a3, a4) -> 1/0`. src/codegen_support/runtime/io/user_wrapper_path_op.rs:49:/// AArch64 implementation of `__rt_user_wrapper_path_op`. src/codegen_support/runtime/io/user_wrapper_path_op.rs:53: emitter.label_global(\"__rt_user_wrapper_path_op\"); src/codegen_support/runtime/io/user_wrapper_path_op.rs:157:/// x86_64 implementation of `__rt_user_wrapper_path_op`. src/codegen_support/runtime/io/user_wrapper_path_op.rs:161: emitter.label_global(\"__rt_user_wrapper_path_op\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c8969f3afd1170d6eb7dc69d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:12:40.367Z",
+  "stored_at": "2026-08-14T14:12:40.367Z"
+}

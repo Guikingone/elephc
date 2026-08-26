@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'label_global(\"__rt_key_parse_i64_decimal\")' -A40 src/codegen_support/runtime/arrays/hash_key_compare.rs | head -45",
+  "summary": "grep -n 'label_global(\"__rt_key_parse_i64_decimal\")' -A40 src/codegen_support/runtime/arrays/hash_key_compare.rs | head -45: tter.instruction(\"cbz x10, __rt_key_parse_i64_decimal_fail\"); // exact decimal helper instruction 669- emitter.instruction(\"mov x14, #0\"); // exact decimal helper instruction 670- emitter.label(\"",
+  "text": "grep -n 'label_global(\"__rt_key_parse_i64_decimal\")' -A40 src/codegen_support/runtime/arrays/hash_key_compare.rs | head -45: tter.instruction(\"cbz x10, __rt_key_parse_i64_decimal_fail\"); // exact decimal helper instruction 669- emitter.instruction(\"mov x14, #0\"); // exact decimal helper instruction 670- emitter.label(\"__rt_key_parse_i64_decimal_digit_loop\"); 671- emitter.instruction(\"cbz x10, __rt_key_parse_i64_decimal_finish\"); // exact decimal helper instruction 672- emitter.instruction(\"ldrb w13, [x9]\"); // exact decimal helper instruction 673- emitter.instruction(\"sub w17, w13, #48\"); // exact decimal helper instruction 674- emitter.instruction(\"cmp w17, #9\"); // exact decimal helper instruction 675- emitter.instruction(\"b.hi __rt_key_parse_i64_decimal_tail\"); // exact decimal helper instruction -- 793: emitter.label_global(\"__rt_key_parse_i64_decimal\"); 794- emitter.instruction(\"mov r9, rax\"); // exact decimal helper instruction 795- emitter.instruction(\"mov r10, rdx\"); // exact decimal helper instruction",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "431efae3e4727a25ebc2ecf0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:29:07.167Z",
+  "stored_at": "2026-08-21T07:29:07.167Z"
+}

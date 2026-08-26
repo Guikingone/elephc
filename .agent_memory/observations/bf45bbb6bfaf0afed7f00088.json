@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'Warning:' tests/codegen/io/*.rs | head -5",
+  "summary": "grep -rn 'Warning:' tests/codegen/io/*.rs | head -5: tests/codegen/io/directory_as_a_file.rs:55: \"Warning: copy(): The first argument to copy() function cannot be a directory\\n\" tests/codegen/io/files.rs:124: .contains(\"Warning: disk_free_space(): No such file or directory\\n\"), tests/codegen/io/files.rs:130: .contains(",
+  "text": "grep -rn 'Warning:' tests/codegen/io/*.rs | head -5: tests/codegen/io/directory_as_a_file.rs:55: \"Warning: copy(): The first argument to copy() function cannot be a directory\\n\" tests/codegen/io/files.rs:124: .contains(\"Warning: disk_free_space(): No such file or directory\\n\"), tests/codegen/io/files.rs:130: .contains(\"Warning: disk_total_space(): No such file or directory\\n\"), tests/codegen/io/files.rs:272: \"Warning: file_get_contents(missing.txt): Failed to open stream: No such file or directory\" tests/codegen/io/files.rs:616: .contains(\"Warning: file_get_contents(): Failed to seek to position -30 in the stream\"),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bf45bbb6bfaf0afed7f00088",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:34:50.023Z",
+  "stored_at": "2026-08-24T19:34:50.024Z"
+}

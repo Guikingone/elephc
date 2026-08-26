@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/gz_prelude.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/gz_prelude.rs: //! Purpose:\n//! PHP's `gz*` stream surface — `gzopen`, `gzread`, `gzgets`, `gzwrite`, `gzseek`, `gzfile`,\n//! `readgzfile` and their siblings — implemented in elephc-PHP on top of the `compress.zlib://`",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/gz_prelude.rs: //! Purpose:\n//! PHP's `gz*` stream surface — `gzopen`, `gzread`, `gzgets`, `gzwrite`, `gzseek`, `gzfile`,\n//! `readgzfile` and their siblings — implemented in elephc-PHP on top of the `compress.zlib://`\n//! wrapper the stream functions already serve. All fourteen were absent: a program calling\n//! `gzopen($f, \"r\")` failed with \"Undefined function\".\n//!\n//! Called from:\n//! - `crate::pipeline::compile()` and the codegen test harness via `inject_if_used`, after include\n//!   resolution and before name resolution.\n//!\n//! Key details:\n//! - WHY THIS IS AN EQUIVALENCE AND NOT AN APPROXIMATION. ph",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4c400c2a64b1797b0c7249d5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:31:57.781Z",
+  "stored_at": "2026-08-21T11:31:57.781Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"normalize_builtin_call_args\" src/ | grep -v \"fn normalize_builtin_call_args\"",
+  "summary": "About to run: grep -rn \"normalize_builtin_call_args\" src/ | grep -v \"fn normalize_builtin_call_args\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8a25529f8448a81720fc9b35",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:12:56.709Z",
+  "stored_at": "2026-08-21T16:12:56.709Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"var_export\\|SplFixedArray\\|LimitIterator\\|Iterator\" examples/spl-decorators/main.php | head -20",
+  "summary": "grep -n \"var_export\\|SplFixedArray\\|LimitIterator\\|Iterator\" examples/spl-decorators/main.php | head -20: [\"zero\", \"one\", \"two\", \"three\"]), 1, 2); 40:$filter = new CallbackFilterIterator( 41: new ArrayIterator([\"skip\" => 1, \"keep\" => 2, \"tail\" => 3]), 42: function (int $value, string $key, Iterator $inner) use ($minimu",
+  "text": "grep -n \"var_export\\|SplFixedArray\\|LimitIterator\\|Iterator\" examples/spl-decorators/main.php | head -20: [\"zero\", \"one\", \"two\", \"three\"]), 1, 2); 40:$filter = new CallbackFilterIterator( 41: new ArrayIterator([\"skip\" => 1, \"keep\" => 2, \"tail\" => 3]), 42: function (int $value, string $key, Iterator $inner) use ($minimum, $marker): bool { 43: return $inner instanceof Iterator && ($value > $minimum || $key === $marker); 54:$regex = new RegexIterator( 55: new ArrayIterator([\"first\" => \"item-10\", \"second\" => \"skip\", \"third\" => \"task-7\"]), 57: RegexIterator::GET_MATCH 69:$cache = new CachingIterator( 70: new ArrayIterator([\"a\" => \"A\", \"b\" => \"B\"]), 71: CachingIterator::FULL_CACHE | CachingIterator::TOSTRING_USE_KEY 85:$append = new AppendIterator(); 86:$append->append(new ArrayIterator([\"left\" => \"L\"])); 87:$append->append(new ArrayIterator([\"right\" => \"R\"])); 89: echo $append->getIteratorIndex(); 98:$multi = new MultipleIterator(MultipleIterator::MIT_NEED_ANY | MultipleIterator::MIT_KEYS_ASSOC);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f0393dd7338edd29ac8ed69",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:36:06.531Z",
+  "stored_at": "2026-08-20T20:36:06.531Z"
+}

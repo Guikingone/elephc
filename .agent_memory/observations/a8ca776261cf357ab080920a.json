@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/compress_wrapper.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/compress_wrapper.rs: //! Purpose:\n//! Integration tests for the `compress.zlib://` / `compress.bzip2://` wrappers reached through a\n//! URL or a mode that is only known at RUN time.\n//!\n//! Called from:\n//",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/compress_wrapper.rs: //! Purpose:\n//! Integration tests for the `compress.zlib://` / `compress.bzip2://` wrappers reached through a\n//! URL or a mode that is only known at RUN time.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - Both halves of an `fopen()` used to have to be compile-time literals for these wrappers to\n//!   work properly. A computed URL reached the plain byte readers as a FILENAME, and a computed\n//!   MODE was classified as \"r\" whatever it said — so `$m = \"w\"; fopen(\"compress.zlib://o.gz\", $m)`\n//!   opened for reading and warned about a file it wa",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a8ca776261cf357ab080920a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:14:58.681Z",
+  "stored_at": "2026-08-21T12:14:58.681Z"
+}

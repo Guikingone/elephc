@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/local-suite-needs-ci-rust-min-stack.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/local-suite-needs-ci-rust-min-stack.md: ---\nname: local-suite-needs-ci-rust-min-stack\ndescription: \"🔴🛠️ La suite codegen locale ABORTE (SIGABRT, pas d'échec d'assertion) sans `RUST_MIN_STACK=33554432` — la CI le dé",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/local-suite-needs-ci-rust-min-stack.md: ---\nname: local-suite-needs-ci-rust-min-stack\ndescription: \"🔴🛠️ La suite codegen locale ABORTE (SIGABRT, pas d'échec d'assertion) sans `RUST_MIN_STACK=33554432` — la CI le définit globalement, pas le poste\"\nmetadata:\n  node_type: memory\n  type: feedback\n  modified: 2026-08-21T00:00:00.000Z\n---\n\n`cargo test -p elephc --test codegen_tests` s'abat sur :\n\n    thread 'codegen::fibers::scenarios::test_suspended_fiber_recursion_budget_does_not_leak_to_main'\n    has overflowed its stack\n    fatal runtime error: stack overflow, aborting\n    (signal: 6, SIGABRT)\n\n🔴 Ce n'est PAS un échec d'assertion : le",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a9401b0d735c358f1152c20a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:57:53.450Z",
+  "stored_at": "2026-08-21T19:57:53.451Z"
+}

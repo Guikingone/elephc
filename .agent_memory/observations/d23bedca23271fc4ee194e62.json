@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'label_global(\"__rt_file\")\\|label_global(\"__rt_stat\")\\|label_global(\"__rt_file_get_contents_maybe_phar\")\\|label_global(\"__rt_readfile_wrapper\")\\|label_global(\"__rt_file_from_bytes\")' src/codegen_support/runtime/ | sed 's|src/codegen_support/runtime/||' | head -12",
+  "summary": "grep -rn 'label_global(\"__rt_file\")\\|label_global(\"__rt_stat\")\\|label_global(\"__rt_file_get_contents_maybe_phar\")\\|label_global(\"__rt_readfile_wrapper\")\\|label_global(\"__rt_file_from_bytes\")' src/codegen_support/runtime/ | sed 's|src/codegen_support/runtime/||' | head -12: io/readfile_wrapper.rs:37: emitter.label_globa",
+  "text": "grep -rn 'label_global(\"__rt_file\")\\|label_global(\"__rt_stat\")\\|label_global(\"__rt_file_get_contents_maybe_phar\")\\|label_global(\"__rt_readfile_wrapper\")\\|label_global(\"__rt_file_from_bytes\")' src/codegen_support/runtime/ | sed 's|src/codegen_support/runtime/||' | head -12: io/readfile_wrapper.rs:37: emitter.label_global(\"__rt_readfile_wrapper\"); io/readfile_wrapper.rs:96: emitter.label_global(\"__rt_readfile_wrapper\"); io/phar_read.rs:210: emitter.label_global(\"__rt_file_get_contents_maybe_phar\"); io/phar_read.rs:464: emitter.label_global(\"__rt_file_get_contents_maybe_phar\"); io/file.rs:46: emitter.label_global(\"__rt_file\"); io/file.rs:62: emitter.label_global(\"__rt_file_from_bytes\"); io/file.rs:198: emitter.label_global(\"__rt_file\"); io/file.rs:209: emitter.label_global(\"__rt_file_from_bytes\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d23bedca23271fc4ee194e62",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:33:43.759Z",
+  "stored_at": "2026-08-22T08:33:43.759Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests array_basics::test_sort 2>&1 | grep -E \"^test |test result|panicked|left|right|^error\" | head -15",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests array_basics::test_sort 2>&1 | grep -E \"^test |test result|panicked|left|right|^error\" | head -15: test codegen::array_basics::test_sort_mixed_uses_phps_numeric_string_ordering ... ok test codegen::array_basics::test_sort_orders_mixed_elements_like_php ... FAILED ",
+  "text": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests array_basics::test_sort 2>&1 | grep -E \"^test |test result|panicked|left|right|^error\" | head -15: test codegen::array_basics::test_sort_mixed_uses_phps_numeric_string_ordering ... ok test codegen::array_basics::test_sort_orders_mixed_elements_like_php ... FAILED test codegen::array_basics::test_sort_mixed_from_a_readdir_loop ... ok test codegen::array_basics::test_sort ... ok thread 'codegen::array_basics::test_sort_orders_mixed_elements_like_php' (39860953) panicked at tests/codegen/array_basics.rs:920:5: assertion `left == right` failed left: \"[null,2,10,\\\"apple\\\",\\\"banana\\\",true]\\n[\\\"banana\\\",\\\"apple\\\",10,2,true,null]\\n\" right: \"[null,true,\\\"apple\\\",\\\"banana\\\",2,10]\\n[10,2,\\\"banana\\\",\\\"apple\\\",true,null]\\n\" test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 8839 filtered out; finished in 1.67s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "822468368f4048aaede43c69",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:20:48.539Z",
+  "stored_at": "2026-08-22T10:20:48.539Z"
+}

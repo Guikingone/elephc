@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub enum TypeSpec\" -A 25 crates/elephc-builtin-contract/src/*.rs | head -30",
+  "summary": "About to run: grep -n \"pub enum TypeSpec\" -A 25 crates/elephc-builtin-contract/src/*.rs | head -30",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c8bfcbbe8d8dff07d1df8c4b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:50:19.862Z",
+  "stored_at": "2026-08-21T16:50:19.862Z"
+}

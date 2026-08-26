@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/file_object_read_ahead.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/file_object_read_ahead.rs: //! Purpose:\n//! Integration tests for the LINE COUNT an `SplFileObject` iteration yields and what `eof()`\n//! reports at each step of it.\n//!\n//! Called from:\n//! - `cargo test",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/file_object_read_ahead.rs: //! Purpose:\n//! Integration tests for the LINE COUNT an `SplFileObject` iteration yields and what `eof()`\n//! reports at each step of it.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - php drives the iteration from the stream and reads one line AHEAD of the one it yields, so\n//!   `eof()` is already true while the LAST element is still current. elephc iterates a line\n//!   ARRAY, whose cursor cannot see the stream, and answered `false` at every step.\n//! - The read-ahead is also what decides whether there IS a trailing empty element: after the\n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b606f0f7a16fb74535fd9f3e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:16:53.187Z",
+  "stored_at": "2026-08-25T14:16:53.188Z"
+}

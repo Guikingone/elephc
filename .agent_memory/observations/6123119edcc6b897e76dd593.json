@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_nonobject.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_nonobject.txt: fix(objects): a method call on a non-object always said \"on null\", whatever the receiver was\n\nMEASURED on `php -n` 8.5.6, one `",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_nonobject.txt: fix(objects): a method call on a non-object always said \"on null\", whatever the receiver was\n\nMEASURED on `php -n` 8.5.6, one `$v->d()` per receiver:\n\n    null   Call to a member function d() on null       int      … on int\n    false  … on false                                  float    … on float\n    true   … on true                                   string   … on string\n    array  … on array                                  resource … on resource\n\nTwo of those name the VALUE and not the type — php writes `false` and `true`, never `on bool` —\nwhich is `zend_zval_value_name`, the function php ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6123119edcc6b897e76dd593",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T11:48:14.431Z",
+  "stored_at": "2026-08-23T11:48:14.432Z"
+}

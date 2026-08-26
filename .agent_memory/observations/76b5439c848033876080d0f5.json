@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_gc_array_unique_borrowed_array_survives_unset\" -A 22 tests/codegen/objects/gc_aliasing.rs | head -26",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_gc_array_unique_borrowed_array_survives_unset\" -A 22 tests/codegen/objects/gc_aliasing.rs | head -26: 290:fn test_gc_array_unique_borrowed_array_survives_unset() { 291- let out = compile_and_run( 292- r#\"<?p",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_gc_array_unique_borrowed_array_survives_unset\" -A 22 tests/codegen/objects/gc_aliasing.rs | head -26: 290:fn test_gc_array_unique_borrowed_array_survives_unset() { 291- let out = compile_and_run( 292- r#\"<?php 293-$inner = [3]; 294-$src = [$inner, $inner]; 295-$uniq = array_unique($src); 296-unset($src); 297-unset($inner); 298-echo count($uniq) . \"|\" . $uniq[0][0] . \"|\" . $uniq[2][0]; 299-echo count($uniq) . \"|\" . $uniq[0][0]; 300-\"#, 301- ); 302- assert_eq!(out, \"1|3\"); 303-} 304- 305-/// Verifies that an inner array extracted via array_splice (removed portion) survives unset of the source. 306-/// Fixture: src contains inner array at index 1 among other elements, splice out index 1, unset src and inner, read removed portion. 307-/// Regression: ensures array_splice removed portion preserves GC alias for nested inner arrays. 308-#[test] 309-fn test_gc_array_splice_borrowed_array_survives_unset() { 310- let out = compile_and_run( 311- r#\"<?php 312-$inner = [7];",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "76b5439c848033876080d0f5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:00:09.338Z",
+  "stored_at": "2026-08-23T12:00:09.338Z"
+}

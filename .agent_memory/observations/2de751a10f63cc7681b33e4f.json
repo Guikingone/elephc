@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/mkfull.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/mkfull.py: import re\n\nbody = open('prelude_body.php').read().split('<?php', 1)[1]\ncorpus = open('diff.php').read()\nsubj = re.search(r'\\$subject",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/mkfull.py: import re\n\nbody = open('prelude_body.php').read().split('<?php', 1)[1]\ncorpus = open('diff.php').read()\nsubj = re.search(r'\\$subjects = \\[(.*?)\\n\\];', corpus, re.S).group(0)\nfmts = re.search(r'\\$formats = \\[(.*?)\\n\\];', corpus, re.S).group(0)\ndrv = \"<?php\\n\" + body + \"\\n\" + subj + \"\\n\" + fmts + '''\nfunction render(mixed $v): string\n{\n    if (is_int($v)) { return \"i:\" . $v; }\n    if (is_float($v)) { return \"f:\" . var_export($v, true); }\n    if (is_string($v)) { return \"s:\" . var_export($v, true); }\n    if ($v === null) { return \"NULL\"; }\n    return \"?\";\n}\nforeach ($subjects as $s) {\n    foreach",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2de751a10f63cc7681b33e4f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:07:09.782Z",
+  "stored_at": "2026-08-16T16:07:09.783Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen io:: 2>&1 | head -20",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen io:: 2>&1 | head -20: error: no test target named `codegen` in `elephc` package help: available test targets: array_flip_assoc_tests array_map_result_heap_tests array_result_type_tests array_set_op_key_preservation_tests builtin_p",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen io:: 2>&1 | head -20: error: no test target named `codegen` in `elephc` package help: available test targets: array_flip_assoc_tests array_map_result_heap_tests array_result_type_tests array_set_op_key_preservation_tests builtin_parity_tests cdylib_tests codegen_tests compiler_determinism_tests compiler_security_limits_tests error_class_hierarchy_tests error_tests eval_object_handle_tests eval_resource_id_tests eval_string_interpolation_tests extension_loaded_tests foreach_non_iterable_tests fresh_result_ownership_leak_tests function_exists_tests",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "349d73dc5097f08b0220f833",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:25:06.770Z",
+  "stored_at": "2026-08-24T17:25:06.770Z"
+}

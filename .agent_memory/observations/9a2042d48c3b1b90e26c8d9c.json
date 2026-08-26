@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"http_response_header\" tests/codegen/ | grep -i \"deprecat\\|fn test\" | head",
+  "summary": "grep -rn \"http_response_header\" tests/codegen/ | grep -i \"deprecat\\|fn test\" | head: tests/codegen/io/streams.rs:8961:/// Verifies php 8.5's `$http_response_header` deprecation is version-gated. tests/codegen/io/streams.rs:8969:fn test_http_response_header_deprecation_is_gated_on_php_85() { tests/codegen/io/streams.rs:",
+  "text": "grep -rn \"http_response_header\" tests/codegen/ | grep -i \"deprecat\\|fn test\" | head: tests/codegen/io/streams.rs:8961:/// Verifies php 8.5's `$http_response_header` deprecation is version-gated. tests/codegen/io/streams.rs:8969:fn test_http_response_header_deprecation_is_gated_on_php_85() { tests/codegen/io/streams.rs:8996: let present = asm.contains(\"locally scoped $http_response_header variable is deprecated\"); tests/codegen/io/streams.rs:8999: \"{version}: the $http_response_header deprecation must be emitted only from 8.5\" tests/codegen/io/streams.rs:9024: !asm.contains(\"locally scoped $http_response_header variable is deprecated\"),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9a2042d48c3b1b90e26c8d9c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:24:31.449Z",
+  "stored_at": "2026-08-18T15:24:31.450Z"
+}

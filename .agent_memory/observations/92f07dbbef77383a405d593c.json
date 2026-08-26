@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"label_global(\\\"__rt_warn\" src/codegen_support/runtime/ | head -10; echo \"--- is_dir / stat on cstr ---\"; grep -rn \"label_global(\\\"__rt_is_dir\\|label_global(\\\"__rt_stat\\|label_global(\\\"__rt_cstr\" src/codegen_support/runtime/ | head -10",
+  "summary": "grep -rn \"label_global(\\\"__rt_warn\" src/codegen_support/runtime/ | head -10; echo \"--- is_dir / stat on cstr ---\"; grep -rn \"label_global(\\\"__rt_is_dir\\|label_global(\\\"__rt_stat\\|label_global(\\\"__rt_cstr\" src/codegen_support/runtime/ | head -10: ull\"); --- is_dir / stat on cstr --- src/codegen_support/runtime/io/stat_m",
+  "text": "grep -rn \"label_global(\\\"__rt_warn\" src/codegen_support/runtime/ | head -10; echo \"--- is_dir / stat on cstr ---\"; grep -rn \"label_global(\\\"__rt_is_dir\\|label_global(\\\"__rt_stat\\|label_global(\\\"__rt_cstr\" src/codegen_support/runtime/ | head -10: ull\"); --- is_dir / stat on cstr --- src/codegen_support/runtime/io/stat_mode_access.rs:61: emitter.label_global(\"__rt_stat_mode_access\"); src/codegen_support/runtime/io/stat_mode_access.rs:135: emitter.label_global(\"__rt_stat_mode_access\"); src/codegen_support/runtime/io/stat.rs:110: emitter.label_global(\"__rt_is_dir\"); src/codegen_support/runtime/io/stat.rs:335: emitter.label_global(\"__rt_is_dir\"); src/codegen_support/runtime/io/stat_array.rs:119: emitter.label_global(\"__rt_stat_array\"); src/codegen_support/runtime/io/stat_array.rs:272: emitter.label_global(\"__rt_stat_array\"); src/codegen_support/runtime/io/cstr.rs:29: emitter.label_global(\"__rt_cstr\"); src/codegen_support/runtime/io/cstr.rs:52: emitter.label_global(\"__rt_cstr2\"); src/codegen_support/runtime/io/cstr.rs:84: emitter.label_global(\"__rt_cstr\"); src/codegen_support/runtime/io/cstr.rs:107: emitter.label_global(\"__rt_cstr2\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "92f07dbbef77383a405d593c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:56:29.398Z",
+  "stored_at": "2026-08-22T08:56:29.399Z"
+}

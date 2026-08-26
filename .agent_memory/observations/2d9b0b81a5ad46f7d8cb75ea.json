@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_zlib_string_fns.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_zlib_string_fns.py: \"\"\"Adds `gzencode`, `gzdecode`, `zlib_encode` and `zlib_decode` to the gz prelude.\n\nThese four are string functions, not st",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_zlib_string_fns.py: \"\"\"Adds `gzencode`, `gzdecode`, `zlib_encode` and `zlib_decode` to the gz prelude.\n\nThese four are string functions, not stream ones, but they are the rest of what ext-zlib owes that\ncan be built on primitives elephc already has: `gzdeflate`/`gzcompress` for the bodies,\n`gzinflate`/`gzuncompress` for the reverse, and `crc32` for the gzip trailer.\n\nEvery constant below was MEASURED on `php -n` 8.5.6 rather than read from a spec:\n\n  - the gzip header is `1f 8b 08 00` then a zero mtime, then XFL, then the OS byte. XFL is 2 at\n    level 9, 4 at levels 0 and 1, and 0 otherwise; the body is EXACTLY ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2d9b0b81a5ad46f7d8cb75ea",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:08:03.104Z",
+  "stored_at": "2026-08-21T14:08:03.104Z"
+}

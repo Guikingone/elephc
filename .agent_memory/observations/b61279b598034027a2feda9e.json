@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"\\\"var_export\\\"|\\\"sscanf\\\"|\\\"fscanf\\\"\" crates/elephc-builtin-contract/src/catalog_data.rs | head -10",
+  "summary": "rtk proxy rg -n \"\\\"var_export\\\"|\\\"sscanf\\\"|\\\"fscanf\\\"\" crates/elephc-builtin-contract/src/catalog_data.rs | head -10: 6946: id: BuiltinId::from_canonical_name(\"fscanf\"), 6947: name: \"fscanf\", 14485: id: BuiltinId::from_canonical_name(\"sscanf\"), 14486: name: \"sscanf\",",
+  "text": "rtk proxy rg -n \"\\\"var_export\\\"|\\\"sscanf\\\"|\\\"fscanf\\\"\" crates/elephc-builtin-contract/src/catalog_data.rs | head -10: 6946: id: BuiltinId::from_canonical_name(\"fscanf\"), 6947: name: \"fscanf\", 14485: id: BuiltinId::from_canonical_name(\"sscanf\"), 14486: name: \"sscanf\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b61279b598034027a2feda9e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:45:10.297Z",
+  "stored_at": "2026-08-16T15:45:10.298Z"
+}

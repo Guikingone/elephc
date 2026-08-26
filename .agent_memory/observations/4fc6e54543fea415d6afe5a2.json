@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub fn label_shared\" -A 14 src/codegen_support/emit.rs | head -18",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub fn label_shared\" -A 14 src/codegen_support/emit.rs | head -18: 104: pub fn label_shared(&mut self, name: &str) { 105- if self.dead_strip && self.platform == Platform::MacOS { 106- let _ = writeln!(self.buf, \".al",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub fn label_shared\" -A 14 src/codegen_support/emit.rs | head -18: 104: pub fn label_shared(&mut self, name: &str) { 105- if self.dead_strip && self.platform == Platform::MacOS { 106- let _ = writeln!(self.buf, \".alt_entry {}\", name); 107- } 108- let _ = writeln!(self.buf, \"{}:\", name); 109- } 110- 111- /// Emit a label that is visible across object files (for two-object linking). 112- /// On Linux, places each global symbol in its own `.text.<name>` section so 113- /// that `--gc-sections` can eliminate unreachable helpers at link time. 114- pub fn label_global(&mut self, name: &str) { 115- if self.platform == Platform::Linux { 116- let _ = writeln!(self.buf, \".section .text.{},\\\"ax\\\",@progbits\", name); 117- let _ = writeln!(self.buf, \".globl {}\", name); 118- let _ = writeln!(self.buf, \".type {}, %function\", name);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4fc6e54543fea415d6afe5a2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:26:21.240Z",
+  "stored_at": "2026-08-23T12:26:21.241Z"
+}

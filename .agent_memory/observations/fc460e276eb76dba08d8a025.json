@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockmeta3.php','w').write('''<?php\n$path = sys_get_temp_dir() . \"/elephc_sockmeta3.sock\";\n@unlink($path);\n$srv = stream_socket_server(\"unix://\" . $path);\n$cli = stream_socket_client(\"unix://\" . $path);\n$acc = stream_socket_accept($srv);\n$m = stream_get_meta_data($acc);\nvar_dump(array_key_exists(\"wrapper_type\", $m), array_key_exists(\"uri\", $m), $m[\"stream_type\"]);\nfclose($acc); fclose($cli); fclose… [+160 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockmeta3.php','w').write('''<?php\n$path = sys_get_temp_dir() . \"/elephc_sockmeta3.sock\";\n@unlink($path);\n$srv = stream_",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockmeta3.php','w').write('''<?php\n$path = sys_get_temp_dir() . \"/elephc_sockmeta3.sock\";\n@unlink($path);\n$srv = stream_socket_server(\"unix://\" . $path);\n$cli = stream_socket_client(\"unix://\" . $path);\n$acc = stream_socket_accept($srv);\n$m = stream_get_meta_data($acc);\nvar_dump(array_key_exists(\"wrapper_type\", $m), array_key_exists(\"uri\", $m), $m[\"stream_type\"]);\nfclose($acc); fclose($cli); fclose($srv);\n@unlink($path);\n$fs = fsockopen(\"unix://\" . sys_get_temp_dir() . \"/elephc_nope.sock\");\nvar_dump($fs);\n''')\nPY\nzsh difftests.sh sockmeta3 2>&1 | head -25: sockmeta3 COMPILE FAILED: error[11:7]: fsockopen() takes 2 to 5 arguments",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fc460e276eb76dba08d8a025",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:21:02.523Z",
+  "stored_at": "2026-08-17T13:21:02.523Z"
+}

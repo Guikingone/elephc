@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"preg_match\" src/types/checker/ | grep -iv 'preg_match_all' | head -30",
+  "summary": "About to run: grep -rn \"preg_match\" src/types/checker/ | grep -iv 'preg_match_all' | head -30",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "22c74c0fb3796aa025659c8f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:03:49.986Z",
+  "stored_at": "2026-08-25T13:03:49.986Z"
+}

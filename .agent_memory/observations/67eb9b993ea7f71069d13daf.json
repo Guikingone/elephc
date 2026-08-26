@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_uncaught_dynamic_throwable_fatal_if_no_handler\" -A 45 src/codegen/lower_inst/exceptions.rs | head -50",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_uncaught_dynamic_throwable_fatal_if_no_handler\" -A 45 src/codegen/lower_inst/exceptions",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "67eb9b993ea7f71069d13daf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T10:54:36.163Z",
+  "stored_at": "2026-08-23T10:54:36.164Z"
+}

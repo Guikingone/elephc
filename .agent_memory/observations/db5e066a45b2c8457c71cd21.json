@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn current_source_location\" -A 20 src/codegen/context.rs | head -24",
+  "summary": "grep -n \"fn current_source_location\" -A 20 src/codegen/context.rs | head -24: 396: pub(super) fn current_source_location(&self) -> Option<(String, u32)> { 397- let file = self.module.source_path.clone()?; 398- let inst = self.current_inst?; 399- let span = self.function.instruction(inst)?.span?; 400- Some((file, span.l",
+  "text": "grep -n \"fn current_source_location\" -A 20 src/codegen/context.rs | head -24: 396: pub(super) fn current_source_location(&self) -> Option<(String, u32)> { 397- let file = self.module.source_path.clone()?; 398- let inst = self.current_inst?; 399- let span = self.function.instruction(inst)?.span?; 400- Some((file, span.line)) 401- } 402- 403- /// Returns the frame flag that records whether this slot currently stores a cell pointer. 404- pub(super) fn ref_cell_state_offset(&self, slot: LocalSlotId) -> Option<usize> { 405- self.ref_cell_state_offsets.get(&slot).copied() 406- } 407- 408- /// Returns the required runtime representation flag offset for one dynamic local slot. 409- fn dynamic_ref_cell_state_offset(&self, slot: LocalSlotId) -> Result<usize> { 410- self.ref_cell_state_offset(slot).ok_or_else(|| { 411- CodegenIrError::invalid_module(format!( 412- \"dynamic ref-cell slot {} has no representation flag\", 413- slot.as_raw() 414- )) 415- }) 416- }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "db5e066a45b2c8457c71cd21",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:23:06.504Z",
+  "stored_at": "2026-08-22T12:23:06.505Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '^>>>>>>> origin/main' src/types/result.rs | head -2; sed -n '/^>>>>>>> origin\\/main/,+8p' src/types/result.rs | head -10",
+  "summary": "grep -n '^>>>>>>> origin/main' src/types/result.rs | head -2; sed -n '/^>>>>>>> origin\\/main/,+8p' src/types/result.rs | head -10: 203:>>>>>>> origin/main >>>>>>> origin/main } /// Runs type checking using the host platform (auto-detected from the build environment). /// Returns `Ok(CheckResult)` on success, or `Err(Co",
+  "text": "grep -n '^>>>>>>> origin/main' src/types/result.rs | head -2; sed -n '/^>>>>>>> origin\\/main/,+8p' src/types/result.rs | head -10: 203:>>>>>>> origin/main >>>>>>> origin/main } /// Runs type checking using the host platform (auto-detected from the build environment). /// Returns `Ok(CheckResult)` on success, or `Err(CompileError)` if type checking fails. /// The `CheckResult` carries the resolved type environment, function signatures, class /// metadata, warnings, and any required native libraries for linking. /// Delegates to `check_with_options` with default `CheckOptions`. #[allow(dead_code)]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "97304c9d2aca34708aed7c20",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:09:56.445Z",
+  "stored_at": "2026-08-26T17:09:56.446Z"
+}

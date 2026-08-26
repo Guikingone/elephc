@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn regex_capture_first_match_body\" -A50 src/types/checker/builtin_spl_classes/regex.rs | grep -n \"strlen\" -B6 -A6",
+  "summary": "grep -n \"fn regex_capture_first_match_body\" -A50 src/types/checker/builtin_spl_classes/regex.rs | grep -n \"strlen\" -B6 -A6: 38-804-} 39-805- 40-806-/// Builds statements that advance the regex search cursor after a callback match. 41-807-fn regex_advance_search_offset_body(cursor_name: &str) -> Vec<Stmt> { 42-808- vec!",
+  "text": "grep -n \"fn regex_capture_first_match_body\" -A50 src/types/checker/builtin_spl_classes/regex.rs | grep -n \"strlen\" -B6 -A6: 38-804-} 39-805- 40-806-/// Builds statements that advance the regex search cursor after a callback match. 41-807-fn regex_advance_search_offset_body(cursor_name: &str) -> Vec<Stmt> { 42-808- vec![if_stmt( 43-809- binary_expr( 44:810- function_call(\"strlen\", vec![var_expr(\"fullMatch\")]), 45-811- BinOp::Gt, 46-812- int_expr(0), 47-813- ), 48-814- vec![assign_stmt( 49-815- cursor_name, 50-816- binary_expr(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c5620a7da2203b7520725213",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:38:36.545Z",
+  "stored_at": "2026-08-20T20:38:36.545Z"
+}

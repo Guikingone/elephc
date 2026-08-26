@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-filled-array-is-not-an-out-parameter.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-filled-array-is-not-an-out-parameter.md: ---\nname: a-filled-array-is-not-an-out-parameter\ndescription: preg_match's $matches is FILLED in place, not written into the caller's slot — the boxed-null out-param creat",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-filled-array-is-not-an-out-parameter.md: ---\nname: a-filled-array-is-not-an-out-parameter\ndescription: preg_match's $matches is FILLED in place, not written into the caller's slot — the boxed-null out-param creation gave it bool(true), and array<never> made count() and $m[$i] disagree\nmetadata:\n  type: project\n---\n\n`preg_match($p, $s, $matches)` ne RÉÉCRIT PAS la case de l'appelant : il REMPLIT le tableau\nqu'on lui donne, sur place. Deux pannes distinctes, et à elles deux les TROIS façons d'écrire\nl'idiome étaient fausses (corrigé le 25/08/2026, commit `58a47cf3c`).\n\n**1. `$matches` non déclaré → `bool(true)`.** `create_by_ref_arg_lo",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fe7789d5cae8141a36ccad4a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:40:48.563Z",
+  "stored_at": "2026-08-25T13:40:48.563Z"
+}

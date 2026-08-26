@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"global_name_data\" src/codegen/ | head -10",
+  "summary": "grep -rn \"global_name_data\" src/codegen/ | head -10: xt.rs:889: let name = self.global_name_data(data)?.to_string(); src/codegen/context.rs:1139: pub(super) fn global_name_data(&self, data_id: DataId) -> Result<&str> { src/codegen/lower_inst/globals_constants.rs:15: let name = ctx.global_name_data(data)?; src/codegen/l",
+  "text": "grep -rn \"global_name_data\" src/codegen/ | head -10: xt.rs:889: let name = self.global_name_data(data)?.to_string(); src/codegen/context.rs:1139: pub(super) fn global_name_data(&self, data_id: DataId) -> Result<&str> { src/codegen/lower_inst/globals_constants.rs:15: let name = ctx.global_name_data(data)?; src/codegen/lower_inst/globals_constants.rs:30: let name = ctx.global_name_data(data)?.to_string(); src/codegen/lower_inst/globals_constants.rs:56: let name = ctx.global_name_data(data)?; src/codegen/lower_inst/globals_constants.rs:108: let name = ctx.global_name_data(data)?.to_string(); src/codegen/lower_inst/builtins/pointers.rs:446: let name = ctx.global_name_data(data)?; src/codegen/lower_inst/builtins/eval/symbol_queries.rs:75: let constant_name = ctx.global_name_data(expect_data(inst)?)?.to_string(); src/codegen/lower_inst/builtins/eval/symbol_queries.rs:102: let constant_name = ctx.global_name_data(expect_data(inst)?)?.to_string();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "36784d0b4684a94edf613756",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:19:21.767Z",
+  "stored_at": "2026-08-18T15:19:21.768Z"
+}

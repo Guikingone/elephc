@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn runtime_callable_candidates\" -A 30 src/codegen/ | head -40",
+  "summary": "About to run: grep -rn \"fn runtime_callable_candidates\" -A 30 src/codegen/ | head -40",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ed2e8a4cd908e0b926690c0b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:03:25.685Z",
+  "stored_at": "2026-08-22T11:03:25.685Z"
+}

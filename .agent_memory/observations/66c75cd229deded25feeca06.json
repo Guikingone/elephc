@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/work/symlink-family/php && php -n p.php 2>&1 | cat -n | sed -n '18,32p'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/work/symlink-family/php && php -n p.php 2>&1 | cat -n | sed -n '18,32p': 18 bool(true) 19 bool(false) 20 string(9) \"targetdir\" 21 bool(true) 22 boo",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/work/symlink-family/php && php -n p.php 2>&1 | cat -n | sed -n '18,32p': 18 bool(true) 19 bool(false) 20 string(9) \"targetdir\" 21 bool(true) 22 bool(true) 23 bool(false) 24 bool(false) 25 string(8) \"gone.txt\" 26 bool(false) 27 bool(false) 28 bool(false) 29 bool(false) 30 string(10) \"target.txt\" 31 string(202) \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/work/symlink-family/php/gone.txt\" 32 bool(true)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "66c75cd229deded25feeca06",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:52:05.798Z",
+  "stored_at": "2026-08-26T08:52:05.799Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_zflush.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_zflush.txt: fix(streams): a deflate filter sent nothing until the stream closed, because fflush() was not a flush point\n\nA `zlib.deflate` stream h",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_zflush.txt: fix(streams): a deflate filter sent nothing until the stream closed, because fflush() was not a flush point\n\nA `zlib.deflate` stream holds its bytes until zlib's own window fills, so nothing\nreached the stream until it CLOSED — a long-lived stream, a socket say,\ncompressed everything and sent none of it. php makes `fflush()` a flush point for\nthe filter and pushes a `Z_SYNC_FLUSH` pass, which closes the current block and\nemits the `00 00 ff ff` marker. Measured on `php -n` 8.5.6 over 400 bytes to a\nfile, `filesize()` reads 0 after the write, 12 after `fflush()` and 14 after\n`fclose()` — the cl",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "35819cdfeb0df8de17c089ee",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T19:56:11.640Z",
+  "stored_at": "2026-08-17T19:56:11.640Z"
+}

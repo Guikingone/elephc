@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; target/debug/elephc -q --emit-asm $S/r3.php >/dev/null 2>&1; grep -n 'eir_main_stream_handle_open_163' -A 12 $S/r3.s",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; target/debug/elephc -q --emit-asm $S/r3.php >/dev/null 2>&1; grep -n 'eir_main_stream_handle_open_163' -A 12 $S/r3.s: No matches found",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; target/debug/elephc -q --emit-asm $S/r3.php >/dev/null 2>&1; grep -n 'eir_main_stream_handle_open_163' -A 12 $S/r3.s: No matches found",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9eaeba30618202cae766f99d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:01:37.736Z",
+  "stored_at": "2026-08-24T17:01:37.737Z"
+}

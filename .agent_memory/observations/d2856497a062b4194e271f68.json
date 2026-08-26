@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-asm leak3.php > /dev/null 2>&1; grep -n \"__rt_tmpfile_named\" -A 40 leak3.s | head -50",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-asm leak3.php > /dev/null 2>&",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-asm leak3.php > /dev/null 2>&1; grep -n \"__rt_tmpfile_named\" -A 40 leak3.s | head -50:  _eir_main_tmpfile_backend_kind_done_17 933- mov w10, #0x5000 934- lsl w10, w10, #16 935- cmp x0, x10 936- b.lt _eir_main_tmpfile_backend_kind_user_18 937- add x9, x10, #32 938- cmp x0, x9 939- b.lt _eir_main_tmpfile_backend_kind_phar_19 940-_eir_main_tmpfile_backend_kind_user_18: 941- mov x1, #2 942- b _eir_main_tmpfile_backend_kind_done_17 943-_eir_main_tmpfile_backend_kind_phar_19: 944- mov x1, #5 945-_eir_main_tmpfile_backend_kind_done_17: 946- mov x2, #1 947- bl __rt_stream_adopt_fd 948- cbz x0, _eir_main_tmpfile_false_15 949- str x0, [sp, #-16]! 950- mov x1, x0 951- mov x2, #1 952- mov x0, #9 953- bl __rt_mixed_from_value 954- str x0, [sp, #-16]! 955- ldr x0, [sp, #16] 956- bl __rt_resource_release 957- ldr x0, [sp], #16 958- add sp, sp, #16 959- b _eir_main_tmpfile_done_16 960-_eir_main_tmpfile_false_15: 961- mov x1, #0 962- mov x2, #0 963- mov x0, #3 964- bl __rt_mixed_from_value",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d2856497a062b4194e271f68",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:12:35.361Z",
+  "stored_at": "2026-08-23T08:12:35.362Z"
+}

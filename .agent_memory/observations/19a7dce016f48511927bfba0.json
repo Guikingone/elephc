@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests -- spl::file_object_read_ahead io::temp_stream_eof 2>&1 | tail -8",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests -- spl::file_object_read_ahead io::temp_stream_eof 2>&1 | tail -8: test codegen::io::temp_stream_eof::only_a_temp_stream_reports_eof_when_a_line_read_drains_it ... ok test codegen::io::temp_stream_eof::a_line_past_the_chunk_",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests -- spl::file_object_read_ahead io::temp_stream_eof 2>&1 | tail -8: test codegen::io::temp_stream_eof::only_a_temp_stream_reports_eof_when_a_line_read_drains_it ... ok test codegen::io::temp_stream_eof::a_line_past_the_chunk_size_answers_the_same_way ... ok test codegen::spl::file_object_read_ahead::current_answers_the_first_line_with_no_rewind ... ok test codegen::spl::file_object_read_ahead::the_iteration_reads_one_line_ahead_of_what_it_yields ... ok test codegen::spl::file_object_read_ahead::reading_by_hand_does_not_read_ahead ... ok test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 8966 filtered out; finished in 3.45s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "19a7dce016f48511927bfba0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:21:11.747Z",
+  "stored_at": "2026-08-25T14:21:11.748Z"
+}

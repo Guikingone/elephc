@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"BUILTIN_FILTER_NAMES\" src | head",
+  "summary": "grep -rn \"BUILTIN_FILTER_NAMES\" src | head: src/codegen/lower_inst/builtins/io/filter_helpers.rs:24:/// Kept in step with `BUILTIN_FILTER_NAMES`, the run-time table the dynamic src/codegen_support/runtime/io/builtin_filter_id.rs:34:pub(crate) const BUILTIN_FILTER_NAMES: &[(&str, u8)] = &[ src/codegen_support/runtime/io",
+  "text": "grep -rn \"BUILTIN_FILTER_NAMES\" src | head: src/codegen/lower_inst/builtins/io/filter_helpers.rs:24:/// Kept in step with `BUILTIN_FILTER_NAMES`, the run-time table the dynamic src/codegen_support/runtime/io/builtin_filter_id.rs:34:pub(crate) const BUILTIN_FILTER_NAMES: &[(&str, u8)] = &[ src/codegen_support/runtime/io/builtin_filter_id.rs:48: for (name, id) in BUILTIN_FILTER_NAMES { src/codegen_support/runtime/io/builtin_filter_id.rs:54: for (name, id) in BUILTIN_FILTER_NAMES {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d06f9c617b4d85b1eaeb1091",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:45:31.461Z",
+  "stored_at": "2026-08-18T09:45:31.461Z"
+}

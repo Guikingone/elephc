@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/nested_probe.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/nested_probe.py: \"\"\"Narrows the pre-existing SIGSEGV: a wrapper whose `stream_open` opens a FILTERED stream.\n\n`test_a_nested_open_does_not_steal_th",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/nested_probe.py: \"\"\"Narrows the pre-existing SIGSEGV: a wrapper whose `stream_open` opens a FILTERED stream.\n\n`test_a_nested_open_does_not_steal_the_outer_filter_chain` dies with signal 11. The bisect\nalready showed it predates today's work, so the question is which of the two chains — the one\nthe wrapper opens for itself, or the one wrapped around the wrapper — is required.\n\"\"\"\nimport pathlib, subprocess, sys\n\nD = pathlib.Path(__file__).parent / 'nested'\nD.mkdir(exist_ok=True)\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nELEPHC = ROOT / 'ta",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a81c9f16919d6418e04df35a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:24:58.401Z",
+  "stored_at": "2026-08-21T09:24:58.401Z"
+}

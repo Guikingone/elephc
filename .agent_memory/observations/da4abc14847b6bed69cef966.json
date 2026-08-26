@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"by-reference\\|by_ref\" tests/codegen/*.rs tests/codegen/**/*.rs 2>/dev/null | head -8",
+  "summary": "grep -rln \"by-reference\\|by_ref\" tests/codegen/*.rs tests/codegen/**/*.rs 2>/dev/null | head -8: tests/codegen/array_basics.rs tests/codegen/eval_callables.rs tests/codegen/eval_callable_ref_errors.rs tests/codegen/eval_reflection_invocation.rs tests/codegen/eval.rs tests/codegen/eval_builtin_parity.rs tests/codegen/ev",
+  "text": "grep -rln \"by-reference\\|by_ref\" tests/codegen/*.rs tests/codegen/**/*.rs 2>/dev/null | head -8: tests/codegen/array_basics.rs tests/codegen/eval_callables.rs tests/codegen/eval_callable_ref_errors.rs tests/codegen/eval_reflection_invocation.rs tests/codegen/eval.rs tests/codegen/eval_builtin_parity.rs tests/codegen/eval_closures.rs tests/codegen/eval_constructors.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "da4abc14847b6bed69cef966",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:01:46.424Z",
+  "stored_at": "2026-08-18T11:01:46.424Z"
+}

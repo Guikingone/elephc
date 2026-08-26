@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/mkeval.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/mkeval.py: import json\n\ncases = json.load(open('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tes",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/mkeval.py: import json\n\ncases = json.load(open('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/fixtures/scanf_cases.json'))\nsubjects = ', '.join('\"%s\"' % c['subject'] for c in cases)\nformats = ', '.join('\"%s\"' % c['format'] for c in cases)\ndrv = f'''<?php\n$subjects = [{subjects}];\n$formats = [{formats}];\n$count = count($subjects);\nfor ($i = 0; $i < $count; $i++) {{\n    $s = hex2bin($subjects[$i]);\n    $f = hex2bin($formats[$i]);\n    $r = eval('return sscanf($s, $f);');\n    if ($r === null) {{ echo \"NULL\\\\n\"; continue; }}\n    $line = \"\";\n    foreach ($r a",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cce5be9cccc698340e5f5081",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:48:22.286Z",
+  "stored_at": "2026-08-16T16:48:22.286Z"
+}

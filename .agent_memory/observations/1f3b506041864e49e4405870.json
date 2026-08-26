@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -E '^ *[0-9]+ ' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/prof.txt | head -50",
+  "summary": "grep -E '^ *[0-9]+ ' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/prof.txt | head -50: 3269 Thread_59620007 DispatchQueue_1: com.apple.main-thread (serial) 3269 start (in dyld) + 6992 [0x185f",
+  "text": "grep -E '^ *[0-9]+ ' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/prof.txt | head -50: 3269 Thread_59620007 DispatchQueue_1: com.apple.main-thread (serial) 3269 start (in dyld) + 6992 [0x185f1be00] 3233 eir_main_stream_handle_open_163 (in r4) + 12 [0x100f93a0c] 14 eir_main_fgets_done_186 (in r4) + 44 [0x100f941e8] 6 eir_main_fgets_done_186 (in r4) + 64 [0x100f941fc] 5 eir_main_stream_resource_ok_165 (in r4) + 40 [0x100f941a8] 3 eir_main_fgets_done_186 (in r4) + 112 [0x100f9422c] 2 eir_main_fgets_done_186 (in r4) + 128 [0x100f9423c] 2 eir_main_while_body_20 (in r4) + 76 [0x100f942b4] 1 eir_main_fgets_done_186 (in r4) + 144 [0x100f9424c] 1 eir_main_fopen_dynamic_plain_80 (in r4) + 4 [0x100f92a6c] 1 eir_main_stream_resource_ok_165 (in r4) + 12 [0x100f9418c] 1 eir_main_while_body_20 (in r4) + 104 [0x100f942d0] 1 _rt_mixed_free_deep (in r4) + 192 [0x100f9a22c] 1 _rt_heap_free (in r4) + 96 [0x100f98b58]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1f3b506041864e49e4405870",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T16:59:48.542Z",
+  "stored_at": "2026-08-24T16:59:48.542Z"
+}

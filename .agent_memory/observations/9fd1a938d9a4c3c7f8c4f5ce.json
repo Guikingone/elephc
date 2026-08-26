@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps -A -o etime=,comm= | rg nextest | head -1; pgrep -fl \"codegen_tests-\" | wc -l",
+  "summary": "ps -A -o etime=,comm= | rg nextest | head -1; pgrep -fl \"codegen_tests-\" | wc -l: 24:35 /Users/guillaumeloulier/.cargo/bin/cargo-nextest 3",
+  "text": "ps -A -o etime=,comm= | rg nextest | head -1; pgrep -fl \"codegen_tests-\" | wc -l: 24:35 /Users/guillaumeloulier/.cargo/bin/cargo-nextest 3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9fd1a938d9a4c3c7f8c4f5ce",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:34:34.542Z",
+  "stored_at": "2026-08-17T09:34:34.543Z"
+}

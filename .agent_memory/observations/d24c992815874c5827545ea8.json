@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn ir_backend_handles_iterable_echo' -B 12 -A 30 tests/ir_backend_smoke_test.rs",
+  "summary": "grep -n 'fn ir_backend_handles_iterable_echo' -B 12 -A 30 tests/ir_backend_smoke_test.rs: -} 5297- 5298-/// Verifies iterable and concrete array echo lower to PHP's \"Array\" string payload. 5299-#[test] 5300:fn ir_backend_handles_iterable_echo() { 5301- let source = r#\"<?php 5302-function show(iterable $items): void { 5",
+  "text": "grep -n 'fn ir_backend_handles_iterable_echo' -B 12 -A 30 tests/ir_backend_smoke_test.rs: -} 5297- 5298-/// Verifies iterable and concrete array echo lower to PHP's \"Array\" string payload. 5299-#[test] 5300:fn ir_backend_handles_iterable_echo() { 5301- let source = r#\"<?php 5302-function show(iterable $items): void { 5303- echo $items; 5304-} 5305-show([\"a\" => 1, \"b\" => 2]); 5306-echo \"|\"; 5307-show([10, 20, 30]); 5308-echo \"|\"; 5309-$direct = [1]; 5310-echo $direct; 5311-echo \"done\"; 5312-\"#; 5313- assert_eq!( 5314- compile_and_run_ir_backend(\"iterable_echo\", source), 5315- \"Array|Array|Arraydone\" 5316- ); 5317-} 5318- 5319-/// Verifies `gettype()` reports iterable array/hash payloads as PHP arrays. 5320-#[test] 5321-fn ir_backend_handles_iterable_gettype() { 5322- let source = r#\"<?php 5323-function describe(iterable $items): string { 5324- return gettype($items); 5325-} 5326-echo describe([\"a\" => 1]); 5327-echo \"|\"; 5328-echo describe([1, 2, 3]); 5329-\"#; 5330- assert_eq!(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d24c992815874c5827545ea8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:21:09.115Z",
+  "stored_at": "2026-08-25T13:21:09.115Z"
+}

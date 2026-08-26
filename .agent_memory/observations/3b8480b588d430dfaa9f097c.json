@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn split_php_diagnostics\" -A 40 tests/codegen/support/runner.rs | grep -nE \"Fatal error|located|on line|:\\{|push\" | head -12",
+  "summary": "About to run: grep -rn \"fn split_php_diagnostics\" -A 40 tests/codegen/support/runner.rs | grep -nE \"Fatal error|located|on line|:\\{|push\" | head -12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3b8480b588d430dfaa9f097c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:19:55.038Z",
+  "stored_at": "2026-08-22T07:19:55.039Z"
+}

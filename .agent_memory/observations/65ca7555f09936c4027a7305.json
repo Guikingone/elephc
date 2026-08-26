@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn lower_positional_builtin_args_with_signature\" -A40 src/ir_lower/expr/ | head -50",
+  "summary": "grep -rn \"fn lower_positional_builtin_args_with_signature\" -A40 src/ir_lower/expr/ | head -50:  `NULL` while the write went through the pointer unseen. src/ir_lower/expr/array_builtin_args.rs-456-/// src/ir_lower/expr/array_builtin_args.rs-457-/// Storing a freshly boxed `null` fixes both at once: the slot is initializ",
+  "text": "grep -rn \"fn lower_positional_builtin_args_with_signature\" -A40 src/ir_lower/expr/ | head -50:  `NULL` while the write went through the pointer unseen. src/ir_lower/expr/array_builtin_args.rs-456-/// src/ir_lower/expr/array_builtin_args.rs-457-/// Storing a freshly boxed `null` fixes both at once: the slot is initialized AND re-typed, which src/ir_lower/expr/array_builtin_args.rs-458-/// is exactly what `variadic_writes` promises about the tail. src/ir_lower/expr/array_builtin_args.rs-459-fn lower_write_only_variadic_builtin_args( src/ir_lower/expr/array_builtin_args.rs-460- ctx: &mut LoweringContext<'_, '_>, src/ir_lower/expr/array_builtin_args.rs-461- canonical: &str, src/ir_lower/expr/array_builtin_args.rs-462- sig: Option<&FunctionSig>, src/ir_lower/expr/array_builtin_args.rs-463- args: &[Expr], src/ir_lower/expr/array_builtin_args.rs-464-) -> Option<Vec<crate::ir::ValueId>> { src/ir_lower/expr/array_builtin_args.rs-465- let def = crate::builtins::registry::lookup(canonical)?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "65ca7555f09936c4027a7305",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:39:40.120Z",
+  "stored_at": "2026-08-20T20:39:40.120Z"
+}

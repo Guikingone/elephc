@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h /Users/guillaumeloulier 2>&1 | tail -1; du -sh /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/incremental 2>/dev/null",
+  "summary": "df -h /Users/guillaumeloulier 2>&1 | tail -1; du -sh /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/incremental 2>/dev/null: /dev/disk3s5 460Gi 425Gi 4.0Gi 100% 5.6M 42M 12% /System/Volumes/Data 4.5G /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/wo",
+  "text": "df -h /Users/guillaumeloulier 2>&1 | tail -1; du -sh /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/incremental 2>/dev/null: /dev/disk3s5 460Gi 425Gi 4.0Gi 100% 5.6M 42M 12% /System/Volumes/Data 4.5G /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/incremental",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9ba7b15d9febfcec26e887c7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:46:07.506Z",
+  "stored_at": "2026-08-21T15:46:07.506Z"
+}

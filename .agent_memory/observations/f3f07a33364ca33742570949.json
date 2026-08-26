@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rln \"get_object_vars\" tests/codegen/ | head -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rln \"get_object_vars\" tests/codegen/ | head -5: tests/codegen/serialize.rs tests/codegen/pdo.rs tests/codegen/eval.rs",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rln \"get_object_vars\" tests/codegen/ | head -5: tests/codegen/serialize.rs tests/codegen/pdo.rs tests/codegen/eval.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f3f07a33364ca33742570949",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:01:01.642Z",
+  "stored_at": "2026-08-23T09:01:01.643Z"
+}

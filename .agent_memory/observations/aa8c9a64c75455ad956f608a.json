@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "echo \"CARGO_TARGET_DIR=[${CARGO_TARGET_DIR:-unset}]\"; ls -d /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/wasm-target/target 2>/dev/null | head -2; ls -la target/.rustc_info.json 2>/dev/null | head -2",
+  "summary": "echo \"CARGO_TARGET_DIR=[${CARGO_TARGET_DIR:-unset}]\"; ls -d /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/wasm-target/target 2>/dev/null | head -2; ls -la target/.rustc_info.json 2>/dev/null | head -2 failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/e",
+  "text": "echo \"CARGO_TARGET_DIR=[${CARGO_TARGET_DIR:-unset}]\"; ls -d /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/wasm-target/target 2>/dev/null | head -2; ls -la target/.rustc_info.json 2>/dev/null | head -2 failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree; break it into plain, separate commands. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Run the equivalent from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature without the redirect.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aa8c9a64c75455ad956f608a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:11:40.964Z",
+  "stored_at": "2026-08-16T17:11:40.965Z"
+}

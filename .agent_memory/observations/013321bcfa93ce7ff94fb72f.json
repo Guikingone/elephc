@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\np='byref_stress.php'\ns=open(p).read()\nold = \"\"\"// 11. by-ref array inside an object property round trip\nclass Holder { public array $items = [1, 2]; }\n$h = new Holder(); bump($h->items); echo \"11: \", implode(\",\", $h->items), \"\\\\n\";\n\n\"\"\"\nassert s.count(old)==1\nopen(p,'w').write(s.replace(old,\"\"))\nprint('case 11 removed (property by-ref to a user function is refused: a separate, pre-existing gap)')\nPY\nzsh… [+42 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\np='byref_stress.php'\ns=open(p).read()\nold = \"\"\"// 11. by-ref array inside an object property round trip\nclass Holder { public ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\np='byref_stress.php'\ns=open(p).read()\nold = \"\"\"// 11. by-ref array inside an object property round trip\nclass Holder { public array $items = [1, 2]; }\n$h = new Holder(); bump($h->items); echo \"11: \", implode(\",\", $h->items), \"\\\\n\";\n\n\"\"\"\nassert s.count(old)==1\nopen(p,'w').write(s.replace(old,\"\"))\nprint('case 11 removed (property by-ref to a user function is refused: a separate, pre-existing gap)')\nPY\nzsh difftests.sh byref_stress 2>&1 | head -20: case 11 removed (property by-ref to a user function is refused: a separate, pre-existing gap) byref_stress DIFF: 1,13c1 < 1a: 1,2 < 1b: a,b < 2: 11|21|2|[11,21]|32 < 3: 4,8 < 4: 0,3,2,1 < 5a: 3,6 < 5b: 3,6 < 6: 1,2,3 < 7: [\"text\",2,4.5] < 8: 9 < 9: 2,4,{\"x\":2,\"y\":4} < 10: 5,10 < 12: 1,2",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "013321bcfa93ce7ff94fb72f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:52:37.788Z",
+  "stored_at": "2026-08-16T19:52:37.789Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/emit-asm-shows-the-call-not-the-runtime.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/emit-asm-shows-the-call-not-the-runtime.md: ---\nname: emit-asm-shows-the-call-not-the-runtime\ndescription: \"`--emit-asm` d'un PROGRAMME ne contient PAS les corps des helpers runtime — pour vérifier de l'asm x86 écr",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/emit-asm-shows-the-call-not-the-runtime.md: ---\nname: emit-asm-shows-the-call-not-the-runtime\ndescription: \"`--emit-asm` d'un PROGRAMME ne contient PAS les corps des helpers runtime — pour vérifier de l'asm x86 écrit à la main, dumper le RUNTIME entier\"\nmetadata:\n  type: feedback\n---\n\n`elephc build prog.php --emit-asm --target linux-x86_64` puis `clang -c -target x86_64-...` **N'ASSEMBLE QUE LE PROGRAMME**. Les corps des helpers `__rt_*` vivent dans un OBJET RUNTIME mis en cache à part; le `.s` du programme ne contient que l'`call`. J'ai « vérifié » 5 lots d'asm x86 écrits à la main comme ça — la vérification ne prouvait rien sur mon co",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d935f50ff7e13790b91dfaaa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:19:20.312Z",
+  "stored_at": "2026-08-17T18:19:20.313Z"
+}

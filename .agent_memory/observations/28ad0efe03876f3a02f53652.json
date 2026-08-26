@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '200,245p' src/codegen_support/runtime/data/fixed.rs; echo \"=== mod.rs ===\"; sed -n '125,145p' src/codegen_support/runtime/data/mod.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '200,245p' src/codegen_support/runtime/data/fixed.rs; echo \"=== mod.rs ===\"; sed -n '125,145p' src/codegen_support/runtime/data/mod.rs: LAMP: i64 = 255; /// Longest resolver text copied into the composed message. pub(",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '200,245p' src/codegen_support/runtime/data/fixed.rs; echo \"=== mod.rs ===\"; sed -n '125,145p' src/codegen_support/runtime/data/mod.rs: LAMP: i64 = 255; /// Longest resolver text copied into the composed message. pub(crate) const SOCKET_GAI_REASON_CLAMP: i64 = 200; /// Separator between the socket warning's address and the reason for the failure. pub(crate) const SOCKET_FAILED_REASON_OPEN: &str = \" (\"; /// What the warning says when the failure carries no reason at all. /// /// php-src prints `errstr == NULL ? \"Unknown error\" : errstr`, so a failure no syscall described — /// a datagram transport asked to listen, for one — still names something inside the parentheses. /// Only the warning substitutes it: the caller's `&$error_message` stays the empty string PHP /// leaves there, so this cannot come from `__rt_socket_strerror`, which feeds both. pub(crate) const SOCKET_FAILED_REASON_UNKNOWN: &str = \"Unknown error\"; /// Tail of the socket warning, after the reason. pub(crate) const SOCKET_FAILED_REASON_CLOSE: &str = \")\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "28ad0efe03876f3a02f53652",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:53:08.392Z",
+  "stored_at": "2026-08-22T20:53:08.393Z"
+}

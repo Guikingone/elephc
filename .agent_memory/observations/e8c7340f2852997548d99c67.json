@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Agent",
+  "path": "",
+  "command": "",
+  "summary": "Agent: async_launched a51b64e40f0e7ceb7 TDD: ssl + ftp + http options claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `22a97454aa` ; sinon `git reset --hard 22a97454aa` AVANT tout (10 agents sur 10 ",
+  "text": "async_launched a51b64e40f0e7ceb7 TDD: ssl + ftp + http options claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `22a97454aa` ; sinon `git reset --hard 22a97454aa` AVANT tout (10 agents sur 10 ont reçu une base erronée — systématique). Chemins absolus ; ne pousse RIEN ; pas de Co-Authored-By ; jamais `.codebase-memory/*` stagé. ⚠️ RESSOURCES CRITIQUES : ~19 GiB libres et UN AUTRE AGENT travaille sur le même hôte. Purge `$TMPDIR/elephc_*` de +2h AVANT de commencer, à mi-parcours et sur `No space left`. UN SEUL cargo à la fois ; builds debug ; PAS de docker. Timeout nextest 60 s pile = faux rouge (charge croisée) → rejoue isolé via `cargo test`. Supprime ton scratch à la fin. ⚠️ NE TOUCHE PAS aux fichiers de l'autre agent : il travaille sur `implode`/`join`, la fermeture des filtres (`fclose`), et `ftell` sur flux filtré. ⚠️ PORTES avant commit : `cargo test -p elephc-builtin-contract` · `cargo test --test builtin_parity_tests` · `cargo nextest run --test ir_backend_smoke_test`. Catalogue touché ⇒ compteurs épinglés dans le MÊME commit + docs régénérées (gen_builtins, extract_bu",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e8c7340f2852997548d99c67",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T08:43:38.548Z",
+  "stored_at": "2026-08-16T08:43:38.549Z"
+}

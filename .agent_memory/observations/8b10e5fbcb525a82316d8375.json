@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"iconv\" tests/codegen/io/streams.rs | head -12",
+  "summary": "grep -rn \"iconv\" tests/codegen/io/streams.rs | head -12: n test_stream_filter_iconv_utf8_to_utf16le() { tests/codegen/io/streams.rs:3035: // convert.iconv.UTF-8/UTF-16LE transcodes the stream at attach time via tests/codegen/io/streams.rs:3036: // libc iconv. \"Hi\" → 4 bytes UTF-16LE: 'H',0,'i',0. UTF-8↔UTF-16LE is in t",
+  "text": "grep -rn \"iconv\" tests/codegen/io/streams.rs | head -12: n test_stream_filter_iconv_utf8_to_utf16le() { tests/codegen/io/streams.rs:3035: // convert.iconv.UTF-8/UTF-16LE transcodes the stream at attach time via tests/codegen/io/streams.rs:3036: // libc iconv. \"Hi\" → 4 bytes UTF-16LE: 'H',0,'i',0. UTF-8↔UTF-16LE is in tests/codegen/io/streams.rs:3037: // the charset set even musl's limited iconv supports. tests/codegen/io/streams.rs:3043:stream_filter_append($m, \"convert.iconv.UTF-8/UTF-16LE\", STREAM_FILTER_READ); tests/codegen/io/streams.rs:3052:/// Verifies compiled PHP output for stream filter iconv utf16le to utf8 roundtrips. tests/codegen/io/streams.rs:3054:fn test_stream_filter_iconv_utf16le_to_utf8_roundtrips() { tests/codegen/io/streams.rs:3063:stream_filter_append($m, \"convert.iconv.UTF-16LE/UTF-8\", STREAM_FILTER_READ); tests/codegen/io/streams.rs:3071:/// Verifies compiled PHP output for stream filter iconv write transcodes on fwrite.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8b10e5fbcb525a82316d8375",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:02:19.559Z",
+  "stored_at": "2026-08-18T10:02:19.561Z"
+}

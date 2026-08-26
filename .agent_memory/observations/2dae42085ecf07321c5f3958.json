@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/size_conflicts.sh",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/size_conflicts.sh: #!/bin/zsh\n# Counts conflict hunks per unmerged file, generated builtin docs excluded: those are resolved by\n# REGENERATING, not by",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/size_conflicts.sh: #!/bin/zsh\n# Counts conflict hunks per unmerged file, generated builtin docs excluded: those are resolved by\n# REGENERATING, not by reading, so counting them would drown the files that need judgement.\ncd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature || exit 1\ngit status --short \\\n  | grep \"^UU\" \\\n  | sed 's/^.. //' \\\n  | grep -v 'docs/internals/builtins/\\|docs/php/builtins' \\\n  | while read -r f; do\n      n=$(grep -c '^<<<<<<<' \"$f\" 2>/dev/null)\n      [[ -z \"$n\" ]] && n=0\n      printf '%3d %s\\n' \"$n\" \"$f\"\n    done | sort -rn",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2dae42085ecf07321c5f3958",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T16:56:36.750Z",
+  "stored_at": "2026-08-20T16:56:36.750Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "diff -rq /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/src 2>&1 | head -40",
+  "summary": "diff -rq /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/src 2>&1 | head -40: rojects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/src/builtins/array/array_pop.rs differ Files ",
+  "text": "diff -rq /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/src 2>&1 | head -40: rojects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/src/builtins/array/array_pop.rs differ Files /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/array/array_product.rs and /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/src/builtins/array/array_product.rs differ Files /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/array/array_push.rs and /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/src/builtins/array/array_push.rs differ Files /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/array/array_rand.rs and /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn/src/builtins/array/array_rand.rs differ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ec3f36b34a48b542891ab7fb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:12:57.835Z",
+  "stored_at": "2026-08-14T14:12:57.836Z"
+}

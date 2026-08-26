@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/jsonlist && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/jsonlist && printf '%s\\n' '<?php' '$a = [];' '$a[0] = \"x\"; $a[1] = \"y\";' 'echo json_encode($a), \"\\n\";' '$b = [];' '$b[1] = \"x\"; $b[2] = \"y\";' 'echo json_encode($b), \"\\n\";' '$c = [];' '$c[2] = \"x\"; $c[0] = \"y\";' 'echo json_encode($c), \"\\n\";' >… [+247 chars truncated]",
+  "summary": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/jsonlist && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79",
+  "text": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/jsonlist && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/jsonlist && printf '%s\\n' '<?php' '$a = [];' '$a[0] = \"x\"; $a[1] = \"y\";' 'echo json_encode($a), \"\\n\";' '$b = [];' '$b[1] = \"x\"; $b[2] = \"y\";' 'echo json_encode($b), \"\\n\";' '$c = [];' '$c[2] = \"x\"; $c[0] = \"y\";' 'echo json_encode($c), \"\\n\";' > p.php && php -n p.php && echo \"=== elephc ===\" && rm -rf run && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php 2>&1 | tail -1 && mkdir -p run && cp p run/p && cd run && ./p: [\"x\",\"y\"] {\"1\":\"x\",\"2\":\"y\"} {\"2\":\"x\",\"0\":\"y\"} === elephc === Compiled 'p.php' -> 'p' [\"x\",\"y\"] {\"1\":\"x\",\"2\":\"y\"} {\"2\":\"x\",\"0\":\"y\"}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d22608cb0a355a7ced6ba93b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:33:43.581Z",
+  "stored_at": "2026-08-22T11:33:43.581Z",
+  "low_signal": true
+}

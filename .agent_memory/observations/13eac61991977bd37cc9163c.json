@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"params property\\|filter_params_offset\\|user_filter_params\" -B3 -A18 src/codegen_support/runtime/data/user.rs | head -40",
+  "summary": "grep -n \"params property\\|filter_params_offset\\|user_filter_params\" -B3 -A18 src/codegen_support/runtime/data/user.rs | head -40: to choose which code path 2347-/// to invoke. Adding the flag inline in the vtable lets the dispatcher 2348-/// branch with a single load + cmp. 2349-pub(crate) const USER_FILTER_VTABLE_SLOT",
+  "text": "grep -n \"params property\\|filter_params_offset\\|user_filter_params\" -B3 -A18 src/codegen_support/runtime/data/user.rs | head -40: to choose which code path 2347-/// to invoke. Adding the flag inline in the vtable lets the dispatcher 2348-/// branch with a single load + cmp. 2349-pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 7; 2350- 2351-/// Returns true when a method key belongs to the fixed-ABI stream-wrapper 2352-/// vtable surface dispatched by the runtime with raw arguments. 2353-pub(crate) fn is_user_wrapper_contract_method(method_key: &str) -> bool { 2354- USER_WRAPPER_METHOD_NAMES.contains(&method_key) 2355-} 2356- 2357-/// Returns true when a method key belongs to the fixed-ABI user-filter 2358-/// vtable surface dispatched by the runtime with raw arguments. 2359-pub(crate) fn is_user_filter_contract_method(method_key: &str) -> bool { 2360- USER_FILTER_METHOD_NAMES.contains(&method_key) 2361-} 2362- 2363-/// Returns true when declaring `method_key` is by itself enough to identify a class as a wrapper.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "13eac61991977bd37cc9163c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:31:28.040Z",
+  "stored_at": "2026-08-21T09:31:28.041Z"
+}

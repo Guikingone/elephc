@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel.php: <?php\n// What does php's stream_select() do with streams that have NO descriptor?\nfunction t(string $label, callable $fn): void {\n    ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel.php: <?php\n// What does php's stream_select() do with streams that have NO descriptor?\nfunction t(string $label, callable $fn): void {\n    echo $label, \": \";\n    try { $fn(); } catch (\\Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; return; }\n}\n\nt(\"a memory-only\", function () {\n    $m = fopen('php://memory', 'r+'); fwrite($m, \"x\"); rewind($m);\n    $r = [$m]; $w = null; $e = null;\n    $n = stream_select($r, $w, $e, 0);\n    echo \"n=\", var_export($n, true), \" ready=\", count($r), \"\\n\";\n});\n\nt(\"b temp-only\", function () {\n    $m = fopen('php://temp', 'r+'); fwrite($m, \"x\"); rewind($m);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a74933d0ca91a162159891d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:25:30.677Z",
+  "stored_at": "2026-08-17T06:25:30.678Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: ## Active work — Streams (`feat/streams-csv-signatures`)\n- 🎯✅✅✅ **Balayage streams 46/46** — surface entière identique à php (46 programmes, sortie + diagnostic -> ## Active work — Streams (`feat/strea",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: ## Active work — Streams (`feat/streams-csv-signatures`)\n- 🎯✅✅✅ **Balayage streams 46/46** — surface entière identique à php (46 programmes, sortie + diagnostic -> ## Active work — Streams (`feat/streams-csv-signatures`)\n- 🔴🔴🔑★★★ [Un store dans une CONDITION de boucle est hors de la boucle](a-store-in-a-loop-condition-is-outside-the-loop.md) — `while (($x = f()) …)` fuyait 1 alloc/tour; 4 régions. Test = 10 vs 2000 tours, PAS zéro.\n- 🔴🔑 [Les clauses de `for` n'acceptaient qu'UNE écriture simple](for-clauses-accepted-only-one-assignment.md) — `for ($i = 0, $n = count($a); …)` refusé À L'ANALYSE; 5 formes php sur 5.\n- 🎯✅✅✅ **Balayage stre",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "edad6d0ae6a2c02d89ae5719",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:32:22.824Z",
+  "stored_at": "2026-08-23T13:32:22.828Z"
+}

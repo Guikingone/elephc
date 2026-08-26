@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn promote_key_preserving_sort_receiver\" -A40 src/ir_lower/ | head -50",
+  "summary": "grep -rn \"fn promote_key_preserving_sort_receiver\" -A40 src/ir_lower/ | head -50: ir_lower/expr/array_builtin_args.rs-114- if !crate::types::key_preserving_sort_promotes(name, &elem_ty) { src/ir_lower/expr/array_builtin_args.rs-115- return; src/ir_lower/expr/array_builtin_args.rs-116- } src/ir_lower/expr/array_builtin_",
+  "text": "grep -rn \"fn promote_key_preserving_sort_receiver\" -A40 src/ir_lower/ | head -50: ir_lower/expr/array_builtin_args.rs-114- if !crate::types::key_preserving_sort_promotes(name, &elem_ty) { src/ir_lower/expr/array_builtin_args.rs-115- return; src/ir_lower/expr/array_builtin_args.rs-116- } src/ir_lower/expr/array_builtin_args.rs-117- let span = args[0].span; src/ir_lower/expr/array_builtin_args.rs-118- let assoc_ty = PhpType::AssocArray { src/ir_lower/expr/array_builtin_args.rs-119- key: Box::new(PhpType::Int), src/ir_lower/expr/array_builtin_args.rs-120- value: elem_ty, src/ir_lower/expr/array_builtin_args.rs-121- }; src/ir_lower/expr/array_builtin_args.rs-122- let array_value = ctx.load_local(local, Some(span)); src/ir_lower/expr/array_builtin_args.rs-123- ctx.prepare_mutated_local_owner(local, array_value, assoc_ty.clone(), Some(span)); src/ir_lower/expr/array_builtin_args.rs-124- let hash = ctx.emit_value( src/ir_lower/expr/array_builtin_args.rs-125- Op::ArrayToHash,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "31d47620ed8dfe7f127c2ddd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:23:50.088Z",
+  "stored_at": "2026-08-21T07:23:50.088Z"
+}

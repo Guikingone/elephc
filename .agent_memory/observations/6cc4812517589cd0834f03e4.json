@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/gaps.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/gaps.php: <?php\n// GAP 1 — an EMPTY array passed by reference and filled by the callee.\nfunction fill(array &$a): void { $a[] = 1; $a[] = 2; }\n",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/gaps.php: <?php\n// GAP 1 — an EMPTY array passed by reference and filled by the callee.\nfunction fill(array &$a): void { $a[] = 1; $a[] = 2; }\n$e = []; fill($e); echo \"1a: \", count($e), \":\", implode(\",\", $e), \"\\n\";\n\nfunction fill_str(array &$a): void { $a[] = \"x\"; $a[] = \"y\"; }\n$f = []; fill_str($f); echo \"1b: \", implode(\",\", $f), \"\\n\";\n\nfunction fill_mixed(array &$a): void { $a[] = 1; $a[] = \"s\"; $a[] = 2.5; }\n$g = []; fill_mixed($g); echo \"1c: \", json_encode($g), \"\\n\";\n\nfunction fill_keyed(array &$a): void { $a[\"k\"] = 1; $a[\"j\"] = 2; }\n$h = []; fill_keyed($h); echo \"1d: \", json_encode($h), \"\\n\";\n\n$i =",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6cc4812517589cd0834f03e4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:59:50.623Z",
+  "stored_at": "2026-08-16T20:59:50.623Z"
+}

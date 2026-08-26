@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__elephc_hash_ctx_init\" src/builtins/ | head -3; echo \"=== hash_init declaration ===\"; grep -rn \"contract: \\\"hash_init\\\"\" -A 25 src/builtins/ | head -30",
+  "summary": "grep -rn \"__elephc_hash_ctx_init\" src/builtins/ | head -3; echo \"=== hash_init declaration ===\"; grep -rn \"contract: \\\"hash_init\\\"\" -A 25 src/builtins/ | head -30: src/builtins/string/__elephc_hash_ctx_copy.rs:10://! - See `__elephc_hash_ctx_init` for why the hash-context builtins are internal. src/builtins/string/__el",
+  "text": "grep -rn \"__elephc_hash_ctx_init\" src/builtins/ | head -3; echo \"=== hash_init declaration ===\"; grep -rn \"contract: \\\"hash_init\\\"\" -A 25 src/builtins/ | head -30: src/builtins/string/__elephc_hash_ctx_copy.rs:10://! - See `__elephc_hash_ctx_init` for why the hash-context builtins are internal. src/builtins/string/__elephc_hash_ctx_init.rs:2://! Home of the internal `__elephc_hash_ctx_init` builtin: the raw incremental-hash src/builtins/string/__elephc_hash_ctx_init.rs:26: contract: \"__elephc_hash_ctx_init\", === hash_init declaration ===",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ac7ea07967ce05fd955db487",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:33:26.934Z",
+  "stored_at": "2026-08-21T16:33:26.935Z"
+}

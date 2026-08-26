@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"is_main\" src/codegen/lower_inst/exceptions.rs src/codegen/context.rs | head -5; grep -rn \"flags.is_main\" src/codegen --include='*.rs' | head -4",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"is_main\" src/codegen/lower_inst/exceptions.rs src/codegen/context.rs | head -5; grep -rn \"flags.is_main\" src/codegen --include='*.rs' | head -4: src/codegen/context.rs:65: pub(super) is_main: bool, src/codegen/cont",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"is_main\" src/codegen/lower_inst/exceptions.rs src/codegen/context.rs | head -5; grep -rn \"flags.is_main\" src/codegen --include='*.rs' | head -4: src/codegen/context.rs:65: pub(super) is_main: bool, src/codegen/context.rs:82: is_main: bool, src/codegen/context.rs:121: is_main, src/codegen/local_analysis.rs:649: function.flags.is_main = true; src/codegen/lower_term.rs:491: function.flags.is_main = true; src/codegen/lower_term.rs:508: function.flags.is_main = true; src/codegen/lower_term.rs:532: function.flags.is_main = true;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6814cba10d5fc8930f90d4f5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:39:02.975Z",
+  "stored_at": "2026-08-22T19:39:02.975Z"
+}

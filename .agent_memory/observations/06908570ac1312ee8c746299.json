@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"str_getcsv\" tests/codegen/ | head -20",
+  "summary": "grep -rn \"str_getcsv\" tests/codegen/ | head -20: \"); tests/codegen/io/streams.rs:1235:str_getcsv(\"a,b\", \",\", \"\\\"\", \"\\\\\"); tests/codegen/io/streams.rs:1245: for name in [\"fgetcsv\", \"fputcsv\", \"str_getcsv\"] { tests/codegen/io/streams.rs:1255:/// Verifies `str_getcsv()` parses one record, with a newline as DATA rather tha",
+  "text": "grep -rn \"str_getcsv\" tests/codegen/ | head -20: \"); tests/codegen/io/streams.rs:1235:str_getcsv(\"a,b\", \",\", \"\\\"\", \"\\\\\"); tests/codegen/io/streams.rs:1245: for name in [\"fgetcsv\", \"fputcsv\", \"str_getcsv\"] { tests/codegen/io/streams.rs:1255:/// Verifies `str_getcsv()` parses one record, with a newline as DATA rather than a break. tests/codegen/io/streams.rs:1262:fn test_str_getcsv_treats_an_interior_newline_as_data() { tests/codegen/io/streams.rs:1266:foreach ($cases as $c) { echo json_encode(str_getcsv($c, \",\", \"\\\"\", \"\\\\\")), \"|\"; } tests/codegen/io/streams.rs:1275:/// Verifies `str_getcsv()` answers the same through `eval()` as it does compiled. tests/codegen/io/streams.rs:1277:fn test_str_getcsv_matches_between_compiled_and_eval() { tests/codegen/io/streams.rs:1280:echo json_encode(str_getcsv(\"a,\\\"b,c\\\",d\", \",\", \"\\\"\", \"\\\\\")), \"|\"; tests/codegen/io/streams.rs:1281:eval('echo json_encode(str_getcsv(\"a,\\\"b,c\\\",d\", \",\", \"\\\"\", \"\\\\\\\\\"));');",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "06908570ac1312ee8c746299",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:22:53.986Z",
+  "stored_at": "2026-08-14T14:22:53.986Z"
+}

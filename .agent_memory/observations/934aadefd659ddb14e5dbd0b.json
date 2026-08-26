@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests 2>&1 | tail -6",
+  "summary": "cargo test --test codegen_tests 2>&1 | tail -6: b2h4mbxa9",
+  "text": "cargo test --test codegen_tests 2>&1 | tail -6: b2h4mbxa9",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "934aadefd659ddb14e5dbd0b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T20:10:26.165Z",
+  "stored_at": "2026-08-17T20:10:26.165Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/string/sscanf.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/string/sscanf.rs: pub(crate) fn require_scanf_engine(cx: &mut BuiltinCheckCtx) -> Result<(), CompileError> {\n    if cx.checker.functions.contains_key(SCANF_ENGINE_FUNCTION) {\n    -> pub(crate) fn require_sca",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/string/sscanf.rs: pub(crate) fn require_scanf_engine(cx: &mut BuiltinCheckCtx) -> Result<(), CompileError> {\n    if cx.checker.functions.contains_key(SCANF_ENGINE_FUNCTION) {\n    -> pub(crate) fn require_scanf_engine(cx: &mut BuiltinCheckCtx) -> Result<(), CompileError> {\n    // `functions` is filled LAZILY, one entry per signature the checker has had to resolve, so\n    // it is empty for a prelude function nothing has called yet. `function_variant_groups` is\n    // the index of every DECLARED name — the one `function_exists()` reads — and is the only\n    // one that answers \"was this injected\" at the moment a builtin's hook runs.\n    if cx\n        .chec",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c13616115d3100c24355e484",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:53:16.193Z",
+  "stored_at": "2026-08-16T17:53:16.193Z"
+}

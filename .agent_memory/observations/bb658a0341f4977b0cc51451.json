@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn check_function_body\\|check_fn_body\\|fn check_user_function\" src/types/checker | head -10",
+  "summary": "About to run: grep -rn \"fn check_function_body\\|check_fn_body\\|fn check_user_function\" src/types/checker | head -10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bb658a0341f4977b0cc51451",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:42:40.435Z",
+  "stored_at": "2026-08-18T09:42:40.435Z"
+}

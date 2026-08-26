@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy find . -type d -name \"prelude*\" -not -path \"./target/*\" -not -path \"./.git/*\" | head -10; echo \"=== php files ===\"; rtk proxy find . -name \"*.php\" -not -path \"./target/*\" -not -path \"./.git/*\" -not -path \"./tests/*\" -not -path \"./examples/*\" | head -20",
+  "summary": "About to run: rtk proxy find . -type d -name \"prelude*\" -not -path \"./target/*\" -not -path \"./.git/*\" | head -10; echo \"=== php files ===\"; rtk proxy find . -name \"*.php\" -not -path \"./target/*\" -not -path \"./.git/",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "963a9d65bb4fbe4036794133",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:39:39.057Z",
+  "stored_at": "2026-08-16T15:39:39.057Z",
+  "low_signal": true
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/lines/k05; clang -c -target x86_64-unknown-linux-gnu -x assembler -o /dev/null $D/chain.s 2>&1 | head -10; echo \"ASM_EXIT=$?\"",
+  "summary": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/lines/k05; clang -c -target x86_64-unknown-linux-gnu -x assembler -o /dev/null $D/chain.s 2>&1 | head -10; echo \"ASM_EXIT=$?\": ASM_EXIT=0",
+  "text": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/lines/k05; clang -c -target x86_64-unknown-linux-gnu -x assembler -o /dev/null $D/chain.s 2>&1 | head -10; echo \"ASM_EXIT=$?\": ASM_EXIT=0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "26832a98b2769a2a5347555f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:49:44.575Z",
+  "stored_at": "2026-08-24T17:49:44.576Z"
+}

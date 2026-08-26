@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"glob\" src/codegen_support/runtime/io/*.rs | grep -iE \"label_global|bl_c|call.*glob\" | head -6; echo \"=== lowering ===\"; grep -rn \"fn lower_glob\" src/ | head -2",
+  "summary": "grep -rn \"glob\" src/codegen_support/runtime/io/*.rs | grep -iE \"label_global|bl_c|call.*glob\" | head -6; echo \"=== lowering ===\"; grep -rn \"fn lower_glob\" src/ | head -2: src/codegen_support/runtime/io/basename.rs:35: emitter.label_global(\"__rt_basename\"); src/codegen_support/runtime/io/basename.rs:105: emitter.label_g",
+  "text": "grep -rn \"glob\" src/codegen_support/runtime/io/*.rs | grep -iE \"label_global|bl_c|call.*glob\" | head -6; echo \"=== lowering ===\"; grep -rn \"fn lower_glob\" src/ | head -2: src/codegen_support/runtime/io/basename.rs:35: emitter.label_global(\"__rt_basename\"); src/codegen_support/runtime/io/basename.rs:105: emitter.label_global(\"__rt_basename\"); src/codegen_support/runtime/io/build_sockaddr_in6.rs:41: emitter.label_global(\"__rt_build_sockaddr_in6\"); src/codegen_support/runtime/io/build_sockaddr_in6.rs:167: emitter.label_global(\"__rt_build_sockaddr_in6\"); src/codegen_support/runtime/io/append_position.rs:34: emitter.label_global(\"__rt_stream_append_skip\"); src/codegen_support/runtime/io/append_position.rs:77: emitter.label_global(\"__rt_stream_clear_append_skip\"); === lowering === src/ir_lower/stmt/declarations.rs:116:pub(super) fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String]) { src/codegen/lower_inst/builtins/io/filesystem_ops.rs:173:pub(crate) fn lower_glob(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4342098fbb3fe8d83ef96078",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:07:50.273Z",
+  "stored_at": "2026-08-21T20:07:50.273Z"
+}

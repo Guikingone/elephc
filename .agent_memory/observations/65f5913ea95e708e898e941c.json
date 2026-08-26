@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/port_remaining.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/port_remaining.py: import pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/port_remaining.py: import pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n\ndef cut_test(path, fn_name):\n    \"\"\"Removes one `#[test]` function together with the doc block above it.\"\"\"\n    p = ROOT / path\n    t = p.read_text()\n    at = t.index(f'fn {fn_name}(')\n    start = t.rindex('\\n#[test]\\n', 0, at) + 1\n    while True:\n        prev = t.rindex('\\n', 0, start - 1) + 1\n        if not t[prev:].startswith('///'):\n            break\n        start = prev\n    end = t.index('\\n}\\n', at) + len('\\n}\\n')\n    if t[end:end + 1] == '\\n':\n        end ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "65f5913ea95e708e898e941c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:38:55.805Z",
+  "stored_at": "2026-08-20T19:38:55.805Z"
+}

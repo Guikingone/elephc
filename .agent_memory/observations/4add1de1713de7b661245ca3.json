@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_array_filter_tests.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_array_filter_tests.py: \"\"\"Two tests pinned a constant php does not define. They now pin its absence.\n\n`defined(\"ARRAY_FILTER_USE_VALUE\")` is fa",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_array_filter_tests.py: \"\"\"Two tests pinned a constant php does not define. They now pin its absence.\n\n`defined(\"ARRAY_FILTER_USE_VALUE\")` is false on `php -n` 8.5.6 — the namespaced test asserted\n`\"Y\"` for it. Both tests were written from the implementation, so they held the divergence in\nplace rather than catching it. Mode 0 is still the value mode; it is the NAME that does not exist,\nso the behaviour tests keep exercising it through the literal and through the default.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = ROOT / '",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4add1de1713de7b661245ca3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:07:54.818Z",
+  "stored_at": "2026-08-22T10:07:54.819Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"lower_args_with_signature\" src/ir_lower/expr/calls*.rs src/ir_lower/expr/mod.rs 2>/dev/null | head; grep -rln \"Op::Call\" src/ir_lower/expr | head",
+  "summary": "grep -rn \"lower_args_with_signature\" src/ir_lower/expr/calls*.rs src/ir_lower/expr/mod.rs 2>/dev/null | head; grep -rln \"Op::Call\" src/ir_lower/expr | head: (eval):1: no matches found: src/ir_lower/expr/calls*.rs src/ir_lower/expr/descriptor_invoke.rs src/ir_lower/expr/method_calls.rs src/ir_lower/expr/callable_resolut",
+  "text": "grep -rn \"lower_args_with_signature\" src/ir_lower/expr/calls*.rs src/ir_lower/expr/mod.rs 2>/dev/null | head; grep -rln \"Op::Call\" src/ir_lower/expr | head: (eval):1: no matches found: src/ir_lower/expr/calls*.rs src/ir_lower/expr/descriptor_invoke.rs src/ir_lower/expr/method_calls.rs src/ir_lower/expr/callable_resolution.rs src/ir_lower/expr/function_calls.rs src/ir_lower/expr/static_array_callbacks.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bb30643f4e95b9ae8df03819",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:14:10.382Z",
+  "stored_at": "2026-08-18T10:14:10.382Z"
+}

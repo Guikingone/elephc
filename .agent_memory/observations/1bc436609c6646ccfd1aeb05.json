@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"bl __rt_stream_pending_take\");                         // x0 = how many came back\n    emitter.instruction(\"cbz x0, __rt_fread_no_pending\"); -> emitter.instruc",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"bl __rt_stream_pending_take\");                         // x0 = how many came back\n    emitter.instruction(\"cbz x0, __rt_fread_no_pending\"); -> emitter.instruction(\"bl __rt_stream_pending_take\");                         // x0 = how many came back\n    emitter.instruction(\"cbz x0, __rt_fread_no_pending\");\n    emitter.instruction(\"str x0, [sp, #48]\");                                   // this much came out of the holding area\n    emitter.instruction(\"ldr x9, [sp, #8]\");                                    // the caller's request\n    emitter.instruction(\"cmp x0, x9\");\n    emitter.instruction(\"b.lt __rt_fread_no_pending\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1bc436609c6646ccfd1aeb05",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:20:43.851Z",
+  "stored_at": "2026-08-23T20:20:43.852Z"
+}

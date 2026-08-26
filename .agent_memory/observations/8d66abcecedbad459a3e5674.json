@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1063,1085p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/io_run6.txt",
+  "summary": "sed -n '1063,1085p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/io_run6.txt: eError: stream_context_set_options(): Argument #2 ($options) must be of type array, string given|empty=TypeError: strea",
+  "text": "sed -n '1063,1085p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/io_run6.txt: eError: stream_context_set_options(): Argument #2 ($options) must be of type array, string given|empty=TypeError: stream_context_set_options(): Argument #2 ($options) must be of type array, string given|map=TypeError: stream_context_set_options(): Argument #2 ($options) must be of type array, string given|\" right: \"scalar=TypeError: stream_context_set_options(): Argument #2 ($options) must be of type array, int given|list=ValueError: Options should have the form [\\\"wrappername\\\"][\\\"optionname\\\"] = $value|empty=[]|map={\\\"http\\\":{\\\"method\\\":\\\"POST\\\"}}|\" failures: codegen::io::streams::test_the_singular_context_form_declares_array_or_string codegen::io::streams::test_the_two_argument_context_form_refuses_what_php_refuses test result: FAILED. 1044 passed; 2 failed; 8 ignored; 0 measured; 7813 filtered out; finished in 317.36s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8d66abcecedbad459a3e5674",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:21:43.062Z",
+  "stored_at": "2026-08-22T19:21:43.063Z"
+}

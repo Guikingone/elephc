@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -rn \"ref_params|by_ref_param|RefBound|declare_ref_bound\" -g '*.rs' src/ir_lower/expr/function_calls.rs | head -12",
+  "summary": "rtk proxy rg -rn \"ref_params|by_ref_param|RefBound|declare_ref_bound\" -g '*.rs' src/ir_lower/expr/function_calls.rs | head -12 completed",
+  "text": "rtk proxy rg -rn \"ref_params|by_ref_param|RefBound|declare_ref_bound\" -g '*.rs' src/ir_lower/expr/function_calls.rs | head -12 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e31ce49621c63073d80ae83f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:28:40.747Z",
+  "stored_at": "2026-08-16T19:28:40.748Z"
+}

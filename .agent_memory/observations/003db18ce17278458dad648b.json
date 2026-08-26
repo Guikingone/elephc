@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nfor x in d['drifts']:\n    if x['category']=='function-signature' and x['symbol'] in ('stream_socket_client','stream_socket_accept','stream_context_create','stream_filter_append','fopen'):\n        e=x['elephc']['signature']; p=x['php']['signature']\n        print(x['symbol'])\n        print('  elephc:', [(q['name'],q.get('type'),q.get('optional'),q.get('by_reference')) for q in e['parameters']], '->', e['return_type'])\n        print('  php   :', [(q['name'],q.get('type'),q.get('o… [+85 chars truncated]",
+  "summary": "About to run: python3 -c \" import json d=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json')) for x in d['drifts']: if x['category']=='function-signature' and x['symbol'] in (",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "003db18ce17278458dad648b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:21:21.270Z",
+  "stored_at": "2026-08-14T14:21:21.271Z"
+}

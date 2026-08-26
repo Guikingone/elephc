@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"by_ref_widened_params\" src | head",
+  "summary": "grep -rn \"by_ref_widened_params\" src | head: src/types/checker/method_pass.rs:378: self.by_ref_widened_params.insert((owner.clone(), index)); src/types/checker/mod.rs:76: pub by_ref_widened_params: HashSet<(String, usize)>, src/types/checker/driver/init.rs:148: by_ref_widened_params: HashSet::new(), src/types/checker/f",
+  "text": "grep -rn \"by_ref_widened_params\" src | head: src/types/checker/method_pass.rs:378: self.by_ref_widened_params.insert((owner.clone(), index)); src/types/checker/mod.rs:76: pub by_ref_widened_params: HashSet<(String, usize)>, src/types/checker/driver/init.rs:148: by_ref_widened_params: HashSet::new(), src/types/checker/functions/resolution/specialization.rs:279: .by_ref_widened_params src/types/checker/functions/resolution/signature.rs:170: self.by_ref_widened_params src/types/checker/inference/objects/methods.rs:530: .by_ref_widened_params src/types/checker/inference/objects/methods.rs:1138: .by_ref_widened_params src/types/checker/inference/objects/methods.rs:1235: .by_ref_widened_params",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bec516302b861c219bc6cc26",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:43:15.307Z",
+  "stored_at": "2026-08-18T09:43:15.308Z"
+}

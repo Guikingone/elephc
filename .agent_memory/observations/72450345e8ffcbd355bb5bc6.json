@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo check --workspace 2>&1 | grep -E \"^error|^warning: unused|-->\" | head -60",
+  "summary": "cargo check --workspace 2>&1 | grep -E \"^error|^warning: unused|-->\" | head -60: bzyo30u0l",
+  "text": "cargo check --workspace 2>&1 | grep -E \"^error|^warning: unused|-->\" | head -60: bzyo30u0l",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "72450345e8ffcbd355bb5bc6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:37:32.363Z",
+  "stored_at": "2026-08-20T17:37:32.364Z",
+  "low_signal": true
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'stream_metadata' tests --include='*.rs' | head -10; echo \"=== test bodies ===\"; grep -rn 'stream_metadata' -B3 -A3 tests/codegen/*/*.rs 2>/dev/null | head -40",
+  "summary": "About to run: grep -rn 'stream_metadata' tests --include='*.rs' | head -10; echo \"=== test bodies ===\"; grep -rn 'stream_metadata' -B3 -A3 tests/codegen/*/*.rs 2>/dev/null | head -40",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "de13d3472912d23932a01e0f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:17:35.965Z",
+  "stored_at": "2026-08-14T14:17:35.965Z"
+}

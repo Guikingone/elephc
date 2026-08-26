@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/e3; mkdir -p $S/e3; cp $S/probes2/file-scheme3.php $S/e3/p.php; cd $S/e3 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php >/dev/null 2>&1 && ./p",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/e3; mkdir -p $S/e3; cp $S/probes2/file-scheme3.php $S/e3/p.php; cd $S/e3 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/w",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/e3; mkdir -p $S/e3; cp $S/probes2/file-scheme3.php $S/e3/p.php; cd $S/e3 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php >/dev/null 2>&1 && ./p: readfile content 8 file array ( 0 => 'content ', ) touch true exists true chmod true is_writable true is_readable true filemtime true opendir true scandir array ( 0 => '.', 1 => '..', 2 => 'inner.txt', ) glob array ( ) mkdir true exists true rmdir true unlink true rename true true realpath false disk_free false fileatime-type integer sfi 8 linecount 1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cdd331531f6da49ebc73dd88",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:18:55.848Z",
+  "stored_at": "2026-08-24T18:18:55.849Z"
+}

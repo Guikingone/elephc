@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib, re, subprocess\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nt = (ROOT / 'src/scanf_prelude.rs').read_text()\nm = re.search(r'pub\\(crate\\) const SCANF_PRELUDE_SRC: &str = r#\"(.*?)\"#;', t, re.S)\nassert m, 'engine source not found'\nengine = m.group(1)\n# The oracle fixture must be engine + generated wrappers, exactly what inject_if_used used to parse.\nout = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f7… [+230 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib, re, subprocess ROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature') t = (ROOT / 'src/scanf_prelude.rs').r",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e46937aab246c7aaddc7b20a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:41:05.601Z",
+  "stored_at": "2026-08-22T07:41:05.602Z"
+}

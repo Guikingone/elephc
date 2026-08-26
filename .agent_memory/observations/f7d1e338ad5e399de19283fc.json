@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '6825,6840p' tests/ir_backend_smoke_test.rs",
+  "summary": "sed -n '6825,6840p' tests/ir_backend_smoke_test.rs: assert!( stderr.contains(\"Fatal error: Call to undefined function double()\"), \"unexpected fatal stderr: {stderr}\" ); } /// Compiles `source`, runs the output binary, and returns stdout. fn compile_and_run_ir_backend(name: &str, source: &str) -> String { compile_and_ru",
+  "text": "sed -n '6825,6840p' tests/ir_backend_smoke_test.rs: assert!( stderr.contains(\"Fatal error: Call to undefined function double()\"), \"unexpected fatal stderr: {stderr}\" ); } /// Compiles `source`, runs the output binary, and returns stdout. fn compile_and_run_ir_backend(name: &str, source: &str) -> String { compile_and_run_ir_backend_with_args(name, source, &[]) } /// Compiles a managed-PCRE2 fixture, runs its output binary, and returns stdout. fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String { let run = compile_ir_backend_and_run_with_managed_pcre2(name, source, &[]); assert!(run.status.success(), \"IR backend binary failed for {name}\"); String::from_utf8(run.stdout).unwrap()",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f7d1e338ad5e399de19283fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:38:53.198Z",
+  "stored_at": "2026-08-25T08:38:53.199Z"
+}

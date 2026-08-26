@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"rbp - 56\\]\\\"\" src/codegen_support | grep -i \"rdi\" | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"rbp - 56\\]\\\"\" src/codegen_support | grep -i \"rdi\" | head -20: uction(\"mov rdi, QWORD PTR [rbp - 56]\"); // prepare SysV call argument src/codegen_support/runtime/io/http_build_request.rs:780: emitter.instruction(\"mo",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"rbp - 56\\]\\\"\" src/codegen_support | grep -i \"rdi\" | head -20: uction(\"mov rdi, QWORD PTR [rbp - 56]\"); // prepare SysV call argument src/codegen_support/runtime/io/http_build_request.rs:780: emitter.instruction(\"mov rdi, QWORD PTR [rbp - 56]\"); // prepare SysV call argument src/codegen_support/runtime/io/http_build_request.rs:785: emitter.instruction(\"mov rdi, QWORD PTR [rbp - 56]\"); // prepare SysV call argument src/codegen_support/runtime/io/http_build_request.rs:796: emitter.instruction(\"mov rdi, QWORD PTR [rbp - 56]\"); // prepare SysV call argument src/codegen_support/runtime/io/http_build_request.rs:804: emitter.instruction(\"mov rdi, QWORD PTR [rbp - 56]\"); // dest src/codegen_support/runtime/io/http_build_request.rs:807: emitter.instruction(\"mov rdi, QWORD PTR [rbp - 56]\"); // prepare SysV call argument src/codegen_support/runtime/io/http_build_request.rs:815: emitter.instruction(\"mov rdi, QWORD PTR [rbp - 56]\"); // prepare SysV call argument",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eea0db073049c2d7b3904263",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T14:13:39.799Z",
+  "stored_at": "2026-08-23T14:13:39.800Z"
+}

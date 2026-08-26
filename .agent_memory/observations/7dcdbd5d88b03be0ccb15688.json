@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"contract: \\\"\" --include=\"*.rs\" src/builtins/io | sed 's/.*contract: \"//; s/\".*//' | sort | tr '\\n' ' '",
+  "summary": "grep -rn \"contract: \\\"\" --include=\"*.rs\" src/builtins/io | sed 's/.*contract: \"//; s/\".*//' | sort | tr '\\n' ' ': ontext_set_default stream_context_set_option stream_context_set_options stream_context_set_params stream_copy_to_stream stream_filter_append stream_filter_prepend stream_filter_register stream_filter_remove",
+  "text": "grep -rn \"contract: \\\"\" --include=\"*.rs\" src/builtins/io | sed 's/.*contract: \"//; s/\".*//' | sort | tr '\\n' ' ': ontext_set_default stream_context_set_option stream_context_set_options stream_context_set_params stream_copy_to_stream stream_filter_append stream_filter_prepend stream_filter_register stream_filter_remove stream_get_contents stream_get_filters stream_get_line stream_get_meta_data stream_get_transports stream_get_wrappers stream_is_local stream_isatty stream_register_wrapper stream_resolve_include_path stream_select stream_set_blocking stream_set_chunk_size stream_set_read_buffer stream_set_timeout stream_set_write_buffer stream_socket_accept stream_socket_client stream_socket_enable_crypto stream_socket_get_name stream_socket_pair stream_socket_recvfrom stream_socket_sendto stream_socket_server stream_socket_shutdown stream_supports_lock stream_wrapper_register stream_wrapper_restore stream_wrapper_unregister symlink sys_get_temp_dir tempnam tmpfile touch umask unlink var_dump vfprintf",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7dcdbd5d88b03be0ccb15688",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:12:03.398Z",
+  "stored_at": "2026-08-14T14:12:03.398Z"
+}

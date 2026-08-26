@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "Sur les trous mesurés, je prend, j'aimerais bien qu'on aille regarder le code source de php-src afin de voir ce qu'il reste REELLEMENT à faire",
+  "summary": "Sur les trous mesurés, je prend, j'aimerais bien qu'on aille regarder le code source de php-src afin de voir ce qu'il reste REELLEMENT à faire",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3debac82d02251eb43a994c1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:41:37.428Z",
+  "stored_at": "2026-08-18T15:41:37.429Z",
+  "low_signal": true
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/lines/k05/n3.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/lines/k05/n3.php: <?php\n$tv = 0;\n\nfunction shape(string $label, &$r, &$w, &$e): void {\n    global $tv;\n    try {\n        $n = stream_select($r, $w, $e",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/lines/k05/n3.php: <?php\n$tv = 0;\n\nfunction shape(string $label, &$r, &$w, &$e): void {\n    global $tv;\n    try {\n        $n = stream_select($r, $w, $e, $tv);\n        echo \"$label: returned \", var_export($n, true), \"\\n\";\n    } catch (Throwable $t) {\n        $names = [];\n        for ($x = $t; $x !== null; $x = $x->getPrevious()) { $names[] = get_class($x); }\n        echo \"$label: \", implode(\" <- \", $names), \"\\n\";\n    }\n}\n\n$f = fopen(__FILE__, 'r');\n$g = fopen(__FILE__, 'r');\n\n$r = [$f, 'bad']; $w = null; $e = null;         shape(\"1 valid + 1 bad (read)\", $r, $w, $e);\n$r = ['bad', 'worse']; $w = null; $e = null;  ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f81cd7cb8678ad0919082fc5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:42:16.004Z",
+  "stored_at": "2026-08-24T17:42:16.005Z"
+}

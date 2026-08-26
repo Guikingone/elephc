@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '282,340p' src/types/checker/inference/syntactic.rs",
+  "summary": "sed -n '282,340p' src/types/checker/inference/syntactic.rs:  | \"stream_copy_to_stream\" | \"clamp\" // hexdec/bindec/octdec return `int|float`, whose shared codegen representation // is `Mixed`; the boxed cell must not be read back as a raw integer. | \"hexdec\" | \"bindec\" | \"octdec\" // `base64_decode()` returns `string|fal",
+  "text": "sed -n '282,340p' src/types/checker/inference/syntactic.rs:  | \"stream_copy_to_stream\" | \"clamp\" // hexdec/bindec/octdec return `int|float`, whose shared codegen representation // is `Mixed`; the boxed cell must not be read back as a raw integer. | \"hexdec\" | \"bindec\" | \"octdec\" // `base64_decode()` returns `string|false` because `$strict = true` rejects a // character outside the Base64 alphabet with `false`. Its representation is the // same boxed `Mixed` cell, so it must not be read back as a string pair. | \"base64_decode\" => { PhpType::Mixed } \"fopen\" | \"tmpfile\" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::False]), \"strlen\" | \"ord\" | \"count\" | \"intval\" | \"abs\" | \"intdiv\" | \"printf\" | \"rand\" | \"time\" | \"fpassthru\" | \"linkinfo\" // Listed explicitly rather than left to the `_ => PhpType::Int` fallback, so a // future change to that fallback cannot silently retype them. | \"substr_count\" | \"strncmp\" | \"strncasecmp\" => PhpType::Int,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dbce36c8e69b31668d2d8360",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:29:43.442Z",
+  "stored_at": "2026-08-20T19:29:43.443Z"
+}

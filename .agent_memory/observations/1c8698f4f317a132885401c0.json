@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"label_global\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/quoted_printable_encode.rs | head -4; echo \"=== who calls it:\"; rtk proxy grep -rn \"__rt_quoted_printable_encode\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -8",
+  "summary": "rtk proxy grep -n \"label_global\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/quoted_printable_encode.rs | head -4; echo \"=== who calls it:\"; rtk proxy grep -rn \"__rt_quoted_printable_encode\" /Users/guillaumeloulier/PhpstormProjects/oss/",
+  "text": "rtk proxy grep -n \"label_global\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/quoted_printable_encode.rs | head -4; echo \"=== who calls it:\"; rtk proxy grep -rn \"__rt_quoted_printable_encode\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -8: -src's /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/quoted_printable_encode.rs:28:/// Emits the `__rt_quoted_printable_encode` runtime helper. /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/quoted_printable_encode.rs:43: emitter.label_global(\"__rt_quoted_printable_encode\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/quoted_printable_encode.rs:189:/// Emits the `__rt_quoted_printable_encode` runtime helper for the Linux x86_64 target. /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/quoted_printable_encode.rs:200: emitter.label_global(\"__rt_quoted_printable_encode\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1c8698f4f317a132885401c0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:58:12.397Z",
+  "stored_at": "2026-08-17T06:58:12.398Z"
+}

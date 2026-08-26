@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '14,26p' src/builtins/mod.rs",
+  "summary": "sed -n '14,26p' src/builtins/mod.rs: mod macros; pub mod semantics; pub mod spec; pub mod registry; pub mod docs; pub(crate) mod convert; mod requirements; mod array; pub(crate) mod array_or_false; mod callables; mod io; mod string; mod math;",
+  "text": "sed -n '14,26p' src/builtins/mod.rs: mod macros; pub mod semantics; pub mod spec; pub mod registry; pub mod docs; pub(crate) mod convert; mod requirements; mod array; pub(crate) mod array_or_false; mod callables; mod io; mod string; mod math;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6039ba2559c0580c7ac98bff",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:15:32.166Z",
+  "stored_at": "2026-08-25T13:15:32.167Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \"\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/ob_constants.py')\nt = p.read_text()\nt = t.replace(\\\"f = ROOT / 'src/types.rs'\\\", \\\"f = ROOT / 'src/types/mod.rs'\\\")\nt = t.replace(\\\"OLD = 'pub mod openssl_constants;'\\\", \\\"OLD = 'pub(crate) mod openssl_constants;'\\\")\nt = t.replace(\\\"f.write_text(t.replace(OLD, OLD + '\\\\\\\\npub mod output_ha… [+179 chars truncated]",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \" import pathlib p = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormPr",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e329df909188c9ae7eca50d7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:22:03.252Z",
+  "stored_at": "2026-08-23T09:22:03.253Z"
+}

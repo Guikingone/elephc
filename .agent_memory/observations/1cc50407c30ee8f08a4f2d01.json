@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'STREAM_FILTERED_POS_OFFSET' src/ | head -8; grep -n 'STREAM_FILTERED_POS_OFFSET' -B 6 src/codegen_support/runtime/resources/layout.rs | head -12",
+  "summary": "grep -rn 'STREAM_FILTERED_POS_OFFSET' src/ | head -8; grep -n 'STREAM_FILTERED_POS_OFFSET' -B 6 src/codegen_support/runtime/resources/layout.rs | head -12: sition.rs:19: STREAM_APPEND_SKIP_OFFSET, STREAM_FILTERED_BUF_PTR_OFFSET, STREAM_FILTERED_POS_OFFSET, 230-/// number counts: through `convert.base64-encode`, two `fr",
+  "text": "grep -rn 'STREAM_FILTERED_POS_OFFSET' src/ | head -8; grep -n 'STREAM_FILTERED_POS_OFFSET' -B 6 src/codegen_support/runtime/resources/layout.rs | head -12: sition.rs:19: STREAM_APPEND_SKIP_OFFSET, STREAM_FILTERED_BUF_PTR_OFFSET, STREAM_FILTERED_POS_OFFSET, 230-/// number counts: through `convert.base64-encode`, two `fread($f, 4)` answer `4` and `8` — the 231-/// FILTERED bytes handed out, not the source bytes consumed to make them. 232-/// 233-/// The field is only authoritative once the buffered path has actually run, which 234-/// `STREAM_FILTERED_BUF_PTR_OFFSET` reports: a filtered stream read only through `fgets()` never 235-/// engages the buffer, and its descriptor offset is still the right answer. 236:pub(crate) const STREAM_FILTERED_POS_OFFSET: i64 = 232; -- 422- assert!(STREAM_TRANSPORT_OFFSET > STREAM_MODE_LEN_OFFSET); 423- assert!(STREAM_TRANSPORT_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET); 424- assert!(STREAM_APPEND_SKIP_OFFSET == STREAM_TRANSPORT_OFFSET + 8); 425- assert!(STREAM_APPEND_SKIP_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1cc50407c30ee8f08a4f2d01",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T16:56:04.574Z",
+  "stored_at": "2026-08-26T16:56:04.575Z"
+}

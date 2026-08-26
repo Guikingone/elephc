@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '40,70p' src/codegen_support/runtime/io/stream_get_line.rs",
+  "summary": "sed -n '40,70p' src/codegen_support/runtime/io/stream_get_line.rs: eam carry a read-filter chain? -- // Probed once, up front: the answer picks the byte source for every iteration below. emitter.instruction(\"ldr x0, [sp, #16]\"); // the opaque stream handle emitter.instruction(\"bl __rt_stream_state\"); // resolve the sta",
+  "text": "sed -n '40,70p' src/codegen_support/runtime/io/stream_get_line.rs: eam carry a read-filter chain? -- // Probed once, up front: the answer picks the byte source for every iteration below. emitter.instruction(\"ldr x0, [sp, #16]\"); // the opaque stream handle emitter.instruction(\"bl __rt_stream_state\"); // resolve the stable stream state emitter.instruction(\"cbz x0, __rt_sgl_unfiltered\"); // no state: nothing can be attached to it emitter.instruction(&format!(\"ldr x9, [x0, #{STREAM_READ_FILTER_HEAD_OFFSET}]\")); // read-direction chain head emitter.instruction(\"str x9, [sp, #80]\"); // remember whether the chain exists emitter.instruction(\"b __rt_sgl_filter_probed\"); // continue with the reservation emitter.label(\"__rt_sgl_unfiltered\"); emitter.instruction(\"str xzr, [sp, #80]\"); // an unfiltered stream keeps the descriptor path emitter.label(\"__rt_sgl_filter_probed\"); emitter.instruction(\"ldr x1, [sp, #24]\"); // the state lookup clobbered the budget register",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "426ad8d98f397cc220939d14",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:40:08.278Z",
+  "stored_at": "2026-08-21T13:40:08.278Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"by_ref\" -g '*.rs' crates/elephc-builtin-contract/src/spec.rs | head -20; echo \"---- checker byref\"; rg -rn \"by_ref\" -g '*.rs' src/types/checker/ -l | head -20",
+  "summary": "rg -n \"by_ref\" -g '*.rs' crates/elephc-builtin-contract/src/spec.rs | head -20; echo \"---- checker byref\"; rg -rn \"by_ref\" -g '*.rs' src/types/checker/ -l | head -20: : bool, 144: if self.by_ref { 189: pub by_ref_return: bool, ---- checker byref src/types/checker/builtin_json.rs src/types/checker/builtin_user_filter.rs",
+  "text": "rg -n \"by_ref\" -g '*.rs' crates/elephc-builtin-contract/src/spec.rs | head -20; echo \"---- checker byref\"; rg -rn \"by_ref\" -g '*.rs' src/types/checker/ -l | head -20: : bool, 144: if self.by_ref { 189: pub by_ref_return: bool, ---- checker byref src/types/checker/builtin_json.rs src/types/checker/builtin_user_filter.rs src/types/checker/driver/init.rs src/types/checker/callables/first_class.rs src/types/checker/stmt_check.rs src/types/checker/callables/closures.rs src/types/checker/functions/call_validation.rs src/types/checker/builtins/out_params.rs src/types/checker/functions/param_binding.rs src/types/checker/mod.rs src/types/checker/method_pass.rs src/types/checker/driver/functions.rs src/types/checker/builtin_types/reflection/ast_literals.rs src/types/checker/functions/resolution/call.rs src/types/checker/inference/ops.rs src/types/checker/driver/externs.rs src/types/checker/schema/validation.rs src/types/checker/builtins/callables.rs src/types/checker/functions/resolution/signature.rs src/types/checker/builtins/callables/preg_replace_callback.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f99b2c024ba87da86eb498a3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:33:02.849Z",
+  "stored_at": "2026-08-16T15:33:02.849Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"label_global(\\\"__rt_var_dump_value\\\")\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -2; rtk proxy grep -rn \"__rt_var_dump_value\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/ | rtk proxy grep \"label_global\" | head -3",
+  "summary": "rtk proxy grep -rn \"label_global(\\\"__rt_var_dump_value\\\")\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -2; rtk proxy grep -rn \"__rt_var_dump_value\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/",
+  "text": "rtk proxy grep -rn \"label_global(\\\"__rt_var_dump_value\\\")\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -2; rtk proxy grep -rn \"__rt_var_dump_value\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/ | rtk proxy grep \"label_global\" | head -3: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/var_dump_walk.rs:994: emitter.label_global(\"__rt_var_dump_value\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/var_dump_walk.rs:1115: emitter.label_global(\"__rt_var_dump_value\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/var_dump_walk.rs:994: emitter.label_global(\"__rt_var_dump_value\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/var_dump_walk.rs:1115: emitter.label_global(\"__rt_var_dump_value\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4b65d3572bdb9c7f4d3a9f19",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:39:04.943Z",
+  "stored_at": "2026-08-17T12:39:04.943Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '600,650p' src/codegen_support/runtime/exceptions/trace_buffer.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '600,650p' src/codegen_support/runtime/exceptions/trace_buffer.rs: nstruction(&format!(\"mov x2, #{}\", trace_literal_len(\"_rt_trace_thrown_in\"))); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); abi::emit_symbol",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '600,650p' src/codegen_support/runtime/exceptions/trace_buffer.rs: nstruction(&format!(\"mov x2, #{}\", trace_literal_len(\"_rt_trace_thrown_in\"))); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); abi::emit_symbol_address(emitter, \"x1\", \"_script_source_file\"); abi::emit_load_symbol_to_reg(emitter, \"x2\", \"_script_source_file_len\", 0); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); abi::emit_symbol_address(emitter, \"x1\", \"_rt_trace_on_line\"); emitter.instruction(&format!(\"mov x2, #{}\", trace_literal_len(\"_rt_trace_on_line\"))); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); emitter.instruction(\"ldr x0, [sp, #16]\"); emitter.instruction(\"bl __rt_itoa\"); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); abi::emit_symbol_address(emitter, \"x1\", \"_rt_trace_nl\"); emitter.instruction(&format!(\"mov x2, #{}\", trace_literal_len(\"_rt_trace_nl\"))); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); emitter.label(\"__rt_uncaught_trace_done\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "df889186daf90a2a390c1a16",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:38:48.117Z",
+  "stored_at": "2026-08-22T19:38:48.117Z"
+}

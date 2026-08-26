@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git worktree list | grep agent-",
+  "summary": "git worktree list | grep agent-: eb 38b21d0d6a [worktree-agent-a8cbbc034b26621eb] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a96cbf939b56de3a0 2f939635e9 [worktree-agent-a96cbf939b56de3a0] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-ad6eb9e707395b1d2 487b",
+  "text": "git worktree list | grep agent-: eb 38b21d0d6a [worktree-agent-a8cbbc034b26621eb] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a96cbf939b56de3a0 2f939635e9 [worktree-agent-a96cbf939b56de3a0] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-ad6eb9e707395b1d2 487b39fbe2 [worktree-agent-ad6eb9e707395b1d2] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-ad831c47db6c55775 67af69fbab [worktree-agent-ad831c47db6c55775] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-af32c140cac10332d da63f86474 [worktree-agent-af32c140cac10332d] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-afcfcdc0f79e91072 75e822f319 [worktree-agent-afcfcdc0f79e91072] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/wasm-oracle-foundation-agent-w0 b5b604aa3d [feat/wasm-oracle-foundation-agent-w0]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "45a69b8891d1b088e75ada73",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T16:49:30.915Z",
+  "stored_at": "2026-08-15T16:49:30.916Z"
+}

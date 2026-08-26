@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/a2s_where.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/a2s_where.php: <?php\n// WHICH conversions warn, and which are silent? One line per shape, in php's own order.\n$a = [1, 2];\necho \"1 echo: \";\necho $",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/a2s_where.php: <?php\n// WHICH conversions warn, and which are silent? One line per shape, in php's own order.\n$a = [1, 2];\necho \"1 echo: \";\necho $a;\necho \"\\n\";\necho \"2 print: \";\nprint $a;\necho \"\\n\";\necho \"3 concat: \" . $a . \"\\n\";\necho \"4 interp: {$a}\\n\";\necho \"5 cast: \" . (string) $a . \"\\n\";\necho \"6 strval: \" . strval($a) . \"\\n\";\necho \"7 compare: \", ($a == \"Array\" ? \"eq\" : \"ne\"), \"\\n\";\necho \"8 heredoc: \", <<<EOT\n{$a}\nEOT;\necho \"\\n\";\n$s = \"9 dotequals: \";\n$s .= $a;\necho $s, \"\\n\";\necho \"done\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7cab74b4b7ce47c4884ef3b3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:18:16.909Z",
+  "stored_at": "2026-08-23T13:18:16.910Z"
+}

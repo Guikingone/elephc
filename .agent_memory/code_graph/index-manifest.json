@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "generated_at": "2026-08-26T16:54:49.030Z",
+  "mode": "structural",
+  "limits": {
+    "max_extract_file_bytes": 524288,
+    "max_calls": 50000,
+    "max_calls_per_file": 250
+  },
+  "coverage": {
+    "indexable_files": 4260,
+    "indexed_files": 4260,
+    "deferred_files": 5,
+    "ignored_files": 1615,
+    "coverage_percent": 100,
+    "complete": false
+  },
+  "cache": {
+    "hits": 4260,
+    "misses": 0
+  },
+  "deferred_files": [
+    {
+      "path": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "size_bytes": 547784,
+      "reason": "over_structural_extract_file_size_limit"
+    },
+    {
+      "path": "src/image_prelude.rs",
+      "size_bytes": 606475,
+      "reason": "over_structural_extract_file_size_limit"
+    },
+    {
+      "path": "src/pdo_prelude/build.rs",
+      "size_bytes": 659885,
+      "reason": "over_structural_extract_file_size_limit"
+    },
+    {
+      "path": "tests/codegen/eval.rs",
+      "size_bytes": 1004839,
+      "reason": "over_structural_extract_file_size_limit"
+    },
+    {
+      "path": "tests/codegen/io/streams.rs",
+      "size_bytes": 736085,
+      "reason": "over_structural_extract_file_size_limit"
+    }
+  ],
+  "ignored_summary": {
+    "generated_vendor_or_cache": 9,
+    "symlink": 7,
+    "unsupported_file_type": 1599
+  },
+  "fingerprint": "6cd6db6eaa6df3e00737bf0892e82c5959066fb2e90388d4f7431788546a782c"
+}

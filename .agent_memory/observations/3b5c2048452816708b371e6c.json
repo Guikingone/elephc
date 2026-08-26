@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Agent",
+  "path": "",
+  "command": "",
+  "summary": "Agent: async_launched afcfcdc0f79e91072 TDD fix: php:// fidelity claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `98f3fc9509` ; sinon `git reset --hard 98f3fc9509` AVANT tout (les QUATRE agents préc",
+  "text": "async_launched afcfcdc0f79e91072 TDD fix: php:// fidelity claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `98f3fc9509` ; sinon `git reset --hard 98f3fc9509` AVANT tout (les QUATRE agents précédents ont tous reçu une base erronée — c'est systématique, ne saute pas cette étape). Chemins absolus ; ne pousse RIEN ; pas de Co-Authored-By ; jamais `.codebase-memory/*` stagé. ⚠️ RESSOURCES : disque hôte serré (un agent l'a vu tomber à 1,3 GiB) — purge `$TMPDIR/elephc_*` de +2h AVANT de commencer, à mi-parcours, et sur tout `No space left` ; UN SEUL cargo à la fois ; builds debug ; scratch supprimé à la fin ; docker x86 `-j2` UNIQUEMENT si tu touches l'asm runtime, volume supprimé après. ⚠️ AVANT DE COMMITTER, exécute ces trois portes souvent oubliées (elles ont cassé la CI trois fois) : `cargo test -p elephc-builtin-contract` (comptes épinglés) · `cargo test --test builtin_parity_tests` (dont le set des préludes) · `cargo nextest run --test ir_backend_smoke_test -E 'test(/stream|php|memory/)'`. Si tu changes le catalogue ou ajoutes un builtin, ces compteurs bougent et DOIVENT être ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3b5c2048452816708b371e6c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T14:02:09.548Z",
+  "stored_at": "2026-08-15T14:02:09.549Z"
+}

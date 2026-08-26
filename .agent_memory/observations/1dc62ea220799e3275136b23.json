@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"x86_64\\|fn emit\" src/codegen_support/runtime/io/php_fd_open.rs | head -12",
+  "summary": "grep -n \"x86_64\\|fn emit\" src/codegen_support/runtime/io/php_fd_open.rs | head -12: 63:pub fn emit_php_fd_open(emitter: &mut Emitter) { 66: Arch::X86_64 => emit_x86_64(emitter), 75:fn emit_aarch64(emitter: &mut Emitter) { 141:fn emit_line_head_aarch64(emitter: &mut Emitter) { 151:fn emit_decimal_aarch64(emitter: &mut E",
+  "text": "grep -n \"x86_64\\|fn emit\" src/codegen_support/runtime/io/php_fd_open.rs | head -12: 63:pub fn emit_php_fd_open(emitter: &mut Emitter) { 66: Arch::X86_64 => emit_x86_64(emitter), 75:fn emit_aarch64(emitter: &mut Emitter) { 141:fn emit_line_head_aarch64(emitter: &mut Emitter) { 151:fn emit_decimal_aarch64(emitter: &mut Emitter, offset: i64) { 163:/// x86_64 form of [`emit_aarch64`]. 166:fn emit_x86_64(emitter: &mut Emitter) { 198: emit_line_head_x86_64(emitter); 202: emit_decimal_x86_64(emitter, 8); // the descriptor the URL named 206: emit_decimal_x86_64(emitter, 32); // the errno, as a bare number 215: emit_line_head_x86_64(emitter); 219: emit_decimal_x86_64(emitter, 32); // the table size php compared against",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1dc62ea220799e3275136b23",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T13:02:26.878Z",
+  "stored_at": "2026-08-16T13:02:26.878Z"
+}

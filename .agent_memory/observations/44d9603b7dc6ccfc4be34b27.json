@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"label_global(\\\"__rt_stream_socket_pair\\\")\" -A44 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/ | rtk proxy grep -n \"array_set\\|mixed_from_value\\|tag\\|resource\" | head -12",
+  "summary": "rtk proxy grep -rn \"label_global(\\\"__rt_stream_socket_pair\\\")\" -A44 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/ | rtk proxy grep -n \"array_set\\|mixed_from_value\\|tag\\|resource\" | head -12: 22:/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude",
+  "text": "rtk proxy grep -rn \"label_global(\\\"__rt_stream_socket_pair\\\")\" -A44 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/ | rtk proxy grep -n \"array_set\\|mixed_from_value\\|tag\\|resource\" | head -12: 22:/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_socket_pair.rs-54- // -- adopt both acquired descriptors before exposing PHP resources -- 61:/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_socket_pair.rs-129- // -- adopt both acquired descriptors before exposing PHP resources --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "44d9603b7dc6ccfc4be34b27",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:56:11.698Z",
+  "stored_at": "2026-08-17T09:56:11.698Z"
+}

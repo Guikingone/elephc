@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json, collections\nd = json.load(open('scripts/docs/builtin_registry.json'))\nitems = d if isinstance(d, list) else list(d.values())\nsem = items[0].get('semantics')\nprint('semantics keys:', sorted(sem) if isinstance(sem, dict) else type(sem))\nc = collections.Counter()\nfor it in items:\n    s = it.get('semantics') or {}\n    c[str(s.get('callable'))[:60]] += 1\nfor k, v in c.most_common(8):\n    print(f'{v:>5}  {k}')\n\"",
+  "summary": "python3 -c \"\nimport json, collections\nd = json.load(open('scripts/docs/builtin_registry.json'))\nitems = d if isinstance(d, list) else list(d.values())\nsem = items[0].get('semantics')\nprint('semantics keys:', sorted(sem) if isinstance(sem, dict) else type(sem))\nc = collections.Counter()\nfor it in items:\n    s = it.get('",
+  "text": "python3 -c \"\nimport json, collections\nd = json.load(open('scripts/docs/builtin_registry.json'))\nitems = d if isinstance(d, list) else list(d.values())\nsem = items[0].get('semantics')\nprint('semantics keys:', sorted(sem) if isinstance(sem, dict) else type(sem))\nc = collections.Counter()\nfor it in items:\n    s = it.get('semantics') or {}\n    c[str(s.get('callable'))[:60]] += 1\nfor k, v in c.most_common(8):\n    print(f'{v:>5}  {k}')\n\": semantics keys: ['argument_lowering', 'callable', 'effects', 'lowering', 'ownership', 'requirements', 'result_type', 'runtime_functions', 'target_strategy', 'target_support', 'validation'] 488 {'kind': 'static_only', 'reason': 'typed backend operation h 33 {'kind': 'dynamic'} 33 None 9 {'kind': 'static_only', 'reason': 'internal compiler primiti 6 {'kind': 'static_only', 'reason': 'the internal array pointe 1 {'kind': 'dynamic_target', 'target': 'abs'} 1 {'kind': 'static_only', 'reason': 'constant() needs a compil 1 {'kind': 'static_only', 'reason': 'fscanf is scanned by an i",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7016820e4d1238d837c8df74",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:33:06.319Z",
+  "stored_at": "2026-08-22T10:33:06.319Z"
+}

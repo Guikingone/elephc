@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -rn \"inject_if_used\" --glob '*.rs' src/pipeline*.rs src/pipeline/ 2>/dev/null | head -20",
+  "summary": "rtk proxy rg -rn \"inject_if_used\" --glob '*.rs' src/pipeline*.rs src/pipeline/ 2>/dev/null | head -20: src/pipeline.rs: pdo_prelude::n(ast, with_crates.contains(\"pdo\")) src/pipeline.rs: pdo_prelude::n_for_version( src/pipeline.rs: let ast = tz_prelude::n(ast, with_crates.contains(\"tz\")); src/pipeline.rs: let ast = list",
+  "text": "rtk proxy rg -rn \"inject_if_used\" --glob '*.rs' src/pipeline*.rs src/pipeline/ 2>/dev/null | head -20: src/pipeline.rs: pdo_prelude::n(ast, with_crates.contains(\"pdo\")) src/pipeline.rs: pdo_prelude::n_for_version( src/pipeline.rs: let ast = tz_prelude::n(ast, with_crates.contains(\"tz\")); src/pipeline.rs: let ast = list_id_prelude::n(ast); src/pipeline.rs: let ast = var_export_prelude::n(ast); src/pipeline.rs: let (ast, opcache_bake_sites) = opcache_prelude::n( src/pipeline.rs: let ast = crate::image_prelude::n(ast, with_crates.contains(\"image\")); src/pipeline.rs: let ast = crate::hash_prelude::n(ast, false); src/pipeline.rs: let ast = crate::dir_prelude::n(ast); src/pipeline.rs: let ast = crate::version_prelude::n(ast, php_version);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "45d7fc0682ea4a0d5889ac9a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:45:11.337Z",
+  "stored_at": "2026-08-16T15:45:11.337Z"
+}

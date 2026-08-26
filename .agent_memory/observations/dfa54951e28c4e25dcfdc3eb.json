@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,30p' src/codegen/lower_inst/builtins/io/string_validation.rs",
+  "summary": "sed -n '1,30p' src/codegen/lower_inst/builtins/io/string_validation.rs: //! Purpose: //! String ABI loading and IO argument type validation. //! //! Called from: //! - `crate::codegen::lower_inst::builtins::io`. //! //! Key details: //! - Preserves target-aware ABI handling, runtime calls, and result ownership. use sup",
+  "text": "sed -n '1,30p' src/codegen/lower_inst/builtins/io/string_validation.rs: //! Purpose: //! String ABI loading and IO argument type validation. //! //! Called from: //! - `crate::codegen::lower_inst::builtins::io`. //! //! Key details: //! - Preserves target-aware ABI handling, runtime calls, and result ownership. use super::*; /// Loads a string SSA value into the target string result registers, coercing /// any scalar to its PHP string form. Shared with `system::lower_header`. pub(in crate::codegen::lower_inst::builtins) fn load_string_to_result( ctx: &mut FunctionContext<'_>, value: ValueId, context: &str, ) -> Result<()> { match ctx.value_php_type(value)?.codegen_repr() { PhpType::Str => { ctx.load_value_to_result(value)?; Ok(()) } PhpType::Float => { ctx.load_value_to_result(value)?; abi::emit_call_label(ctx.emitter, \"__rt_ftoa\"); Ok(()) } PhpType::Int => { ctx.load_value_to_result(value)?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dfa54951e28c4e25dcfdc3eb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:48:18.086Z",
+  "stored_at": "2026-08-21T10:48:18.086Z"
+}

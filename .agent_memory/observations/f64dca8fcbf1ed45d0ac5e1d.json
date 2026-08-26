@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs: /// A userspace wrapper that does not implement `stream_cast` cannot be\n/// represented as a select()-able descriptor, so `stream_select` excludes its\n/// synth -> /// A userspace wrapper tha",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs: /// A userspace wrapper that does not implement `stream_cast` cannot be\n/// represented as a select()-able descriptor, so `stream_select` excludes its\n/// synth -> /// A userspace wrapper that does not implement `stream_cast` cannot be represented as a\n/// select()-able descriptor, so it contributes nothing to the descriptor set.\n///\n/// This test used to assert `n=0 kept=0`, which is not php's answer: php counts the streams it\n/// could cast and raises `ValueError: No stream arrays were passed` when that count is zero, so\n/// the only entry here leaves it at zero and the call THROWS. Measured on `php -n` 8.5.6, which\n/// also prints `N",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f64dca8fcbf1ed45d0ac5e1d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:24:05.771Z",
+  "stored_at": "2026-08-17T07:24:05.772Z"
+}

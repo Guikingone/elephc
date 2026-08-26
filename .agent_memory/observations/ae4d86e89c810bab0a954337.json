@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '104,155p' src/codegen_support/runtime/io/stat.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '104,155p' src/codegen_support/runtime/io/stat.rs: \"cset x0, eq\"); // x0 = 1 if directory emitter.instruction(\"b __rt_is_dir_ret\"); // jump to return emitter.label(\"__rt_is_dir_no\"); emitter.instruction(\"mov x0, #0\");",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '104,155p' src/codegen_support/runtime/io/stat.rs: \"cset x0, eq\"); // x0 = 1 if directory emitter.instruction(\"b __rt_is_dir_ret\"); // jump to return emitter.label(\"__rt_is_dir_no\"); emitter.instruction(\"mov x0, #0\"); // not a directory emitter.label(\"__rt_is_dir_ret\"); emitter.instruction(&format!(\"ldp x29, x30, [sp, #{}]\", save_offset)); // restore frame pointer and return address emitter.instruction(&format!(\"add sp, sp, #{}\", frame_size)); // deallocate stack frame emitter.instruction(\"ret\"); // return to caller // ================================================================ // __rt_is_readable: check if path is readable // Input: x1/x2=path // Output: x0=1 if readable, 0 if not // ================================================================ emitter.blank(); emitter.comment(\"--- runtime: is_readable ---\"); emitter.label_global(\"__rt_is_readable\"); // php locates a wrapper for every path; a bare one is the plain-files wrapper.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ae4d86e89c810bab0a954337",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:19:35.481Z",
+  "stored_at": "2026-08-23T12:19:35.482Z"
+}

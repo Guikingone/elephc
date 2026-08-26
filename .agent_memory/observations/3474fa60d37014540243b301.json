@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh api /repos/Guikingone/elephc/actions/jobs/94808855025/logs 2>/dev/null | sed -n '/15:45:5[0-9]/p' | head -12",
+  "summary": "About to run: gh api /repos/Guikingone/elephc/actions/jobs/94808855025/logs 2>/dev/null | sed -n '/15:45:5[0-9]/p' | head -12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3474fa60d37014540243b301",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T16:43:05.886Z",
+  "stored_at": "2026-08-14T16:43:05.887Z"
+}

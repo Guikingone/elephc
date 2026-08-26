@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"mov x9, #1\");\n    emitter.instruction(\"str x9, [sp, #40]\");                                   // \"this is a real result\" — cleared only by  -> emitter.instruc",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"mov x9, #1\");\n    emitter.instruction(\"str x9, [sp, #40]\");                                   // \"this is a real result\" — cleared only by  -> emitter.instruction(\"mov x9, #1\");\n    emitter.instruction(\"str x9, [sp, #40]\");                                   // \"this is a real result\" — cleared only by an actual read failure\n    // Slot 48 is how many of the caller's bytes came out of the stream's own holding area. A\n    // request that outruns what is held is topped up FROM THE DESCRIPTOR into the same window,\n    // because php serves one `fread()` from its buffer AND the source when the buffer runs out —\n    // me",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b7601d4a331d8ac717982474",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:20:34.244Z",
+  "stored_at": "2026-08-23T20:20:34.245Z"
+}

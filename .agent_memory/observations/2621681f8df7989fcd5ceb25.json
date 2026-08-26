@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 10,20p src/types/error_constants.rs; echo \"=== array_constants ===\"; sed -n 15,40p src/types/array_constants.rs",
+  "summary": "sed -n 10,20p src/types/error_constants.rs; echo \"=== array_constants ===\"; sed -n 15,40p src/types/array_constants.rs: e, value)` pairs for every PHP `E_*` error-level constant. === array_constants === /// are passed; `count()` uses the `COUNT_*` constants to select flat or recursive counting. pub(crate) use elephc_bu",
+  "text": "sed -n 10,20p src/types/error_constants.rs; echo \"=== array_constants ===\"; sed -n 15,40p src/types/array_constants.rs: e, value)` pairs for every PHP `E_*` error-level constant. === array_constants === /// are passed; `count()` uses the `COUNT_*` constants to select flat or recursive counting. pub(crate) use elephc_builtin_contract::php_constants::ARRAY_INT_CONSTANTS; #[cfg(test)] mod tests { use super::*; /// Verifies PHP 8.6's value-mode constant is the default mode value. #[test] fn array_filter_use_value_is_zero() { let entry = ARRAY_INT_CONSTANTS .iter() .find(|(name, _)| *name == \"ARRAY_FILTER_USE_VALUE\") .expect(\"ARRAY_FILTER_USE_VALUE defined\"); assert_eq!(entry.1, 0); } /// Verifies `count()`'s mode constants carry php-src's exact values. /// /// `count()`'s omitted-`$mode` default and its `ValueError` range check both assume /// `COUNT_NORMAL == 0` and `COUNT_RECURSIVE == 1`. #[test] fn count_modes_match_php() { let normal = ARRAY_INT_CONSTANTS .iter() .find(|(name, _)| *name == \"COUNT_NORMAL\")",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2621681f8df7989fcd5ceb25",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:54:26.361Z",
+  "stored_at": "2026-08-22T09:54:26.362Z"
+}

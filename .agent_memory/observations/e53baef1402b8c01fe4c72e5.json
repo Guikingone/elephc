@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build 2>&1 | grep -cE \"^error|^warning\"; cargo build --example dump_x86_runtime 2>&1 | tail -1",
+  "summary": "cargo build 2>&1 | grep -cE \"^error|^warning\"; cargo build --example dump_x86_runtime 2>&1 | tail -1: 0 Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.80s",
+  "text": "cargo build 2>&1 | grep -cE \"^error|^warning\"; cargo build --example dump_x86_runtime 2>&1 | tail -1: 0 Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.80s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e53baef1402b8c01fe4c72e5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T13:04:33.283Z",
+  "stored_at": "2026-08-16T13:04:33.284Z"
+}

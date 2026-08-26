@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"tokenize\\|parse_internal\" src/*_prelude.rs src/*_prelude/*.rs 2>/dev/null | head -10; echo \"--- RAM ---\"; ps -o rss=,comm= -ax 2>/dev/null | sort -rn | head -4 | awk '{printf \"%.1f GB  %s\\n\", $1/1048576, $2}'",
+  "summary": "grep -rln \"tokenize\\|parse_internal\" src/*_prelude.rs src/*_prelude/*.rs 2>/dev/null | head -10; echo \"--- RAM ---\"; ps -o rss=,comm= -ax 2>/dev/null | sort -rn | head -4 | awk '{printf \"%.1f GB  %s\\n\", $1/1048576, $2}': src/gz_prelude.rs src/hash_prelude.rs src/dir_prelude.rs src/mysqli_prelude.rs src/scanf_prelude.rs",
+  "text": "grep -rln \"tokenize\\|parse_internal\" src/*_prelude.rs src/*_prelude/*.rs 2>/dev/null | head -10; echo \"--- RAM ---\"; ps -o rss=,comm= -ax 2>/dev/null | sort -rn | head -4 | awk '{printf \"%.1f GB  %s\\n\", $1/1048576, $2}': src/gz_prelude.rs src/hash_prelude.rs src/dir_prelude.rs src/mysqli_prelude.rs src/scanf_prelude.rs src/image_prelude.rs src/dir_prelude/detect.rs src/web_prelude.rs src/pdo_prelude.rs src/list_id_prelude/detect.rs --- RAM --- 0.7 GB /Applications/Kaspersky 0.6 GB /Users/guillaumeloulier/.local/bin/codebase-memory-mcp 0.6 GB /Applications/Brave 0.5 GB claude",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fcfa78e6787098300e847ab6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:17:15.385Z",
+  "stored_at": "2026-08-22T07:17:15.386Z"
+}

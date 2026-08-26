@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"catches.is_empty()\\|body_throws\\|throwable_reachable\\|drops the try\" src/ | grep -v tests | head -10",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"catches.is_empty()\\|body_throws\\|throwable_reachable\\|drops the try\" src/ | grep -v tests | head -10: src/optimize/control/path.rs:154: can_sink_into_finally: catches.is_empty() src/optimize/control/dce/tries.rs:60",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"catches.is_empty()\\|body_throws\\|throwable_reachable\\|drops the try\" src/ | grep -v tests | head -10: src/optimize/control/path.rs:154: can_sink_into_finally: catches.is_empty() src/optimize/control/dce/tries.rs:60: if catches.is_empty() && finally_body.is_none() { src/optimize/control/dce/tries.rs:64: if catches.is_empty() { src/optimize/control/prune/statements.rs:200: if catches.is_empty() && finally_body.is_some() && try_body.len() == 1 { src/optimize/control/prune/statements.rs:247: } else if catches.is_empty() && finally_body.is_none() { src/ir_lower/stmt/exceptions.rs:96: if catches.is_empty() { src/parser/control.rs:574: if catches.is_empty() && finally_body.is_none() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dc5275b6952b0542c128be74",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:48:16.703Z",
+  "stored_at": "2026-08-23T17:48:16.704Z"
+}

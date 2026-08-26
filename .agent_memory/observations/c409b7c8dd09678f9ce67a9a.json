@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"swr_bad_proto\\|swr_dup_proto\\|PROTOCOL_WARNING\" src/codegen_support/runtime/io/stream_wrapper_register.rs | head -8",
+  "summary": "About to run: grep -n \"swr_bad_proto\\|swr_dup_proto\\|PROTOCOL_WARNING\" src/codegen_support/runtime/io/stream_wrapper_register.rs | head -8",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c409b7c8dd09678f9ce67a9a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:54:46.859Z",
+  "stored_at": "2026-08-20T17:54:46.860Z"
+}

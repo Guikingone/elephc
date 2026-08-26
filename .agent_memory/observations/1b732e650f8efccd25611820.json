@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/k3_docs.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/k3_docs.py: \"\"\"Writes down the two invariants Kimi K3 found unstated in round 5.\n\n1. The ladder reads as fall-through, but every arm ends in the u",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/k3_docs.py: \"\"\"Writes down the two invariants Kimi K3 found unstated in round 5.\n\n1. The ladder reads as fall-through, but every arm ends in the unwinder — `emit_static_exception_at`\n   finishes with an unconditional jump to `__rt_throw_current` on both targets. VERIFIED by\n   reading it, and by the differential probe: the `true` arm does not fall into the `false` one.\n   Stated at both ends now, because nothing in the ladder's shape says so.\n\n2. K3 suspected `null carries no options` described an unreachable instruction, on the theory that\n   an earlier branch takes null away. It does not: the two branch",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1b732e650f8efccd25611820",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:23:36.059Z",
+  "stored_at": "2026-08-22T16:23:36.059Z"
+}

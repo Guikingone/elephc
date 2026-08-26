@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 27,100p src/codegen_support/runtime/arrays/usort.rs",
+  "summary": "sed -n 27,100p src/codegen_support/runtime/arrays/usort.rs: j] (complete swap) emitter.instruction(\"mov x21, #1\"); // set swapped flag = 1 // -- advance inner loop -- emitter.label(\"__rt_usort_noswap\"); emitter.instruction(\"add x22, x22, #1\"); // j += 1 emitter.instruction(\"b __rt_usort_inner\"); // continue inner loop ",
+  "text": "sed -n 27,100p src/codegen_support/runtime/arrays/usort.rs: j] (complete swap) emitter.instruction(\"mov x21, #1\"); // set swapped flag = 1 // -- advance inner loop -- emitter.label(\"__rt_usort_noswap\"); emitter.instruction(\"add x22, x22, #1\"); // j += 1 emitter.instruction(\"b __rt_usort_inner\"); // continue inner loop // -- check if any swaps occurred -- emitter.label(\"__rt_usort_check\"); emitter.instruction(\"cbnz x21, __rt_usort_outer\"); // if swaps happened, repeat outer loop // -- done -- emitter.label(\"__rt_usort_done\"); // -- tear down stack frame and return -- emitter.instruction(\"ldp x21, x22, [sp, #32]\"); // restore callee-saved x21, x22 emitter.instruction(\"ldp x19, x20, [sp, #48]\"); // restore callee-saved x19, x20 emitter.instruction(\"ldp x29, x30, [sp, #64]\"); // restore frame pointer and return address emitter.instruction(\"add sp, sp, #80\"); // deallocate stack frame emitter.instruction(\"ret\"); // return (void, array sorted in place)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "761166d05a6b89a446b6a730",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:14:01.314Z",
+  "stored_at": "2026-08-22T10:14:01.315Z"
+}

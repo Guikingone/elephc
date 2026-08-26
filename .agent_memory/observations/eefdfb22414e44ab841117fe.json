@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '526,600p' src/codegen_support/runtime/io/user_wrapper.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '526,600p' src/codegen_support/runtime/io/user_wrapper.rs: apper's int result to the caller emitter.label(\"__rt_uwftell_fail_x86\"); emitter.instruction(\"mov rax, -1\"); // ftell failure sentinel for missing handle/meth",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '526,600p' src/codegen_support/runtime/io/user_wrapper.rs: apper's int result to the caller emitter.label(\"__rt_uwftell_fail_x86\"); emitter.instruction(\"mov rax, -1\"); // ftell failure sentinel for missing handle/method emitter.instruction(\"pop rbp\"); // restore the caller frame pointer emitter.instruction(\"ret\"); // return -1 } /// `__rt_user_wrapper_fflush`: invoke the wrapper's `stream_flush()` and /// return its declared bool result. /// /// A wrapper WITHOUT `stream_flush()` answers false, measured on php 8.5.6 — /// \"nothing to do\" is not treated as success here, unlike an ordinary stream. /// An unresolvable handle keeps the old success answer: it is not a wrapper /// missing its hook, it is not a wrapper at all. pub fn emit_user_wrapper_fflush(emitter: &mut Emitter) { if emitter.target.arch == Arch::X86_64 { emit_user_wrapper_fflush_linux_x86_64(emitter); return; } emitter.blank(); emitter.comment(\"--- runtime: user_wrapper_fflush ---\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eefdfb22414e44ab841117fe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:58:11.596Z",
+  "stored_at": "2026-08-22T17:58:11.597Z"
+}

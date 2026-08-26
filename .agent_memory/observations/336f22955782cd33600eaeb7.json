@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 45,90p src/codegen_support/runtime/io/builtin_wrapper_index.rs",
+  "summary": "About to run: sed -n 45,90p src/codegen_support/runtime/io/builtin_wrapper_index.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "336f22955782cd33600eaeb7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:54:32.606Z",
+  "stored_at": "2026-08-21T16:54:32.606Z"
+}

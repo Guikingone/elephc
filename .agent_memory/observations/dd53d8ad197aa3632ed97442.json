@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/codegen_support && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg10.txt 2>&1 | tail -3",
+  "summary": "git add src/codegen_support && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg10.txt 2>&1 | tail -3: [worktree-streams-csv-signature a1395ffa7] fix(streams): the read-loop fallback as",
+  "text": "git add src/codegen_support && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg10.txt 2>&1 | tail -3: [worktree-streams-csv-signature a1395ffa7] fix(streams): the read-loop fallback asked for 4096 where php's default chunk is 8192 3 files changed, 13 insertions(+), 2 deletions(-)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dd53d8ad197aa3632ed97442",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:02:13.569Z",
+  "stored_at": "2026-08-21T10:02:13.570Z"
+}

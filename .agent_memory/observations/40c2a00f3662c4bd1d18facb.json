@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\n# Promote the helper to a shared crate-visible function so both passes use one rule.\np='src/types/checker/functions/resolution/signature.rs'\ns=open(p).read()\nold = \"\"\"/// Returns whether an array-ish type's ELEMENT representation CHANGED across the body.\"\"\"\nnew = \"\"\"/// Returns whether an array-ish type's ELEMENT representation CHANGED across the body.\"\"\"\nassert s.count(old)==1\ns=s.replace(\"fn array_element_representation_changes(entry: &PhpType, exit: &PhpType) -> bool {\",\n            \"pub(in crate::types) fn array_element_representation_changes(entry: &PhpType, exit: &PhpTyp… [+263 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' # Promote the helper to a shared crate-visible function so both passes use one rule. p='src/types/checker/functions/resolution/signature.rs' s=open(p).read() old = \"\"\"/// Returns whet",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "40c2a00f3662c4bd1d18facb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:28:43.054Z",
+  "stored_at": "2026-08-16T20:28:43.054Z"
+}

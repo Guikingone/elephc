@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls tests/parser_tests/classes/; grep -n \"fn parse_ok\\|fn parse_err\\|fn assert_parses\" tests/parser_tests/classes/modifiers.rs | head -5; sed -n '1,30p' tests/parser_tests/classes/modifiers.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls tests/parser_tests/classes/; grep -n \"fn parse_ok\\|fn parse_err\\|fn assert_parses\" tests/parser_tests/classes/modifiers.rs | head -5; sed -n '1,30p' tests/parser_tests/classes/modifiers.rs: cluding abstract class with imp",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls tests/parser_tests/classes/; grep -n \"fn parse_ok\\|fn parse_err\\|fn assert_parses\" tests/parser_tests/classes/modifiers.rs | head -5; sed -n '1,30p' tests/parser_tests/classes/modifiers.rs: cluding abstract class with implements, readonly class flag, and final class flag. //! //! Called from: //! - `cargo test` through Rust's test harness. //! //! Key details: //! - Inline PHP snippets are parsed and assertions inspect AST shape, precedence, or expected parse failures. use super::*; /// Parses `abstract class` with `implements` interfaces and verifies the AST captures /// `is_abstract`, interface names, and an abstract method with visibility and no body. #[test] fn test_parse_abstract_class_with_implements() { let stmts = parse_source( \"<?php abstract class Base implements Named, Tagged { abstract protected function load(); }\", ); match &stmts[0].kind { StmtKind::ClassDecl { name, implements, is_abstract, methods, .. } => { assert_eq!(name, \"Base\"); assert_eq!(implements, &vec![\"Named\".to_string(), \"Tagged\".to_string()]); assert!(*is_abstract); assert_eq!(methods.len(), 1);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a9247cc43291004e45f35bac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:00:02.485Z",
+  "stored_at": "2026-08-23T09:00:02.485Z"
+}

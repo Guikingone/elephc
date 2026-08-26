@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn emit_const_string\\|fn emit_const_int\\|fn emit_const_float\\|fn emit_const_bool\" src/ir_lower/context.rs | head",
+  "summary": "grep -n \"fn emit_const_string\\|fn emit_const_int\\|fn emit_const_float\\|fn emit_const_bool\" src/ir_lower/context.rs | head completed",
+  "text": "grep -n \"fn emit_const_string\\|fn emit_const_int\\|fn emit_const_float\\|fn emit_const_bool\" src/ir_lower/context.rs | head completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e9de03d9c44db4a7ea87c1a8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:40:44.824Z",
+  "stored_at": "2026-08-20T20:40:44.825Z"
+}

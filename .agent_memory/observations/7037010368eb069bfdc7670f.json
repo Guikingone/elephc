@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git worktree list",
+  "summary": "git worktree list: Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/symfony-rebase-correct 1bdaed08de (detached HEAD) /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/typed-knitting-floyd 795aa2a00f [feat/windows-pe] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/wo",
+  "text": "git worktree list: Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/symfony-rebase-correct 1bdaed08de (detached HEAD) /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/typed-knitting-floyd 795aa2a00f [feat/windows-pe] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/wasm-oracle-fixtures 131a0492ea [feat/wasm-oracle-fixtures] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/wasm-oracle-foundation-agent-w0 b5b604aa3d [feat/wasm-oracle-foundation-agent-w0] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/wasm-pinned-php-src-builder 9f7421deef [chore/wasm-pinned-php-src-builder] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/wasm-target 57e05ca700 [feat/wasm-target] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/windows-pe-final-20260801 d14d1ee18e (detached HEAD)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7037010368eb069bfdc7670f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T09:30:26.438Z",
+  "stored_at": "2026-08-15T09:30:26.439Z"
+}

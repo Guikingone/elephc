@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 281,370p src/codegen/lower_inst/builtins/arrays/sort_dispatch.rs",
+  "summary": "sed -n 281,370p src/codegen/lower_inst/builtins/arrays/sort_dispatch.rs: t_load_int_immediate( ctx.emitter, abi::int_result_reg(ctx.emitter), 0x7fff_ffff_ffff_fffe, ); return store_if_result(ctx, inst); } let elem_ty = indexed_sort_element_type(operand_ty, name, str_helper.is_some())?; let receiver = ReceiverPlace::res",
+  "text": "sed -n 281,370p src/codegen/lower_inst/builtins/arrays/sort_dispatch.rs: t_load_int_immediate( ctx.emitter, abi::int_result_reg(ctx.emitter), 0x7fff_ffff_ffff_fffe, ); return store_if_result(ctx, inst); } let elem_ty = indexed_sort_element_type(operand_ty, name, str_helper.is_some())?; let receiver = ReceiverPlace::resolve(ctx, array)?; ensure_unique_sort_source(ctx, array)?; receiver.store_back_value(ctx, array)?; match ctx.emitter.target.arch { Arch::AArch64 => { ctx.load_value_to_reg(array, \"x0\")?; } Arch::X86_64 => { ctx.load_value_to_reg(array, \"rdi\")?; } } let helper = if elem_ty == PhpType::Str { str_helper.expect(\"string sort helper is required after validation\") } else { int_helper }; abi::emit_call_label(ctx.emitter, helper); abi::emit_load_int_immediate( ctx.emitter, abi::int_result_reg(ctx.emitter), 0x7fff_ffff_ffff_fffe, ); store_if_result(ctx, inst) } /// Calls the mutating shuffle helper for indexed arrays whose payload slots are pointer-sized.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "72677a2a9237d21d52892d25",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:13:19.041Z",
+  "stored_at": "2026-08-22T10:13:19.041Z"
+}

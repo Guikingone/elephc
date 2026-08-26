@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn lower_indexed_array_sort\" src/ | head -3",
+  "summary": "grep -rn \"fn lower_indexed_array_sort\" src/ | head -3: src/codegen/lower_inst/builtins/arrays/sort_dispatch.rs:281:pub(super) fn lower_indexed_array_sort(",
+  "text": "grep -rn \"fn lower_indexed_array_sort\" src/ | head -3: src/codegen/lower_inst/builtins/arrays/sort_dispatch.rs:281:pub(super) fn lower_indexed_array_sort(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d03c3367fecc6cd907639d15",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:13:15.487Z",
+  "stored_at": "2026-08-22T10:13:15.487Z"
+}

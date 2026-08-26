@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"__rt_asf_b64e_copyback_x86\\|__rt_asf_b64e_cb_loop_x86\\|__rt_asf_qpe_copyback_x86\\|__rt_asf_qpe_cb_loop_x86\\|__rt_asf_qp_encode_x86\\|__rt_asf_qpe_literal_x86\\|__rt_asf_qpe_escape_x86\\|__rt_asf_b64e_done_x86\\|__rt_asf_qpe_done_x86\" src/codegen_support/runtime/io/stream_filter.rs | head -20",
+  "summary": "grep -n \"__rt_asf_b64e_copyback_x86\\|__rt_asf_b64e_cb_loop_x86\\|__rt_asf_qpe_copyback_x86\\|__rt_asf_qpe_cb_loop_x86\\|__rt_asf_qp_encode_x86\\|__rt_asf_qpe_literal_x86\\|__rt_asf_qpe_escape_x86\\|__rt_asf_b64e_done_x86\\|__rt_asf_qpe_done_x86\" src/codegen_support/runtime/io/stream_filter.rs | head -20: ter.label(\"__rt_asf_q",
+  "text": "grep -n \"__rt_asf_b64e_copyback_x86\\|__rt_asf_b64e_cb_loop_x86\\|__rt_asf_qpe_copyback_x86\\|__rt_asf_qpe_cb_loop_x86\\|__rt_asf_qp_encode_x86\\|__rt_asf_qpe_literal_x86\\|__rt_asf_qpe_escape_x86\\|__rt_asf_b64e_done_x86\\|__rt_asf_qpe_done_x86\" src/codegen_support/runtime/io/stream_filter.rs | head -20: ter.label(\"__rt_asf_qp_encode_x86\"); 1310: emitter.instruction(\"jge __rt_asf_qpe_copyback_x86\"); // copy back once input encoding is complete 1316: emitter.instruction(\"je __rt_asf_qpe_literal_x86\"); // keep it as-is 1318: emitter.instruction(\"je __rt_asf_qpe_literal_x86\"); // keep it as-is 1320: emitter.instruction(\"jl __rt_asf_qpe_escape_x86\"); // reject values below the accepted range 1322: emitter.instruction(\"jg __rt_asf_qpe_escape_x86\"); // reject values above the accepted range 1324: emitter.instruction(\"je __rt_asf_qpe_escape_x86\"); // escape the current byte 1325: emitter.label(\"__rt_asf_qpe_literal_x86\"); 1329: emitter.label(\"__rt_asf_qpe_escape_x86\"); 1358: emitter.label(\"__rt_asf_qpe_copyback_x86\"); 1360: emitter.label(\"__rt_asf_qpe_cb_loop_x86\"); 1362: emitter.instruction(\"jge __rt_asf_qpe_done_x86\"); // finish the quoted-printable encoder operation when the bound is reached",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "62acc28dc9972bbcb6b8c6de",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:13:35.641Z",
+  "stored_at": "2026-08-17T14:13:35.642Z"
+}

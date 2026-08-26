@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_streams.rs'\ns=open(p).read()\nold='''        assert_eq!(\n            eval_declared_builtin_param_names(\"fwrite\"),\n            Some([\"stream\", \"data\"].as_slice())\n        );'''\nnew='''        // php's third parameter caps the write: `fwrite($stream, string $data, ?int $length = null)`.\n        assert_eq!(\n            eval_declared_builtin_param_names(\"fwrite\"),\n            Some([\"stream\", \"data\", \"length\"].as_slice())\n        );'''\nassert s.count(old)==1\nopen(p,'w').write(s.replace(old,new))\nprint(\"pin up… [+97 chars truncated]",
+  "summary": "python3 - <<'PY'\np='crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_streams.rs'\ns=open(p).read()\nold='''        assert_eq!(\n            eval_declared_builtin_param_names(\"fwrite\"),\n            Some([\"stream\", \"data\"].as_slice())\n        );'''\nnew='''        // php's third parameter caps the writ",
+  "text": "python3 - <<'PY'\np='crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_streams.rs'\ns=open(p).read()\nold='''        assert_eq!(\n            eval_declared_builtin_param_names(\"fwrite\"),\n            Some([\"stream\", \"data\"].as_slice())\n        );'''\nnew='''        // php's third parameter caps the write: `fwrite($stream, string $data, ?int $length = null)`.\n        assert_eq!(\n            eval_declared_builtin_param_names(\"fwrite\"),\n            Some([\"stream\", \"data\", \"length\"].as_slice())\n        );'''\nassert s.count(old)==1\nopen(p,'w').write(s.replace(old,new))\nprint(\"pin updated\")\nPY\ncargo test --lib 2>&1 | rg \"^test result: FAILED|FAILED\" | head -3; echo \"LIB_CHECKED\": b0m9ejmue",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "83abd194fe8a6b2a50fbb194",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:34:14.940Z",
+  "stored_at": "2026-08-17T08:34:14.941Z"
+}

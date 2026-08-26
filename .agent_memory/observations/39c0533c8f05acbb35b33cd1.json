@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test -p elephc-magician --lib metadata_filesystem 2>&1 | grep -E \"left|right|assert|panicked|glob\" -A 3 | head -30",
+  "summary": "RUST_MIN_STACK=33554432 cargo test -p elephc-magician --lib metadata_filesystem 2>&1 | grep -E \"left|right|assert|panicked|glob\" -A 3 | head -30: thread 'interpreter::builtins::registry::tests::metadata_filesystem::declared_builtin_registry_derives_filesystem_metadata' (39435943) panicked at crates/elephc-magician/src/",
+  "text": "RUST_MIN_STACK=33554432 cargo test -p elephc-magician --lib metadata_filesystem 2>&1 | grep -E \"left|right|assert|panicked|glob\" -A 3 | head -30: thread 'interpreter::builtins::registry::tests::metadata_filesystem::declared_builtin_registry_derives_filesystem_metadata' (39435943) panicked at crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_filesystem.rs:42:9: assertion `left == right` failed left: Some([\"pattern\", \"flags\"]) right: Some([\"pattern\"]) note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "39c0533c8f05acbb35b33cd1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:12:01.449Z",
+  "stored_at": "2026-08-22T09:12:01.450Z"
+}

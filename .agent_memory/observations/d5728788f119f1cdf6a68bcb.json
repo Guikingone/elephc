@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"__rt_array_filter\\b\" -A 3 src/codegen_support/runtime/arrays/array_filter.rs | head -20; echo \"--- size ---\"; wc -l src/codegen_support/runtime/arrays/array_filter.rs; grep -n \"Input:\\|Output:\" src/codegen_support/runtime/arrays/array_filter.rs | head -6",
+  "summary": "grep -n \"__rt_array_filter\\b\" -A 3 src/codegen_support/runtime/arrays/array_filter.rs | head -20; echo \"--- size ---\"; wc -l src/codegen_support/runtime/arrays/array_filter.rs; grep -n \"Input:\\|Output:\" src/codegen_support/runtime/arrays/array_filter.rs | head -6: allocated array. The new array length is set to the -- ",
+  "text": "grep -n \"__rt_array_filter\\b\" -A 3 src/codegen_support/runtime/arrays/array_filter.rs | head -20; echo \"--- size ---\"; wc -l src/codegen_support/runtime/arrays/array_filter.rs; grep -n \"Input:\\|Output:\" src/codegen_support/runtime/arrays/array_filter.rs | head -6: allocated array. The new array length is set to the -- 33: emitter.label_global(\"__rt_array_filter\"); 34- 35- // -- set up stack frame, save callee-saved registers -- 36- emitter.instruction(\"sub sp, sp, #96\"); // allocate 96 bytes on the stack -- 142:/// Emits the `__rt_array_filter` runtime helper for x86_64 Linux (SysV ABI). 143-/// Saves frame pointer and callee-saved registers (r12–r14), allocates a destination array sized 144-/// to the source length, then iterates source indices in r13 while accumulating kept elements in r14. 145-/// Calls the user callback through r12 with value, key, or both based on rcx mode; optionally -- --- size --- 236 src/codegen_support/runtime/arrays/array_filter.rs 23:/// Input: x0 = callback address, x1 = source array ptr, x2 = optional callback environment, x3 = mode 24:/// Output: x0 = new array containing only elements where callback returned truthy",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d5728788f119f1cdf6a68bcb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:33:56.193Z",
+  "stored_at": "2026-08-22T11:33:56.194Z"
+}

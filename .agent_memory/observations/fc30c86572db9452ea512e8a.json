@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '355,400p' src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs",
+  "summary": "About to run: sed -n '355,400p' src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fc30c86572db9452ea512e8a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:18:40.483Z",
+  "stored_at": "2026-08-20T20:18:40.484Z"
+}

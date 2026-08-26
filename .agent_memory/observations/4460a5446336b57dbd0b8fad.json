@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn class_method_already_emitted' -A 20 src/codegen/ | head -25",
+  "summary": "grep -rn 'fn class_method_already_emitted' -A 20 src/codegen/ | head -25: == method_key src/codegen/lower_inst/method_resolution.rs-113- }) src/codegen/lower_inst/method_resolution.rs-114- }) src/codegen/lower_inst/method_resolution.rs-115-} src/codegen/lower_inst/method_resolution.rs-116- src/codegen/lower_inst/method",
+  "text": "grep -rn 'fn class_method_already_emitted' -A 20 src/codegen/ | head -25: == method_key src/codegen/lower_inst/method_resolution.rs-113- }) src/codegen/lower_inst/method_resolution.rs-114- }) src/codegen/lower_inst/method_resolution.rs-115-} src/codegen/lower_inst/method_resolution.rs-116- src/codegen/lower_inst/method_resolution.rs-117-/// Stores a call result, boxing concrete returns for generic EIR result slots. src/codegen/lower_inst/method_resolution.rs-118-pub(super) fn store_call_result( src/codegen/lower_inst/method_resolution.rs-119- ctx: &mut FunctionContext<'_>, src/codegen/lower_inst/method_resolution.rs-120- inst: &Instruction, src/codegen/lower_inst/objects/interface_layout.rs:94:pub(super) fn class_method_already_emitted( src/codegen/lower_inst/objects/interface_layout.rs-95- ctx: &FunctionContext<'_>, src/codegen/lower_inst/objects/interface_layout.rs-96- class_name: &str, src/codegen/lower_inst/objects/interface_layout.rs-97- method_key: &str,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4460a5446336b57dbd0b8fad",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:10:24.987Z",
+  "stored_at": "2026-08-25T12:10:24.987Z"
+}

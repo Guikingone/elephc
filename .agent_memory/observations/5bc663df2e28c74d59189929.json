@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '%s\\n' '<?php' 'try { echo \"a\"; } catch (Error $e) { echo \"b\"; }' 'echo \"c\";' > try1.php; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ./target/debug/elephc --emit-ir /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/try1.php 2>/dev/null | sed -n '/fun… [+20 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '%s\\n' '<?php' 'try { echo \"a\"; } catch (Error $e) { echo \"b\"; }' 'echo \"c\";' > try1.php; cd /Users/guillaumeloulier/PhpstormProjects/oss/ele",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '%s\\n' '<?php' 'try { echo \"a\"; } catch (Error $e) { echo \"b\"; }' 'echo \"c\";' > try1.php; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ./target/debug/elephc --emit-ir /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/try1.php 2>/dev/null | sed -n '/function main/,/^  }/p': function main() -> Void flags(main) { entry: concat_reset ; effects: writes_global ; span: 2:7 v0: Str php=string own=persistent = const_str data[4] ; span: 2:12 echo_value v0 ; effects: output ; span: 2:7 concat_reset ; effects: writes_global ; span: 3:1 v1: Str php=string own=persistent = const_str data[5] ; span: 3:6 echo_value v1 ; effects: output ; span: 3:1 return }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5bc663df2e28c74d59189929",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:48:05.602Z",
+  "stored_at": "2026-08-23T17:48:05.602Z"
+}

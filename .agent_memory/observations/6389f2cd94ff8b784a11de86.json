@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>b7ro2nzqp</task-id>\n<tool-use-id>toolu_01CXbM59vo2JGApkYSLUH6AE</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b7ro2nzqp.output</output-file>\n<status>killed</status>\n<summary>Background command \"Run the eval group without cargo, bounded threads\" was stopped</summary>\n</task-notification>",
+  "summary": "<task-notification> <task-id>b7ro2nzqp</task-id> <tool-use-id>toolu_01CXbM59vo2JGApkYSLUH6AE</tool-use-id> <output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8db",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6389f2cd94ff8b784a11de86",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T15:39:33.111Z",
+  "stored_at": "2026-08-20T15:39:33.111Z",
+  "low_signal": true
+}

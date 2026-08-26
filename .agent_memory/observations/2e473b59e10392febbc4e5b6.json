@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests codegen::io 2>&1 | rg \"^test result|FAILED|panicked\" | head -8",
+  "summary": "cargo test --test codegen_tests codegen::io 2>&1 | rg \"^test result|FAILED|panicked\" | head -8: degen::io::streams::test_fopen_user_wrapper_fscanf_reads_through_stream_read ... FAILED test codegen::io::streams::test_fscanf_float_via_shared_sscanf_engine ... FAILED test codegen::io::streams::test_fscanf_reads_and_parses",
+  "text": "cargo test --test codegen_tests codegen::io 2>&1 | rg \"^test result|FAILED|panicked\" | head -8: degen::io::streams::test_fopen_user_wrapper_fscanf_reads_through_stream_read ... FAILED test codegen::io::streams::test_fscanf_float_via_shared_sscanf_engine ... FAILED test codegen::io::streams::test_fscanf_reads_and_parses_line_by_line ... FAILED test codegen::io::streams::test_line_readers_apply_the_read_filter_chain ... FAILED thread 'codegen::io::streams::test_fopen_user_wrapper_fscanf_reads_through_stream_read' (4113416) panicked at tests/codegen/support/compiler.rs:256:63: thread 'codegen::io::streams::test_fscanf_float_via_shared_sscanf_engine' (4116984) panicked at tests/codegen/support/compiler.rs:256:63: thread 'codegen::io::streams::test_fscanf_reads_and_parses_line_by_line' (4116985) panicked at tests/codegen/support/compiler.rs:256:63: thread 'codegen::io::streams::test_line_readers_apply_the_read_filter_chain' (4120262) panicked at tests/codegen/support/compiler.rs:256:63:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2e473b59e10392febbc4e5b6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:50:53.574Z",
+  "stored_at": "2026-08-16T17:50:53.575Z"
+}

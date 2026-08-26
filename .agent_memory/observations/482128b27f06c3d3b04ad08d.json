@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ksort.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ksort.py: \"\"\"Key sorts against php: krsort on packed storage, and the exact numeric-string orderings.\"\"\"\nimport pathlib, subprocess, sys\n\nD = pathl",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ksort.py: \"\"\"Key sorts against php: krsort on packed storage, and the exact numeric-string orderings.\"\"\"\nimport pathlib, subprocess, sys\n\nD = pathlib.Path(__file__).parent\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nELEPHC = ROOT / 'target/debug/elephc'\n\nDUMP = 'foreach ($a as $k => $v) { echo $k, \":\", $v, \",\"; } echo \"\\\\n\";'\n\nCASES = {\n    'krsort_packed':   '<?php $a = [10, 20, 30]; var_dump(krsort($a)); ' + DUMP,\n    'krsort_assoc':    '<?php $a = [\"b\" => 2, \"a\" => 1, \"c\" => 3]; krsort($a); ' + DUMP,\n    'krsort_empty':    '<?php ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "482128b27f06c3d3b04ad08d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:27:26.637Z",
+  "stored_at": "2026-08-21T07:27:26.638Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"fn specialize_generic_array_param_hint\" -A25 -g '*.rs' src/types/checker/ | head -32",
+  "summary": "rtk proxy rg -n \"fn specialize_generic_array_param_hint\" -A25 -g '*.rs' src/types/checker/ | head -32: r/type_compat/unions.rs-305- { src/types/checker/type_compat/unions.rs-306- PhpType::Array(Box::new(PhpType::Mixed)) src/types/checker/type_compat/unions.rs-307- } src/types/checker/type_compat/unions.rs-308- PhpType:",
+  "text": "rtk proxy rg -n \"fn specialize_generic_array_param_hint\" -A25 -g '*.rs' src/types/checker/ | head -32: r/type_compat/unions.rs-305- { src/types/checker/type_compat/unions.rs-306- PhpType::Array(Box::new(PhpType::Mixed)) src/types/checker/type_compat/unions.rs-307- } src/types/checker/type_compat/unions.rs-308- PhpType::AssocArray { key, value } src/types/checker/type_compat/unions.rs-309- if matches!(value.as_ref(), PhpType::Object(_)) src/types/checker/type_compat/unions.rs-310- || matches!(value.as_ref(), PhpType::Union(members) if members src/types/checker/type_compat/unions.rs-311- .iter() src/types/checker/type_compat/unions.rs-312- .any(|member| matches!(member, PhpType::Object(_)))) => src/types/checker/type_compat/unions.rs-313- { src/types/checker/type_compat/unions.rs-314- PhpType::AssocArray { src/types/checker/type_compat/unions.rs-315- key: key.clone(), src/types/checker/type_compat/unions.rs-316- value: Box::new(PhpType::Mixed), src/types/checker/type_compat/unions.rs-317- }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "31c051844bf9ad385d36fc6b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:41:30.342Z",
+  "stored_at": "2026-08-16T19:41:30.343Z"
+}

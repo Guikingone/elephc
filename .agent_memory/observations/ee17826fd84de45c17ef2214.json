@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/extract.py",
+  "summary": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/extract.py: stem = os.path.splitext(name)[0]\n            stem = re.sub(r'[^A-Za-z0-9_]', '_', stem)\n            src = body['FILE'].strip()\n    ",
+  "text": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/extract.py: stem = os.path.splitext(name)[0]\n            stem = re.sub(r'[^A-Za-z0-9_]', '_', stem)\n            src = body['FILE'].strip()\n            if not src.startswith -> stem = os.path.splitext(name)[0]\n            stem = re.sub(r'[^A-Za-z0-9_]', '_', stem)\n            src = body['FILE'].strip()\n            if not src.startswith('<?php'):\n                skipped.append((name, 'body is not php'))\n                continue\n            # elephc does not implement the PHP closing tag at all (`?>` lexes as the ternary\n            # `?`), so every php-src body would fail to compile for a reason unrelated to what\n            # the test measures. A TR",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee17826fd84de45c17ef2214",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:41:49.027Z",
+  "stored_at": "2026-08-17T06:41:49.029Z"
+}

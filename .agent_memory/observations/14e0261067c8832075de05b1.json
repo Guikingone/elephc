@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filter_segv_narrow.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filter_segv_narrow.py: \"\"\"Which construct in a three-line filter registration is the one that crashes?\n\n`class CustomFilter {} stream_filter_regist",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filter_segv_narrow.py: \"\"\"Which construct in a three-line filter registration is the one that crashes?\n\n`class CustomFilter {} stream_filter_register(...)` SIGSEGVs, and a segfault says nothing about\nwhere. Narrowing by SOURCE, one construct at a time, names the culprit before any assembler is\nread — the cheaper half of the two techniques, and the one that decides where to point lldb.\n\"\"\"\nimport pathlib, subprocess, shutil\n\nD = pathlib.Path(__file__).parent / 'segvnarrow'\nROOT = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\nELEPHC = ROOT + '/target/debug/elephc'\n\nCASES",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "14e0261067c8832075de05b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:37:59.225Z",
+  "stored_at": "2026-08-21T15:37:59.226Z"
+}

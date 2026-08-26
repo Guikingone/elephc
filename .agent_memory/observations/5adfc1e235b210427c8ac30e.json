@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"php_user_filter\\|filtername\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md | head -8",
+  "summary": "rtk proxy grep -n \"php_user_filter\\|filtername\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md | head -8: 440:Classes may extend PHP's `php_user_filter` base class; the fourth 443:`$filtername` and `$stream`, so the manual's `stream_bucket_new($this->stre",
+  "text": "rtk proxy grep -n \"php_user_filter\\|filtername\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md | head -8: 440:Classes may extend PHP's `php_user_filter` base class; the fourth 443:`$filtername` and `$stream`, so the manual's `stream_bucket_new($this->stream, …)`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5adfc1e235b210427c8ac30e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:54:29.643Z",
+  "stored_at": "2026-08-17T09:54:29.644Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests io::streams 2>&1 | tail -16",
+  "summary": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests io::streams 2>&1 | tail -16: left: \"10 11 11 11 11 11 11 |1\" right: \"10 11 11 11 11 00 00 |0\" failures: codegen::io::streams::test_a_wrapper_without_a_context_property_is_still_deprecated codegen::io::streams::test_an_untyped_context_property_receive",
+  "text": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests io::streams 2>&1 | tail -16: left: \"10 11 11 11 11 11 11 |1\" right: \"10 11 11 11 11 00 00 |0\" failures: codegen::io::streams::test_a_wrapper_without_a_context_property_is_still_deprecated codegen::io::streams::test_an_untyped_context_property_receives_its_context codegen::io::streams::test_fopen_false_stream_use_is_type_error codegen::io::streams::test_stream_context_set_option_refuses_phps_invalid_shapes codegen::io::streams::test_stream_select_microseconds_require_seconds codegen::io::streams::test_stream_type_error_reports_runtime_string_type codegen::io::streams::test_wrapper_scheme_acceptance_matches_php test result: FAILED. 608 passed; 7 failed; 8 ignored; 0 measured; 8159 filtered out; finished in 177.14s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5bed94fc5796a59521fa093d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:41:35.066Z",
+  "stored_at": "2026-08-21T16:41:35.067Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 3380,3425p tests/codegen/regressions/arrays.rs",
+  "summary": "sed -n 3380,3425p tests/codegen/regressions/arrays.rs: e) { echo \"count-raises\\n\"; } try { echo count($r), \"\\n\"; } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; } echo empty($r) ? \"empty\\n\" : \"not-empty\\n\"; echo (int) $r, \"\\n\"; echo json_encode($r), \"\\n\"; echo serialize($r), \"\\n\"; echo zval_type(zval_pack($r)), \"",
+  "text": "sed -n 3380,3425p tests/codegen/regressions/arrays.rs: e) { echo \"count-raises\\n\"; } try { echo count($r), \"\\n\"; } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; } echo empty($r) ? \"empty\\n\" : \"not-empty\\n\"; echo (int) $r, \"\\n\"; echo json_encode($r), \"\\n\"; echo serialize($r), \"\\n\"; echo zval_type(zval_pack($r)), \"\\n\"; \"#, ); assert!(out.success, \"program crashed: {}\", out.stderr); assert_eq!(out.stdout, \"count-raises\\nempty\\n0\\nnull\\nN;\\n1\\n\"); assert_eq!( out.stdout, \"count(): Argument #1 ($value) must be of type Countable|array, null given\\nempty\\n0\\n\\ null\\nN;\\n1\\n\" ); assert_eq!( out.diagnostics.matches(\"Warning: Undefined array key 5\").count(), 1 ); } /// Nullable container elements can be retained inside typed indexed and /// associative storage, whole-boxed, and read back as canonical nulls. #[test] fn test_ternary_missed_read_normalizes_sentinel_children_in_typed_containers() { let out = compile_and_run_with_heap_debug( r#\"<?php",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1ab566a24214d008eeda7d4d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:25:39.872Z",
+  "stored_at": "2026-08-22T10:25:39.872Z"
+}

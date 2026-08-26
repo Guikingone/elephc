@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"^## \\|^### \\|tlsv\\|ssl://\\|tls://\\|udg://\\|unix://\" docs/php/streams.md | sed -n '1,80p'",
+  "summary": "grep -n \"^## \\|^### \\|tlsv\\|ssl://\\|tls://\\|udg://\\|unix://\" docs/php/streams.md | sed -n '1,80p': lse` | Open a client stream for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. The two error outputs carry the real failure: the `errno` of the syscall that failed and its `strerror` text. Both ",
+  "text": "grep -n \"^## \\|^### \\|tlsv\\|ssl://\\|tls://\\|udg://\\|unix://\" docs/php/streams.md | sed -n '1,80p': lse` | Open a client stream for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. The two error outputs carry the real failure: the `errno` of the syscall that failed and its `strerror` text. Both may be passed undeclared, as in PHP — the call defines them as `int` and `string`. A failed open also raises PHP's `Unable to connect to <address> (<reason>)` Warning, whether or not the error outputs were passed; `@` suppresses it. A host that does not resolve reports php-src's own `php_network_getaddresses: getaddrinfo for <host> failed: <reason>` text — that failure has no `errno`, so `&$error_code` stays `0` — and warns twice, as PHP does. | 389:Socket addresses use `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or 390:`udg:///path`. Host names are resolved through the system resolver to IPv4. 392:## Directory streams 400:## Stream metadata and introspection",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "76ec415d7f90f6f2af2de978",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:02.963Z",
+  "stored_at": "2026-08-14T14:15:02.963Z"
+}

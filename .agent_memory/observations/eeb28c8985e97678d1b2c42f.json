@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h /System/Volumes/Data",
+  "summary": "df -h /System/Volumes/Data: Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 426Gi 5.8Gi 99% 5.6M 61M 8% /System/Volumes/Data",
+  "text": "df -h /System/Volumes/Data: Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 426Gi 5.8Gi 99% 5.6M 61M 8% /System/Volumes/Data",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eeb28c8985e97678d1b2c42f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:22:44.255Z",
+  "stored_at": "2026-08-23T13:22:44.255Z"
+}

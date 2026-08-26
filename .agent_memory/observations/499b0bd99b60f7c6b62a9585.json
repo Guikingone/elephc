@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '378,392p' src/codegen_support/runtime/eval_bridge.rs",
+  "summary": "sed -n '378,392p' src/codegen_support/runtime/eval_bridge.rs: \\x20 mov eax, 0\\n\\ \\x20 sete al\\n\\ \\x20 pop rbp\\n\\ \\x20 ret\\n\" ), \"{asm}\" ); /// Pins the AArch64 eval key-sort bridge to the shared AOT regular comparator. #[test] fn aarch64_eval_key_sort_uses_native_regular_comparator() { let asm = emit_for(Target::new(Pl",
+  "text": "sed -n '378,392p' src/codegen_support/runtime/eval_bridge.rs: \\x20 mov eax, 0\\n\\ \\x20 sete al\\n\\ \\x20 pop rbp\\n\\ \\x20 ret\\n\" ), \"{asm}\" ); /// Pins the AArch64 eval key-sort bridge to the shared AOT regular comparator. #[test] fn aarch64_eval_key_sort_uses_native_regular_comparator() { let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64)); let body = body_of(&asm, \"__elephc_eval_value_regular_key_compare\"); assert!(body.contains(\"bl __rt_mixed_unbox\"), \"{body}\"); assert!(body.contains(\"bl __rt_key_compare_regular\"), \"{body}\"); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "499b0bd99b60f7c6b62a9585",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:39:03.689Z",
+  "stored_at": "2026-08-20T17:39:03.690Z"
+}

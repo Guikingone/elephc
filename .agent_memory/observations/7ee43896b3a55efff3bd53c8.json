@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\nd=json.load(open('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json'))\nitems = d if isinstance(d,list) else d.get('builtins', d)\nif isinstance(items,dict): items=list(items.values())\nSCALAR={'int','string','float','bool'}\nhits=[]\nfor b in items:\n    aot=b.get('aot') or {}\n    if not aot.get('supported'): continue\n    for i,p in enumerate(aot.get('params') or []):\n        if p.get('type') in SCALAR and p.get('default') is None and p.get('optional'):\n            hits.append((b.get('canonical_nam… [+160 chars truncated]",
+  "summary": "python3 -c \"\nimport json\nd=json.load(open('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json'))\nitems = d if isinstance(d,list) else d.get('builtins', d)\nif isinstance(items,dict): items=list(items.values())\nSCALAR={'int','string','float','boo",
+  "text": "python3 -c \"\nimport json\nd=json.load(open('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json'))\nitems = d if isinstance(d,list) else d.get('builtins', d)\nif isinstance(items,dict): items=list(items.values())\nSCALAR={'int','string','float','bool'}\nhits=[]\nfor b in items:\n    aot=b.get('aot') or {}\n    if not aot.get('supported'): continue\n    for i,p in enumerate(aot.get('params') or []):\n        if p.get('type') in SCALAR and p.get('default') is None and p.get('optional'):\n            hits.append((b.get('canonical_name'), i, p.get('name'), p.get('type')))\nprint(len(hits),'optional scalar params whose declared default is null')\nfor h in hits: print('   ', h)\n\" 2>&1 | head -60: ) ('bcscale', 0, 'scale', 'int') ('bcsqrt', 1, 'scale', 'int') ('bcsub', 2, 'scale', 'int') ('date', 1, 'timestamp', 'int') ('fgetcsv', 1, 'length', 'int') ('getdate', 0, 'timestamp', 'int') ('gmdate', 1, 'timestamp', 'int') ('json_decode', 1, 'associative', 'bool') ('mb_ereg_match', 2, 'options', 'string') ('mb_strlen', 1, 'encoding', 'string') ('phpversion', 0, 'extension', 'string') ('readline', 0, 'prompt', 'string') ('str_word_count', 2, 'characters', 'string') ('stream_context_set_option', 2, 'option_name', 'string') ('stream_copy_to_stream', 2, 'length', 'int') ('stream_get_contents', 1, 'length', 'int') ('stream_select', 4, 'microseconds', 'int') ('stream_socket_recvfrom', 3, 'address', 'string') ('strtotime', 1, 'baseTimestamp', 'int') ('strtr', 2, 'to', 'string') ('substr', 2, 'length', 'int') ('touch', 1, 'mtime', 'int') ('touch', 2, 'atime', 'int') ('umask', 0, 'mask', 'int')",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7ee43896b3a55efff3bd53c8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:00:51.587Z",
+  "stored_at": "2026-08-21T11:00:51.587Z"
+}

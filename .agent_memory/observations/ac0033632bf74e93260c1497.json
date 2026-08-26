@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"return_type|classes\\b\" src/types/checker/method_pass.rs | rg \"insert|get_mut\" | head -8",
+  "summary": "About to run: rtk proxy rg -n \"return_type|classes\\b\" src/types/checker/method_pass.rs | rg \"insert|get_mut\" | head -8",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ac0033632bf74e93260c1497",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:28:11.261Z",
+  "stored_at": "2026-08-16T20:28:11.261Z"
+}

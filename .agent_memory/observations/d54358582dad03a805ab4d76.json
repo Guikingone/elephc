@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps aux | grep \"[c]odegen_tests\" | head -4 | awk '{print $2, $3, $10, $11}'; echo \"--- children ---\"; pgrep -P $(pgrep -f \"[c]odegen_tests\" | head -1) 2>/dev/null | head -5",
+  "summary": "ps aux | grep \"[c]odegen_tests\" | head -4 | awk '{print $2, $3, $10, $11}'; echo \"--- children ---\"; pgrep -P $(pgrep -f \"[c]odegen_tests\" | head -1) 2>/dev/null | head -5 failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but th",
+  "text": "ps aux | grep \"[c]odegen_tests\" | head -4 | awk '{print $2, $3, $10, $11}'; echo \"--- children ---\"; pgrep -P $(pgrep -f \"[c]odegen_tests\" | head -1) 2>/dev/null | head -5 failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Split it into plain, separate commands and run them from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d54358582dad03a805ab4d76",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:39:20.351Z",
+  "stored_at": "2026-08-23T09:39:20.352Z"
+}

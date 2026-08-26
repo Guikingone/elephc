@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"sscanf\" -B4 -A10 tests/ir_backend_smoke_test.rs | head -30",
+  "summary": "rtk proxy rg -n \"sscanf\" -B4 -A10 tests/ir_backend_smoke_test.rs | head -30: 5308- r#\"<?php $parts = explode(\"-\", \"one-two-three\"); echo implode(\", \", $parts);\"#, 5309- \"one, two, three\", 5310- ), 5311- ( 5312: \"sscanf_strings\", 5313: r#\"<?php $result = sscanf(\"John 30\", \"%s %d\"); echo $result[0] . \":\" . $result[1];\"#,",
+  "text": "rtk proxy rg -n \"sscanf\" -B4 -A10 tests/ir_backend_smoke_test.rs | head -30: 5308- r#\"<?php $parts = explode(\"-\", \"one-two-three\"); echo implode(\", \", $parts);\"#, 5309- \"one, two, three\", 5310- ), 5311- ( 5312: \"sscanf_strings\", 5313: r#\"<?php $result = sscanf(\"John 30\", \"%s %d\"); echo $result[0] . \":\" . $result[1];\"#, 5314- \"John:30\", 5315- ), 5316- ] { 5317- assert_eq!(compile_and_run_ir_backend(name, source), expected); 5318- } 5319-} 5320- 5321-/// Verifies `is_iterable()` static decisions for concrete arrays, hashes, and scalars. 5322-#[test] 5323-fn ir_backend_handles_is_iterable_predicates() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "376b35aea3661898111d196d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:19:44.637Z",
+  "stored_at": "2026-08-16T16:19:44.637Z"
+}

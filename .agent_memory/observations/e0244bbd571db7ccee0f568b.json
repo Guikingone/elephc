@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/guard_remaining_fs.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/guard_remaining_fs.py: \"\"\"Guards the rest of the bare-path surface against an unregistered `file://` wrapper.\n\nEach helper's failure value was READ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/guard_remaining_fs.py: \"\"\"Guards the rest of the bare-path surface against an unregistered `file://` wrapper.\n\nEach helper's failure value was READ from its own failure path rather than assumed, because they\nare not uniform and a wrong one turns a refusal into a plausible answer: the boolean helpers use\n0, `opendir` uses -1, `readfile` uses -2, `file_put_contents` uses -1, and `scandir` uses a null\nlisting pointer. `filemtime` already proved the cost of guessing — a shared -1 boxed as the\nINTEGER -1 there, because that helper answers a pair and the caller reads the flag, not the value.\n\"\"\"\nimport pathlib\n\nROOT = pat",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e0244bbd571db7ccee0f568b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:32:06.371Z",
+  "stored_at": "2026-08-22T08:32:06.372Z"
+}

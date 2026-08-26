@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport json\nbase='tests/php_oracle/manifests/streams/php-8.5.6/%s/streams-full.json'\nT=['macos-aarch64','linux-x86_64','linux-aarch64']\ntab={}\nfor t in T:\n    c=json.load(open(base%t))['surface']['constants']\n    if isinstance(c,list):\n        c={e['name']:e.get('value') for e in c}\n    tab[t]=c\nnames=[n for n in tab['macos-aarch64'] if n.startswith('GLOB_')]\nnames+= [n for n in ('SEEK_SET','LOCK_EX','PHP_INT_SIZE','DIRECTORY_SEPARATOR') if n in tab['macos-aarch64']]\nprint(f'{\"name\":<26}'+''.join(f'{t:>16}' for t in T))\nfor n in sorted(set(names)):\n    row=[tab[t].get(n,'—') f… [+196 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport json\nbase='tests/php_oracle/manifests/streams/php-8.5.6/%s/streams-full.json'\nT=['macos-aarch64','linux-x86_64','linux-aarch64']\ntab={}\nfor t in T:\n    c=json.load(open(base%t))['surface']['constants']\n    if isinstance(c,list):\n        c={e['name']:e.get('value') for e in c}\n    tab[t]=c\nnames=",
+  "text": "python3 - <<'PY'\nimport json\nbase='tests/php_oracle/manifests/streams/php-8.5.6/%s/streams-full.json'\nT=['macos-aarch64','linux-x86_64','linux-aarch64']\ntab={}\nfor t in T:\n    c=json.load(open(base%t))['surface']['constants']\n    if isinstance(c,list):\n        c={e['name']:e.get('value') for e in c}\n    tab[t]=c\nnames=[n for n in tab['macos-aarch64'] if n.startswith('GLOB_')]\nnames+= [n for n in ('SEEK_SET','LOCK_EX','PHP_INT_SIZE','DIRECTORY_SEPARATOR') if n in tab['macos-aarch64']]\nprint(f'{\"name\":<26}'+''.join(f'{t:>16}' for t in T))\nfor n in sorted(set(names)):\n    row=[tab[t].get(n,'—') for t in T]\n    d='' if len(set(map(str,row)))==1 else '  <-- DIFFERS'\n    print(f'{n:<26}'+''.join(f'{str(v):>16}' for v in row)+d)\nprint()\nprint('total constants:', {t:len(tab[t]) for t in T})\nPY failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Split it into plain, separate commands and run them from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c9f1458be78c48e62a62639b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:51:26.362Z",
+  "stored_at": "2026-08-22T08:51:26.362Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ToolSearchPlaceholder 2>/dev/null; echo waiting",
+  "summary": "About to run: ToolSearchPlaceholder 2>/dev/null; echo waiting",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "505ffd75d85b15699ec28196",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:59:03.732Z",
+  "stored_at": "2026-08-21T16:59:03.733Z"
+}

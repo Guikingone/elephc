@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub(super) fn\\|pub(in crate\" src/codegen/lower_inst/objects/throwable_new.rs | head -8; sed -n 1,40p src/codegen/lower_inst/objects/throwable_new.rs | tail -22",
+  "summary": "About to run: grep -n \"pub(super) fn\\|pub(in crate\" src/codegen/lower_inst/objects/throwable_new.rs | head -8; sed -n 1,40p src/codegen/lower_inst/objects/throwable_new.rs | tail -22",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a60647a6abf667d39ecbcbc5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:22:46.272Z",
+  "stored_at": "2026-08-22T12:22:46.272Z"
+}

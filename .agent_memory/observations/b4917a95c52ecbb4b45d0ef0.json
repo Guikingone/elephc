@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.label(\"__rt_fread_would_block\");\n    emitter.instruction(\"str xzr, [sp, #24]\");                                  // return an empty read without setting -> emitter.label(\"",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.label(\"__rt_fread_would_block\");\n    emitter.instruction(\"str xzr, [sp, #24]\");                                  // return an empty read without setting -> emitter.label(\"__rt_fread_would_block\");\n    emitter.instruction(\"ldr x9, [sp, #48]\");                                   // whatever the holding area supplied stands\n    emitter.instruction(\"str x9, [sp, #24]\");                                   // an empty read otherwise, without setting EOF for EAGAIN/EWOULDBLOCK",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b4917a95c52ecbb4b45d0ef0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:21:47.760Z",
+  "stored_at": "2026-08-23T20:21:47.760Z"
+}

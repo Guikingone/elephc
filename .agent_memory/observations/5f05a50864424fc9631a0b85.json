@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fsockopen\" src/codegen_support/runtime/data/fixed.rs | head -5",
+  "summary": "grep -n \"fsockopen\" src/codegen_support/runtime/data/fixed.rs | head -5: 171: (\"_sock_fail_fsockopen\", SOCKET_FAILED_FSOCKOPEN_PREFIX), 1218: out.push_str(&comm_directive(\"_fsockopen_addr\", 512, target));",
+  "text": "grep -n \"fsockopen\" src/codegen_support/runtime/data/fixed.rs | head -5: 171: (\"_sock_fail_fsockopen\", SOCKET_FAILED_FSOCKOPEN_PREFIX), 1218: out.push_str(&comm_directive(\"_fsockopen_addr\", 512, target));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f05a50864424fc9631a0b85",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:31:38.444Z",
+  "stored_at": "2026-08-17T13:31:38.445Z"
+}

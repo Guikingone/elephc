@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo fmt --check 2>&1 | head -5; echo FMT; git add -A src tests && git status --short | grep -v codebase-memory | grep -v agent_memory",
+  "summary": "cargo fmt --check 2>&1 | head -5; echo FMT; git add -A src tests && git status --short | grep -v codebase-memory | grep -v agent_memory: FMT M src/types/checker/builtin_spl_classes/filesystem.rs M tests/codegen/spl.rs A tests/codegen/spl/file_object_open.rs",
+  "text": "cargo fmt --check 2>&1 | head -5; echo FMT; git add -A src tests && git status --short | grep -v codebase-memory | grep -v agent_memory: FMT M src/types/checker/builtin_spl_classes/filesystem.rs M tests/codegen/spl.rs A tests/codegen/spl/file_object_open.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a4e70ae84bd83673653c430c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:39:52.819Z",
+  "stored_at": "2026-08-24T20:39:52.820Z"
+}

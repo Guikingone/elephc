@@ -2742,7 +2742,7 @@ class PDO {
         return false;
     }
 
-    public function exec(string $statement): int|bool {
+    public function exec(string $statement): int|false {
         // F-CORE-21/P2-f: real PHP validates this before any driver call at all —
         // php-src's PHP_METHOD(PDO, exec) raises the ValueError from its own
         // argument check, exactly like the prepare() guard just below (which this
@@ -2941,7 +2941,7 @@ class PDO {
         return $_statement;
     }
 
-    public function lastInsertId(?string $name = null): string|bool {
+    public function lastInsertId(?string $name = null): string|false {
         // The name is a sequence for PostgreSQL (`currval($name)`); SQLite and
         // MySQL ignore it and return the last rowid / auto-increment id. The text
         // bridge is used so oversized PostgreSQL sequence values (which need not
@@ -2972,7 +2972,7 @@ class PDO {
     // -- elephc optional PDO_CUBRID method begin --
     // PDO_CUBRID's driver method. The native extension returns the schema rows
     // directly as an array rather than exposing its temporary CCI request handle.
-    public function cubrid_schema(int $schemaType, ?string $className = null, ?string $attributeName = null): array|bool {
+    public function cubrid_schema(int $schemaType, ?string $className = null, ?string $attributeName = null): array|false {
         if (elephc_pdo_driver_name($this->conn) !== "cubrid") {
             throw new Error("Call to undefined method PDO::cubrid_schema()");
         }
@@ -3306,7 +3306,7 @@ class PDO {
         return file_put_contents($filename, $_raw) !== false;
     }
 
-    public function pgsqlLOBCreate(): string|bool {
+    public function pgsqlLOBCreate(): string|false {
         if (!$this->inTransaction()) {
             return false;
         }
@@ -3371,7 +3371,7 @@ class PDO {
         return [$_sqlstate, elephc_pdo_errcode($this->conn), $_message];
     }
 
-    public function quote(string $string, int $type = 2): string|bool {
+    public function quote(string $string, int $type = 2): string|false {
         // Driver-aware string-literal quoting. PDO::PARAM_LOB (3, P1-e) selects a
         // driver-native binary literal instead of the plain string-escaping path;
         // every other $type value is accepted for PHP signature compatibility but
@@ -5763,7 +5763,7 @@ class PDOStatement implements IteratorAggregate {
         return false;
     }
 
-    public function getColumnMeta(int $column): array|bool {
+    public function getColumnMeta(int $column): array|false {
         // PDOStatement::getColumnMeta is assembled from the common PDO descriptor and
         // the active driver's metadata. Returns false for an out-of-range column index.
         //
@@ -6653,7 +6653,7 @@ namespace Pdo {
             }
         }
 
-        public function exec(string $statement): int|bool {
+        public function exec(string $statement): int|false {
             // Runs the statement through the base driver, then drains + dispatches any
             // server NOTICE it raised (e.g. a DO block / function using RAISE NOTICE).
             $_result = parent::exec($statement);
@@ -6688,7 +6688,7 @@ namespace Pdo {
             return \elephc_pdo_backend_pid($this->connectionId());
         }
 
-        public function lobCreate(): string|bool {
+        public function lobCreate(): string|false {
             // Creates an empty large object and returns its OID as a numeric string,
             // or false on error. libpq's large-object API requires an explicit
             // transaction, which is enforced before the bridge call.

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bw4e30ze1.output; echo \"--- elapsed:\"; ps -eo etime,time,comm | grep codegen_tests | head -2",
+  "summary": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bw4e30ze1.output; echo \"--- elapsed:\"; ps -eo etime,time,comm | grep codegen_tests | head -2: --- elapsed: 49:44 169:36.83 /Users/guillaumeloulier/PhpstormPr",
+  "text": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bw4e30ze1.output; echo \"--- elapsed:\"; ps -eo etime,time,comm | grep codegen_tests | head -2: --- elapsed: 49:44 169:36.83 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps/codegen_tests-16c45d69d5f633ba",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9b30427098f1b2db1c23fc63",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T19:45:50.548Z",
+  "stored_at": "2026-08-18T19:45:50.548Z"
+}

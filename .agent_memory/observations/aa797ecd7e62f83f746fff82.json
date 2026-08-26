@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_eval.py\ncargo test --test codegen_tests -- codegen::eval::test_eval_call_user_func codegen::eval::test_eval_error_contract_reports_non_fatal_warning codegen::eval_constructors::test_eval_reflection_class_constructor_by_ref codegen::eval_reflection_invocation 2>&1 | tail -14",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_eval.py\ncargo test --test codegen_tests -- codegen::eval::test_eval_call_user_func codegen::eval::test_eval_error_contract_reports_non_fatal",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_eval.py\ncargo test --test codegen_tests -- codegen::eval::test_eval_call_user_func codegen::eval::test_eval_error_contract_reports_non_fatal_warning codegen::eval_constructors::test_eval_reflection_class_constructor_by_ref codegen::eval_reflection_invocation 2>&1 | tail -14: _func_aot_method_by_ref_args_warn_and_use_value_copy codegen::eval::test_eval_call_user_func_eval_function_by_ref_args_warn_and_use_value_copy codegen::eval::test_eval_call_user_func_eval_method_by_ref_args_warn_and_use_value_copy codegen::eval::test_eval_call_user_func_filesystem_ref_like_builtin_args_warn_and_use_value_copy codegen::eval::test_eval_call_user_func_regex_ref_like_builtin_args_warn_and_use_value_copy codegen::eval_constructors::test_eval_reflection_class_constructor_by_ref_matches_php_ref_semantics codegen::eval_reflection_invocation::test_eval_reflection_function_invoke_by_ref_matches_php_ref_semantics codegen::eval_reflection_invocation::test_eval_reflection_method_invoke_by_ref_matches_php_ref_semantics test result: FAILED. 7 passed; 9 failed; 0 ignored; 0 measured; 8437 filtered out; finished in 47.20s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aa797ecd7e62f83f746fff82",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:59:35.545Z",
+  "stored_at": "2026-08-18T20:59:35.546Z"
+}

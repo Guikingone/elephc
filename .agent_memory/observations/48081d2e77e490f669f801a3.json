@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git cherry-pick b0029ffd86 ceea3d6941 3e8eb8e051 7e561ef8d0 12536b4397 df380b8b61 d40139e2d5 e53646e542 2>&1 | tail -3; git log --format=\"%h %s\" -9 | head -9",
+  "summary": "git cherry-pick b0029ffd86 ceea3d6941 3e8eb8e051 7e561ef8d0 12536b4397 df380b8b61 d40139e2d5 e53646e542 2>&1 | tail -3; git log --format=\"%h %s\" -9 | head -9: x(streams): the path operations warned for no missing hook at all 886305dbc0 fix(streams): a wrapper missing stream_read or url_stat answered a VALUE where php a",
+  "text": "git cherry-pick b0029ffd86 ceea3d6941 3e8eb8e051 7e561ef8d0 12536b4397 df380b8b61 d40139e2d5 e53646e542 2>&1 | tail -3; git log --format=\"%h %s\" -9 | head -9: x(streams): the path operations warned for no missing hook at all 886305dbc0 fix(streams): a wrapper missing stream_read or url_stat answered a VALUE where php answers false 29abaed8a6 fix(streams): a missing wrapper hook was silent, and two of the silent answers were wrong e4712e7967 fix(streams): the filter's &$consumed was written over a Mixed tag, and fwrite ignored it anyway 3940ac15fa fix(streams): the buffer setters never reached stream_set_option, and answered 0 for every stream 78c04832dc fix(streams): mkdir/rmdir/unlink stopped at the path, and the wrapper got zeros where php sends mode and options fc4a42b86b fix(streams): stream_metadata was missing from the contract seeding, and the wrapper marker only knew stream_open 2de66a6926 fix(streams): three STREAM_CLIENT_* bits were permuted, the filter list named one php dropped and missed one php has, and $mode = 0 attached nothing",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "48081d2e77e490f669f801a3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T18:34:48.540Z",
+  "stored_at": "2026-08-14T18:34:48.540Z"
+}

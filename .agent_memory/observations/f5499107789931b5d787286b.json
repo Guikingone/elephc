@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction collect(int $base, &...$out): int {\\n  $n = 0;\\n  foreach ($out as $i => $_) { $out[$i] = $base + $i; $n = $n + 1; }\\n  return $n;\\n}\\n$a = 0; $b = 0; $c = 0;\\nvar_dump(collect(10, $a, $b, $c));\\nvar_dump($a, $b, $c);\\n' > v1.php && zsh difftests.sh v1 rm16 2>&1 | head -14",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction collect(int $base, &...$out): int {\\n  $n = 0;\\n  foreach ($out as $i => $_) { $out[$i] = $base + $i; $n = $n + 1; }\\n ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction collect(int $base, &...$out): int {\\n  $n = 0;\\n  foreach ($out as $i => $_) { $out[$i] = $base + $i; $n = $n + 1; }\\n  return $n;\\n}\\n$a = 0; $b = 0; $c = 0;\\nvar_dump(collect(10, $a, $b, $c));\\nvar_dump($a, $b, $c);\\n' > v1.php && zsh difftests.sh v1 rm16 2>&1 | head -14: v1 DIFF: 2,4c2,4 < int(10) < int(11) < int(12) --- > int(0) > int(0) > int(0) rm16 DIFF: 2,4c2,4 < int(10) < int(11) < int(12)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f5499107789931b5d787286b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:28:03.639Z",
+  "stored_at": "2026-08-18T12:28:03.639Z"
+}

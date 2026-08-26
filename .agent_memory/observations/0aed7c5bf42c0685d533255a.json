@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "awk 'NR>6100 && /^fn |^    fn |#\\[test\\]/' tests/codegen/io/streams.rs >/dev/null; grep -n \"^fn test_\" tests/codegen/io/streams.rs | awk -F: '$1>6120 && $1<6500'",
+  "summary": "awk 'NR>6100 && /^fn |^    fn |#\\[test\\]/' tests/codegen/io/streams.rs >/dev/null; grep -n \"^fn test_\" tests/codegen/io/streams.rs | awk -F: '$1>6120 && $1<6500': 6162:fn test_zip_archive_reads_entries_like_php() { 6240:fn test_zip_archive_stat_index_reports_php_fields() { 6302:fn test_zip_archive_open_flag_matrix_matc",
+  "text": "awk 'NR>6100 && /^fn |^    fn |#\\[test\\]/' tests/codegen/io/streams.rs >/dev/null; grep -n \"^fn test_\" tests/codegen/io/streams.rs | awk -F: '$1>6120 && $1<6500': 6162:fn test_zip_archive_reads_entries_like_php() { 6240:fn test_zip_archive_stat_index_reports_php_fields() { 6302:fn test_zip_archive_open_flag_matrix_matches_php() { 6384:fn test_zip_archive_encrypted_and_directory_entries() { 6468:fn test_zip_archive_extract_to_matches_php() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0aed7c5bf42c0685d533255a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:30:14.511Z",
+  "stored_at": "2026-08-21T15:30:14.511Z"
+}

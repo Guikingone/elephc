@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"stream_context_set_options\" src/builtins/io/mod.rs src/builtins/mod.rs 2>/dev/null | head; echo \"=== contract catalog ===\"; grep -n \"stream_context_set_options\" crates/elephc-builtin-contract/src/catalog_data.rs | head -5",
+  "summary": "grep -rn \"stream_context_set_options\" src/builtins/io/mod.rs src/builtins/mod.rs 2>/dev/null | head; echo \"=== contract catalog ===\"; grep -n \"stream_context_set_options\" crates/elephc-builtin-contract/src/catalog_data.rs | head -5: src/builtins/io/mod.rs:164:pub mod stream_context_set_options; === contract catalog ===",
+  "text": "grep -rn \"stream_context_set_options\" src/builtins/io/mod.rs src/builtins/mod.rs 2>/dev/null | head; echo \"=== contract catalog ===\"; grep -n \"stream_context_set_options\" crates/elephc-builtin-contract/src/catalog_data.rs | head -5: src/builtins/io/mod.rs:164:pub mod stream_context_set_options; === contract catalog === 15262: id: BuiltinId::from_canonical_name(\"stream_context_set_options\"), 15263: name: \"stream_context_set_options\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "427f2f8ad0fdf29ce39f9bed",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:20:11.656Z",
+  "stored_at": "2026-08-14T14:20:11.656Z"
+}

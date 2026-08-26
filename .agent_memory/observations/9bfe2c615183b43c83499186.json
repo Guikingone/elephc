@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs: /// Byte offset of the filter lifecycle flags.\npub(crate) const FILTER_FLAGS_OFFSET: i64 = 56; -> /// Byte offset of the filter lifecycle flags.\npub(crate) const FILTER_FL",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs: /// Byte offset of the filter lifecycle flags.\npub(crate) const FILTER_FLAGS_OFFSET: i64 = 56; -> /// Byte offset of the filter lifecycle flags.\npub(crate) const FILTER_FLAGS_OFFSET: i64 = 56;\n\n/// Byte offset of the `line-length` a built-in encoder wraps at, 0 for no wrapping.\n///\n/// The four fields below are the built-in filter parameters, read out of `$params` ONCE at attach\n/// time rather than on every buffer. php's own defaults are what a zeroed allocation already says:\n/// measured on `php -n` 8.5.6, both `convert.base64-encode` and `convert.quoted-printable-encod",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9bfe2c615183b43c83499186",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:55:54.962Z",
+  "stored_at": "2026-08-17T13:55:54.963Z"
+}

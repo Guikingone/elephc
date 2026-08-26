@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='tests/error_tests/io_builtins/streams.rs'\ns=open(p).read()\nold='''/// Verifies fwrite() produces correct error when called with only one argument.\n#[test]\nfn test_error_fwrite_wrong_args() {\n    expect_error(\"<?php fwrite(1);\", \"fwrite() takes exactly 2 arguments\");\n}'''\nnew='''/// Verifies fwrite() produces correct error when called with only one argument.\n///\n/// The arity is 2 OR 3: php's signature is `fwrite($stream, string $data, ?int $length = null)`,\n/// and the third argument caps the write. php reports the shortfall at run time as\n/// `ArgumentCountError: fwrite()… [+407 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' p='tests/error_tests/io_builtins/streams.rs' s=open(p).read() old='''/// Verifies fwrite() produces correct error when called with only one argument. #[test] fn test_error_fwrite_wron",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1759d98f121453b5a073fbbf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:43:52.813Z",
+  "stored_at": "2026-08-17T07:43:52.814Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "TaskStop",
+  "path": "",
+  "command": "",
+  "summary": "TaskStop: Successfully stopped task: b2h0x1z6d (RUST_MIN_STACK=33554432 ./target/debug/deps/codegen_tests-711c2df818d88011 --test-threads 4)",
+  "text": "Successfully stopped task: b2h0x1z6d (RUST_MIN_STACK=33554432 ./target/debug/deps/codegen_tests-711c2df818d88011 --test-threads 4)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4a5a89fd80d8f3e5e8d3a49e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:00:02.132Z",
+  "stored_at": "2026-08-26T17:00:02.132Z"
+}

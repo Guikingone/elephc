@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '409,450p' crates/elephc-builtin-contract/src/php_constants.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '409,450p' crates/elephc-builtin-contract/src/php_constants.rs: s were separate files before they were one module, so a name could appear in two /// of them without anything noticing — and `int_constant` would then an",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '409,450p' crates/elephc-builtin-contract/src/php_constants.rs: s were separate files before they were one module, so a name could appear in two /// of them without anything noticing — and `int_constant` would then answer whichever came /// first, which is not a property anyone should have to know. fn every_name_is_declared_once() { let mut seen: Vec<(&str, i64)> = Vec::new(); for table in ALL_INT_CONSTANT_TABLES { for (name, value) in table.iter() { if let Some((_, previous)) = seen.iter().find(|(declared, _)| declared == name) { panic!(\"{name} is declared twice, as {previous} and as {value}\"); } seen.push((name, *value)); } } assert!(!seen.is_empty()); } #[test] /// The lookup answers what the tables hold. fn int_constant_reads_the_tables() { assert_eq!(int_constant(\"SEEK_SET\"), Some(0)); assert_eq!(int_constant(\"STREAM_FILTER_READ\"), Some(1)); assert_eq!(int_constant(\"GLOB_MARK\"), Some(8)); assert_eq!(int_constant(\"NOT_A_PHP_CONSTANT\"), None); } }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "305a1031e32797396b35f39b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:43:16.928Z",
+  "stored_at": "2026-08-23T09:43:16.929Z"
+}

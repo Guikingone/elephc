@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh splsc3 splscan2 splfg2 splk3 iso3 real",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh splsc3 splscan2 splfg2 splk3 iso3 real: splsc3 IDENTICAL splscan2 DIFF: 1,37c1 < key0=0 < array(2) { < [0]=> < int(42) < [1]=> < str",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh splsc3 splscan2 splfg2 splk3 iso3 real: splsc3 IDENTICAL splscan2 DIFF: 1,37c1 < key0=0 < array(2) { < [0]=> < int(42) < [1]=> < string(5) \"alpha\" < } < key1=0 < array(2) { < [0]=> < int(7) < [1]=> < string(4) \"beta\" splfg2 IDENTICAL splk3 IDENTICAL iso3 IDENTICAL real IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "45dab83045f8ef8d8203ab19",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:43:31.466Z",
+  "stored_at": "2026-08-16T17:43:31.466Z"
+}

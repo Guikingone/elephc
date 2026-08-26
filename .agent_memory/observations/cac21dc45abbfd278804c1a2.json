@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('zres.php','w').write('''<?php\nforeach ([\"zlib.deflate\", \"zlib.inflate\", \"bzip2.compress\", \"bzip2.decompress\", \"convert.iconv.utf-8/utf-8\"] as $n) {\n    $h = fopen(\"php://memory\", \"w+\");\n    $r = stream_filter_append($h, $n, STREAM_FILTER_WRITE);\n    printf(\"%-28s resource=%s type=%s\\\\n\", $n, var_export(is_resource($r), true),\n        is_resource($r) ? get_resource_type($r) : \"-\");\n    fclose($h);… [+47 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY' open('",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cac21dc45abbfd278804c1a2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:03:26.068Z",
+  "stored_at": "2026-08-17T15:03:26.069Z"
+}

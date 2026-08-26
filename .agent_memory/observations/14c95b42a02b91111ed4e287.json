@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"resolve_int_operand_to_result\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/ | rtk proxy grep \"use \\|pub use\" | head -5",
+  "summary": "rtk proxy grep -rn \"resolve_int_operand_to_result\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/ | rtk proxy grep \"use \\|pub use\" | head -5: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/built",
+  "text": "rtk proxy grep -rn \"resolve_int_operand_to_result\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/ | rtk proxy grep \"use \\|pub use\" | head -5: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io.rs:26:use super::super::resolve_int_operand_to_result; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/arrays.rs:27:use super::super::{expect_operand, resolve_int_operand_to_result, store_if_result};",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "14c95b42a02b91111ed4e287",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:13:18.506Z",
+  "stored_at": "2026-08-17T07:13:18.506Z"
+}

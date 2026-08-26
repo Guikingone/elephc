@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff --stat -- src tests",
+  "summary": "git diff --stat -- src tests: rs | 23 ++++- src/ir_lower/expr/array_builtin_args.rs | 113 ++++++++++++++++++++++ src/ir_lower/expr/call_arg_coercion.rs | 72 ++++++++++++++ src/ir_lower/expr/closures.rs | 16 ++++ src/ir_lower/expr/function_calls.rs | 6 +- src/ir_lower/expr/lazy_branches.rs | 4 +- src/ir_lower/expr/lazy_",
+  "text": "git diff --stat -- src tests: rs | 23 ++++- src/ir_lower/expr/array_builtin_args.rs | 113 ++++++++++++++++++++++ src/ir_lower/expr/call_arg_coercion.rs | 72 ++++++++++++++ src/ir_lower/expr/closures.rs | 16 ++++ src/ir_lower/expr/function_calls.rs | 6 +- src/ir_lower/expr/lazy_branches.rs | 4 +- src/ir_lower/expr/lazy_isset.rs | 18 +++- src/ir_lower/function.rs | 6 ++ src/types/checker/builtins/mod.rs | 6 +- src/types/checker/callables/closures.rs | 16 ++-- src/types/checker/inference/expr/mod.rs | 21 ++++- tests/codegen/mod.rs | 1 + tests/error_tests/exceptions_enums_magic.rs | 9 -- tests/error_tests/io_builtins/streams.rs | 2 +- tests/error_tests/misc/functions.rs | 19 ---- tests/error_tests/misc/system_builtins.rs | 9 -- tests/error_tests/recovery.rs | 60 ++++++------ tests/error_tests/string_builtins.rs | 14 --- tests/error_tests/type_system.rs | 48 ---------- 27 files changed, 539 insertions(+), 166 deletions(-)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1a78b3ad7cf9216f5b16c6cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:48:15.335Z",
+  "stored_at": "2026-08-20T20:48:15.335Z"
+}

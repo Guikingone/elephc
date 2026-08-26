@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn box_stat_int_or_false_result\" -A 12 src/codegen/lower_inst/builtins/io/boxing_helpers.rs | head -14",
+  "summary": "grep -rn \"fn box_stat_int_or_false_result\" -A 12 src/codegen/lower_inst/builtins/io/boxing_helpers.rs | head -14: \"mov x2, xzr\"); // integer Mixed payloads do not use a high word src/codegen/lower_inst/builtins/io/boxing_helpers.rs-474- ctx.emitter.instruction(\"mov x1, x0\"); // pass the stat integer as the Mixed low pa",
+  "text": "grep -rn \"fn box_stat_int_or_false_result\" -A 12 src/codegen/lower_inst/builtins/io/boxing_helpers.rs | head -14: \"mov x2, xzr\"); // integer Mixed payloads do not use a high word src/codegen/lower_inst/builtins/io/boxing_helpers.rs-474- ctx.emitter.instruction(\"mov x1, x0\"); // pass the stat integer as the Mixed low payload word src/codegen/lower_inst/builtins/io/boxing_helpers.rs-475- ctx.emitter.instruction(\"mov x0, #0\"); // select runtime tag 0 for an integer Mixed value src/codegen/lower_inst/builtins/io/boxing_helpers.rs-476- abi::emit_call_label(ctx.emitter, \"__rt_mixed_from_value\"); src/codegen/lower_inst/builtins/io/boxing_helpers.rs-477- ctx.emitter.instruction(&format!(\"b {}\", done_label)); // skip false boxing after building the integer Mixed result src/codegen/lower_inst/builtins/io/boxing_helpers.rs-478- ctx.emitter.label(&false_label); src/codegen/lower_inst/builtins/io/boxing_helpers.rs-479- ctx.emitter.instruction(\"mov x1, #0\"); // use zero as the false payload for the Mixed bool box",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a938f58c0d79c30b76ba72f7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:28:22.152Z",
+  "stored_at": "2026-08-22T08:28:22.152Z"
+}

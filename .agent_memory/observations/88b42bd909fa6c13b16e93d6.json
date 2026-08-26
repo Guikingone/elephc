@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/placesmsg.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/placesmsg.txt: feat(checker): a PROPERTY could not be passed by reference to a user function\n\n```php\nclass Holder { public array $items = [1, 2]; }\nfu",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/placesmsg.txt: feat(checker): a PROPERTY could not be passed by reference to a user function\n\n```php\nclass Holder { public array $items = [1, 2]; }\nfunction bump(array &$a): void { foreach ($a as $k => $v) { $a[$k] = $v + 1; } }\n$o = new Holder(); bump($o->items);\n```\n\n`Function 'bump' parameter $a must be passed a variable`. php has always allowed\na property there, and the refusal covered static properties and every scalar\ntype too, so a class that keeps state in a property could not hand it to any\nby-reference helper it owns.\n\nThe machinery was already in the tree. `ir_lower::expr::ref_place_args` reads a\n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "88b42bd909fa6c13b16e93d6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:22:57.893Z",
+  "stored_at": "2026-08-17T06:22:57.894Z"
+}

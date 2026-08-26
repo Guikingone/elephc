@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"fn update_method_return_type\" -A30 src/types/checker/method_pass.rs | head -36",
+  "summary": "rtk proxy rg -n \"fn update_method_return_type\" -A30 src/types/checker/method_pass.rs | head -36: - let mut return_infos = Vec::new(); 353- let mut callable_return_sigs = Vec::new(); 354- let mut callable_array_return_sigs = Vec::new(); 355- for stmt in &method.body { 356- self.collect_return_infos(stmt, method_env, &mu",
+  "text": "rtk proxy rg -n \"fn update_method_return_type\" -A30 src/types/checker/method_pass.rs | head -36: - let mut return_infos = Vec::new(); 353- let mut callable_return_sigs = Vec::new(); 354- let mut callable_array_return_sigs = Vec::new(); 355- for stmt in &method.body { 356- self.collect_return_infos(stmt, method_env, &mut return_infos); 357- self.collect_return_callable_sigs(stmt, method_env, &mut callable_return_sigs); 358- self.collect_return_callable_array_sigs( 359- stmt, 360- method_env, 361- &mut callable_array_return_sigs, 362- ); 363- } 364- let raw_inferred = if return_infos.is_empty() { 365- None 366- } else { 367- let mut widest = return_infos[0].ty.clone(); 368- for return_info in &return_infos[1..] { 369- widest = Self::wider_type(&widest, &return_info.ty); 370- } 371- Some(widest) 372- }; 373- let inferred_return = raw_inferred.clone().unwrap_or(PhpType::Void); 374- let effective_return = if crate::types::checker::yield_validation::body_contains_yield( 375- &method.body,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1f613aa6ea87b7f298ecfced",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:28:00.811Z",
+  "stored_at": "2026-08-16T20:28:00.812Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py select_rule3.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py select_rule3.php: ) left=2 empty array ValueError: No stream arrays were passed all null ValueError: No stream arrays were passed c",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py select_rule3.php: ) left=2 empty array ValueError: No stream arrays were passed all null ValueError: No stream arrays were passed closed stream alone ValueError: No stream arrays were passed stream + closed TypeError: stream_select(): supplied resource is not a valid stream resource bad in write only ValueError: No stream arrays were passed stream read, bad write TypeError: stream_select(): supplied argument is not a valid stream resource null read, stream write int(1) === elephc === only a non-stream int(1) two non-streams int(2) stream then non-stream int(1) non-stream then stream int(1) two streams int(2) left=2 empty array ValueError: No stream arrays were passed all null ValueError: No stream arrays were passed closed stream alone ValueError: No stream arrays were passed stream + closed int(1) bad in write only int(1) stream read, bad write int(2) null read, stream write int(1) --- exit 0 (php 0) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f5dd54eac5cc25509bbd5686",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:17:13.585Z",
+  "stored_at": "2026-08-23T07:17:13.585Z"
+}

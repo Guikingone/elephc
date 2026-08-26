@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"Unable to find the wrapper\" src --include='*.rs' | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"Unable to find the wrapper\" src --include='*.rs' | head: src/codegen_support/runtime/io/unknown_wrapper_warning.rs:101: // -- compose \"Warning: <prefix>(): Unable to find the wrapper \"<scheme>\" - ...\" -- src/codege",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"Unable to find the wrapper\" src --include='*.rs' | head: src/codegen_support/runtime/io/unknown_wrapper_warning.rs:101: // -- compose \"Warning: <prefix>(): Unable to find the wrapper \"<scheme>\" - ...\" -- src/codegen_support/runtime/io/unknown_wrapper_warning.rs:253: // -- compose \"Warning: <prefix>(): Unable to find the wrapper \"<scheme>\" - ...\" -- src/codegen_support/runtime/io/unknown_wrapper_warning.rs:358: /// warning read `Unable to find the wrapper \"\"`. AArch64 clamps with `csel` and cannot src/codegen_support/runtime/data/mod.rs:431:pub(crate) const UNKNOWN_WRAPPER_MIDDLE: &str = \"(): Unable to find the wrapper \\\"\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d47a854227dc8de0eb87e767",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:48:20.776Z",
+  "stored_at": "2026-08-22T17:48:20.776Z"
+}

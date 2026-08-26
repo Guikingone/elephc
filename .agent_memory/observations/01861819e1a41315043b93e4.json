@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git cherry-pick cbffe0ebf4 5fad81fc50 2>&1 | tail -2; git log --format=\"%h %s\" -3",
+  "summary": "git cherry-pick cbffe0ebf4 5fad81fc50 2>&1 | tail -2; git log --format=\"%h %s\" -3: create mode 100644 src/codegen_support/runtime/strings/nan_string_coercion_warning.rs create mode 100644 tests/nan_string_coercion_tests.rs bef399fa76 fix(floats): coercing a NAN to a string produced the right bytes and no warning 7cad74",
+  "text": "git cherry-pick cbffe0ebf4 5fad81fc50 2>&1 | tail -2; git log --format=\"%h %s\" -3: create mode 100644 src/codegen_support/runtime/strings/nan_string_coercion_warning.rs create mode 100644 tests/nan_string_coercion_tests.rs bef399fa76 fix(floats): coercing a NAN to a string produced the right bytes and no warning 7cad748195 fix(streams): only fread() pulled through the read-filter chain, every line reader read past it cfb871fd6f fix(streams): ftell() on a filtered read reported where the READ-AHEAD stopped, not where php is",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "01861819e1a41315043b93e4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T10:39:33.445Z",
+  "stored_at": "2026-08-16T10:39:33.445Z"
+}

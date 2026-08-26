@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 1,40p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/prologue/p.s",
+  "summary": "sed -n 1,40p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/prologue/p.s: l=_fn_inner .align 2 .globl _fn_inner _fn_inner: ; prologue sub sp, sp, #112 stp x29, x30, [sp, #96] add x29, sp, #96 ; call-s",
+  "text": "sed -n 1,40p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/prologue/p.s: l=_fn_inner .align 2 .globl _fn_inner _fn_inner: ; prologue sub sp, sp, #112 stp x29, x30, [sp, #96] add x29, sp, #96 ; call-stack overflow guard adrp x9, _stack_limit@PAGE ldr x9, [x9, _stack_limit@PAGEOFF] cmp sp, x9 b.hs _eir_inner_stack_ok_1 b __rt_stack_overflow _eir_inner_stack_ok_1: adrp x9, _concat_off@PAGE add x9, x9, _concat_off@PAGEOFF ldr x10, [x9] stur x10, [x29, #-96] ; save callee-saved registers used by the register allocator stur x21, [x29, #-80] stur x22, [x29, #-88] ; param $s from x0,x1 stur x0, [x29, #-64] stur x1, [x29, #-56] ; param $n from x2 stur x2, [x29, #-72] ; @block name=entry _eir_inner_entry_0: ; @src line=2 col=37 end=2:43 op=concat_reset ldur x10, [x29, #-96] adrp x9, _concat_off@PAGE add x9, x9, _concat_off@PAGEOFF str x10, [x9] ; @src line=2 col=51 end=2:53 op=load_local ldur x1, [x29, #-64] ldur x2, [x29, #-56] stur x1, [x29, #-16] stur x2, [x29, #-8]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "31f86cddf152f309e39cd5a7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:57:14.148Z",
+  "stored_at": "2026-08-22T11:57:14.148Z"
+}

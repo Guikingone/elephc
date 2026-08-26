@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; mkdir -p k16; cp named_probes7/kimi-k2.7-code-16.php k16/p.php; cd k16; php -n p.php 2>&1 | sed 's| in /private.*||'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; mkdir -p k16; cp named_probes7/kimi-k2.7-code-16.php k16/p.php; cd k16; php -n p.php 2>&1 | sed 's| in /private.*||': Deprecated: Creation of dynami",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; mkdir -p k16; cp named_probes7/kimi-k2.7-code-16.php k16/p.php; cd k16; php -n p.php 2>&1 | sed 's| in /private.*||': Deprecated: Creation of dynamic property Src::$context is deprecated Deprecated: Creation of dynamic property Snk::$context is deprecated Warning: stream_copy_to_stream(): Stream does not support seeking Warning: stream_copy_to_stream(): Failed to seek to position 1 in the stream bool(false) int(0) int(0)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4f497fef0d799c8c2e090389",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:46:35.877Z",
+  "stored_at": "2026-08-22T20:46:35.878Z"
+}

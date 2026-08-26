@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\nd=json.load(open('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json'))\nitems = d if isinstance(d,list) else d.get('builtins', d)\nif isinstance(items,dict): items=list(items.values())\nSCALAR={'int','string','float','bool'}\nhits=[]\nfor b in items:\n    aot=b.get('aot') or {}\n    if not aot.get('supported'): continue\n    for i,p in enumerate(aot.get('params') or []):\n        if p.get('type') in SCALAR and p.get('default') is None and p.get('optional'):\n            hits.append((b.get('canonical_nam… [+160 chars truncated]",
+  "summary": "About to run: python3 -c \" import json d=json.load(open('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json')) items = d if isinstance(d,l",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4dda92193d531ba6148d9b79",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:00:48.385Z",
+  "stored_at": "2026-08-21T11:00:48.385Z"
+}

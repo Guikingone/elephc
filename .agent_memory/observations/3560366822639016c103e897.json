@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs; echo \"=== PHP_FUNCTION in streamsfuncs.c ===\"; grep -n \"^PHP_FUNCTION\" $D/streamsfuncs.c; echo \"=== notification in stub ===\"; grep -n \"notification\" $D/basic_functions.stub.php; echo \"=== master diff for stream_ ===\"; diff <(grep -o \"^function stream_[a-z_]*\" $D/basic_functions.stub.php | sort) <(grep -o \"^function stream_[a-z_]*\" $D/basic_functions.stub.php.master | sort)",
+  "summary": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs; echo \"=== PHP_FUNCTION in streamsfuncs.c ===\"; grep -n \"^PHP_FUNCTION\" $D/streamsfuncs.c; echo \"=== notification in stub ===\"; grep -n \"notif",
+  "text": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs; echo \"=== PHP_FUNCTION in streamsfuncs.c ===\"; grep -n \"^PHP_FUNCTION\" $D/streamsfuncs.c; echo \"=== notification in stub ===\"; grep -n \"notification\" $D/basic_functions.stub.php; echo \"=== master diff for stream_ ===\"; diff <(grep -o \"^function stream_[a-z_]*\" $D/basic_functions.stub.php | sort) <(grep -o \"^function stream_[a-z_]*\" $D/basic_functions.stub.php.master | sort) failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree; break it into plain, separate commands. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Run the equivalent from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature without the redirect.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3560366822639016c103e897",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:23.390Z",
+  "stored_at": "2026-08-14T14:11:23.390Z"
+}

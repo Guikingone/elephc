@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('ssel2.php','w').write('''<?php\nclass C {\n    public $context;\n    public function stream_open($p, $m, $o, &$op) { return true; }\n    public function stream_read($n) { return \"\"; }\n    public function stream_write($d) { return strlen($d); }\n    public function stream_eof() { return true; }\n    public function stream_tell() { return 0; }\n    public function stream_seek($o, $w) { return false; }… [+493 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('ssel2.php','w').write('''<?php\nclass C {\n    public $context;\n    public function stream_open($p, $m, $o, &$op) { return",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('ssel2.php','w').write('''<?php\nclass C {\n    public $context;\n    public function stream_open($p, $m, $o, &$op) { return true; }\n    public function stream_read($n) { return \"\"; }\n    public function stream_write($d) { return strlen($d); }\n    public function stream_eof() { return true; }\n    public function stream_tell() { return 0; }\n    public function stream_seek($o, $w) { return false; }\n    public function stream_stat() { return []; }\n    public function stream_cast($as) { return false; }\n    public function stream_close() {}\n}\nstream_wrapper_register(\"hascast2\", \"C\");\n$h = fopen(\"hascast2://x\", \"rb\");\n$r = [$h]; $w = null; $e = null;\ntry { var_dump(stream_select($r, $w, $e, 0, 0)); }\ncatch (Throwable $t) { echo get_class($t), \": \", $t->getMessage(), \"\\\\n\"; }\nfclose($h);\n''')\nPY\nzsh difftests.sh ssel2 2>&1 | head -12; echo \"=== elephc:\"; cat ssel2_e.txt 2>/dev/null | head -4: ssel2 DIFF: 1,2c1 < < Warning: stream_select(): Cannot represent a stream of type user-space as a select()able descriptor in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ssel2.php on line 17 --- > Warning: stream_select(): Cannot represent a stream of type user-space as a select()able descriptor === elephc: Warning: stream_select(): Cannot represent a stream of type user-space as a select()able descriptor ValueError: No stream arrays were passed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "61c1dec4e7fd24cabb2b3195",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:02:23.155Z",
+  "stored_at": "2026-08-17T18:02:23.156Z"
+}

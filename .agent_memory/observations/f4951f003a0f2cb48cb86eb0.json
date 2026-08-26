@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fgetcsv\" --include=\"*.rs\" src crates | head -30 && echo \"---FPUTCSV---\" && grep -rn \"fputcsv\" --include=\"*.rs\" src crates | head -20 && echo \"---STRGETCSV---\" && grep -rn \"str_getcsv\" --include=\"*.rs\" src crates | head -20",
+  "summary": "grep -rn \"fgetcsv\" --include=\"*.rs\" src crates | head -30 && echo \"---FPUTCSV---\" && grep -rn \"fputcsv\" --include=\"*.rs\" src crates | head -20 && echo \"---STRGETCSV---\" && grep -rn \"str_getcsv\" --include=\"*.rs\" src crates | head -20:  &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { src/codegen/lower_inst/",
+  "text": "grep -rn \"fgetcsv\" --include=\"*.rs\" src crates | head -30 && echo \"---FPUTCSV---\" && grep -rn \"fputcsv\" --include=\"*.rs\" src crates | head -20 && echo \"---STRGETCSV---\" && grep -rn \"str_getcsv\" --include=\"*.rs\" src crates | head -20:  &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { src/codegen/lower_inst/builtins/io/stream_file_ops.rs:586: ensure_arg_count_between(inst, \"str_getcsv\", 1, 4)?; src/codegen/lower_inst/builtins/io/stream_file_ops.rs:587: emit_csv_escape_deprecation(ctx, inst, \"str_getcsv\", 3); src/codegen/lower_inst/builtins/io/stream_file_ops.rs:593: (1, \"str_getcsv separator\"), src/codegen/lower_inst/builtins/io/stream_file_ops.rs:594: (2, \"str_getcsv enclosure\"), src/codegen/lower_inst/builtins/io/stream_file_ops.rs:595: (3, \"str_getcsv escape\"), src/codegen/lower_inst/builtins/io/stream_file_ops.rs:641: load_string_to_result(ctx, subject, \"str_getcsv string\")?; src/codegen/lower_inst/builtins/io/stream_file_ops.rs:654: load_string_to_result(ctx, subject, \"str_getcsv string\")?; src/codegen/lower_inst/builtins/io/stream_file_ops.rs:660: abi::emit_call_label(ctx.emitter, \"__rt_str_getcsv\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f4951f003a0f2cb48cb86eb0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:28.148Z",
+  "stored_at": "2026-08-14T14:11:28.148Z"
+}

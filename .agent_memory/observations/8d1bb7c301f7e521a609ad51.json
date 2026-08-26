@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn allows_effect_refinement\" -A 25 src/ir/ | head -35",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn allows_effect_refinement\" -A 25 src/ir/ | head -35: in every src/ir/instr.rs-822- // program pay for the location stores; refining it per site keeps that pay-for-use, src/ir/instr.rs-823- // which is the same re",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn allows_effect_refinement\" -A 25 src/ir/ | head -35: in every src/ir/instr.rs-822- // program pay for the location stores; refining it per site keeps that pay-for-use, src/ir/instr.rs-823- // which is the same reason the call opcodes below refine theirs. src/ir/instr.rs-824- Op::EchoValue src/ir/instr.rs-825- | Op::IDiv src/ir/instr.rs-826- | Op::ISDiv src/ir/instr.rs-827- | Op::ISMod src/ir/instr.rs-828- | Op::FDiv src/ir/instr.rs-829- | Op::IShl src/ir/instr.rs-830- | Op::IShrA src/ir/instr.rs-831- | Op::Call src/ir/instr.rs-832- | Op::FunctionVariantCall src/ir/instr.rs-833- | Op::ClosureBind src/ir/instr.rs-834- | Op::LanguageConstructCall src/ir/instr.rs-835- | Op::EvalLiteralCall src/ir/instr.rs-836- | Op::EvalFunctionCall src/ir/instr.rs-837- | Op::EvalFunctionCallArray src/ir/instr.rs-838- | Op::EvalObjectNew src/ir/instr.rs-839- | Op::EvalStaticMethodCall src/ir/instr.rs-840- | Op::RuntimeCall src/ir/instr.rs-841- | Op::ExternCall",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8d1bb7c301f7e521a609ad51",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:40:08.504Z",
+  "stored_at": "2026-08-23T16:40:08.505Z"
+}

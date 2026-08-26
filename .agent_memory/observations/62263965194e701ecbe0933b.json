@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n filterreg.php 2>&1 | head -20",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n filterreg.php 2>&1 | head -20: bool(false) bool(true) bool(true) bool(false) ValueError: stream_filter_register(): Argument #1 ($filter_",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n filterreg.php 2>&1 | head -20: bool(false) bool(true) bool(true) bool(false) ValueError: stream_filter_register(): Argument #1 ($filter_name) must be a non-empty string ValueError: stream_filter_register(): Argument #2 ($class) must be a non-empty string bool(false) string(3) \"abc\" string(5) \"HELLO\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "62263965194e701ecbe0933b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:35:44.581Z",
+  "stored_at": "2026-08-17T08:35:44.582Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport json, pathlib\nfor t in ('linux-x86_64', 'macos-aarch64'):\n    base = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/php_oracle/manifests/streams/php-8.5.6') / t\n    f = next(iter(base.glob('*.json')))\n    d = json.loads(f.read_text())\n    meta = {k: v for k, v in d.items() if not isinstance(v, (dict, list))}\n    print(f'{t}: {f.name}')\n    for k, v in list(meta.items())[:8]:\n        print(f'    {k}: {v}')\nPY",
+  "summary": "python3 - <<'PY'\nimport json, pathlib\nfor t in ('linux-x86_64', 'macos-aarch64'):\n    base = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/php_oracle/manifests/streams/php-8.5.6') / t\n    f = next(iter(base.glob('*.json')))\n    d = json.loads(f.read_text",
+  "text": "python3 - <<'PY'\nimport json, pathlib\nfor t in ('linux-x86_64', 'macos-aarch64'):\n    base = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/php_oracle/manifests/streams/php-8.5.6') / t\n    f = next(iter(base.glob('*.json')))\n    d = json.loads(f.read_text())\n    meta = {k: v for k, v in d.items() if not isinstance(v, (dict, list))}\n    print(f'{t}: {f.name}')\n    for k, v in list(meta.items())[:8]:\n        print(f'    {k}: {v}')\nPY: linux-x86_64: streams-full.json kind: php-src-stream-build-manifest schema_version: 1 macos-aarch64: streams-full.json kind: php-src-stream-build-manifest schema_version: 1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "75aec02a4908449b081ab073",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:45:30.961Z",
+  "stored_at": "2026-08-22T08:45:30.961Z"
+}

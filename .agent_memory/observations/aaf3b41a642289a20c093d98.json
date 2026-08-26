@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"Undefined property\" -B 20 src/types/checker/stmt_check/assignments/properties.rs | head -26",
+  "summary": "grep -n \"Undefined property\" -B 20 src/types/checker/stmt_check/assignments/properties.rs | head -26: 212- value: &Expr, 213- val_ty: &PhpType, 214- span: Span, 215-) -> Result<(), CompileError> { 216- if crate::types::checker::builtin_stdclass::is_stdclass(class_name) { 217- return Ok(()); 218- } 219- if let Some(clas",
+  "text": "grep -n \"Undefined property\" -B 20 src/types/checker/stmt_check/assignments/properties.rs | head -26: 212- value: &Expr, 213- val_ty: &PhpType, 214- span: Span, 215-) -> Result<(), CompileError> { 216- if crate::types::checker::builtin_stdclass::is_stdclass(class_name) { 217- return Ok(()); 218- } 219- if let Some(class_info) = checker.classes.get(class_name) { 220- if class_info.visible_property(property).is_none() { 221- if class_info.methods.contains_key(\"__set\") { 222- return Ok(()); 223- } 224- if class_info.allow_dynamic_properties { 225- // PHP 8.2 #[\\AllowDynamicProperties]: writes to undeclared 226- // properties are routed at codegen time to a per-object 227- // hashtable side-table. The value is stored as `Mixed`. 228- return Ok(()); 229- } 230- return Err(CompileError::new( 231- span, 232: &format!(\"Undefined property: {}::{}\", class_name, property), -- 530-} 531- 532-/// Resolves the type of a named property on a class object, for array property operations. 533-///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aaf3b41a642289a20c093d98",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:45:27.059Z",
+  "stored_at": "2026-08-17T21:45:27.059Z"
+}

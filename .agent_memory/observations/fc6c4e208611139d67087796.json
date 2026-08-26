@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"fn .*(\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/call_validation.rs | rtk proxy grep -B1 -A1 \"4[0-9][0-9]:\\|5[0-9][0-9]:\" | head -8; rtk proxy sed -n '455,480p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/call_validation.rs",
+  "summary": "rtk proxy grep -n \"fn .*(\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/call_validation.rs | rtk proxy grep -B1 -A1 \"4[0-9][0-9]:\\|5[0-9][0-9]:\" | head -8; rtk proxy sed -n '455,480p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/w",
+  "text": "rtk proxy grep -n \"fn .*(\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/call_validation.rs | rtk proxy grep -B1 -A1 \"4[0-9][0-9]:\\|5[0-9][0-9]:\" | head -8; rtk proxy sed -n '455,480p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/functions/call_validation.rs: 380: pub(crate) fn check_user_declared_call_allowing_by_ref_spread( 406: fn class_is_user_declared(&self, class_name: &str) -> bool { 414: pub(crate) fn check_known_callable_call_allowing_by_ref_spread( 437: fn check_known_callable_call_with_options( sig.params.len().saturating_sub(1) } else { sig.params.len() }; // The variadic collector is represented as the signature's final param // with no default expression, but it never contributes to minimum arity. let required = sig .defaults .iter() .take(regular_param_count) .filter(|default| default.is_none()) .count(); if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread && !allow_by_ref_spread { return Err(CompileError::new( span, &format!( \"{} cannot be invoked with spread arguments when it has pass-by-reference parameters\", callee_desc ), )); } if !has_spread { if sig.variadic.is_some() { if effective_arg_count < required {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fc6c4e208611139d67087796",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:18:58.080Z",
+  "stored_at": "2026-08-17T09:18:58.080Z"
+}

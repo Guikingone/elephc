@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('a-branch-into-another-symbol-dies-with-it.md')\nt = p.read_text()\nOLD = '''symbole global ? Un appel vers l'ENTRÉE d'un autre symbole (offset 0) est normal ; `symbole+N` est\nle défaut. Verdict AFFINÉ'''\nNEW = '''symbole global, et l'instruction porte-t-elle une RELOCATION ? Verdict AFFINÉ'''\nassert t.count(OLD) == 1\np.write_text(t.replace(OLD, NEW, 1))\nprint('the stale sentence is gone')\nPY\npython3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Us… [+827 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('a-branch-into-another-symbol-dies-with-it.md')\nt = p.read_text()\nOLD = '''symbole global ? Un appel vers l'ENTRÉE d'un autre symbole (offset 0) est normal ; `symbole+",
+  "text": "cd /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('a-branch-into-another-symbol-dies-with-it.md')\nt = p.read_text()\nOLD = '''symbole global ? Un appel vers l'ENTRÉE d'un autre symbole (offset 0) est normal ; `symbole+N` est\nle défaut. Verdict AFFINÉ'''\nNEW = '''symbole global, et l'instruction porte-t-elle une RELOCATION ? Verdict AFFINÉ'''\nassert t.count(OLD) == 1\np.write_text(t.replace(OLD, NEW, 1))\nprint('the stale sentence is gone')\nPY\npython3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md')\nt = p.read_text()\nOLD = \"- 🔴🔴🔑★★★ [Un saut vers `X+N` MEURT avec X](a-branch-into-another-symbol-dies-with-it.md) — correct dans le .o, pendant après élagage; SIGSEGV avec x29/x30 = octets du chemin. 🛠 balayage: **18 instances** préexistantes en 3 grappes.\"\nNEW = \"- 🔴🔴🔴🔑★★★ [Un saut SANS RELOCATION vers un autre symbole MEURT avec lui](a-branch-into-another-symbol-dies-with-it.md) — `is_dir(\\\".\\\")` **SEGFAULTAIT** sauf si le programme appelait aussi `glob(GLOB_ONLYDIR)`. ⚠️ l'offset N'EST PAS le critère (ma 1re version exemptait l'offset 0, le pire cas). 🛠 remède `label_global_alt_entry`; balayage affiné = **0**.\"\nassert t.count(OLD) == 1\np.write_text(t.replace(OLD, NEW, 1))\nprint('index updated')\nPY: the stale sentence is gone index updated",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "13c31e3b37fca71dbd999baf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:35:16.036Z",
+  "stored_at": "2026-08-23T12:35:16.037Z"
+}

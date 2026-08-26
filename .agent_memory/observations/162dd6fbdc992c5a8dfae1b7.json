@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/stream_runtime_typeerror.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/stream_runtime_typeerror.py: \"\"\"A non-stream reaching a stream builtin THROUGH a `mixed`: what does php raise, and what does elephc?\n\nThe checker c",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/stream_runtime_typeerror.py: \"\"\"A non-stream reaching a stream builtin THROUGH a `mixed`: what does php raise, and what does elephc?\n\nThe checker cannot refuse a `mixed` statically, so the refusal has to happen at RUN time — which is\nexactly php's own behaviour, and exactly the case a compile-time check cannot cover. Every scalar\nkind is passed, because php names the type it received in the message and a fix that only handles\n`string` would leave the rest silent.\n\"\"\"\nimport pathlib, subprocess, shutil\n\nD = pathlib.Path(__file__).parent / 'rtte'\nELEPHC = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktree",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "162dd6fbdc992c5a8dfae1b7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:46:01.709Z",
+  "stored_at": "2026-08-21T16:46:01.709Z"
+}

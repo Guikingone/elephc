@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/suite_in_chunks.sh",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/suite_in_chunks.sh: #!/bin/bash\n# Runs the codegen suite one MODULE at a time, reclaiming scratch space between chunks.\n#\n# A single whole-suite ru",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/suite_in_chunks.sh: #!/bin/bash\n# Runs the codegen suite one MODULE at a time, reclaiming scratch space between chunks.\n#\n# A single whole-suite run needs more transient disk than this volume has: the harness deletes a\n# test's scratch directory on SUCCESS only, so once failures start they leave ~2 MB each, which\n# fills the disk, which causes more failures. That is what turned one run into 2 443 failures whose\n# tests all pass individually.\n#\n# Chunking bounds the in-flight footprint and gives a verdict per module instead of one number that\n# a single environmental problem can invalidate. Full output per chunk g",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "511be7b037197dd42735d5a5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T21:12:42.049Z",
+  "stored_at": "2026-08-21T21:12:42.049Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_register_rules.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_register_rules.py: \"\"\"What does `stream_wrapper_register()` accept, and what does it warn?\n\nelephc declares both of php's refusal warnings ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_register_rules.py: \"\"\"What does `stream_wrapper_register()` accept, and what does it warn?\n\nelephc declares both of php's refusal warnings — `Invalid protocol scheme specified.` and\n`Protocol is already defined.` — places them in the data section, and NEVER BRANCHES TO EITHER.\nThe validation does not exist, so every scheme registers and every duplicate succeeds.\n\nBefore writing it, the rule itself is measured rather than inferred: which bytes pass, whether a\nbuiltin scheme can be shadowed, what an empty protocol does, whether case matters, and the exact\nwarning text — including whether php appends a location, wh",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9cdf1eb800a5120fcd80a75c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:52:51.533Z",
+  "stored_at": "2026-08-21T16:52:51.534Z"
+}

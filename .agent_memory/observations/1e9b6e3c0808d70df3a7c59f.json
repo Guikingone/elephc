@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 205,260p src/types/checker/type_compat/unions.rs",
+  "summary": "About to run: sed -n 205,260p src/types/checker/type_compat/unions.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1e9b6e3c0808d70df3a7c59f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:55:52.716Z",
+  "stored_at": "2026-08-22T12:55:52.716Z"
+}

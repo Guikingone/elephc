@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '70,110p' src/ir_lower/expr/assignments.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '70,110p' src/ir_lower/expr/assignments.rs: static_callable = callable_array .map(|assignment| assignment.target) .or(static_callable); if let Some(target) = static_callable { ctx.bind_static_callable_local(name, targ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '70,110p' src/ir_lower/expr/assignments.rs: static_callable = callable_array .map(|assignment| assignment.target) .or(static_callable); if let Some(target) = static_callable { ctx.bind_static_callable_local(name, target); } if let Some(reflected_class) = reflected_class { ctx.bind_reflection_class_local(name, reflected_class); } if let Some(reflected_function) = reflected_function { ctx.bind_reflection_function_local(name, reflected_function); } if let Some((reflected_class, reflected_property)) = reflected_property { ctx.bind_reflection_property_local(name, reflected_class, reflected_property); } if let Some((reflected_class, reflected_method)) = reflected_method { ctx.bind_reflection_method_local(name, reflected_class, reflected_method); } if let Some(reflected_args) = reflected_args { ctx.bind_reflection_arg_array_local(name, reflected_args); } if let Some(sig) = fiber_start_sig { ctx.bind_fiber_start_sig(name, sig); } } else {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e383c8a0e2b6c1c9b655f775",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:49:52.515Z",
+  "stored_at": "2026-08-23T12:49:52.516Z"
+}

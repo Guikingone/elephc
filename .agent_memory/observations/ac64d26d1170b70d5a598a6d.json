@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/zlib_string_functions.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/zlib_string_functions.rs: /// Verifies the three encoding constants carry php's `windowBits` values. -> /// Verifies `zlib_get_coding_type()` answers what php answers with output compression off.\n///\n///",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/zlib_string_functions.rs: /// Verifies the three encoding constants carry php's `windowBits` values. -> /// Verifies `zlib_get_coding_type()` answers what php answers with output compression off.\n///\n/// php reports what its OUTPUT layer compressed with, and `false` when nothing did — MEASURED\n/// under `php -n`, both outside and inside an `ob_start()`. elephc has no zlib output compression\n/// at all, so `false` is php's answer for every configuration this can be in rather than a\n/// placeholder for one.\n#[test]\nfn test_zlib_get_coding_type_reports_no_output_compression() {\n  ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ac64d26d1170b70d5a598a6d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:01:54.237Z",
+  "stored_at": "2026-08-21T15:01:54.237Z"
+}

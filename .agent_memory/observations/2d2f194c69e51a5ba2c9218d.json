@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '140,200p' src/codegen/lower_inst/throwable_methods.rs",
+  "summary": "sed -n '140,200p' src/codegen/lower_inst/throwable_methods.rs: ger shares this path — see [`lower_throwable_get_file`]. pub(super) fn lower_throwable_empty_string(ctx: &mut FunctionContext<'_>) -> Result<PhpType> { let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter); let (label, len) = ctx.data.add_string(b\"\"",
+  "text": "sed -n '140,200p' src/codegen/lower_inst/throwable_methods.rs: ger shares this path — see [`lower_throwable_get_file`]. pub(super) fn lower_throwable_empty_string(ctx: &mut FunctionContext<'_>) -> Result<PhpType> { let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter); let (label, len) = ctx.data.add_string(b\"\"); abi::emit_symbol_address(ctx.emitter, ptr_reg, &label); abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64); Ok(PhpType::Str) } /// Loads `Throwable::getFile()` from the compiled script's canonical path. /// /// The path is a per-MODULE constant rather than a per-object field because EIR spans carry a line /// and column but no filename (`crate::span::Span`), so the compiler has exactly one path to /// report. That is the same string `__FILE__` yields, and it is right for every single-file /// program; code merged in from an `include` reports the including script's path, which is the /// known limit of this approximation.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2d2f194c69e51a5ba2c9218d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:19:33.761Z",
+  "stored_at": "2026-08-26T09:19:33.762Z"
+}

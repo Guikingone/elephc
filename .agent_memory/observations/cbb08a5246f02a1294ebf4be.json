@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"GLOB_ERR\" -B 12 src/types/stream_constants.rs | grep -n \"pub\\|const\\|static\" | head",
+  "summary": "grep -n \"GLOB_ERR\" -B 12 src/types/stream_constants.rs | grep -n \"pub\\|const\\|static\" | head: 5:207- // PHP constants: `php -n -r 'var_dump(defined(\"STREAM_FROM_START\"));'` is 6:208- // false. Declaring them let a program name a constant php does not have and",
+  "text": "grep -n \"GLOB_ERR\" -B 12 src/types/stream_constants.rs | grep -n \"pub\\|const\\|static\" | head: 5:207- // PHP constants: `php -n -r 'var_dump(defined(\"STREAM_FROM_START\"));'` is 6:208- // false. Declaring them let a program name a constant php does not have and",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cbb08a5246f02a1294ebf4be",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:59:56.297Z",
+  "stored_at": "2026-08-22T08:59:56.297Z"
+}

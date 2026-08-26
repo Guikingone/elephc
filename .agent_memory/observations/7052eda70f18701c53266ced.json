@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/undefined_variables.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/undefined_variables.rs: let echoed = compile_and_run_capture(\n        \"<?php $fn = function() use ($undefined) { echo $undefined; }; $fn(); echo \\\"done\\\\n\\\";\\n\",\n    );\n    assert!(ech -> let echoed = compi",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/undefined_variables.rs: let echoed = compile_and_run_capture(\n        \"<?php $fn = function() use ($undefined) { echo $undefined; }; $fn(); echo \\\"done\\\\n\\\";\\n\",\n    );\n    assert!(ech -> let echoed = compile_and_run_capture(\n        \"<?php $fn = function() use ($undefined) { echo $undefined; }; $fn(); echo \\\"done\\\\n\\\";\\n\",\n    );\n    assert!(echoed.success, \"program failed: {}\", echoed.stderr);\n    assert_eq!(echoed.stdout, \"done\\n\");\n    assert_eq!(echoed.diagnostics, \"Warning: Undefined variable $undefined\\n\");\n}\n\n/// Verifies a read inside a multi-line interpolated string names the line it is WRITTEN on.\n///\n/// Every token an interpolated string produced ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7052eda70f18701c53266ced",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:31:27.479Z",
+  "stored_at": "2026-08-23T17:31:27.480Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$p = \"php://\" . \"temp\";\\n$fp = fopen($p, \"a+\");\\nfwrite($fp, \"hello\");\\nfseek($fp, 0, SEEK_SET);\\nfwrite($fp, \"world\");\\nvar_dump(stream_get_contents($fp, -1, 0));\\nfclose($fp);\\n' > appenddyn.php && zsh difftests.sh appendlit appenddyn 2>&1 | head -8",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$p = \"ph",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ce43d4cb22be5500ecf19839",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:01:57.092Z",
+  "stored_at": "2026-08-17T08:01:57.093Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs: emitter.instruction(\"test r9, r9\");                                          // no descriptors?\n    emitter.instruction(\"jz __rt_stream_select_return_zero_x\");  -> emitter",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs: emitter.instruction(\"test r9, r9\");                                          // no descriptors?\n    emitter.instruction(\"jz __rt_stream_select_return_zero_x\");  -> emitter.instruction(\"test r9, r9\");                                          // no entries at all?\n    emitter.instruction(\"jz __rt_stream_select_no_castable_x\");                  // → php's ValueError\n    emitter.instruction(\"cmp r9, 256\");                                          // exceeds the stack-allocated capacity?\n    emitter.instruction(\"ja __rt_stream_select_error_x\");                         // too many fds → return -1\n\n    // -- build the pollfd array: read (POLLI",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6ad2021ae9ae87a840f823bc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:04:58.291Z",
+  "stored_at": "2026-08-17T07:04:58.292Z"
+}

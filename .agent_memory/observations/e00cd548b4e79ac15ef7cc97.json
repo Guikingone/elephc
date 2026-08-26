@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -25 src/codegen_support/runtime/io/fopen.rs | grep -n \"^use\\|^//!\" | head -10",
+  "summary": "head -25 src/codegen_support/runtime/io/fopen.rs | grep -n \"^use\\|^//!\" | head -10: 1://! Purpose: 2://! Emits the `__rt_fopen`, `__rt_cstr` runtime helper assembly for fopen. 3://! Keeps PHP filesystem/resource behavior, libc calls, and target-specific ABI variants in one focused emitter. 4://! 5://! Called from: 6://",
+  "text": "head -25 src/codegen_support/runtime/io/fopen.rs | grep -n \"^use\\|^//!\" | head -10: 1://! Purpose: 2://! Emits the `__rt_fopen`, `__rt_cstr` runtime helper assembly for fopen. 3://! Keeps PHP filesystem/resource behavior, libc calls, and target-specific ABI variants in one focused emitter. 4://! 5://! Called from: 6://! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`. 7://! 8://! Key details: 9://! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings. 11:use super::MIN_WRAPPER_SCHEME_LEN;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e00cd548b4e79ac15ef7cc97",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:32:54.699Z",
+  "stored_at": "2026-08-21T09:32:54.699Z"
+}

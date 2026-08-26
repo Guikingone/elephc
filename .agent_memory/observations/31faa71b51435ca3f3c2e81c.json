@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"emit_csv_control_bytes(ctx, inst\" src/codegen/lower_inst/builtins/io/stream_file_ops.rs",
+  "summary": "grep -n \"emit_csv_control_bytes(ctx, inst\" src/codegen/lower_inst/builtins/io/stream_file_ops.rs: 663: emit_csv_control_bytes(ctx, inst, \"fgetcsv\", &STREAM_CSV_CONTROLS)?; 722: emit_csv_control_bytes(ctx, inst, \"str_getcsv\", &STRING_CSV_CONTROLS)?; 982: emit_csv_control_bytes(ctx, inst, \"fputcsv\", &STREAM_CSV_CONTROLS)",
+  "text": "grep -n \"emit_csv_control_bytes(ctx, inst\" src/codegen/lower_inst/builtins/io/stream_file_ops.rs: 663: emit_csv_control_bytes(ctx, inst, \"fgetcsv\", &STREAM_CSV_CONTROLS)?; 722: emit_csv_control_bytes(ctx, inst, \"str_getcsv\", &STRING_CSV_CONTROLS)?; 982: emit_csv_control_bytes(ctx, inst, \"fputcsv\", &STREAM_CSV_CONTROLS)?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "31faa71b51435ca3f3c2e81c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:26:07.156Z",
+  "stored_at": "2026-08-18T09:26:07.156Z"
+}

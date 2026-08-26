@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "echo \"compteurs à REMESURER après build:\n- crates/elephc-builtin-contract/src/support.rs  (eval_registry/internal/pending, aot_registry/external/unsupported)\n- scripts/docs/audit_builtins.py                 (prelude/none, len(non_registry))\nRaison: HEAD compte MES ajouts, origin/main compte BCMath; l'arbre fusionné a LES DEUX,\ndonc ni l'une ni l'autre série n'est juste. Les tests donneront les vrais nombres.\" > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/counters_todo.txt\ncat… [+182 chars truncated]",
+  "summary": "echo \"compteurs à REMESURER après build:\n- crates/elephc-builtin-contract/src/support.rs  (eval_registry/internal/pending, aot_registry/external/unsupported)\n- scripts/docs/audit_builtins.py                 (prelude/none, len(non_registry))\nRaison: HEAD compte MES ajouts, origin/main compte BCMath; l'arbre fusionné a L",
+  "text": "echo \"compteurs à REMESURER après build:\n- crates/elephc-builtin-contract/src/support.rs  (eval_registry/internal/pending, aot_registry/external/unsupported)\n- scripts/docs/audit_builtins.py                 (prelude/none, len(non_registry))\nRaison: HEAD compte MES ajouts, origin/main compte BCMath; l'arbre fusionné a LES DEUX,\ndonc ni l'une ni l'autre série n'est juste. Les tests donneront les vrais nombres.\" > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/counters_todo.txt\ncat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/counters_todo.txt: compteurs à REMESURER après build: - crates/elephc-builtin-contract/src/support.rs (eval_registry/internal/pending, aot_registry/external/unsupported) - scripts/docs/audit_builtins.py (prelude/none, len(non_registry)) Raison: HEAD compte MES ajouts, origin/main compte BCMath; l'arbre fusionné a LES DEUX, donc ni l'une ni l'autre série n'est juste. Les tests donneront les vrais nombres.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d78a28416706c8673bdb0aab",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:00:22.090Z",
+  "stored_at": "2026-08-20T17:00:22.091Z"
+}

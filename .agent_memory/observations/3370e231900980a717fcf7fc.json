@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-virtual-call-needs-the-subclasss-body.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-virtual-call-needs-the-subclasss-body.md: ---\nname: a-virtual-call-needs-the-subclasss-body\ndescription: the SPL pay-for-use pass climbs from the receiver's STATIC type to the declaring class, so a call through a",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-virtual-call-needs-the-subclasss-body.md: ---\nname: a-virtual-call-needs-the-subclasss-body\ndescription: the SPL pay-for-use pass climbs from the receiver's STATIC type to the declaring class, so a call through a parent-typed parameter hit a null vtable slot and SEGFAULTED\nmetadata:\n  type: project\n---\n\n```php\nfunction walk(SplFileObject $o) { $o->eof(); }\nwalk(new SplTempFileObject());     // SIGSEGV\n```\n\nCorrigé le 25/08/2026, commit `faa3fda41`.\n\n**Le diagnostic qui tranche** : ajouter un `$temp->eof()` SANS RAPPORT ailleurs dans le même\nprogramme le fait marcher. Donc le trou est l'ÉMISSION, pas la répartition — le créneau de vtab",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3370e231900980a717fcf7fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:38:49.085Z",
+  "stored_at": "2026-08-25T14:38:49.085Z"
+}

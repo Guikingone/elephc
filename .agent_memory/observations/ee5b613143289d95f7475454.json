@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -50 src/builtins/array_or_false.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -50 src/builtins/array_or_false.rs: e) const ARRAY_OR_FALSE_ARG_SITES: &[(&str, usize, Option<&str>)] = &[ (\"array_column\", 0, Some(\"array\")), (\"array_count_values\", 0, Some(\"array\")), (\"array_diff\", 0, Some(\"array\")), ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -50 src/builtins/array_or_false.rs: e) const ARRAY_OR_FALSE_ARG_SITES: &[(&str, usize, Option<&str>)] = &[ (\"array_column\", 0, Some(\"array\")), (\"array_count_values\", 0, Some(\"array\")), (\"array_diff\", 0, Some(\"array\")), (\"array_diff\", 1, None), (\"array_diff_key\", 0, Some(\"array\")), (\"array_filter\", 0, Some(\"array\")), (\"array_flip\", 0, Some(\"array\")), (\"array_intersect\", 0, Some(\"array\")), (\"array_intersect\", 1, None), (\"array_intersect_key\", 0, Some(\"array\")), (\"array_map\", 1, Some(\"array\")), // `array_merge(array ...$arrays)` is fully variadic: even its FIRST argument has no // parameter name in php's TypeError, where `array_diff`/`array_intersect` name theirs. (\"array_merge\", 0, None), (\"array_merge\", 1, None), (\"array_pad\", 0, Some(\"array\")), (\"array_product\", 0, Some(\"array\")), (\"array_rand\", 0, Some(\"array\")), (\"array_reverse\", 0, Some(\"array\")), (\"array_search\", 1, Some(\"haystack\")), (\"array_slice\", 0, Some(\"array\")),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee5b613143289d95f7475454",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:14:22.376Z",
+  "stored_at": "2026-08-23T09:14:22.376Z"
+}

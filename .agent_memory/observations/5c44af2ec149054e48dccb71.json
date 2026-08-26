@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln 'function [a-z]*(&\\$' tests/codegen 2>/dev/null | head -6",
+  "summary": "grep -rln 'function [a-z]*(&\\$' tests/codegen 2>/dev/null | head -6: tests/codegen/eval_builtin_parity.rs tests/codegen/array_basics.rs tests/codegen/eval.rs tests/codegen/spl/iterator_helpers.rs tests/codegen/optimizer/peephole.rs tests/codegen/optimizer/constant_propagation/straight_line.rs",
+  "text": "grep -rln 'function [a-z]*(&\\$' tests/codegen 2>/dev/null | head -6: tests/codegen/eval_builtin_parity.rs tests/codegen/array_basics.rs tests/codegen/eval.rs tests/codegen/spl/iterator_helpers.rs tests/codegen/optimizer/peephole.rs tests/codegen/optimizer/constant_propagation/straight_line.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5c44af2ec149054e48dccb71",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:02:17.724Z",
+  "stored_at": "2026-08-18T11:02:17.725Z"
+}

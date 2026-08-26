@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 25,40p src/codegen/lower_inst/builtins/io/phar_read.rs",
+  "summary": "sed -n 25,40p src/codegen/lower_inst/builtins/io/phar_read.rs: Context<'_>, inst: &Instruction, ) -> Result<()> { super::super::ensure_arg_count_between(inst, \"file_get_contents\", 1, 5)?; // php opens a stream internally for this call, so it consumes one PHP-visible resource // id even though the caller never sees a ha",
+  "text": "sed -n 25,40p src/codegen/lower_inst/builtins/io/phar_read.rs: Context<'_>, inst: &Instruction, ) -> Result<()> { super::super::ensure_arg_count_between(inst, \"file_get_contents\", 1, 5)?; // php opens a stream internally for this call, so it consumes one PHP-visible resource // id even though the caller never sees a handle. elephc uses raw syscalls and minted // nothing, so every id AFTER such a call was one lower than php's — visible through // `var_dump($handle)`, `(int) $handle` and `get_resource_id()`. The cursor is never // reused, so advancing it is the whole of what php does here. abi::emit_call_label(ctx.emitter, \"__rt_resource_id_burn\"); let range = FileReadRange::from_operands(ctx, inst, 3, 4)?; range.emit_negative_length_guard(ctx, FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE)?; let context_scope = emit_file_get_contents_bytes(ctx, inst, range.is_active())?; range.emit(ctx, \"file_get_contents\")?; box_owned_string_or_false_result(ctx, \"fgc\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8910d53a96f29abb545674c6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:00:28.582Z",
+  "stored_at": "2026-08-21T18:00:28.582Z"
+}

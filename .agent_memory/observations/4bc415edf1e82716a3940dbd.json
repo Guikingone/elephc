@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n selbad.php 2>&1 | sed 's| in /private.*||'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n selbad.php 2>&1 | sed 's| in /private.*||': false => ValueError: No stream arrays were passed int => ValueError: No stream arrays were passed",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n selbad.php 2>&1 | sed 's| in /private.*||': false => ValueError: No stream arrays were passed int => ValueError: No stream arrays were passed string => ValueError: No stream arrays were passed null => ValueError: No stream arrays were passed closed => ValueError: No stream arrays were passed good => Warning: stream_select(): Cannot represent a stream of type MEMORY as a select()able descriptor Fatal error: Uncaught ValueError: No stream arrays were passed Stack trace: #0 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/selbad.php(31): stream_select(Array, NULL, NULL, 0) #1 {main} thrown",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4bc415edf1e82716a3940dbd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:40:51.434Z",
+  "stored_at": "2026-08-22T20:40:51.434Z"
+}

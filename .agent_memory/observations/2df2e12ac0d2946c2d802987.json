@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r 'var_dump(class_exists(\"ZipArchive\"));' 2>&1 | head -3; php -r 'var_dump(class_exists(\"ZipArchive\"));' 2>&1 | head -3",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r 'var_dump(class_exists(\"ZipArchive\"));' 2>&1 | head -3; php -r 'var_dump(class_exists(\"ZipArchive\"));' 2>&1 | head -3: bool(true) Com",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r 'var_dump(class_exists(\"ZipArchive\"));' 2>&1 | head -3; php -r 'var_dump(class_exists(\"ZipArchive\"));' 2>&1 | head -3: bool(true) Command line code:1: bool(true)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2df2e12ac0d2946c2d802987",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:44:49.936Z",
+  "stored_at": "2026-08-16T16:44:49.936Z"
+}

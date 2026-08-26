@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"STREAM_WRAPPERS\" -A 25 src/types/stream_constants.rs | grep -oE '\"[a-z0-9.]+\"' | head -20",
+  "summary": "grep -n \"STREAM_WRAPPERS\" -A 25 src/types/stream_constants.rs | grep -oE '\"[a-z0-9.]+\"' | head -20: \"https\" \"ftps\" \"compress.zlib\" \"compress.bzip2\" \"php\" \"file\" \"glob\" \"data\" \"http\" \"ftp\" \"phar\" \"zip\" \"tcp\" \"udp\" \"unix\" \"udg\" \"ssl\" \"tls\" \"https\" \"ftps\"",
+  "text": "grep -n \"STREAM_WRAPPERS\" -A 25 src/types/stream_constants.rs | grep -oE '\"[a-z0-9.]+\"' | head -20: \"https\" \"ftps\" \"compress.zlib\" \"compress.bzip2\" \"php\" \"file\" \"glob\" \"data\" \"http\" \"ftp\" \"phar\" \"zip\" \"tcp\" \"udp\" \"unix\" \"udg\" \"ssl\" \"tls\" \"https\" \"ftps\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bf710233d9f1874405f11aab",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:08:13.238Z",
+  "stored_at": "2026-08-21T17:08:13.239Z"
+}

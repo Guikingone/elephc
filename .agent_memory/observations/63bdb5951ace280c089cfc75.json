@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bmrx0sa2w.output\" 2>/dev/null | tail -10; pgrep -f cargo-nextest >/dev/null && echo SUITE_RUNNING || echo SUITE_DONE; echo \"=== phpt counts:\"; SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; ls $SRC/ext/standard/tests/streams/*.phpt | wc -l; ls $SRC/ext/standard/tests/file/*.phpt | wc -l",
+  "summary": "cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bmrx0sa2w.output\" 2>/dev/null | tail -10; pgrep -f cargo-nextest >/dev/null && echo SUITE_RUNNING || echo SUITE_DONE; echo \"=== phpt counts:\"; SRC=/private/",
+  "text": "cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bmrx0sa2w.output\" 2>/dev/null | tail -10; pgrep -f cargo-nextest >/dev/null && echo SUITE_RUNNING || echo SUITE_DONE; echo \"=== phpt counts:\"; SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; ls $SRC/ext/standard/tests/streams/*.phpt | wc -l; ls $SRC/ext/standard/tests/file/*.phpt | wc -l failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree; break it into plain, separate commands. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Run the equivalent from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature without the redirect.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "63bdb5951ace280c089cfc75",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:36:45.900Z",
+  "stored_at": "2026-08-17T06:36:45.902Z"
+}

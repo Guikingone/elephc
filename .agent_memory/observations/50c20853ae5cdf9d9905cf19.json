@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '325,360p' src/codegen_support/stream_filters/zlib.rs",
+  "summary": "sed -n '325,360p' src/codegen_support/stream_filters/zlib.rs:  z_stream handle and seed the input window -- abi::emit_symbol_address(emitter, \"r9\", \"_zstream_handles\"); // z_stream handle table base emitter.instruction(\"mov r10, QWORD PTR [r9 + rdi*8]\"); // r10 = z_stream pointer for this descriptor emitter.instruction",
+  "text": "sed -n '325,360p' src/codegen_support/stream_filters/zlib.rs:  z_stream handle and seed the input window -- abi::emit_symbol_address(emitter, \"r9\", \"_zstream_handles\"); // z_stream handle table base emitter.instruction(\"mov r10, QWORD PTR [r9 + rdi*8]\"); // r10 = z_stream pointer for this descriptor emitter.instruction(\"mov QWORD PTR [rbp - 24], r10\"); // save the z_stream pointer emitter.instruction(\"mov QWORD PTR [r10 + 0], rsi\"); // z_stream.next_in = payload pointer emitter.instruction(\"mov DWORD PTR [r10 + 8], edx\"); // z_stream.avail_in = payload length // -- deflate loop: drain next_in into the scratch window and write it out -- emitter.label(&format!(\"{}_loop\", fwrite_label)); emitter.instruction(\"mov r10, QWORD PTR [rbp - 24]\"); // reload the z_stream pointer abi::emit_symbol_address(emitter, \"r11\", \"_stream_filter_buf\"); // scratch window base emitter.instruction(\"mov QWORD PTR [r10 + 24], r11\"); // z_stream.next_out = scratch window base",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "50c20853ae5cdf9d9905cf19",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T19:29:07.709Z",
+  "stored_at": "2026-08-17T19:29:07.710Z"
+}

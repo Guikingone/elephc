@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "Eh bah go sur ce qui reste et les bugs détectés",
+  "summary": "Eh bah go sur ce qui reste et les bugs détectés",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bb442b77d84ae7f55218fc68",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T20:41:10.910Z",
+  "stored_at": "2026-08-17T20:41:10.910Z",
+  "low_signal": true
+}

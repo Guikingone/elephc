@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py dirtests.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py dirtests.php: === php === Warning: copy(): The first argument to copy() function cannot be a directory in <dir>/p.php on line 4 boo",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py dirtests.php: === php === Warning: copy(): The first argument to copy() function cannot be a directory in <dir>/p.php on line 4 bool(false) untouched --- string(0) \"\" bool(true) bool(false) --- string(5) \"hello\" int(40000) string(1) \"a\" string(1) \"b\" === elephc === Warning: copy(): The first argument to copy() function cannot be a directory in <dir>/p.php on line 4 bool(false) untouched --- string(0) \"\" bool(true) bool(false) --- string(5) \"hello\" int(40000) string(1) \"a\" string(1) \"b\" --- exit 0 (php 0) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3c4b1c7832391606be25d29b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T14:45:58.631Z",
+  "stored_at": "2026-08-24T14:45:58.632Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/Research/php-src && git log --oneline -1 2>/dev/null; grep -n \"PHP_VERSION \" main/php_version.h",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/Research/php-src && git log --oneline -1 2>/dev/null; grep -n \"PHP_VERSION \" main/php_version.h: 5f004fe5ed feat(rust): types started 7:#define PHP_VERSION \"8.3.0-dev\"",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/Research/php-src && git log --oneline -1 2>/dev/null; grep -n \"PHP_VERSION \" main/php_version.h: 5f004fe5ed feat(rust): types started 7:#define PHP_VERSION \"8.3.0-dev\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "182f5a2b27fb0954081906a2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:14:32.411Z",
+  "stored_at": "2026-08-14T14:14:32.411Z"
+}

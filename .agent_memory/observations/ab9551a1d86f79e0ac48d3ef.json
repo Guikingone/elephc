@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fwrite\" -A12 crates/elephc-builtin-contract/src/catalog_data.rs | head -24",
+  "summary": "grep -n \"fwrite\" -A12 crates/elephc-builtin-contract/src/catalog_data.rs | head -24: 6900: summary: \"Binary-safe file write (alias of fwrite).\", 6901- examples: &[ 6902- ], 6903: php_manual: Some(\"function.fwrite\"), 6904- deprecation: None, 6905- extension: false, 6906- internal: false, 6907- requirements: &[], 6908- }",
+  "text": "grep -n \"fwrite\" -A12 crates/elephc-builtin-contract/src/catalog_data.rs | head -24: 6900: summary: \"Binary-safe file write (alias of fwrite).\", 6901- examples: &[ 6902- ], 6903: php_manual: Some(\"function.fwrite\"), 6904- deprecation: None, 6905- extension: false, 6906- internal: false, 6907- requirements: &[], 6908- }, 6909- BuiltinContract { 6910- id: BuiltinId::from_canonical_name(\"fread\"), 6911- name: \"fread\", 6912- area: Area::Io, 6913- kind: BuiltinKind::Function, 6914- params: &[ 6915- ParamSpec { -- 7234: id: BuiltinId::from_canonical_name(\"fwrite\"), 7235: name: \"fwrite\", 7236- area: Area::Io, 7237- kind: BuiltinKind::Function, 7238- params: &[ 7239- ParamSpec { 7240- name: \"stream\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ab9551a1d86f79e0ac48d3ef",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:52:06.627Z",
+  "stored_at": "2026-08-17T06:52:06.628Z"
+}

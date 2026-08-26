@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -o 'stream_wrapper_register(\"[a-z0-9]*\"' tests/codegen/io/streams.rs | sort | uniq -c | sort -rn | head",
+  "summary": "About to run: grep -o 'stream_wrapper_register(\"[a-z0-9]*\"' tests/codegen/io/streams.rs | sort | uniq -c | sort -rn | head",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0b3ad87beb773cad4b6e3ad1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:12:34.565Z",
+  "stored_at": "2026-08-21T09:12:34.566Z"
+}

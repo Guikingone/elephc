@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n flock2.php > php_flock.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o flock2 flock2.php 2>&1 | tail -3; ./flock2 > el_flock.txt 2>&1; diff php_flock.txt el_flock.txt && echo IDENTICAL; echo \"--- php ---\"; cat php_flock.txt; echo \"--- elephc ---\"; cat el_flock.txt",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n flock2.php > php_flock.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/ele",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n flock2.php > php_flock.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o flock2 flock2.php 2>&1 | tail -3; ./flock2 > el_flock.txt 2>&1; diff php_flock.txt el_flock.txt && echo IDENTICAL; echo \"--- php ---\"; cat php_flock.txt; echo \"--- elephc ---\"; cat el_flock.txt: Compiled 'flock2.php' -> 'flock2' 1,4c1,4 < memory ex=false sh=false nb=false un=false < temp ex=false sh=false nb=false un=false < output ex=false sh=false nb=false un=false < data ex=false sh=false nb=false un=false --- > memory ex=true sh=true nb=true un=true > temp ex=true sh=true nb=true un=true > output ex=true sh=true nb=true un=true > data ex=true sh=true nb=true un=true --- php --- memory ex=false sh=false nb=false un=false temp ex=false sh=false nb=false un=false output ex=false sh=false nb=false un=false data ex=false sh=false nb=false un=false file ex=true sh=true nb=true un=true --- elephc --- memory ex=true sh=true nb=true un=true temp ex=true sh=true nb=true un=true output ex=true sh=true nb=true un=true data ex=true sh=true nb=true un=true file ex=true sh=true nb=true un=true",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "518f0c2c20ec89f9df82f0e4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:37:25.470Z",
+  "stored_at": "2026-08-22T16:37:25.471Z",
+  "low_signal": true
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '^## \\[' CHANGELOG.md | head -12; echo \"=== wrapper mentions per release ===\"; awk '/^## \\[/{rel=$0} /stream_metadata|stream_set_option|stream_cast|stream_truncate|stream_lock|dir_opendir|url_stat|stream_wrapper/{print rel\" :: \"substr($0,1,150)}' CHANGELOG.md | head -40",
+  "summary": "About to run: grep -n '^## \\[' CHANGELOG.md | head -12; echo \"=== wrapper mentions per release ===\"; awk '/^## \\[/{rel=$0} /stream_metadata|stream_set_option|stream_cast|stream_truncate|stream_lock|dir_opendir|url_",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a943bc242daca8435ecaa85c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:13:48.647Z",
+  "stored_at": "2026-08-14T14:13:48.648Z"
+}

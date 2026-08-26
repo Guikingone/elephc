@@ -1595,24 +1595,47 @@ $c = new Constructed([1]);
 }
 
 /// Verifies `unset($local)` writes PHP null into local slots on the EIR backend.
+///
+/// The probes are `isset`, not `is_null`. Reading a variable after a straight-line `unset` is a
+/// compile ERROR since the checker learned to end the binding there (`Undefined variable: $x`),
+/// and `is_null($x)` is such a read. `isset`/`??` are the two forms PHP defines on an unbound
+/// name, so they are what a program may still ask — and they lower to exactly the load-and-
+/// null-check this test is here to smoke: the kill leaves the name typed `Void` and its slot
+/// holding PHP null, which is what the probes observe.
 #[test]
 fn ir_backend_handles_unset_locals() {
     for (name, source, expected) in [
         (
             "unset_int_local",
-            "<?php $x = 42; unset($x); echo is_null($x) ? 'null' : 'value';",
+            "<?php $x = 42; unset($x); echo isset($x) ? 'value' : 'null';",
             "null",
         ),
         (
             "unset_multiple_locals",
-            "<?php $a = 1; $b = 'owned' . $argc; unset($a, $b); echo is_null($a) ? 'A' : 'a'; echo is_null($b) ? 'B' : 'b';",
+            "<?php $a = 1; $b = 'owned' . $argc; unset($a, $b); echo isset($a) ? 'a' : 'A'; echo isset($b) ? 'b' : 'B';",
             "AB",
         ),
+        // The owned heap string is released by the unset and the name re-bound at a new type,
+        // so the slot the backend hands the rebind is the one the kill nulled.
+        (
+            "unset_then_rebind_local",
+            "<?php $c = 'owned' . $argc; unset($c); $c = 7; echo $c;",
+            "7",
+        ),
     ] {
-        // Reading a variable after `unset()` is an UNDEFINED VARIABLE in php, and it says so.
-        // The expectations predate elephc raising that warning, so they pinned its absence.
+        // NO warning, on any of the three. `isset()` never raises one — probing storage that may
+        // not exist is what it is FOR — and the third case reads `$c` only after re-binding it.
+        // MEASURED on `php -n` 8.5.6: `$x = 42; unset($x); echo isset($x) ? 'value' : 'null';`
+        // prints `null` and nothing else.
+        //
+        // An earlier revision of this test asserted a warning here, which pinned one elephc was
+        // raising and php was not: `unset()` is a read of nothing, and the diagnostic belongs to a
+        // later BARE read (`echo $x;`), which the type-ops sweep covers.
         let out = compile_and_run_ir_backend(name, source);
-        assert!(out.contains("Warning: Undefined variable $"), "got {out}");
+        assert!(
+            !out.contains("Warning: Undefined variable $"),
+            "isset() after unset() must not warn: {out}"
+        );
         assert_eq!(program_output_only(&out), expected);
     }
 }

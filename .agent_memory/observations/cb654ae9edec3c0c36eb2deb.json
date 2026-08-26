@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '140,180p' src/codegen/lower_inst.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '140,180p' src/codegen/lower_inst.rs: ruction boundary: this backend gives every SSA value a /// stack slot, so nothing of the function's own is live in one here. fn publish_diagnostic_location(ctx: &mut FunctionConte",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '140,180p' src/codegen/lower_inst.rs: ruction boundary: this backend gives every SSA value a /// stack slot, so nothing of the function's own is live in one here. fn publish_diagnostic_location(ctx: &mut FunctionContext<'_>, inst: &Instruction) { if !inst.effects.contains(crate::ir::Effects::MAY_WARN) { return; } let Some(span) = inst.span else { return; }; publish_diagnostic_line(ctx, span.line); } /// Publishes one already-known source line as the location the next diagnostic will name. /// /// Split out of `publish_diagnostic_location` because not every diagnostic is raised BY an /// instruction: php's `$http_response_header` deprecation is raised while compiling the file and /// is emitted from the main prologue, where there is no instruction to read a span from, yet php /// still names the line of the mention that caused it. pub(super) fn publish_diagnostic_line(ctx: &mut FunctionContext<'_>, line: u32) { if line == 0 {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cb654ae9edec3c0c36eb2deb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:54:24.546Z",
+  "stored_at": "2026-08-22T20:54:24.547Z"
+}

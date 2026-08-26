@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs: emitter.instruction(\"strh wzr, [x15, #6]\");                                  // clear the revents field\n    emitter.instruction(\"add x14, x14, #1\");             -> emitter",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_select.rs: emitter.instruction(\"strh wzr, [x15, #6]\");                                  // clear the revents field\n    emitter.instruction(\"add x14, x14, #1\");             -> emitter.instruction(\"strh wzr, [x15, #6]\");                                  // clear the revents field\n    emitter.instruction(\"add x14, x14, #1\");                                     // advance the running pollfd index\n    // php counts only the entries it could CAST; the tally decides between running the poll and\n    // raising `No stream arrays were passed`. The pollfd slot is still written above, because the\n    // compact pass indexes by array position and the two loops",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fa521c76dfa9378253d05f8c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:04:30.002Z",
+  "stored_at": "2026-08-17T07:04:30.002Z"
+}

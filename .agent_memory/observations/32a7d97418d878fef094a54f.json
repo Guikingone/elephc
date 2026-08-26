@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub\" src/types/call_args/plan.rs | head -30",
+  "summary": "About to run: grep -n \"pub\" src/types/call_args/plan.rs | head -30",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "32a7d97418d878fef094a54f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:12:41.058Z",
+  "stored_at": "2026-08-21T16:12:41.058Z"
+}

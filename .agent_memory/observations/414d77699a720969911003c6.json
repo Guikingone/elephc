@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dirtests.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dirtests.php: <?php\nmkdir(\"srcdir\");\nfile_put_contents(\"dst.txt\", \"untouched\");\nvar_dump(copy(\"srcdir\", \"dst.txt\"));\necho file_get_contents(\"dst.t",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/dirtests.php: <?php\nmkdir(\"srcdir\");\nfile_put_contents(\"dst.txt\", \"untouched\");\nvar_dump(copy(\"srcdir\", \"dst.txt\"));\necho file_get_contents(\"dst.txt\"), \"\\n\";\nunlink(\"dst.txt\");\nrmdir(\"srcdir\");\necho \"---\\n\";\nmkdir(\"readme\");\n$content = @file_get_contents(\"readme\");\nvar_dump($content, $content === \"\", $content === false);\nrmdir(\"readme\");\necho \"---\\n\";\nfile_put_contents(\"small.txt\", \"hello\");\nfile_put_contents(\"big.txt\", str_repeat(\"ab\", 20000));\n$small = file_get_contents(\"small.txt\");\n$big = file_get_contents(\"big.txt\");\nvar_dump($small, strlen($big), $big[0], $big[39999]);\nunlink(\"small.txt\");\nunlink(\"big",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "414d77699a720969911003c6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T14:24:07.736Z",
+  "stored_at": "2026-08-24T14:24:07.736Z"
+}

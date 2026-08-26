@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'php_wrapper_open' src/codegen_support/runtime/ -l | head -5",
+  "summary": "About to run: grep -rn 'php_wrapper_open' src/codegen_support/runtime/ -l | head -5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca9248a093270d3cd40eaa9d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:43:21.364Z",
+  "stored_at": "2026-08-25T13:43:21.365Z"
+}

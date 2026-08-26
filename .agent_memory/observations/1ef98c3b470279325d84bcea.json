@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/ir_backend_smoke_test.rs\")\ns = p.read_text()\nold = '''fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String {\n    let run = compile_ir_backend_and_run_with_managed_pcre2(name, source, &[]);\n    assert!(run.status.success(), \"IR backend binary failed for {name}\");'''\nnew = '''fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String {\n    let run = compile_ir_backend_and_run_with_managed_pcre2(name, source, &[]);\n    assert!(\n        run.status.success(),\n        \"IR backend binary… [+428 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/ir_backend_smoke_test.rs\")\ns = p.read_text()\nold = '''fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String {\n    let run = compile_ir_backend_and_run_with_managed_pcre2(name, source, &[]);\n    assert!(run.status.success(), \"IR backe",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/ir_backend_smoke_test.rs\")\ns = p.read_text()\nold = '''fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String {\n    let run = compile_ir_backend_and_run_with_managed_pcre2(name, source, &[]);\n    assert!(run.status.success(), \"IR backend binary failed for {name}\");'''\nnew = '''fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String {\n    let run = compile_ir_backend_and_run_with_managed_pcre2(name, source, &[]);\n    assert!(\n        run.status.success(),\n        \"IR backend binary failed for {name} ({}): stdout={} stderr={}\",\n        run.status,\n        String::from_utf8_lossy(&run.stdout),\n        String::from_utf8_lossy(&run.stderr)\n    );'''\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nprint(\"harness now says WHY\")\nPY\nCARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles_preg_match_captures 2>&1 | grep -A6 'panicked': harness now says WHY thread 'ir_backend_handles_preg_match_captures' (64658392) panicked at tests/ir_backend_smoke_test.rs:6890:5: IR backend binary failed for preg_match_captures (exit status: 255): stdout=1: Fatal error: Uncaught TypeError: count(): Argument #1 ($value) must be of type Countable|array, true given in /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_preg_match_captures_94961_1787662917339407000/main.php:5 Stack trace: #0 /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_preg_match_captures_94961_1787662917339407000/main.php(5): count(true) #1 {main} thrown in /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_preg_match_captures_94961_1787662917339407000/main.php on line 5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1ef98c3b470279325d84bcea",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:02:01.440Z",
+  "stored_at": "2026-08-25T13:02:01.441Z"
+}

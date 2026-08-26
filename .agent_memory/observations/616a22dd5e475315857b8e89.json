@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/io/mod.rs')\nt = p.read_text()\nold = 'pub(crate) use stream_wrapper_register::emit_stream_wrapper_register;'\nnew = '''pub(crate) use stream_wrapper_register::{\n    emit_stream_wrapper_register, BAD_PROTOCOL_WARNING, DUPLICATE_PROTOCOL_WARNING,\n};'''\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('io/mod.rs: the two warning texts re-exported for the data section')\n\"\ncargo check --workspace 2>&1 | grep -E \"^error\" -A 3 | head -20",
+  "summary": "python3 -c \"\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/io/mod.rs')\nt = p.read_text()\nold = 'pub(crate) use stream_wrapper_register::emit_stream_wrapper_register;'\nnew = '''pub(crate) use stream_wrapper_register::{\n    emit_stream_wrapper_register, BAD_PROTOCOL_WARNING, DUPLICATE_PROTOCOL_WARNING,\n};'",
+  "text": "python3 -c \"\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/io/mod.rs')\nt = p.read_text()\nold = 'pub(crate) use stream_wrapper_register::emit_stream_wrapper_register;'\nnew = '''pub(crate) use stream_wrapper_register::{\n    emit_stream_wrapper_register, BAD_PROTOCOL_WARNING, DUPLICATE_PROTOCOL_WARNING,\n};'''\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('io/mod.rs: the two warning texts re-exported for the data section')\n\"\ncargo check --workspace 2>&1 | grep -E \"^error\" -A 3 | head -20: io/mod.rs: the two warning texts re-exported for the data section",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "616a22dd5e475315857b8e89",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:55:47.307Z",
+  "stored_at": "2026-08-20T17:55:47.307Z"
+}

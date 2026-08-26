@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::benchmarks) or test(codegen::ffi) or test(codegen::image) or test(codegen::mysqli) or test(codegen::pdo) or test(codegen::operators) or test(codegen::namespaces) or test(codegen::preprocessor) or test(codegen::php_tags) or test(codegen::static_class_features)' 2>&1 | tail -14",
+  "summary": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::benchmarks) or t",
+  "text": "rm -rf /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_*; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::benchmarks) or test(codegen::ffi) or test(codegen::image) or test(codegen::mysqli) or test(codegen::pdo) or test(codegen::operators) or test(codegen::namespaces) or test(codegen::preprocessor) or test(codegen::php_tags) or test(codegen::static_class_features)' 2>&1 | tail -14: by55guv5s Session cwd remains /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; directory changes made by the backgrounded command do not apply to subsequent commands.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bfc168f27401c9cf4f08e6b5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T15:57:48.588Z",
+  "stored_at": "2026-08-23T15:57:48.588Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log --format=\"%h %s\" 034ac07936..clf-streams-filters",
+  "summary": "About to run: git log --format=\"%h %s\" 034ac07936..clf-streams-filters",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "926a0f0f3e0cc98bc07fd597",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T18:11:28.819Z",
+  "stored_at": "2026-08-14T18:11:28.819Z",
+  "low_signal": true
+}

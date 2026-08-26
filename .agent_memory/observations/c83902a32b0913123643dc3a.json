@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/replace_refusal_tests.py 2>&1 | head -2; grep -n \"at most 8 output variables\" tests/error_tests/string_builtins.rs tests/error_tests/io_builtins/streams.rs",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/replace_refusal_tests.py 2>&1 | head -2; grep -n \"at most 8 output variables\" tests/error_tests/string_builtins.rs tests/error_tests/io_builtins/str",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/replace_refusal_tests.py 2>&1 | head -2; grep -n \"at most 8 output variables\" tests/error_tests/string_builtins.rs tests/error_tests/io_builtins/streams.rs: Traceback (most recent call last): File \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/replace_refusal_tests.py\", line 32, in <module> tests/error_tests/io_builtins/streams.rs:176: \"fscanf(): at most 8 output variables are supported, got 9\", tests/error_tests/string_builtins.rs:459: \"sscanf(): at most 8 output variables are supported, got 9\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c83902a32b0913123643dc3a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:56:49.080Z",
+  "stored_at": "2026-08-18T10:56:49.081Z"
+}

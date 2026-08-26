@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build --lib 2>&1 | grep -E \"^error\" -A 8 | head -40",
+  "summary": "cargo build --lib 2>&1 | grep -E \"^error\" -A 8 | head -40: ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ | = note: inner doc comments like this (starting with `//!` or `/*!`) can only appear before items help: you might have meant to write a regular comment | -- error[E0753]: expected outer doc comment --> crates/elephc-builtin-contrac",
+  "text": "cargo build --lib 2>&1 | grep -E \"^error\" -A 8 | head -40: ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ | = note: inner doc comments like this (starting with `//!` or `/*!`) can only appear before items help: you might have meant to write a regular comment | -- error[E0753]: expected outer doc comment --> crates/elephc-builtin-contract/src/php_constants.rs:29:1 | 29 | //! Single source of truth for `STREAM_*`, `PSFS_*`, `FILE_*`, and `GLOB_*` values. | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ | = note: inner doc comments like this (starting with `//!` or `/*!`) can only appear before items help: you might have meant to write a regular comment | -- error[E0753]: expected outer doc comment --> crates/elephc-builtin-contract/src/php_constants.rs:30:1 | 30 | //! | ^^^ | = note: inner doc comments like this (starting with `//!` or `/*!`) can only appear before items help: you might have meant to write a regular comment | --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0ee6f544e76356b8960a3cf7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:46:35.670Z",
+  "stored_at": "2026-08-22T09:46:35.670Z"
+}

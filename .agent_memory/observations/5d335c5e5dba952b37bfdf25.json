@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git cherry-pick 707536efe5 7dc444d4c0 1ce7173bcb e9ebb7c545 2>&1 | tail -2; git log --format=\"%h %s\" -5",
+  "summary": "About to run: git cherry-pick 707536efe5 7dc444d4c0 1ce7173bcb e9ebb7c545 2>&1 | tail -2; git log --format=\"%h %s\" -5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5d335c5e5dba952b37bfdf25",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T16:26:54.584Z",
+  "stored_at": "2026-08-14T16:26:54.585Z",
+  "low_signal": true
+}

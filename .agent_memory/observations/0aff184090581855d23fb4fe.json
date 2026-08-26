@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - ✅✅✅ **CI 127/127 VERT ×4** — dernier run 31901529819 / tree `14685e7335` -> - ✅✅✅ **CI 127/127 VERT ×6** — dernier run 31950331533 / tree `42a4b0f3bd` (vague « tout le cartographié » : url_stat 16 bu",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - ✅✅✅ **CI 127/127 VERT ×4** — dernier run 31901529819 / tree `14685e7335` -> - ✅✅✅ **CI 127/127 VERT ×6** — dernier run 31950331533 / tree `42a4b0f3bd` (vague « tout le cartographié » : url_stat 16 builtins+dir() · ValueError stream_* · php:// fidélité · variadique+lexer · implode float/hash · 5 lecteurs filtrés+NAN · options ssl/http · handles dir optionnels · zlib écriture · fd x86). Précédent run 31901529819 / tree `14685e7335`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0aff184090581855d23fb4fe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T14:49:20.451Z",
+  "stored_at": "2026-08-16T14:49:20.452Z"
+}

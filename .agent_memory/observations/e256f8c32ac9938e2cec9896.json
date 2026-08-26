@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_mixed_cast_int\" src/codegen_support/runtime/io/fopen.rs src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null | head -10",
+  "summary": "grep -rn \"__rt_mixed_cast_int\" src/codegen_support/runtime/io/fopen.rs src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null | head -10: src/codegen/lower_inst/builtins/io/phar_read.rs:287: /// argument calls `__rt_mixed_cast_int`, which clobbers the caller-saved registers the",
+  "text": "grep -rn \"__rt_mixed_cast_int\" src/codegen_support/runtime/io/fopen.rs src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null | head -10: src/codegen/lower_inst/builtins/io/phar_read.rs:287: /// argument calls `__rt_mixed_cast_int`, which clobbers the caller-saved registers the",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e256f8c32ac9938e2cec9896",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:43:55.985Z",
+  "stored_at": "2026-08-21T09:43:55.985Z"
+}

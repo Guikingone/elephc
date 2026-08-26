@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '74,100p' src/ir_lower/expr/native_isset.rs",
+  "summary": "About to run: sed -n '74,100p' src/ir_lower/expr/native_isset.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5297fa4eaa89aa7860b72417",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:04:51.245Z",
+  "stored_at": "2026-08-20T19:04:51.246Z"
+}

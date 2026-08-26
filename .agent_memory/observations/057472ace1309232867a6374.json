@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '20,60p' src/superglobals.rs; sed -n '82,110p' src/superglobals.rs",
+  "summary": "sed -n '20,60p' src/superglobals.rs; sed -n '82,110p' src/superglobals.rs:  on) for every one the source SPELLS. /// /// Off-web these names are ordinary top-level locals: nothing pre-initializes the /// shared `_eir_global_*` storage, so a bare read used to yield `null` and every /// consumer inherited that — silently",
+  "text": "sed -n '20,60p' src/superglobals.rs; sed -n '82,110p' src/superglobals.rs:  on) for every one the source SPELLS. /// /// Off-web these names are ordinary top-level locals: nothing pre-initializes the /// shared `_eir_global_*` storage, so a bare read used to yield `null` and every /// consumer inherited that — silently for `$_SERVER['x']`, and loudly once /// `count()` started raising PHP's TypeError for a non-countable argument. /// /// Seeding is driven by what the program mentions, so a source that never names /// one emits nothing for it and the binary does not grow. The assignment is an /// ordinary top-level store, which `contextualize_local_assignment` already types /// as `AssocArray{Str, Mixed}` for these names, so the empty literal lands on hash /// storage rather than indexed storage. /// /// `$_REQUEST`, `$_ENV` and `$_SESSION` are deliberately absent from the seeded /// set — see `CLI_POPULATED_SUPERGLOBALS`. pub fn seed_cli_populated_superglobals(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "057472ace1309232867a6374",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:45:16.907Z",
+  "stored_at": "2026-08-20T19:45:16.908Z"
+}

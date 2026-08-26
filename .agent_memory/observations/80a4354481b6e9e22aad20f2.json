@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_eval.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_eval.py: \"\"\"eval()'s glob learns the same flags the compiled one just did.\n\nBefore this, `eval('glob(\"*\", GLOB_ONLYDIR)')` was a runtime",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_eval.py: \"\"\"eval()'s glob learns the same flags the compiled one just did.\n\nBefore this, `eval('glob(\"*\", GLOB_ONLYDIR)')` was a runtime fatal while php answered — a\ncompiled/eval divergence that declaring the parameter on the compiled side would only have\nwidened. The eval interpreter matches paths itself rather than calling libc, so it acts on php's\nown flag values directly, with no translation.\n\nThe order questions were MEASURED on `php -n` 8.5.6 rather than assumed, and they are not the\nobvious answers:\n\n    glob(\"d/{c*,a*}\", GLOB_BRACE)          [\"c.log\", \"a.txt\"]   sorted PER EXPANSION, not globa",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "80a4354481b6e9e22aad20f2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:16:21.600Z",
+  "stored_at": "2026-08-22T09:16:21.600Z"
+}

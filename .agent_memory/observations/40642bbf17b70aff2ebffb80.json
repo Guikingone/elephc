@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(spl): a throwable the RUNTIME built still reported line 0\n\n`new SplFixedArray(-1)` answered `getLine() === 0` where php answers the line of the `new`.\nZero is not a line php ever prints, and it takes the uncaught report's whole location tail\nwith it.\n\nTwo halves, and each was wrong on its own.\n\nThe throw sequences in the SplFixedArray and doubly-linked-list runtimes write every field\nof the Throwable payload — class id, message, length, code, previous — except the creation\nline, which they left as whatever the allocator had put there. `emi… [+880 chars truncated]",
+  "summary": "About to run: git -c commit.gpgsign=false commit -q -F - <<'MSG' fix(spl): a throwable the RUNTIME built still reported line 0 `new SplFixedArray(-1)` answered `getLine() === 0` where php answers the line of the `n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "40642bbf17b70aff2ebffb80",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:45:56.924Z",
+  "stored_at": "2026-08-26T07:45:56.925Z"
+}

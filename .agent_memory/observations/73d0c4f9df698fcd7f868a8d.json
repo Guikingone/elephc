@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/tmpclean.sh purge 2>&1 | tail -3; df -h /Users/guillaumeloulier 2>&1 | tail -1",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/tmpclean.sh purge 2>&1 | tail -3; df -h /Users/guillaumeloulier 2>&1 | tail -1: 208M /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/ purged; now: 30 /",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/tmpclean.sh purge 2>&1 | tail -3; df -h /Users/guillaumeloulier 2>&1 | tail -1: 208M /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/ purged; now: 30 /dev/disk3s5 460Gi 408Gi 23Gi 95% 7.1M 242M 3% /System/Volumes/Data",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "73d0c4f9df698fcd7f868a8d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:43:46.771Z",
+  "stored_at": "2026-08-17T12:43:46.771Z"
+}

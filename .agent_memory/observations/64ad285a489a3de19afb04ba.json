@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -14 tests/codegen/callables/language_features.rs",
+  "summary": "head -14 tests/codegen/callables/language_features.rs: //! Purpose: //! Integration or regression tests for end-to-end codegen coverage of callables language features, including default param string, default param override, and default param integer. //! //! Called from: //! - `cargo test` through Rust's test harness. ",
+  "text": "head -14 tests/codegen/callables/language_features.rs: //! Purpose: //! Integration or regression tests for end-to-end codegen coverage of callables language features, including default param string, default param override, and default param integer. //! //! Called from: //! - `cargo test` through Rust's test harness. //! //! Key details: //! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures. use crate::support::*; // ===== Feature 1: Default parameter values ===== /// Verifies that a string default parameter is used when no argument is provided.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "64ad285a489a3de19afb04ba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:02:35.137Z",
+  "stored_at": "2026-08-18T11:02:35.139Z"
+}

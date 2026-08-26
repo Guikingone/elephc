@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w23 $S/e23; mkdir -p $S/w23 $S/e23; cp $S/probes2/errlast.php $S/w23/p.php; cp $S/probes2/errlast.php $S/e23/p.php; cd $S/w23 && php -n p.php 2>&1 | head -8; echo \"=== elephc ===\"; cd $S/e23 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php 2>&1 | tail -2",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w23 $S/e23; mkdir -p $S/w23 $S/e23; cp $S/probes2/errlast.php $S/w23/p.php; cp $S/probes2/errlast.php $S/e23/p.php; cd $S/w23 && php -n p",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w23 $S/e23; mkdir -p $S/w23 $S/e23; cp $S/probes2/errlast.php $S/w23/p.php; cp $S/probes2/errlast.php $S/e23/p.php; cd $S/w23 && php -n p.php 2>&1 | head -8; echo \"=== elephc ===\"; cd $S/e23 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php 2>&1 | tail -2: bool(false) string(65) \"fopen(nope.txt): Failed to open stream: No such file or directory\" bool(false) string(59) \"fopen(locked.txt): Failed to open stream: Permission denied\" === elephc === error[4:6]: Undefined function: error_get_last error[10:7]: Undefined function: error_get_last",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a2b6b241482450b706dc7434",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:09:36.192Z",
+  "stored_at": "2026-08-24T20:09:36.193Z"
+}

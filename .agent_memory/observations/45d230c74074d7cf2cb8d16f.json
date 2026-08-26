@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'sub sp, sp, #\\|stp x29, x30, \\[sp\\|add x29, sp\\|ldp x29, x30, \\[sp\\|add sp, sp, #\\|sub rsp\\|mov rbp, rsp' src/codegen_support/runtime/io/stream_get_line.rs",
+  "summary": "About to run: grep -n 'sub sp, sp, #\\|stp x29, x30, \\[sp\\|add x29, sp\\|ldp x29, x30, \\[sp\\|add sp, sp, #\\|sub rsp\\|mov rbp, rsp' src/codegen_support/runtime/io/stream_get_line.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "45d230c74074d7cf2cb8d16f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:18:58.464Z",
+  "stored_at": "2026-08-24T17:18:58.465Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py 2>&1 | head -45",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py 2>&1 | head -45: eam_filter_remove php: string(3) \"DEF\" elephc: string(0) \"\" php: Fatal error: Uncaught TypeError: str",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py 2>&1 | head -45: eam_filter_remove php: string(3) \"DEF\" elephc: string(0) \"\" php: Fatal error: Uncaught TypeError: stream_filter_remove(): supplied resource is not a valid stream filter resource in p.php:8 elephc: Fatal error: Uncaught TypeError: stream_filter_remove(): supplied resource is not a valid stream filter resource in /private/tmp/claude-501/-Users-gui php: Stack trace: elephc: <none> php: #0 p.php(8): stream_filter_remove(Resource id #7) elephc: <none> php: #1 {main} elephc: <none> php: thrown in p.php on line 8 elephc: <none> DIFF user wrapper: every reader php: array(3) { elephc: php: [0]=> elephc: Warning: file_get_contents(uw://x): Failed to open stream: No such file or directory in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjec php: string(9) \"line one elephc: bool(false) php: \" elephc: line one php: [1]=> elephc: line two php: string(9) \"line two elephc: line three php: \"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c275695cd43f692dd8c72445",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:48:56.943Z",
+  "stored_at": "2026-08-21T17:48:56.943Z"
+}

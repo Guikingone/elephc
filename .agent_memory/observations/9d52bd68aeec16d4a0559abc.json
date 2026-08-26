@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build 2>&1 | tail -4 && python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/segv_scope.py 2>&1",
+  "summary": "cargo build 2>&1 | tail -4 && python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/segv_scope.py 2>&1: ng elephc v0.26.4 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/stream",
+  "text": "cargo build 2>&1 | tail -4 && python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/segv_scope.py 2>&1: ng elephc v0.26.4 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `dev` profile [unoptimized + debuginfo] target(s) in 33.69s SAME data php='bool(true)' SAME memory php='bool(true)' SAME temp php='bool(true)' SAME wrapper php='bool(true)' SAME wrap_write php='bool(true)' SAME wrap_nofil php='bool(true)' SAME wrap_unk php='Warning: fopen(): Unable to locate filter \"no.such\" in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/segvscope/wrap_unk.php on line 9 Warning: fopen(): Unable to create filter (no.such) in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/segvscope/wrap_unk.php on line 9 bool(true)'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9d52bd68aeec16d4a0559abc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:50:47.137Z",
+  "stored_at": "2026-08-21T09:50:47.138Z"
+}

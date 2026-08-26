@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/array_to_string.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/array_to_string.php: <?php\n// php warns \"Array to string conversion\" and yields the word Array in every one of these.\n$a = [1, 2];\necho \"concat: \"",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/array_to_string.php: <?php\n// php warns \"Array to string conversion\" and yields the word Array in every one of these.\n$a = [1, 2];\necho \"concat: \" . $a . \"\\n\";\necho \"cast: \", (string) $a, \"\\n\";\necho \"interp: {$a}\\n\";\n$b = [$a, $a];\necho \"implode: \", implode(\",\", $b), \"\\n\";\necho \"strlen: \", strlen($a), \"\\n\";\n$c = [1, [2], 3];\necho \"unique: \", implode(\"|\", array_unique($c)), \"\\n\";\necho \"cmp: \", ($a == \"Array\") ? \"eq\" : \"ne\", \"\\n\";\nprintf(\"printf: %s\\n\", $a);\necho \"done\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c0179265d06b362cb8670aad",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:16:12.901Z",
+  "stored_at": "2026-08-23T13:16:12.901Z"
+}

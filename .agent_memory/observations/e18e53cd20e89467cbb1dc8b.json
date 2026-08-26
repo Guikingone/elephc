@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '/--- REFUSED ---/,$p' round8_probes7.txt; echo \"=== DIFFERS ===\"; sed -n '/--- DIFFERS ---/,/--- REFUSED ---/p' round8_probes7.txt | grep \"^### \"",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '/--- REFUSED ---/,$p' round8_probes7.txt; echo \"=== DIFFERS ===\"; sed -n '/--- DIFFERS ---/,/--- REFUSED ---/p' round8_probes7.txt | grep \"^",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '/--- REFUSED ---/,$p' round8_probes7.txt; echo \"=== DIFFERS ===\"; sed -n '/--- DIFFERS ---/,/--- REFUSED ---/p' round8_probes7.txt | grep \"^### \": --- REFUSED --- kimi-k2.7-code-12 EIR backend error: unsupported EIR backend feature: i_to_str for PHP type Callable kimi-k3-01 EIR backend error: unsupported EIR backend feature: array_push for PHP type Void kimi-k3-49 error[3:26]: stream_get_line() expects resource, got null kimi-k3-57 error[3:14]: fgetc() expects resource, got null === DIFFERS === ### glm-5.2-01 ### kimi-k2.7-code-05 ### kimi-k2.7-code-10 ### kimi-k2.7-code-21 ### kimi-k2.7-code-54 ### kimi-k2.7-code-79 ### kimi-k2.7-code-82 ### kimi-k2.7-code-83 ### kimi-k2.7-code-97 ### kimi-k3-06 ### kimi-k3-16 ### kimi-k3-27 ### kimi-k3-56",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e18e53cd20e89467cbb1dc8b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:42:35.043Z",
+  "stored_at": "2026-08-23T12:42:35.043Z"
+}

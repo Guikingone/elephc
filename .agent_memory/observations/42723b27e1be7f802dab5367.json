@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"is not supported; \\\\\\\\\" src/builtins/string/sscanf.rs > /dev/null; sed -n '1,60p' src/scanf_prelude.rs",
+  "summary": "grep -rn \"is not supported; \\\\\\\\\" src/builtins/string/sscanf.rs > /dev/null; sed -n '1,60p' src/scanf_prelude.rs: set has no such trap and needs no array keys at all. //! - `fscanf()` reads ONE LINE per call through `fgets()`, newline included, exactly as php's //! `php_stream_get_line` does: `fscanf($h, '%[^z]')` on `",
+  "text": "grep -rn \"is not supported; \\\\\\\\\" src/builtins/string/sscanf.rs > /dev/null; sed -n '1,60p' src/scanf_prelude.rs: set has no such trap and needs no array keys at all. //! - `fscanf()` reads ONE LINE per call through `fgets()`, newline included, exactly as php's //! `php_stream_get_line` does: `fscanf($h, '%[^z]')` on `\"a\\n\"` returns `[\"a\\n\"]`. End of file //! is `false`; an EMPTY line is `NULL`, since scanning `\"\\n\"` reaches EOF without assigning. //! - THE BY-REF `$vars` FORM IS STILL REFUSED, in `sscanf`/`fscanf`'s check hooks rather than //! here. It cannot live in this prelude: elephc requires a caller variable passed to a //! `mixed &$param` to ALREADY have mixed storage and does not auto-vivify an undefined one, //! so php's own idiom `fscanf($h, '%s %d', $name, $age)` would not compile. Delivering it //! needs the registry's write-only out-parameter machinery (`ParamSpec::writes`) extended to //! a variadic tail, which is what binds `$errno`/`$errstr` for `stream_socket_client()`. mod detect;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "42723b27e1be7f802dab5367",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:33:39.433Z",
+  "stored_at": "2026-08-18T09:33:39.433Z"
+}

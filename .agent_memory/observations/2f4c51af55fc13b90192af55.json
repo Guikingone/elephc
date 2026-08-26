@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"mod tests\" -A20 src/codegen_support/runtime/io/user_wrapper.rs | head -30",
+  "summary": "grep -n \"mod tests\" -A20 src/codegen_support/runtime/io/user_wrapper.rs | head -30: :emit::Emitter; 1165- use crate::codegen_support::platform::{Arch, Platform, Target}; 1166- 1167- use super::*; 1168- 1169- /// Emits `__rt_user_wrapper_fread` for one target. 1170- fn emit_for(platform: Platform, arch: Arch) -> String ",
+  "text": "grep -n \"mod tests\" -A20 src/codegen_support/runtime/io/user_wrapper.rs | head -30: :emit::Emitter; 1165- use crate::codegen_support::platform::{Arch, Platform, Target}; 1166- 1167- use super::*; 1168- 1169- /// Emits `__rt_user_wrapper_fread` for one target. 1170- fn emit_for(platform: Platform, arch: Arch) -> String { 1171- let mut emitter = Emitter::new(Target::new(platform, arch)); 1172- emit_user_wrapper_fread(&mut emitter); 1173- emitter.output() 1174- } 1175- 1176- /// The read helper dispatches both result shapes on BOTH architectures. 1177- /// 1178- /// Companion to the directory guard: the behaviour test for the manual's 1179- /// `stream_read(): string|false` runs only on the host architecture, and a conversion 1180- /// present on one target and missing on the other reads a boxed cell as a string pointer — 1181- /// the exact silent corruption this change removes. 1182- #[test] 1183- fn the_read_helper_dispatches_both_result_shapes_on_both_architectures() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2f4c51af55fc13b90192af55",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:51:34.304Z",
+  "stored_at": "2026-08-20T20:51:34.304Z"
+}

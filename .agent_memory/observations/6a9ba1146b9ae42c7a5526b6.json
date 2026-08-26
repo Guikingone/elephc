@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && python3 -c \"\nimport re\nfrom pathlib import Path\nFILE_SECTION = re.compile(r'^--FILE--\\s*\\$(.*?)^--[A-Z_]+--\\s*\\$', re.M | re.S)\nPHP_SRC = Path('php-src')\ntotal=ok=0\nfor pat in ['ext/standard/tests/streams','ext/standard/tests/filters','ext/standard/tests/file']:\n    for p in sorted((PHP_SRC/pat).rglob('*.phpt')):\n        total+=1\n        t=p.read_text(errors='replace')\n        m=FILE_SECTION.search(t)\n        if m and '__DIR__… [+92 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && python3 -c \"\nimport re\nfrom pathlib import Path\nFILE_SECTION = re.compile(r'^--FILE--\\s*\\$(.*?)^--[A-Z_]+--\\s*\\$', re.M | re.S)\nPHP_SRC = Path('php-sr",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && python3 -c \"\nimport re\nfrom pathlib import Path\nFILE_SECTION = re.compile(r'^--FILE--\\s*\\$(.*?)^--[A-Z_]+--\\s*\\$', re.M | re.S)\nPHP_SRC = Path('php-src')\ntotal=ok=0\nfor pat in ['ext/standard/tests/streams','ext/standard/tests/filters','ext/standard/tests/file']:\n    for p in sorted((PHP_SRC/pat).rglob('*.phpt')):\n        total+=1\n        t=p.read_text(errors='replace')\n        m=FILE_SECTION.search(t)\n        if m and '__DIR__' not in m.group(1): ok+=1\nprint(f'{ok} runnable / {total} .phpt in streams+filters+file')\n\": 375 runnable / 1099 .phpt in streams+filters+file",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6a9ba1146b9ae42c7a5526b6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T14:55:02.322Z",
+  "stored_at": "2026-08-19T14:55:02.323Z"
+}

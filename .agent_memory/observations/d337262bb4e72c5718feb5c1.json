@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/probes.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/probes.py: \"\"\"Third probe set: exactly WHICH subexpression of a null probe PHP reads.\n\nThe rule under test: the chain being probed is silent, every",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/probes.py: \"\"\"Third probe set: exactly WHICH subexpression of a null probe PHP reads.\n\nThe rule under test: the chain being probed is silent, every other subexpression is an\nordinary read. Each case names one position and asks whether PHP warns about it.\n\"\"\"\nimport pathlib, subprocess, sys\n\nD = pathlib.Path(__file__).parent\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nELEPHC = ROOT / 'target/debug/elephc'\n\nCASES = {\n    'isset_var':          '<?php var_dump(isset($x));',\n    'empty_var':          '<?php var_dump(empty($x));',\n    'coal",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d337262bb4e72c5718feb5c1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:17:18.824Z",
+  "stored_at": "2026-08-20T19:17:18.825Z"
+}

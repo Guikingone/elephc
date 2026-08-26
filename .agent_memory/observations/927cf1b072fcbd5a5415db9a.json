@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 880,905p tests/codegen/array_basics.rs",
+  "summary": "sed -n 880,905p tests/codegen/array_basics.rs: } /// Verifies sort. #[test] fn test_sort() { let out = compile_and_run(r#\"<?php $a = [5, 3, 1, 4, 2]; sort($a); foreach ($a as $v) { echo $v; }\"#); assert_eq!(out, \"12345\"); } /// Verifies rsort. #[test] fn test_rsort() { let out = compile_and_run(r#\"<?php $a = [1, 3, 2];",
+  "text": "sed -n 880,905p tests/codegen/array_basics.rs: } /// Verifies sort. #[test] fn test_sort() { let out = compile_and_run(r#\"<?php $a = [5, 3, 1, 4, 2]; sort($a); foreach ($a as $v) { echo $v; }\"#); assert_eq!(out, \"12345\"); } /// Verifies rsort. #[test] fn test_rsort() { let out = compile_and_run(r#\"<?php $a = [1, 3, 2]; rsort($a); foreach ($a as $v) { echo $v; }\"#); assert_eq!(out, \"321\"); } /// Verifies array keys. #[test] fn test_array_keys() { let out = compile_and_run( r#\"<?php $a = [10, 20, 30]; $k = array_keys($a); foreach ($k as $v) { echo $v; }\"#, ); assert_eq!(out, \"012\"); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "927cf1b072fcbd5a5415db9a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:20:00.415Z",
+  "stored_at": "2026-08-22T10:20:00.415Z"
+}

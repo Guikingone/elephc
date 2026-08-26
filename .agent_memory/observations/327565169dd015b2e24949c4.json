@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub struct Attribute\\b\" -A 8 src/parser/ast/oop.rs | head -12; echo \"=== CheckResult ===\"; grep -rn \"pub struct CheckResult\" -A 30 src/types/result.rs | head -34",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub struct Attribute\\b\" -A 8 src/parser/ast/oop.rs | head -12; echo \"=== CheckResult ===\"; gre",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "327565169dd015b2e24949c4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:25:42.990Z",
+  "stored_at": "2026-08-22T18:25:42.991Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 4000 python3 run.py file-info-queries 2>&1 | tail -14",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 4000 python3 run.py file-info-queries 2>&1 | tail -14: ### file-info-queries (exit php=255 elephc=0) php : missing size elephc: missing ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 4000 python3 run.py file-info-queries 2>&1 | tail -14: ### file-info-queries (exit php=255 elephc=0) php : missing size elephc: missing size 0 php : Fatal error: Uncaught RuntimeException: SplFileInfo::getSize(): stat failed for nope.txt in <dir>/p.php:13 elephc: <missing> php : Stack trace: elephc: <missing> php : #0 <dir>/p.php(13): SplFileInfo->getSize() elephc: <missing> php : #1 {main} elephc: <missing> php : thrown in <dir>/p.php on line 13 elephc: <missing> ...",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d8fa059c724c2c7010877440",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:21:52.774Z",
+  "stored_at": "2026-08-25T09:21:52.775Z"
+}

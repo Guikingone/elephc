@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc build b6.php --emit-asm 2>&1 | rg \"^\\s+[0-9]+:\" | head -12",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc build b6.php --emit-asm 2>&1 | ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc build b6.php --emit-asm 2>&1 | rg \"^\\s+[0-9]+:\" | head -12: 0: std::backtrace_rs::backtrace::libunwind::trace 1: std::backtrace_rs::backtrace::trace_unsynchronized::<<std::backtrace::Backtrace>::create::{closure#0}> 2: <std::backtrace::Backtrace>::create 3: set_local_type_impl 4: store_mutated_local_impl 5: store_mutated_local 6: apply_loop_storage_contracts 7: lower_foreach 8: lower_stmt_once 9: {closure#1} 10: lower_region_at_type_fixpoint<elephc::ir_lower::stmt::repr_fixpoint::lower_stmt_at_type_fixpoint::{closure_env#0}, elephc::ir_lower::stmt::repr_fixpoint::lower_stmt_at_type_fixpoint::{closure_env#1}> 11: lower_stmt_at_type_fixpoint",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3369f627b10497ab7dac0537",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:39:07.296Z",
+  "stored_at": "2026-08-16T19:39:07.297Z"
+}

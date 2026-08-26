@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src tests && git diff --cached --stat",
+  "summary": "About to run: git add src tests && git diff --cached --stat",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "888bfeb9565161c260052441",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:34:05.677Z",
+  "stored_at": "2026-08-21T07:34:05.677Z",
+  "low_signal": true
+}

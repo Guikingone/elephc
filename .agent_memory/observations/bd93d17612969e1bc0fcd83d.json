@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh scsr scsr2 scs scs2 sgl sgl4 2>&1 | head -14",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh scsr scsr2 scs scs2 sgl sgl4 2>&1 | head -14: scsr IDENTICAL scsr2 DIFF: 1c1 < bounded-30 len=30 reads=17,17 --- > bounded-30 ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh scsr scsr2 scs scs2 sgl sgl4 2>&1 | head -14: scsr IDENTICAL scsr2 DIFF: 1c1 < bounded-30 len=30 reads=17,17 --- > bounded-30 len=30 reads=17,13 scs IDENTICAL scs2 IDENTICAL sgl IDENTICAL sgl4 IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bd93d17612969e1bc0fcd83d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T17:42:56.054Z",
+  "stored_at": "2026-08-17T17:42:56.055Z"
+}

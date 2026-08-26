@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add -A docs/ scripts/docs/builtin_registry.json && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/batchmsg.txt --no-verify 2>&1 | head -4",
+  "summary": "git add -A docs/ scripts/docs/builtin_registry.json && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/batchmsg.txt --no-verify 2>&1 | head -4: [worktree-streams-csv-signature 6a80a85c2] fix",
+  "text": "git add -A docs/ scripts/docs/builtin_registry.json && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/batchmsg.txt --no-verify 2>&1 | head -4: [worktree-streams-csv-signature 6a80a85c2] fix(streams): fwrite() had no $length, quoted-printable escaped whitespace php keeps, and a pathless stream reported a `uri` 20 files changed, 434 insertions(+), 39 deletions(-)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5aec6c460c3c04a8e1cec25e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:49:12.796Z",
+  "stored_at": "2026-08-17T07:49:12.796Z"
+}

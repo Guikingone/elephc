@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "diff -u /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/src/builtins/io/fgetcsv.rs /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/fgetcsv.rs | head -60",
+  "summary": "diff -u /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/src/builtins/io/fgetcsv.rs /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/fgetcsv.rs | head -60: t `[\"\"]`. Only a boxed cell can hold that null, so this has to",
+  "text": "diff -u /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/src/builtins/io/fgetcsv.rs /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/fgetcsv.rs | head -60: t `[\"\"]`. Only a boxed cell can hold that null, so this has to agree with the +/// `array<mixed>` layout `__rt_fgetcsv_row_to_mixed` builds — a `Str` element would read the box +/// pointer as a raw string pointer/length pair. fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> { crate::types::checker::builtins::io::common::ensure_stream_resource( cx.checker, @@ -34,10 +46,8 @@ &cx.args[0], cx.env, )?; - // `False`, not `Bool`: the guard narrowing strips an exact `False` member, so - // `while (($row = fgetcsv($h)) !== false)` leaves `$row` an array in the body — - // with `Bool` the union survives the guard and `count($row)` stops compiling. - Ok(cx - .checker - .normalize_union_type(vec![PhpType::Array(Box::new(PhpType::Str)), PhpType::False])) -} + Ok(PhpType::Union(vec![ + PhpType::Array(Box::new(PhpType::Mixed)), + PhpType::False, + ])) +} \\ No newline at end of file",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "307266dbe6dd63d40233c1ce",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:13:05.759Z",
+  "stored_at": "2026-08-14T14:13:05.760Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/statement_basics.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/statement_basics.rs: // A float reaching the output formatter can be NaN, and PHP warns when it is\n    // (`unexpected NAN value was coerced to string`). The warning is raised by `_ -> let mut effects =",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir_lower/stmt/statement_basics.rs: // A float reaching the output formatter can be NaN, and PHP warns when it is\n    // (`unexpected NAN value was coerced to string`). The warning is raised by `_ -> let mut effects = Op::EchoValue.default_effects();\n    if output_value_can_warn(value.ir_type) {\n        effects |= crate::ir::Effects::MAY_WARN;\n    }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a864479197ade2a0ea32da99",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:37:27.758Z",
+  "stored_at": "2026-08-23T16:37:27.759Z"
+}

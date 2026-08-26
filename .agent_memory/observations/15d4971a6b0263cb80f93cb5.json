@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '40,105p' src/codegen/lower_inst/builtins/io/stream_filters.rs",
+  "summary": "sed -n '40,105p' src/codegen/lower_inst/builtins/io/stream_filters.rs: = \"stream_filter_prepend\"; let filter = expect_operand(inst, 1)?; if let Some(filter_name) = optional_const_string_operand(ctx, filter)? { if filter_name == \"zlib.deflate\" { return lower_zlib_deflate_stream_filter_attach(ctx, inst); } if filter_name",
+  "text": "sed -n '40,105p' src/codegen/lower_inst/builtins/io/stream_filters.rs: = \"stream_filter_prepend\"; let filter = expect_operand(inst, 1)?; if let Some(filter_name) = optional_const_string_operand(ctx, filter)? { if filter_name == \"zlib.deflate\" { return lower_zlib_deflate_stream_filter_attach(ctx, inst); } if filter_name == \"zlib.inflate\" { return lower_zlib_inflate_stream_filter_attach(ctx, inst); } if filter_name == \"bzip2.compress\" { return lower_bzip2_compress_stream_filter_attach(ctx, inst); } if filter_name == \"bzip2.decompress\" { return lower_bzip2_decompress_stream_filter_attach(ctx, inst); } if let Some(spec) = filter_name.strip_prefix(\"convert.iconv.\") { return lower_iconv_stream_filter_attach(ctx, inst, spec); } if let Some(id) = stream_filter_id(&filter_name) { return lower_builtin_stream_filter_attach(ctx, inst, id, prepend); } } lower_user_stream_filter_attach(ctx, inst, prepend) } /// Lowers `stream_filter_append($stream, \"zlib.deflate\", ...)`.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "15d4971a6b0263cb80f93cb5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:45:48.537Z",
+  "stored_at": "2026-08-18T09:45:48.538Z"
+}

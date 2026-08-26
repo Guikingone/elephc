@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '528,545p' src/types/checker/inference/expr/effects.rs",
+  "summary": "rtk proxy sed -n '528,545p' src/types/checker/inference/expr/effects.rs: let local_names = env.keys().cloned().collect::<Vec<_>>(); for ty in env.values_mut() { *ty = PhpType::Mixed; } for name in local_names { self.closure_return_types.remove(&name); self.callable_sigs.remove(&name); self.callable_captures.remove(&nam",
+  "text": "rtk proxy sed -n '528,545p' src/types/checker/inference/expr/effects.rs: let local_names = env.keys().cloned().collect::<Vec<_>>(); for ty in env.values_mut() { *ty = PhpType::Mixed; } for name in local_names { self.closure_return_types.remove(&name); self.callable_sigs.remove(&name); self.callable_captures.remove(&name); self.callable_array_targets.remove(&name); self.first_class_callable_targets.remove(&name); } } } /// Returns whether a receiver type may contain a PDOStatement instance. fn type_may_be_pdo_statement(ty: &PhpType) -> bool { match ty { PhpType::Object(class) => class.trim_start_matches('\\\\') == \"PDOStatement\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5abbb7a8304d542e03f1a25b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:54:46.140Z",
+  "stored_at": "2026-08-16T19:54:46.140Z"
+}

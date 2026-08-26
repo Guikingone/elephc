@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rename_op.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rename_op.py: \"\"\"Generalises the opcode: its contract is \"raise this warning, answer null\", not \"a local read\".\n\nphp raises the same shape of diagn",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rename_op.py: \"\"\"Generalises the opcode: its contract is \"raise this warning, answer null\", not \"a local read\".\n\nphp raises the same shape of diagnostic for three different reads that all answer null — an\nundefined variable, a property read on null, and an array offset on null. The instruction that\ncarries a finished message and produces null serves all three; only its name said otherwise.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\nRENAMES = [\n    ('src/ir/instr.rs', [\n        ('    UndefinedLocalRead,', '    Warned",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "63a1d4939593d177c28a9017",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T21:13:18.498Z",
+  "stored_at": "2026-08-20T21:13:18.499Z"
+}

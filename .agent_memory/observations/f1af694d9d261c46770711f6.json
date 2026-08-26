@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"unsupported EIR backend feature\" src/ | head -5",
+  "summary": "grep -rn \"unsupported EIR backend feature\" src/ | head -5: src/pdo_prelude.rs:5113: // (\"unsupported EIR backend feature: array_key_exists key PHP type src/types/checker/builtin_class_gate.rs:92:/// The `spl-decorators` example found it, as `unsupported EIR backend feature: unknown class src/codegen/mod.rs:140: message",
+  "text": "grep -rn \"unsupported EIR backend feature\" src/ | head -5: src/pdo_prelude.rs:5113: // (\"unsupported EIR backend feature: array_key_exists key PHP type src/types/checker/builtin_class_gate.rs:92:/// The `spl-decorators` example found it, as `unsupported EIR backend feature: unknown class src/codegen/mod.rs:140: message: format!(\"unsupported EIR backend feature: {}\", message.into()), src/codegen/lower_inst/objects/dynamic_mixed_candidates.rs:278:/// `unsupported EIR backend feature: dynamic_object_new_mixed for default value of property src/codegen/lower_inst/builtins/io/stream_context.rs:478: // this used to be a compile-time \"unsupported EIR backend feature\" instead.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f1af694d9d261c46770711f6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:12:58.760Z",
+  "stored_at": "2026-08-22T10:12:58.760Z"
+}

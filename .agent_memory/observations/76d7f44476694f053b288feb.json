@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"_swr_bad_proto_msg\\|_swr_dup_proto_msg\" src/ | head -4; echo \"--- mes constantes utilisées ?\"; grep -rn \"BAD_PROTOCOL_WARNING\\|DUPLICATE_PROTOCOL_WARNING\" src/ | head -4",
+  "summary": "grep -rn \"_swr_bad_proto_msg\\|_swr_dup_proto_msg\" src/ | head -4; echo \"--- mes constantes utilisées ?\"; grep -rn \"BAD_PROTOCOL_WARNING\\|DUPLICATE_PROTOCOL_WARNING\" src/ | head -4: src/codegen_support/runtime/data/fixed.rs:732: out.push_str(\".globl _swr_bad_proto_msg\\n_swr_bad_proto_msg:\\n .ascii \\\"Warning: stream_wrap",
+  "text": "grep -rn \"_swr_bad_proto_msg\\|_swr_dup_proto_msg\" src/ | head -4; echo \"--- mes constantes utilisées ?\"; grep -rn \"BAD_PROTOCOL_WARNING\\|DUPLICATE_PROTOCOL_WARNING\" src/ | head -4: src/codegen_support/runtime/data/fixed.rs:732: out.push_str(\".globl _swr_bad_proto_msg\\n_swr_bad_proto_msg:\\n .ascii \\\"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\\\n\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs:733: out.push_str(\".globl _swr_dup_proto_msg\\n_swr_dup_proto_msg:\\n .ascii \\\"Warning: stream_wrapper_register(): Protocol is already defined.\\\\n\\\"\\n\"); --- mes constantes utilisées ? src/codegen_support/runtime/io/stream_wrapper_register.rs:30:pub(crate) const BAD_PROTOCOL_WARNING: &str = src/codegen_support/runtime/io/stream_wrapper_register.rs:34:pub(crate) const DUPLICATE_PROTOCOL_WARNING: &str =",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "76d7f44476694f053b288feb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:54:35.530Z",
+  "stored_at": "2026-08-20T17:54:35.530Z"
+}

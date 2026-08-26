@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"emit_classes_by_name_table(&mut out\" -B14 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs | head -18",
+  "summary": "rtk proxy grep -n \"emit_classes_by_name_table(&mut out\" -B14 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs | head -18: 592- out.push_str(\" .p2align 3\\n\"); 593- out.push_str(\".globl _user_filter_vtable_missing\\n_user_filter_vtable_mis",
+  "text": "rtk proxy grep -n \"emit_classes_by_name_table(&mut out\" -B14 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs | head -18: 592- out.push_str(\" .p2align 3\\n\"); 593- out.push_str(\".globl _user_filter_vtable_missing\\n_user_filter_vtable_missing:\\n\"); 594- for _ in 0..USER_FILTER_VTABLE_SLOTS { 595- out.push_str(\" .quad 0\\n\"); 596- } 597- out.push_str(\".p2align 3\\n\"); 598- emit_static_callable_method_data(&mut out, &sorted_classes); 599- out.push_str(\".p2align 3\\n\"); 600- emit_script_source_file_data(&mut out, source_path); 601- if emit_eval_reflection_metadata { 602- out.push_str(\".p2align 3\\n\"); 603- emit_eval_reflection_source_file_data(&mut out, source_path); 604- } 605- out.push_str(\".p2align 3\\n\"); 606: emit_classes_by_name_table(&mut out, &sorted_classes);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1d9a3a242e6b5747ebea5179",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:40:01.246Z",
+  "stored_at": "2026-08-17T09:40:01.246Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"http_response_headers\\|\\$http_response_header\" src tests --include=\"*.rs\" 2>/dev/null | head -10; echo \"=== ftp ctx ===\"; grep -rn \"resume_pos\\|overwrite\\|proxy\" src/codegen_support/runtime/io/ftp.rs 2>/dev/null | head -10",
+  "summary": "grep -rn \"http_response_headers\\|\\$http_response_header\" src tests --include=\"*.rs\" 2>/dev/null | head -10; echo \"=== ftp ctx ===\"; grep -rn \"resume_pos\\|overwrite\\|proxy\" src/codegen_support/runtime/io/ftp.rs 2>/dev/null | head -10: n_support/runtime/io/ftp.rs:314: emitter.instruction(\"str xzr, [sp, #8]\"); // resume_p",
+  "text": "grep -rn \"http_response_headers\\|\\$http_response_header\" src tests --include=\"*.rs\" 2>/dev/null | head -10; echo \"=== ftp ctx ===\"; grep -rn \"resume_pos\\|overwrite\\|proxy\" src/codegen_support/runtime/io/ftp.rs 2>/dev/null | head -10: n_support/runtime/io/ftp.rs:314: emitter.instruction(\"str xzr, [sp, #8]\"); // resume_pos_len default 0 src/codegen_support/runtime/io/ftp.rs:317: abi::emit_symbol_address(emitter, \"x2\", \"_ftp_resume_pos_key_str\"); src/codegen_support/runtime/io/ftp.rs:318: emitter.instruction(\"mov x3, #10\"); // strlen(\"resume_pos\") = 10 src/codegen_support/runtime/io/ftp.rs:328: emitter.instruction(\"ldr x10, [sp, #0]\"); // resume_pos_ptr src/codegen_support/runtime/io/ftp.rs:329: emitter.instruction(\"ldr x11, [sp, #8]\"); // resume_pos_len src/codegen_support/runtime/io/ftp.rs:330: emitter.instruction(\"bl __rt_http_build_copy_aarch64\"); // x9 += resume_pos_len src/codegen_support/runtime/io/ftp.rs:342: emitter.instruction(\"add sp, sp, #16\"); // release the resume_pos spill src/codegen_support/runtime/io/ftp.rs:632: // -- optional REST <N>\\r\\n send when stream_context_options['ftp']['resume_pos'] is set --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "541a720255f253f3e8ed02e9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:17:48.693Z",
+  "stored_at": "2026-08-14T14:17:48.694Z"
+}

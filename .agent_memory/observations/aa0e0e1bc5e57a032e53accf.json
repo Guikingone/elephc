@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '%s\\n' '<?php' '$exact = fopen(\"php://memory\", \"w+\");' 'fwrite($exact, \"abc\");' 'rewind($exact);' 'echo fread($exact, 3), \"|\", var_export(feof($exact), true), \"\\n\";' 'echo var_export(fread($exact, 1), true), \"|\", var_export(feof($exact), true), \"\\n\";' 'fclose($exact);' '$short = fopen(\"php://memory\", \"w+\");' 'fwrite($short, \"x\");' 'rewind($short);' 'echo fread($short, 2), \"|\", var_export(feof($short), true), \"\\n\";' 'f… [+43 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '%s\\n' '<?php' '$exact = fopen(\"php://memory\", \"w+\");' 'fwrite($exact, \"abc\");' 'rewind($exact);' 'echo fread($exact, 3), \"|\", var_export(feo",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '%s\\n' '<?php' '$exact = fopen(\"php://memory\", \"w+\");' 'fwrite($exact, \"abc\");' 'rewind($exact);' 'echo fread($exact, 3), \"|\", var_export(feof($exact), true), \"\\n\";' 'echo var_export(fread($exact, 1), true), \"|\", var_export(feof($exact), true), \"\\n\";' 'fclose($exact);' '$short = fopen(\"php://memory\", \"w+\");' 'fwrite($short, \"x\");' 'rewind($short);' 'echo fread($short, 2), \"|\", var_export(feof($short), true), \"\\n\";' 'fclose($short);' > eofq.php; php -n eofq.php: abc|false ''|true x|true",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aa0e0e1bc5e57a032e53accf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:43:51.269Z",
+  "stored_at": "2026-08-23T20:43:51.270Z"
+}

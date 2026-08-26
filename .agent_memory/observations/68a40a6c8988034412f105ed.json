@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_keys.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_keys.php: <?php\n// php preserves array_filter()'s keys ALWAYS; the result reads as a list only when the survivors\n// happen to occupy ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_keys.php: <?php\n// php preserves array_filter()'s keys ALWAYS; the result reads as a list only when the survivors\n// happen to occupy 0..n-1. elephc renumbers, which is a different array.\nfunction s(string $label, array $v): void {\n    echo str_pad($label, 34), json_encode($v), \"\\n\";\n}\ns(\"indexed, all kept\", array_filter([1, 2, 3], fn($v) => true));\ns(\"indexed, first dropped\", array_filter([0, 1, 2], fn($v) => (bool) $v));\ns(\"indexed, middle dropped\", array_filter([1, 0, 3], fn($v) => (bool) $v));\ns(\"indexed, last dropped\", array_filter([1, 2, 0], fn($v) => (bool) $v));\ns(\"indexed, all dropped\", array_f",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "68a40a6c8988034412f105ed",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:31:46.726Z",
+  "stored_at": "2026-08-22T11:31:46.727Z"
+}

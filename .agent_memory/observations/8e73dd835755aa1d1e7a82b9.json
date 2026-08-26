@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -c \"\" docs/php/compatibility.md 2>/dev/null; rg -n \"stream|Stream\" docs/php/compatibility.md | head -20",
+  "summary": "About to run: rg -c \"\" docs/php/compatibility.md 2>/dev/null; rg -n \"stream|Stream\" docs/php/compatibility.md | head -20",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e73dd835755aa1d1e7a82b9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:23:43.104Z",
+  "stored_at": "2026-08-17T06:23:43.105Z"
+}

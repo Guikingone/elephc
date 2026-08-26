@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn expect_ok\\|fn expect_no_error\\|fn compiles_ok\" tests/error_tests.rs | head -4; grep -n \"fn expect_error\" -A 10 tests/error_tests.rs | head -14",
+  "summary": "grep -n \"fn expect_ok\\|fn expect_no_error\\|fn compiles_ok\" tests/error_tests.rs | head -4; grep -n \"fn expect_error\" -A 10 tests/error_tests.rs | head -14: 123:fn expect_no_error(src: &str) { 102:fn expect_error(src: &str, expected_substr: &str) { 103- match check_source(src) { 104- Ok(_) => panic!( 105- \"Expected erro",
+  "text": "grep -n \"fn expect_ok\\|fn expect_no_error\\|fn compiles_ok\" tests/error_tests.rs | head -4; grep -n \"fn expect_error\" -A 10 tests/error_tests.rs | head -14: 123:fn expect_no_error(src: &str) { 102:fn expect_error(src: &str, expected_substr: &str) { 103- match check_source(src) { 104- Ok(_) => panic!( 105- \"Expected error containing '{}', but got Ok\", 106- expected_substr 107- ), 108- Err(msg) => { 109- assert!( 110- msg.contains(expected_substr), 111- \"Error '{}' doesn't contain '{}'\", 112- msg,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0efd3532ac5695b6fba07702",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:00:01.276Z",
+  "stored_at": "2026-08-22T13:00:01.276Z"
+}

@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/elephc_builtins/test_contract_pipeline.py')\nt = p.read_text()\nold = '''                    # 5 hash + `dir` + the 14 `gz*` stream functions, all elephc-PHP bodies.\n                    \"prelude\": 19,'''\nnew = '''                    # The 5 that were here plus the 14 `gz*`… [+136 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scrip",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/elephc_builtins/test_contract_pipeline.py')\nt = p.read_text()\nold = '''                    # 5 hash + `dir` + the 14 `gz*` stream functions, all elephc-PHP bodies.\n                    \"prelude\": 19,'''\nnew = '''                    # The 5 that were here plus the 14 `gz*` stream functions.\n                    \"prelude\": 19,'''\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('corrected')\nPY: corrected",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a539e8c66552c160cf0e0eb9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:20:58.175Z",
+  "stored_at": "2026-08-21T12:20:58.175Z",
+  "low_signal": true
+}

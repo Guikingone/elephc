@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 6 2>&1 | head -130",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 6 2>&1 | head -130: mitter.instruction(&format!(\"jmp {}\", done_label)); ctx.emitter.label(&false_label); ctx.emitter.instruction(\"",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 6 2>&1 | head -130: mitter.instruction(&format!(\"jmp {}\", done_label)); ctx.emitter.label(&false_label); ctx.emitter.instruction(\"xor edi, edi\"); // use zero as the false payload ctx.emitter.instruction(\"xor esi, esi\"); ctx.emitter.instruction(\"mov eax, 3\"); // select runtime tag 3 for boolean false abi::emit_call_label(ctx.emitter, \"__rt_mixed_from_value\"); ctx.emitter.label(&done_label); } } } /// Boxes a raw INDEXED array pointer into PHP `array|false` Mixed form. /// /// A helper that answers with a pointer has only the null pointer left to signal failure, /// and storing that raw leaves the caller reading `null` — which is not `false`, so the /// idiomatic `while (($row = fgetcsv($h)) !== false)` never ends. Sibling of /// `box_stat_array_or_false_result`, which boxes a HASH payload (tag 5) rather than the /// indexed payload (tag 4) these helpers build. pub(super) fn box_indexed_array_or_false_result(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e744815eaded921ea03d29ba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:07:18.881Z",
+  "stored_at": "2026-08-20T17:07:18.881Z"
+}

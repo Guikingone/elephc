@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test uncaught_exception_report_tests 2>&1 | tail -4; CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --lib 2>&1 | tail -3",
+  "summary": "About to run: CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test uncaught_exception_report_tests 2>&1 | tail -4; CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p el",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2e9b10a14bb61cc427d397ca",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:33:18.502Z",
+  "stored_at": "2026-08-26T09:33:18.502Z"
+}

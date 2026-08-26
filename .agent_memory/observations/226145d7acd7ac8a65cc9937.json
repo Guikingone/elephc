@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls tests/php_oracle/ 2>/dev/null | head -20; echo \"=== manifest ===\"; ls tests/php_oracle/*.json 2>/dev/null | head; grep -rn \"streams\" tests/php_oracle_manifest_tests.rs 2>/dev/null | head -10",
+  "summary": "ls tests/php_oracle/ 2>/dev/null | head -20; echo \"=== manifest ===\"; ls tests/php_oracle/*.json 2>/dev/null | head; grep -rn \"streams\" tests/php_oracle_manifest_tests.rs 2>/dev/null | head -10: README.md cases corpora drift manifests oracles reachability tests === manifest === (eval):1: no matches found: tests/php_ora",
+  "text": "ls tests/php_oracle/ 2>/dev/null | head -20; echo \"=== manifest ===\"; ls tests/php_oracle/*.json 2>/dev/null | head; grep -rn \"streams\" tests/php_oracle_manifest_tests.rs 2>/dev/null | head -10: README.md cases corpora drift manifests oracles reachability tests === manifest === (eval):1: no matches found: tests/php_oracle/*.json tests/php_oracle_manifest_tests.rs:21: .join(\"tests/php_oracle/manifests/streams/php-8.5.6\") tests/php_oracle_manifest_tests.rs:28: .join(\"tests/php_oracle/manifests/streams/php-8.5.6\") tests/php_oracle_manifest_tests.rs:30: .join(\"streams-full.json\")",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "226145d7acd7ac8a65cc9937",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:19:01.487Z",
+  "stored_at": "2026-08-14T14:19:01.487Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests -- codegen::eval:: 2>&1 | grep -E \"^test result|^    codegen::\" | head -20",
+  "summary": "cargo test --test codegen_tests -- codegen::eval:: 2>&1 | grep -E \"^test result|^    codegen::\" | head -20 failed: Exit code 144",
+  "text": "cargo test --test codegen_tests -- codegen::eval:: 2>&1 | grep -E \"^test result|^    codegen::\" | head -20 failed: Exit code 144",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0d5d395d6f2e35e92c17bfc5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T17:47:05.254Z",
+  "stored_at": "2026-08-19T17:47:05.255Z"
+}

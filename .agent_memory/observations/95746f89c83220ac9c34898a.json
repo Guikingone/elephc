@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,70p' src/types/checker/null_probe.rs",
+  "summary": "sed -n '1,70p' src/types/checker/null_probe.rs:  => return None, } } } /// Returns a probe environment for `arg`: a clone of `env` in which a never-declared chain root /// is bound to `null`, or `None` when `env` already suffices. /// /// Callers infer the operand against the returned environment so that a probe of a n",
+  "text": "sed -n '1,70p' src/types/checker/null_probe.rs:  => return None, } } } /// Returns a probe environment for `arg`: a clone of `env` in which a never-declared chain root /// is bound to `null`, or `None` when `env` already suffices. /// /// Callers infer the operand against the returned environment so that a probe of a never-declared /// variable answers `null` instead of raising `Undefined variable`. The clone is deliberately not /// propagated back to the caller's scope: PHP's probes do not create the variable /// (`if (isset($z)) {} echo $z;` still warns). pub(crate) fn null_probe_env(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Option<TypeEnv> { let name = undefined_probe_root_variable(arg, env)?.to_string(); record_pending_root(checker, &name, arg.span); let mut probed = env.clone(); probed.insert(name, PhpType::Void); Some(probed) } /// Installs a temporary `null` binding for `arg`'s never-declared chain root in `env`. ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "95746f89c83220ac9c34898a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T18:56:11.933Z",
+  "stored_at": "2026-08-18T18:56:11.934Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/empty_arm_order.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/empty_arm_order.py: \"\"\"The arm written for `empty($o->p)` sat BELOW one that already claimed every property access.\n\n    class C { public int $p; ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/empty_arm_order.py: \"\"\"The arm written for `empty($o->p)` sat BELOW one that already claimed every property access.\n\n    class C { public int $p; }\n    $o = new C();\n    var_dump(empty($o->p));    php bool(true)\n                               elephc Fatal error: Typed property C::$p must not be accessed\n                                      before initialization\n\nThe typed-slot arm exists and its doc says exactly what it is for — \"an uninitialized typed slot is\nEMPTY, and the ordinary read that would say so raises\". It is simply unreachable: the arm above it\nmatches `Variable(_) | PropertyAccess { .. }` and retur",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ef8d437b7f98b3ca25eea41c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T11:49:34.304Z",
+  "stored_at": "2026-08-23T11:49:34.305Z"
+}

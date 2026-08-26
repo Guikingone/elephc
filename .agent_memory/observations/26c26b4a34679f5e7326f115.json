@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"^fn test_a_wrapper_without_a_context_property_is_still_deprecated\\|^fn test_csv_escape_deprecation_comes_after_the_control_validation\\|^fn test_csv_escape_deprecation_is_gated_by_php_version\\|^fn test_csv_family_deprecates_an_omitted_escape_argument\\|^fn test_http_meta_data_carries_the_response_headers\\|^fn test_iconv_filter_refusal_uses_the_create_or_locate_wording\\|^fn test_path_readers_name_themselves_in_unresolvable_filter_warnings\\|^fn test_run_time_filter_warning_count_follows_the_open_mode_directions\\|^fn test_stream_filter_strip_tags_is_not_a_php_filter\\|^fn test_stream_select… [+213 chars truncated]",
+  "summary": "About to run: grep -n \"^fn test_a_wrapper_without_a_context_property_is_still_deprecated\\|^fn test_csv_escape_deprecation_comes_after_the_control_validation\\|^fn test_csv_escape_deprecation_is_gated_by_php_version\\",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "26c26b4a34679f5e7326f115",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:08:22.040Z",
+  "stored_at": "2026-08-18T15:08:22.040Z"
+}

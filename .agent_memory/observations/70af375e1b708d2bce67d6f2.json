@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\nd = json.load(open('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gap_missing.json'))\nprint('--- Core (13) ---'); print(' '.join(d.get('Core', [])))\nprint()\nprint('--- standard (143) ---')\nxs = d.get('standard', [])\nfor i in range(0, len(xs), 6):\n    print('  ' + ' '.join(f'{x:22}' for x in xs[i:i+6]))\n\"",
+  "summary": "python3 -c \"\nimport json\nd = json.load(open('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gap_missing.json'))\nprint('--- Core (13) ---'); print(' '.join(d.get('Core', [])))\nprint()\nprint('--- standa",
+  "text": "python3 -c \"\nimport json\nd = json.load(open('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/gap_missing.json'))\nprint('--- Core (13) ---'); print(' '.join(d.get('Core', [])))\nprint()\nprint('--- standard (143) ---')\nxs = d.get('standard', [])\nfor i in range(0, len(xs), 6):\n    print('  ' + ' '.join(f'{x:22}' for x in xs[i:i+6]))\n\": ve_uploaded_file net_get_interfaces nl_langinfo openlog output_add_rewrite_var output_reset_rewrite_vars pack parse_ini_file parse_ini_string parse_str password_algos password_get_info password_hash password_needs_rehash password_verify php_ini_loaded_file php_ini_scanned_files php_strip_whitespace phpcredits phpinfo pos proc_close proc_get_status proc_nice proc_open proc_terminate quoted_printable_decode register_shutdown_function register_tick_function request_parse_body set_include_path set_time_limit setcookie setlocale setrawcookie sha1_file show_source similar_text sizeof soundex str_decrement str_increment str_rot13 str_shuffle strchr strcoll strcspn strip_tags stripcslashes stristr strnatcasecmp strnatcmp strpbrk strrchr strspn strtok substr_compare sys_getloadavg syslog time_nanosleep time_sleep_until uniqid unpack unregister_tick_function utf8_decode utf8_encode version_compare",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "70af375e1b708d2bce67d6f2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:07:26.621Z",
+  "stored_at": "2026-08-21T10:07:26.622Z"
+}

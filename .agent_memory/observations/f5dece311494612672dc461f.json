@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '235,285p' src/codegen/lower_inst/builtins/io/stream_read_helpers.rs",
+  "summary": "sed -n '235,285p' src/codegen/lower_inst/builtins/io/stream_read_helpers.rs: ctx.emitter.instruction(\"mov QWORD PTR [rsp + 32], rax\"); // save requested max bytes or the unlimited sentinel } } Ok(()) } /// Applies the optional `stream_copy_to_stream` source seek before copying. /// /// php-src guards the seek with `pos",
+  "text": "sed -n '235,285p' src/codegen/lower_inst/builtins/io/stream_read_helpers.rs: ctx.emitter.instruction(\"mov QWORD PTR [rsp + 32], rax\"); // save requested max bytes or the unlimited sentinel } } Ok(()) } /// Applies the optional `stream_copy_to_stream` source seek before copying. /// /// php-src guards the seek with `pos > 0`, so a ZERO offset — the documented default — copies /// from the source's CURRENT position rather than rewinding it. MEASURED on `php -n` 8.5.6 with /// the source parked at byte 4 of `\"0123456789\"`: `$offset` of `0`, `-1`, and the omitted /// default all copy 6 bytes (`\"456789\"`), while `2` copies 8. Treating `0` as \"seek to the /// start\" — what this used to do, in a lowering whose contract default was still `-1` — rewound /// a partially consumed source. pub(super) fn lower_stream_copy_seek( ctx: &mut FunctionContext<'_>, skip_seek: &str, wrap_seek: &str, seek_failed: &str, ) { let native_success = ctx.next_label(\"scs_native_seek_success\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f5dece311494612672dc461f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:47:14.687Z",
+  "stored_at": "2026-08-21T10:47:14.687Z"
+}

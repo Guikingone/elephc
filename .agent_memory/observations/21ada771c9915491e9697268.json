@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1055,1080p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/io_run.txt",
+  "summary": "sed -n '1055,1080p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/io_run.txt: tes_into_a_widened_variable' (42708478) panicked at tests/codegen/io/streams.rs:10455:5: assertion `left == right` faile",
+  "text": "sed -n '1055,1080p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/io_run.txt: tes_into_a_widened_variable' (42708478) panicked at tests/codegen/io/streams.rs:10455:5: assertion `left == right` failed left: \"string(9) \\\"untouched\\\"\\n\" right: \"int(0)\\n\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace ---- codegen::io::streams::test_flock_would_block_out_parameter_may_be_undeclared stdout ---- thread 'codegen::io::streams::test_flock_would_block_out_parameter_may_be_undeclared' (42716342) panicked at tests/codegen/io/streams.rs:10430:5: assertion `left == right` failed left: \"NULL=NULL\" right: \"integer=0\" failures: codegen::io::streams::test_by_ref_out_parameter_writes_into_a_widened_variable codegen::io::streams::test_flock_would_block_out_parameter_may_be_undeclared test result: FAILED. 1035 passed; 2 failed; 8 ignored; 0 measured; 7813 filtered out; finished in 327.99s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "21ada771c9915491e9697268",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:38:58.610Z",
+  "stored_at": "2026-08-22T17:38:58.610Z"
+}

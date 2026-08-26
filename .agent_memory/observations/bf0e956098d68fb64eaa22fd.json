@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"escape parameter must be provided\\|str_getcsv\" tests/ | grep -i \"fn test\\|Deprecated\" | head -20",
+  "summary": "grep -rn \"escape parameter must be provided\\|str_getcsv\" tests/ | grep -i \"fn test\\|Deprecated\" | head -20: tests/codegen/io/streams.rs:1262:fn test_str_getcsv_treats_an_interior_newline_as_data() { tests/codegen/io/streams.rs:1277:fn test_str_getcsv_matches_between_compiled_and_eval() {",
+  "text": "grep -rn \"escape parameter must be provided\\|str_getcsv\" tests/ | grep -i \"fn test\\|Deprecated\" | head -20: tests/codegen/io/streams.rs:1262:fn test_str_getcsv_treats_an_interior_newline_as_data() { tests/codegen/io/streams.rs:1277:fn test_str_getcsv_matches_between_compiled_and_eval() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bf0e956098d68fb64eaa22fd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:22:53.195Z",
+  "stored_at": "2026-08-14T14:22:53.196Z"
+}

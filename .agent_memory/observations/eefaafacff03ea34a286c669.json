@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_x86_qp.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_x86_qp.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen_sup",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_x86_qp.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen_support/runtime/io/stream_filter.rs'\ns = open(p).read()\n\n\ndef soft_break(tag, need):\n    \"\"\"The x86_64 mirror of the AArch64 soft-break test.\"\"\"\n    return f'''    abi::emit_symbol_address(emitter, \"rdi\", \"_asf_line_length\");\n    emitter.instruction(\"mov rdi, QWORD PTR [rdi]\");                            // the width php wraps at, 0 for none\n    emitter.instruction(\"test rdi, rdi\");\n    emitter.instruction(\"jz __rt_asf_qpe_{tag}_fits_x86\");                        ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eefaafacff03ea34a286c669",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:16:03.647Z",
+  "stored_at": "2026-08-17T14:16:03.648Z"
+}

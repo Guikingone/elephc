@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests -- codegen::io::streams::test_stream_filter_append_resolves codegen::io::streams::test_iconv_filter_refusal 2>&1 | tail -8",
+  "summary": "cargo test --test codegen_tests -- codegen::io::streams::test_stream_filter_append_resolves codegen::io::streams::test_iconv_filter_refusal 2>&1 | tail -8: Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-16c45d69d5f633ba) running 2 tests test codegen::io::streams::test_iconv_filter_refusal_uses_the_crea",
+  "text": "cargo test --test codegen_tests -- codegen::io::streams::test_stream_filter_append_resolves codegen::io::streams::test_iconv_filter_refusal 2>&1 | tail -8: Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-16c45d69d5f633ba) running 2 tests test codegen::io::streams::test_iconv_filter_refusal_uses_the_create_or_locate_wording ... ok test codegen::io::streams::test_stream_filter_append_resolves_a_run_time_filter_name ... ok test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 8441 filtered out; finished in 1.47s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "956d00edfe13576915010df3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:06:37.557Z",
+  "stored_at": "2026-08-18T10:06:37.557Z"
+}

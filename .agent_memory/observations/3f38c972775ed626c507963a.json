@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; RUST_MIN_STACK=33554432 cargo test --test codegen_tests globals_array_alias 2>&1 | tail -6",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; RUST_MIN_STACK=33554432 cargo test --test codegen_tests globals_array_alias 2>&1 | tail -6: failures: codegen::optimizer::declaration_reachability::test_globals_array_alias_keeps_receiver_method_body test result: FAILED. 0 p",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; RUST_MIN_STACK=33554432 cargo test --test codegen_tests globals_array_alias 2>&1 | tail -6: failures: codegen::optimizer::declaration_reachability::test_globals_array_alias_keeps_receiver_method_body test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8853 filtered out; finished in 0.10s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3f38c972775ed626c507963a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:18:34.589Z",
+  "stored_at": "2026-08-22T17:18:34.589Z"
+}

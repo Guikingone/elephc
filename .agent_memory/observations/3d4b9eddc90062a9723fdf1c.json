@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/types/checker/builtin_spl_classes/filesystem.rs tests/codegen/spl.rs tests/codegen/spl/file_object_read_ahead.rs && git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(spl): SplFileObject's iteration never read ahead, so eof() answered false throughout\n\nphp drives its iteration from the STREAM and reads one line ahead of the one it yields, so\n`eof()` is already true while the LAST element is still current. elephc iterates a line\nARRAY, whose cursor cannot see the stream, and answered `false` at every step of every\niteration — including the one that had just yielded the final ele… [+1488 chars truncated]",
+  "summary": "About to run: git add src/types/checker/builtin_spl_classes/filesystem.rs tests/codegen/spl.rs tests/codegen/spl/file_object_read_ahead.rs && git -c commit.gpgsign=false commit -q -F - <<'MSG' fix(spl): SplFileObje",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3d4b9eddc90062a9723fdf1c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:37:42.452Z",
+  "stored_at": "2026-08-25T14:37:42.453Z"
+}

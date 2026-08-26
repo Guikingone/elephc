@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_glob_flags.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_glob_flags.py: \"\"\"`glob()` declared no `$flags` parameter, so every flagged call was a compile error.\n\n    glob(\"d/*\", GLOB_ONLYDIR);\n    → err",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_glob_flags.py: \"\"\"`glob()` declared no `$flags` parameter, so every flagged call was a compile error.\n\n    glob(\"d/*\", GLOB_ONLYDIR);\n    → error: glob() takes exactly 1 argument\n\nThe runtime already calls libc `glob()` — with the flags hard-coded to ZERO. Most of php's flags\nare the libc ones and only have to be forwarded: `GLOB_MARK` appends `/` to directories,\n`GLOB_NOSORT` leaves filesystem order, `GLOB_NOCHECK` answers the pattern itself when nothing\nmatched, `GLOB_NOESCAPE`, `GLOB_BRACE` and `GLOB_ERR` likewise. MEASURED on `php -n` 8.5.6, one\nflag at a time.\n\n`GLOB_ONLYDIR` is php's OWN bit, not libc'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2cb943efc72f8baf4cbeebf5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:46:28.021Z",
+  "stored_at": "2026-08-22T08:46:28.022Z"
+}

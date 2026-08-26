@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests -- null_receivers undefined_variables by_ref_places key_sort sorting 2>&1 | tail -12",
+  "summary": "cargo test --test codegen_tests -- null_receivers undefined_variables by_ref_places key_sort sorting 2>&1 | tail -12: t_the_default_side_of_a_coalesce_is_an_ordinary_read ... ok test codegen::undefined_variables::test_the_null_probes_say_nothing_about_an_undefined_variable ... ok test codegen::undefined_variables::test",
+  "text": "cargo test --test codegen_tests -- null_receivers undefined_variables by_ref_places key_sort sorting 2>&1 | tail -12: t_the_default_side_of_a_coalesce_is_an_ordinary_read ... ok test codegen::undefined_variables::test_the_null_probes_say_nothing_about_an_undefined_variable ... ok test codegen::undefined_variables::test_the_undefined_read_warning_names_its_line ... ok test codegen::undefined_variables::test_undefined_variable_in_a_concat_inside_a_function_does_not_crash ... ok test codegen::undefined_variables::test_undefined_variable_in_arithmetic_is_null ... ok test codegen::undefined_variables::test_a_use_list_is_evaluated_before_its_own_assignment ... ok test codegen::undefined_variables::test_undefined_variable_read_warns_and_yields_null ... ok test codegen::undefined_variables::test_every_body_kind_reaches_the_undefined_read ... ok test codegen::eval::test_eval_key_sort_mixed_keys_matches_aot ... ok test result: ok. 124 passed; 0 failed; 0 ignored; 0 measured; 8598 filtered out; finished in 113.90s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "181ec18c6d9f56b1f8a1d444",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T08:20:55.011Z",
+  "stored_at": "2026-08-21T08:20:55.011Z"
+}

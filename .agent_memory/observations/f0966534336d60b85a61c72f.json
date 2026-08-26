@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/src/codegen_support/runtime/io/php_wrapper_open.rs 2>&1; diff -q /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/src/codegen_support/runtime/io/php_wrapper_open.rs /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/php_wrapper_open.rs 2>&1; echo \"--- fopen runtime diff size ---\"; diff /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/src/codegen… [+840 chars truncated]",
+  "summary": "About to run: ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/src/codegen_support/runtime/io/php_wrapper_open.rs 2>&1; diff -q /Users/guillaumeloulier/PhpstormProjects",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f0966534336d60b85a61c72f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:20:25.122Z",
+  "stored_at": "2026-08-14T14:20:25.122Z"
+}

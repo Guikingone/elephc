@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc build s3.php --emit-ir 2>&1 | sed -n '6530,6550p'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc build s3.php --emit-ir 2>&1 | s",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc build s3.php --emit-ir 2>&1 | sed -n '6530,6550p':  ; span: 2:28 v3: Heap(Mixed) php=mixed own=owned = mixed_box v2 ; effects: alloc_heap ; span: 2:28 store_local v3 slot[0] ; effects: writes_local ; span: 2:28 v4: Heap(Mixed) php=mixed own=maybe_owned = load_local slot[0] ; effects: reads_local ; span: 2:28 v5: I64 php=int = call v0 v1 v4 data[11] ; effects: reads_heap, writes_heap, reads_global, writes_global, reads_fs, writes_fs, reads_process, writes_process, output, alloc_heap, alloc_concat, refcount_op, may_throw, may_fatal, may_warn, may_deopt ; span: 2:10 v6: Heap(Mixed) php=mixed own=maybe_owned = load_local slot[0] ; effects: reads_local ; span: 2:33 v7: I64 php=null = runtime_call v5 v6 runtime.var_dump ; effects: reads_local, writes_local, reads_heap, writes_heap, reads_global, reads_fs, writes_fs, reads_process, writes_process, output, alloc_heap, alloc_concat, may_throw, may_fatal, may_warn, may_deopt ; span: 2:1 return } }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "369f2cc603cec75c4a5ed194",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:52:38.842Z",
+  "stored_at": "2026-08-18T10:52:38.842Z"
+}

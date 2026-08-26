@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/byref_null.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/byref_null.py: \"\"\"Is the by-reference capture of a NULL variable already broken, before any undefined read?\"\"\"\nimport pathlib, subprocess, sys\n\nD =",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/byref_null.py: \"\"\"Is the by-reference capture of a NULL variable already broken, before any undefined read?\"\"\"\nimport pathlib, subprocess, sys\n\nD = pathlib.Path(__file__).parent\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nELEPHC = ROOT / 'target/debug/elephc'\n\nCASES = {\n    'byref_defined_int':  '<?php $x = 5; $f = function () use (&$x) { return $x; }; var_dump($f()); var_dump($x);',\n    'byref_defined_null': '<?php $x = null; $f = function () use (&$x) { return $x; }; var_dump($f()); var_dump($x);',\n    'byref_undef':        '<?php $f = ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7c69081928b660a78ece2d1e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:35:35.712Z",
+  "stored_at": "2026-08-20T19:35:35.713Z"
+}

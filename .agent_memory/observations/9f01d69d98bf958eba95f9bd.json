@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"emit_http_response_header_deprecation(\" src/codegen/block_emit.rs | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"emit_http_response_header_deprecation(\" src/codegen/block_emit.rs | head: 927: emit_http_response_header_deprecation(&mut ctx); 968:fn emit_http_response_header_deprecation(ctx: &mut FunctionContext<'_>) {",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"emit_http_response_header_deprecation(\" src/codegen/block_emit.rs | head: 927: emit_http_response_header_deprecation(&mut ctx); 968:fn emit_http_response_header_deprecation(ctx: &mut FunctionContext<'_>) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9f01d69d98bf958eba95f9bd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:28:29.432Z",
+  "stored_at": "2026-08-22T18:28:29.433Z"
+}

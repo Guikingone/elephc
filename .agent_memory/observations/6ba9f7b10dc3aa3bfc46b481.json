@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_nullable_receiver_object_payload\" -A 40 src/codegen/lower_inst/objects.rs 2>/dev/null | head -45 || grep -rn \"fn emit_nullable_receiver_object_payload\" src/",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_nullable_receiver_object_payload\" -A 40 src/codegen/lower_inst/objects.rs 2>/dev/null | head -45 || grep -rn \"fn emit_nullable_receiver_object_payload\" src/ completed",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_nullable_receiver_object_payload\" -A 40 src/codegen/lower_inst/objects.rs 2>/dev/null | head -45 || grep -rn \"fn emit_nullable_receiver_object_payload\" src/ completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6ba9f7b10dc3aa3bfc46b481",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T11:19:49.332Z",
+  "stored_at": "2026-08-23T11:19:49.332Z"
+}

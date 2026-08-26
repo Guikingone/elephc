@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: ## Active work — Streams (branche `feat/streams-csv-signatures`) -> ## Active work — Streams (branche `feat/streams-csv-signatures`)\n- 🎯🔴🔴 [AUDIT COMPLET surface streams 2026-08-14](streams-audit-full-",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: ## Active work — Streams (branche `feat/streams-csv-signatures`) -> ## Active work — Streams (branche `feat/streams-csv-signatures`)\n- 🎯🔴🔴 [AUDIT COMPLET surface streams 2026-08-14](streams-audit-full-surface-2026-08-14.md) — 12 P0 silencieux (STREAM_CLIENT_* permutées · stream_metadata=décalage registres · READ_CSV=explode · fputcsv escape asym · strip_tags fantôme · php://output vs ob · filter défaut 3≠0 · buffers non dispatchés · mkdir 1-param · &$consumed · ValueError single-char · fscanf &vars) ; 2 tests épinglent du FAUX (:2191, :2559) ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "12e16fcdae46a3daa1c73d1d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:27:58.901Z",
+  "stored_at": "2026-08-14T14:27:58.902Z"
+}

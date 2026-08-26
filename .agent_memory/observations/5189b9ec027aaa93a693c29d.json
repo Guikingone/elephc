@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"php_memory\\|memory\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/context_result_helpers.rs | head -8",
+  "summary": "rtk proxy grep -n \"php_memory\\|memory\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/context_result_helpers.rs | head -8: 597:/// Recognizes in-memory `php://` stream URLs backed by the temp-file helper. 598:pub(super) fn is_php_memory_str",
+  "text": "rtk proxy grep -n \"php_memory\\|memory\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/context_result_helpers.rs | head -8: 597:/// Recognizes in-memory `php://` stream URLs backed by the temp-file helper. 598:pub(super) fn is_php_memory_stream(path: &str) -> bool { 599: path == \"php://memory\" || path == \"php://temp\" || path.starts_with(\"php://temp/\")",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5189b9ec027aaa93a693c29d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:52:33.878Z",
+  "stored_at": "2026-08-17T07:52:33.879Z"
+}

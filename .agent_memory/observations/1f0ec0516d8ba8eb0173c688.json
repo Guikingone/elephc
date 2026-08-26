@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-virtual-call-needs-the-subclasss-body.md",
+  "command": "",
+  "summary": "About to run: Write",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1f0ec0516d8ba8eb0173c688",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:38:48.458Z",
+  "stored_at": "2026-08-25T14:38:48.458Z",
+  "low_signal": true
+}

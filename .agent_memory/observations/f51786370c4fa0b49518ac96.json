@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_ctx_shape_boxed_values.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_ctx_shape_boxed_values.py: \"\"\"The options shape guard unboxes a `Mixed` entry value before judging it.\n\nMEASURED: `stream_context_create(json_d",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_ctx_shape_boxed_values.py: \"\"\"The options shape guard unboxes a `Mixed` entry value before judging it.\n\nMEASURED: `stream_context_create(json_decode('{\"http\":{\"method\":\"GET\"}}', true))` raised php's\nValueError in elephc and is a valid context in php. A hash built at runtime holds its values as\nBOXED Mixed cells — runtime tag 7 — and the guard compared that tag against 4 and 5 directly, so\nevery such entry read as \"not an array\".\n\nThe cursor is spilled around the unboxing call: it lives in the register the iterator answers in,\nwhich is also the register the call returns in.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f51786370c4fa0b49518ac96",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:43:57.838Z",
+  "stored_at": "2026-08-22T15:43:57.838Z"
+}

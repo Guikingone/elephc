@@ -67,9 +67,9 @@ impl IrPass for DeadStore {
 /// lifetime tracking (so no `acquire`/`release` ownership ops surround its
 /// stores), and every instruction naming the slot is a plain `load_local` or
 /// `store_local`. Any other slot-naming op (ref-cell promote/alias/release,
-/// `unset_local`, static-local or global access, list unpack, …) makes the slot
-/// ineligible because it could read or alias the slot in a way this pass does not
-/// model.
+/// `unset_local`, `zero_local_slot`, static-local or global access, list unpack, …)
+/// makes the slot ineligible because it could read or alias the slot in a way this
+/// pass does not model.
 fn eligible_slots(function: &Function, data: &DataPool) -> HashSet<LocalSlotId> {
     let mut eligible: HashSet<LocalSlotId> = function
         .locals
@@ -210,7 +210,7 @@ fn op_is_value_only_consumer(op: Op) -> bool {
             | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | MixedNumericBinop
             // Comparisons.
             | ICmp | FCmp | StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | LooseEq
-            | LooseNotEq | Spaceship
+            | LooseNotEq | PhpRelCmp | Spaceship
             // Scalar predicates and type queries.
             | IsNull | IsTruthy | IsEmpty | MixedTagOf
             // Numeric/string/mixed conversions.

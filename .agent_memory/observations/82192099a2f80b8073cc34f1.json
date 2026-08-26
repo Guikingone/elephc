@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"ZLIB\\|zlib\" src/types/stream_constants.rs | head -8; echo \"=== is this table the only one? ===\"; grep -rn \"STREAM_CONSTANTS\\|pub(crate) const .*: &\\[(&str, i64)\\]\" src/types/stream_constants.rs | head -4",
+  "summary": "grep -n \"ZLIB\\|zlib\" src/types/stream_constants.rs | head -8; echo \"=== is this table the only one? ===\"; grep -rn \"STREAM_CONSTANTS\\|pub(crate) const .*: &\\[(&str, i64)\\]\" src/types/stream_constants.rs | head -4: 29: \"compress.zlib\", 61:/// php publishes filter FAMILIES, not concrete names: `zlib.*` stands for 62:/// ",
+  "text": "grep -n \"ZLIB\\|zlib\" src/types/stream_constants.rs | head -8; echo \"=== is this table the only one? ===\"; grep -rn \"STREAM_CONSTANTS\\|pub(crate) const .*: &\\[(&str, i64)\\]\" src/types/stream_constants.rs | head -4: 29: \"compress.zlib\", 61:/// php publishes filter FAMILIES, not concrete names: `zlib.*` stands for 62:/// `zlib.deflate`/`zlib.inflate`, `bzip2.*` for the bzip2 pair, and `convert.*` 66: \"zlib.*\", 290: \"compress.zlib\", 305: \"zlib.*\", === is this table the only one? === src/types/stream_constants.rs:87:pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "82192099a2f80b8073cc34f1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:05:58.673Z",
+  "stored_at": "2026-08-21T14:05:58.674Z"
+}

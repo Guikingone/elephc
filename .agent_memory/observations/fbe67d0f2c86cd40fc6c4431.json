@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep \"FAILED\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/codegen_full.txt | cut -c1-150",
+  "summary": "grep \"FAILED\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/codegen_full.txt | cut -c1-150: test codegen::arrays::assoc_helpers::test_assoc_key_sorts_bound_decimal_whitespace ... FAILED test codegen:",
+  "text": "grep \"FAILED\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/codegen_full.txt | cut -c1-150: test codegen::arrays::assoc_helpers::test_assoc_key_sorts_bound_decimal_whitespace ... FAILED test codegen::arrays::assoc_helpers::test_assoc_key_sorts_keep_large_integer_string_comparisons_exact ... FAILED test codegen::arrays::assoc_helpers::test_assoc_key_sorts_match_php_numeric_string_rounding_and_overflow ... FAILED test codegen::arrays::assoc_helpers::test_assoc_key_sorts_order_i64_overflow_integer_spellings_exactly ... FAILED test codegen::arrays::by_ref_places::test_sort_on_nested_property_chain ... FAILED test codegen::arrays::indexed::key_sort_nested_mixed::test_ksort_missing_child_of_mixed_parent_reports_type_error ... FAILED test codegen::arrays::indexed::key_sort_nested_mixed::test_ksort_scalar_child_of_mixed_parent_reports_type_error ... FAILED",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fbe67d0f2c86cd40fc6c4431",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:19:00.206Z",
+  "stored_at": "2026-08-21T07:19:00.206Z"
+}

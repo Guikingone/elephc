@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 1095,1128p src/types/checker/builtins/callables.rs",
+  "summary": "About to run: sed -n 1095,1128p src/types/checker/builtins/callables.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "346bf5df0b962fb490e66733",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:15:02.129Z",
+  "stored_at": "2026-08-22T11:15:02.130Z"
+}

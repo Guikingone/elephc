@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn emit_compact_pollfd_aarch64\" -A40 src/codegen_support/runtime/io/stream_select.rs | head -45",
+  "summary": "About to run: grep -n \"fn emit_compact_pollfd_aarch64\" -A40 src/codegen_support/runtime/io/stream_select.rs | head -45",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "28a000bb4bf59ce2913acead",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:21:18.051Z",
+  "stored_at": "2026-08-18T11:21:18.052Z"
+}

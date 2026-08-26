@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-ir -q clo_ret_undef.php 2>&1 | grep -n \"function __eir_closure_main_0\\|function main\" -A 30",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-ir -q clo_ret_undef.php 2>&1",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-ir -q clo_ret_undef.php 2>&1 | grep -n \"function __eir_closure_main_0\\|function main\" -A 30: entry: 140- concat_reset ; effects: writes_global ; span: 1:7 141- v0: I64 php=callable own=owned = closure_new data[5] ; effects: alloc_heap ; span: 1:12 142- store_local v0 slot[0] ; effects: writes_local ; span: 1:7 143- concat_reset ; effects: writes_global ; span: 1:43 144- v1: I64 php=int = call data[0] ; effects: writes_global, may_warn ; span: 1:52 145- v2: I64 php=null = runtime_call v1 runtime.var_dump ; effects: reads_local, writes_local, reads_heap, writes_heap, reads_global, reads_fs, writes_fs, reads_process, writes_process, output, alloc_heap, alloc_concat, may_throw, may_fatal, may_warn, may_deopt ; span: 1:43 146- return 147- } 148- 149: function __eir_closure_main_0() -> I64 flags(closure) { 150- entry: 151- concat_reset ; effects: writes_global ; span: 1:26 152- v0: I64 php=null = undefined_local_read data[4] ; effects: may_warn ; span: 1:33 153- return v0 154- } 155-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "24672bf11361f68a2ba958b6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:27:01.301Z",
+  "stored_at": "2026-08-20T19:27:01.301Z"
+}

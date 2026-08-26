@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests spl:: 2>&1 | tail -8",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests spl:: 2>&1 | tail -8: test codegen::spl::storage::test_array_iterator_iterates_associative_keys_and_values ... ok test codegen::spl::storage::test_array_object_returns_array_iterator ... ok test codegen::spl::storage::test_e",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests spl:: 2>&1 | tail -8: test codegen::spl::storage::test_array_iterator_iterates_associative_keys_and_values ... ok test codegen::spl::storage::test_array_object_returns_array_iterator ... ok test codegen::spl::storage::test_empty_iterator_foreach_has_no_values ... ok test codegen::spl::storage::test_spl_registers_for_unserialize ... ok test codegen::spl::storage::test_storage_classes_are_declared_and_implement_contracts ... ok test result: ok. 272 passed; 0 failed; 0 ignored; 0 measured; 8683 filtered out; finished in 82.17s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b786844d7e4c0431a18eddbb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:13:01.628Z",
+  "stored_at": "2026-08-24T20:13:01.629Z"
+}

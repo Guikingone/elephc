@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/trace_per_site.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/trace_per_site.py: \"\"\"The trace block asked a MODULE-wide question where the answer is per THROW SITE.\n\n    class F { function stream_flush() { re",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/trace_per_site.py: \"\"\"The trace block asked a MODULE-wide question where the answer is per THROW SITE.\n\n    class F { function stream_flush() { return false; } }   // any user method at all\n    fwrite(false, \"x\");\n\n    php:    Fatal error: Uncaught TypeError: ...\n            Stack trace:\n            #0 <file>(10): fwrite(false, 'x')\n            #1 {main}\n              thrown in <file> on line 10\n    elephc: the Fatal error line, and nothing else\n\n`_rt_trace_exact` says \"this module declares no user function that could hide a frame\", and it is\nwhat the block writer consults. It is the right question for the RUNTI",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3e0c58a79679cc5640cf0794",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:39:30.230Z",
+  "stored_at": "2026-08-22T19:39:30.231Z"
+}

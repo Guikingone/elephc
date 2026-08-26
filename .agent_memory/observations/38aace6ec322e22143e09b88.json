@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 24,80p src/codegen/lower_inst/builtins/io/stream_filters.rs",
+  "summary": "sed -n 24,80p src/codegen/lower_inst/builtins/io/stream_filters.rs: , super::super::exceptions::ValueGuard::SignedAtLeast(\"rdx\", 1), STREAM_FILTER_REGISTER_EMPTY_CLASS_MESSAGE, ); ctx.emitter.instruction(\"mov rcx, rdx\"); // pass the class-name byte length as the fourth registry argument ctx.emitter.instruction(\"mov rdx",
+  "text": "sed -n 24,80p src/codegen/lower_inst/builtins/io/stream_filters.rs: , super::super::exceptions::ValueGuard::SignedAtLeast(\"rdx\", 1), STREAM_FILTER_REGISTER_EMPTY_CLASS_MESSAGE, ); ctx.emitter.instruction(\"mov rcx, rdx\"); // pass the class-name byte length as the fourth registry argument ctx.emitter.instruction(\"mov rdx, rax\"); // pass the class-name pointer as the third registry argument abi::emit_pop_reg_pair(ctx.emitter, \"rdi\", \"rsi\"); } } abi::emit_call_label(ctx.emitter, \"__rt_stream_filter_register\"); store_if_result(ctx, inst) } /// Lowers `stream_filter_append` and `stream_filter_prepend`. pub(crate) fn lower_stream_filter_attach( ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &str, ) -> Result<()> { ensure_arg_count_between(inst, name, 2, 4)?; // Ordering is the chain's job now: prepend inserts at the head instead of // shuffling two fixed table slots, so a third filter no longer falls off. let prepend = name == \"stream_filter_prepend\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "38aace6ec322e22143e09b88",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:39:15.211Z",
+  "stored_at": "2026-08-21T15:39:15.211Z"
+}

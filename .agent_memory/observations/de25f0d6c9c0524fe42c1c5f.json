@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sleep 5; pkill -f \"codegen_tests-16c45\" 2>/dev/null; sleep 2; echo \"[running=$(ps aux | grep -c '[c]odegen_tests-16c45')]\"",
+  "summary": "sleep 5; pkill -f \"codegen_tests-16c45\" 2>/dev/null; sleep 2; echo \"[running=$(ps aux | grep -c '[c]odegen_tests-16c45')]\": [running=2]",
+  "text": "sleep 5; pkill -f \"codegen_tests-16c45\" 2>/dev/null; sleep 2; echo \"[running=$(ps aux | grep -c '[c]odegen_tests-16c45')]\": [running=2]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "de25f0d6c9c0524fe42c1c5f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:45:48.981Z",
+  "stored_at": "2026-08-18T10:45:48.981Z"
+}

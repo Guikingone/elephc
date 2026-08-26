@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn file_current_line_expr\" -A 12 src/types/checker/builtin_spl_classes/filesystem.rs | head -16; grep -n \"fn spl_file_object_fgets_body\\|fn spl_file_object_get_current_line_body\" -A 12 src/types/checker/builtin_spl_classes/filesystem.rs | head -30",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn file_current_line_expr\" -A 12 src/types/checker/builtin_spl_classes/filesystem.rs | head -16",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "67514058c8968b70da4aa460",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:30:05.778Z",
+  "stored_at": "2026-08-23T09:30:05.779Z"
+}

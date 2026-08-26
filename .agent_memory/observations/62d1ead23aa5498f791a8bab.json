@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 53,75p src/codegen_support/runtime/data/user.rs",
+  "summary": "sed -n 53,75p src/codegen_support/runtime/data/user.rs: pub(crate) fn emit_runtime_data_user( global_var_names: &HashSet<String>, static_vars: &HashMap<(String, String), PhpType>, functions: &HashMap<String, FunctionSig>, function_variant_groups: &HashSet<String>, interfaces: &HashMap<String, InterfaceInfo>, interface_",
+  "text": "sed -n 53,75p src/codegen_support/runtime/data/user.rs: pub(crate) fn emit_runtime_data_user( global_var_names: &HashSet<String>, static_vars: &HashMap<(String, String), PhpType>, functions: &HashMap<String, FunctionSig>, function_variant_groups: &HashSet<String>, interfaces: &HashMap<String, InterfaceInfo>, interface_names: &[String], trait_names: &[String], declared_trait_uses: &HashMap<String, Vec<String>>, declared_trait_source_lines: &HashMap<String, u32>, classes: &HashMap<String, ClassInfo>, enums: &HashMap<String, EnumInfo>, allowed_class_names: Option<&HashSet<String>>, emit_eval_reflection_metadata: bool, source_path: Option<&str>, target: Target, ) -> String { let mut out = String::new(); let mut sorted_globals: Vec<&String> = global_var_names.iter().collect(); sorted_globals.sort(); for name in sorted_globals { out.push_str(&comm_directive(&format!(\"_gvar_{}\", name), 16, target));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "62d1ead23aa5498f791a8bab",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:17:43.125Z",
+  "stored_at": "2026-08-22T12:17:43.126Z"
+}

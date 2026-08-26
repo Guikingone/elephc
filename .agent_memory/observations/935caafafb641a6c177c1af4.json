@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"InvokerRefArg\" src",
+  "summary": "grep -rn \"InvokerRefArg\" src: src/ir/validator.rs:323: | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, \"local slot\", |imm| { src/ir/validator.rs:413: | CallableArrayNew | GeneratorNew | InvokerRefArg src/ir/instr.rs:334: InvokerRefArg, src/ir/instr.rs:654: Invo",
+  "text": "grep -rn \"InvokerRefArg\" src: src/ir/validator.rs:323: | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, \"local slot\", |imm| { src/ir/validator.rs:413: | CallableArrayNew | GeneratorNew | InvokerRefArg src/ir/instr.rs:334: InvokerRefArg, src/ir/instr.rs:654: InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP, src/ir/instr.rs:909: InvokerRefArg => \"invoker_ref_arg\", src/ir_passes/peephole/load_store.rs:107: | Op::InvokerRefArg src/ir_lower/context.rs:2073: | Op::InvokerRefArg src/ir_lower/expr/descriptor_args.rs:196: Op::InvokerRefArg, src/ir_lower/expr/descriptor_args.rs:200: Op::InvokerRefArg.default_effects(), src/codegen/lower_inst.rs:236: Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "935caafafb641a6c177c1af4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:27:15.912Z",
+  "stored_at": "2026-08-18T12:27:15.912Z"
+}

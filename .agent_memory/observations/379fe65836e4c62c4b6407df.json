@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='docs/php/spl.md'\ns=open(p).read()\nold = '| `SplFileObject` | `__construct(string $filename, string $mode = \"r\", bool $useIncludePath = false, mixed $context = null)`, line iterator methods, `eof()`, `fgets()`, `fgetc()`, `fread()`, `fwrite()`, `fseek()`, `ftell()`, `fstat()`, CSV-control helpers, `hasChildren()`, `getChildren()` |'\nnew = '| `SplFileObject` | `__construct(string $filename, string $mode = \"r\", bool $useIncludePath = false, mixed $context = null)`, line iterator methods, `eof()`, `fgets()`, `getCurrentLine()` (its alias), `fscanf(string $format)`, `fgetc()`, `… [+237 chars truncated]",
+  "summary": "python3 - <<'PY'\np='docs/php/spl.md'\ns=open(p).read()\nold = '| `SplFileObject` | `__construct(string $filename, string $mode = \"r\", bool $useIncludePath = false, mixed $context = null)`, line iterator methods, `eof()`, `fgets()`, `fgetc()`, `fread()`, `fwrite()`, `fseek()`, `ftell()`, `fstat()`, CSV-control helpers, `h",
+  "text": "python3 - <<'PY'\np='docs/php/spl.md'\ns=open(p).read()\nold = '| `SplFileObject` | `__construct(string $filename, string $mode = \"r\", bool $useIncludePath = false, mixed $context = null)`, line iterator methods, `eof()`, `fgets()`, `fgetc()`, `fread()`, `fwrite()`, `fseek()`, `ftell()`, `fstat()`, CSV-control helpers, `hasChildren()`, `getChildren()` |'\nnew = '| `SplFileObject` | `__construct(string $filename, string $mode = \"r\", bool $useIncludePath = false, mixed $context = null)`, line iterator methods, `eof()`, `fgets()`, `getCurrentLine()` (its alias), `fscanf(string $format)`, `fgetc()`, `fread()`, `fwrite()`, `fseek()`, `ftell()`, `fstat()`, CSV-control helpers, `hasChildren()`, `getChildren()` |'\nassert s.count(old)==1\nopen(p,'w').write(s.replace(old,new))\nprint('spl.md updated')\nPY\ngit status --short -- docs/ | head -5: spl.md updated M docs/php/spl.md",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "379fe65836e4c62c4b6407df",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:16:34.506Z",
+  "stored_at": "2026-08-16T19:16:34.506Z"
+}

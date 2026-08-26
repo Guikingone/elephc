@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_sgl.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_sgl.txt: fix(streams): stream_get_line() handed back an incomplete line instead of keeping it on the stream\n\nphp answers `false` when `stream_get_",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_sgl.txt: fix(streams): stream_get_line() handed back an incomplete line instead of keeping it on the stream\n\nphp answers `false` when `stream_get_line()` finds neither the delimiter nor the\nlength cap and the stream is not at EOF, and the bytes it read STAY on the\nstream. Measured on `php -n` 8.5.6 over a non-blocking socket pair: writing \"abc\"\nwith no newline answers `false`, and once \"def\\n\" arrives the next call answers\n\"abcdef\". elephc consumed the \"abc\" and answered it — so a reader assembling\nrecords off a non-blocking socket saw each record split wherever the packets\nhappened to land.\n\nEOF is no",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b12d93ec3b9c4fe03cdbf745",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T16:44:06.898Z",
+  "stored_at": "2026-08-17T16:44:06.900Z"
+}

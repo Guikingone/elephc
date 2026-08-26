@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"filter_param_warning\" src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/emitters.rs | head",
+  "summary": "grep -n \"filter_param_warning\" src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/emitters.rs | head: src/codegen_support/runtime/io/mod.rs:37:mod filter_param_warning; src/codegen_support/runtime/io/mod.rs:264:pub(crate) use filter_param_warning::emit_filter_param_warning;",
+  "text": "grep -n \"filter_param_warning\" src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/emitters.rs | head: src/codegen_support/runtime/io/mod.rs:37:mod filter_param_warning; src/codegen_support/runtime/io/mod.rs:264:pub(crate) use filter_param_warning::emit_filter_param_warning;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8d99f06743bff422862cd869",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:56:55.529Z",
+  "stored_at": "2026-08-18T09:56:55.529Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"pub fn emit_array_unique(\\|pub fn emit_array_unique_refcounted(\\|pub fn emit_shuffle_str(\\|pub fn emit_string_offset_warning(\\|pub fn emit_throw_object_not_array(\" src/codegen_support/runtime/ | head",
+  "summary": "grep -rn \"pub fn emit_array_unique(\\|pub fn emit_array_unique_refcounted(\\|pub fn emit_shuffle_str(\\|pub fn emit_string_offset_warning(\\|pub fn emit_throw_object_not_array(\" src/codegen_support/runtime/ | head: src/codegen_support/runtime/objects/string_offset_warning.rs:25:pub fn emit_string_offset_warning(emitter: &m",
+  "text": "grep -rn \"pub fn emit_array_unique(\\|pub fn emit_array_unique_refcounted(\\|pub fn emit_shuffle_str(\\|pub fn emit_string_offset_warning(\\|pub fn emit_throw_object_not_array(\" src/codegen_support/runtime/ | head: src/codegen_support/runtime/objects/string_offset_warning.rs:25:pub fn emit_string_offset_warning(emitter: &mut Emitter) { src/codegen_support/runtime/objects/object_not_array.rs:30:pub fn emit_throw_object_not_array(emitter: &mut Emitter) { src/codegen_support/runtime/arrays/shuffle.rs:118:pub fn emit_shuffle_str(emitter: &mut Emitter) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a1320b2ee2f477578d4c829b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:23:27.356Z",
+  "stored_at": "2026-08-20T17:23:27.356Z"
+}

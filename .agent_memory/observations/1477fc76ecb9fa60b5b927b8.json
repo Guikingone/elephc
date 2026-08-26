@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '60,95p;165,200p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fopen.rs",
+  "summary": "sed -n '60,95p;165,200p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fopen.rs: callee name emitter.instruction(\"bl __rt_unknown_wrapper_warning\"); emitter.instruction(\"ldr x3, [sp], #16\"); // restore the errno emitter.instruction(\"ldr x2, [s",
+  "text": "sed -n '60,95p;165,200p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fopen.rs: callee name emitter.instruction(\"bl __rt_unknown_wrapper_warning\"); emitter.instruction(\"ldr x3, [sp], #16\"); // restore the errno emitter.instruction(\"ldr x2, [sp, #0]\"); // the null-terminated path abi::emit_symbol_address(emitter, \"x0\", \"_diag_open_failed_fopen_prefix\"); emitter.instruction(&format!(\"mov x1, #{}\", \"Warning: fopen(\".len())); // prefix length emitter.instruction(\"bl __rt_open_failed_warning\"); emitter.instruction(\"mov x0, #-1\"); // return -1 to indicate failure emitter.instruction(\"b __rt_fopen_return\"); // skip eof-flag reset on failed opens // -- silent-fail entry for user-registered wrappers (no warning) -- emitter.label(\"__rt_fopen_silent_fail\"); emitter.instruction(\"mov x0, #-1\"); // return -1 without emitting a warning emitter.instruction(\"b __rt_fopen_return\"); // share the common return path // -- user-wrapper dispatch: matched scheme, x12 = wrapper slot base --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1477fc76ecb9fa60b5b927b8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:21:26.576Z",
+  "stored_at": "2026-08-14T14:21:26.576Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "mkdir -p \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_userspace\" && echo OK && awk 'NR>=95 && NR<=112' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/CHANGELOG.md | grep -n '^## \\[' ; awk 'NR>=100 && NR<=115{print NR\": \"substr($0,1,80)}' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/CHANGELOG.md",
+  "summary": "mkdir -p \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_userspace\" && echo OK && awk 'NR>=95 && NR<=112' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "text": "mkdir -p \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_userspace\" && echo OK && awk 'NR>=95 && NR<=112' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/CHANGELOG.md | grep -n '^## \\[' ; awk 'NR>=100 && NR<=115{print NR\": \"substr($0,1,80)}' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/CHANGELOG.md:  the TLS handshake, so the SNI a connectio 106: - Fixed `stream_socket_enable_crypto($stream, false)` always reporting success. 107: - Fixed a resource passed through an untyped parameter losing its identity: `fun 108: - Changed PHP resource ids to follow reference numbering exactly: 1, 2 and 3 sta 109: - Changed a closed resource to report type `Unknown` at every display site rathe 110: - Fixed `fopen('php://stdout')` handing back the process's own descriptor, so `f 111: - Fixed `stream_get_meta_data()` naming the `data:` wrapper `data` instead of PH 112: - Fixed `stream_socket_client()` and `stream_socket_server()` accepting one argu 113: - Fixed request resources and the resource registry itself never being released, 114: - Fixed every compiled program on Linux x86_64 crashing at exit, after printing 115: - Fixed every compiled program on Linux ARM64 failing to link with `undefined re",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a969be1f25ed280bbd821184",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:14:11.522Z",
+  "stored_at": "2026-08-14T14:14:11.523Z"
+}

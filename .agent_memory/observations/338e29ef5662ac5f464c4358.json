@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/runtime-frame-balance-gate-whole-surface.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/runtime-frame-balance-gate-whole-surface.md: ---\nname: runtime-frame-balance-gate-whole-surface\ndescription: \"🔴🔴🔑★★★ stream_filter_register relâchait sa trame DEUX FOIS: 28 tests de filtres rouges pour une raison d",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/runtime-frame-balance-gate-whole-surface.md: ---\nname: runtime-frame-balance-gate-whole-surface\ndescription: \"🔴🔴🔑★★★ stream_filter_register relâchait sa trame DEUX FOIS: 28 tests de filtres rouges pour une raison dont aucun ne parlait. Gate = marche du CFG sur TOUT le runtime (1039/1041 helpers)\"\nmetadata:\n  node_type: memory\n  type: project\n  modified: 2026-08-21T00:00:00.000Z\n---\n\nCommits `633be3d7f` (correctif) + `f07ae0c80` (porte). Généralise\n[[emitter-frame-balance-is-a-testable-property]] : là c'était un COMPTAGE sur un fichier, ici c'est\nune marche du graphe de flot sur **tout** le runtime émis.\n\n## Le défaut\n\n`__rt_stream_filter",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "338e29ef5662ac5f464c4358",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:42:57.255Z",
+  "stored_at": "2026-08-21T16:42:57.256Z"
+}

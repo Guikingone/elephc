@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"php_stream_parse_fopen_modes\" -A 60 /Users/guillaumeloulier/PhpstormProjects/Research/php-src/main/streams/plain_wrapper.c | head -90",
+  "summary": "About to run: grep -n \"php_stream_parse_fopen_modes\" -A 60 /Users/guillaumeloulier/PhpstormProjects/Research/php-src/main/streams/plain_wrapper.c | head -90",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "baf414801883b0f71ead3e48",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:14:33.075Z",
+  "stored_at": "2026-08-14T14:14:33.075Z"
+}

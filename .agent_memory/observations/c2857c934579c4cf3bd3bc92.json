@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps -A -o pid=,etime=,command= | rg \"cargo|rustc\" | rg -v \"rg \" | head -6; ls -d /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps 2>&1 | head -2",
+  "summary": "About to run: ps -A -o pid=,etime=,command= | rg \"cargo|rustc\" | rg -v \"rg \" | head -6; ls -d /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps 2>&1 | hea",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c2857c934579c4cf3bd3bc92",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:42:50.211Z",
+  "stored_at": "2026-08-17T12:42:50.212Z"
+}

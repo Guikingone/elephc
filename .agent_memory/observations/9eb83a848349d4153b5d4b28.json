@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn check_callback_argument\\|callback_string\\|resolve_callback_name\\|fn check_builtin_callback\" src/types/checker/ | head -8",
+  "summary": "grep -rn \"fn check_callback_argument\\|callback_string\\|resolve_callback_name\\|fn check_builtin_callback\" src/types/checker/ | head -8 completed",
+  "text": "grep -rn \"fn check_callback_argument\\|callback_string\\|resolve_callback_name\\|fn check_builtin_callback\" src/types/checker/ | head -8 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9eb83a848349d4153b5d4b28",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:16:48.650Z",
+  "stored_at": "2026-08-22T11:16:48.651Z"
+}

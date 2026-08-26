@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub struct ClassMethod\" -A 22 src/parser/ast/*.rs src/parser/ast.rs 2>/dev/null | head -26",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub struct ClassMethod\" -A 22 src/parser/ast/*.rs src/parser/ast.rs 2>/dev/null | head -26: ic: Option<String>, src/parser/ast/oop.rs-222- /// Whether the variadic parameter was declared by reference (`&...$args`).",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub struct ClassMethod\" -A 22 src/parser/ast/*.rs src/parser/ast.rs 2>/dev/null | head -26: ic: Option<String>, src/parser/ast/oop.rs-222- /// Whether the variadic parameter was declared by reference (`&...$args`). src/parser/ast/oop.rs-223- pub variadic_by_ref: bool, src/parser/ast/oop.rs-224- /// Declared element type hint on the variadic parameter (`int ...$xs`), if any. Each argument src/parser/ast/oop.rs-225- /// collected into the variadic is checked against this type. src/parser/ast/oop.rs-226- pub variadic_type: Option<TypeExpr>, src/parser/ast/oop.rs-227- #[allow(dead_code)] // Will be used for return type checking in future phases src/parser/ast/oop.rs-228- pub return_type: Option<TypeExpr>, src/parser/ast/oop.rs-229- /// `true` when declared with `function &m()` — calls return a reference (alias) src/parser/ast/oop.rs-230- /// to the returned lvalue rather than a copy. src/parser/ast/oop.rs-231- pub by_ref_return: bool, src/parser/ast/oop.rs-232- pub body: Vec<Stmt>,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "545ceda34d6cbf5cbcd184ac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:24:05.223Z",
+  "stored_at": "2026-08-22T18:24:05.223Z"
+}

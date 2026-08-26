@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ZLIB_INT_CONSTANTS\" -B 5 -A 12 crates/elephc-builtin-contract/src/php_constants.rs 2>/dev/null | head -30; ls crates/elephc-builtin-contract/src/ | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ZLIB_INT_CONSTANTS\" -B 5 -A 12 crates/elephc-builtin-contract/src/php_constants.rs 2>/dev/null | head -30; ls crates/elephc-builtin-contract/src/ | head: tract/src/php_constants.rs-354- STREAM_INT_CONSTANTS, crates",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ZLIB_INT_CONSTANTS\" -B 5 -A 12 crates/elephc-builtin-contract/src/php_constants.rs 2>/dev/null | head -30; ls crates/elephc-builtin-contract/src/ | head: tract/src/php_constants.rs-354- STREAM_INT_CONSTANTS, crates/elephc-builtin-contract/src/php_constants.rs-355- MATH_INT_CONSTANTS, crates/elephc-builtin-contract/src/php_constants.rs-356- ERROR_LEVEL_CONSTANTS, crates/elephc-builtin-contract/src/php_constants.rs-357- ENT_INT_CONSTANTS, crates/elephc-builtin-contract/src/php_constants.rs:358: ZLIB_INT_CONSTANTS, crates/elephc-builtin-contract/src/php_constants.rs-359- JSON_INT_CONSTANTS, crates/elephc-builtin-contract/src/php_constants.rs-360- SESSION_INT_CONSTANTS, crates/elephc-builtin-contract/src/php_constants.rs-361- DATE_INT_CONSTANTS, crates/elephc-builtin-contract/src/php_constants.rs-362- ARRAY_INT_CONSTANTS, crates/elephc-builtin-contract/src/php_constants.rs-363- STRING_INT_CONSTANTS, aot_profile.rs callback_parameters.rs catalog_data.rs catalog_surfaces.rs eval_profile.rs glob_flags.rs id.rs lib.rs php_constants.rs registry.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9ef0309584ea102e431d662d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:20:33.677Z",
+  "stored_at": "2026-08-23T09:20:33.677Z"
+}

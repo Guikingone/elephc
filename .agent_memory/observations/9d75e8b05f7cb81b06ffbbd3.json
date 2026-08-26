@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1620,1660p' tests/codegen/io/streams.rs; echo \"==== 6680-6720 ====\"; sed -n '6680,6720p' tests/codegen/io/streams.rs",
+  "summary": "sed -n '1620,1660p' tests/codegen/io/streams.rs; echo \"==== 6680-6720 ====\"; sed -n '6680,6720p' tests/codegen/io/streams.rs: ow is php's, not elephc's. #[test] fn test_file_get_contents_reads_a_run_time_filter_url() { let out = compile_and_run_capture( r#\"<?php file_put_contents(\"fgcrt.txt\", \"Hello World\"); $res = \"fg",
+  "text": "sed -n '1620,1660p' tests/codegen/io/streams.rs; echo \"==== 6680-6720 ====\"; sed -n '6680,6720p' tests/codegen/io/streams.rs: ow is php's, not elephc's. #[test] fn test_file_get_contents_reads_a_run_time_filter_url() { let out = compile_and_run_capture( r#\"<?php file_put_contents(\"fgcrt.txt\", \"Hello World\"); $res = \"fgcrt\" . \".txt\"; echo file_get_contents(\"php://filter/read=string.toupper|string.rot13/resource=\" . $res), \"|\"; echo file_get_contents(\"php://filter/read=string.toupper/resource=data://text/plain,\" . \"abc\"), \"|\"; var_dump(@file_get_contents(\"php://filter/read=string.toupper/resource=\" . \"absent.txt\")); echo file_get_contents(\"php://filter/read=no.such|missing.too/resource=\" . $res), \"|\"; var_dump(file_get_contents(\"php://filter/read=string.toupper/resource=\" . \"absent.txt\")); unlink(\"fgcrt.txt\"); \"#, ); assert!(out.success); assert_eq!( out.stdout, \"URYYB JBEYQ|ABC|bool(false)\\nHello World|bool(false)\\n\" ); assert_eq!( out.stderr, \"Warning: file_get_contents(): Unable to locate filter \\\"no.such\\\"\\n\\",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9d75e8b05f7cb81b06ffbbd3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:17:36.619Z",
+  "stored_at": "2026-08-14T14:17:36.621Z"
+}

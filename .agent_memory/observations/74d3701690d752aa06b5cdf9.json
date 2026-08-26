@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 6 2>&1 | head -110",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 6 2>&1 | head -110: 9..214 --- <<<<<<< HEAD ctx.emitter.instruction(&format!(\"mov rdx, {}\", URL_STAT_FLAGS_EXISTS)); // the url_st",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 6 2>&1 | head -110: 9..214 --- <<<<<<< HEAD ctx.emitter.instruction(&format!(\"mov rdx, {}\", URL_STAT_FLAGS_EXISTS)); // the url_stat flags php passes file_exists() ======= ctx.emitter .instruction(&format!(\"mov edx, {}\", URL_STAT_FLAGS_QUIET)); // PHP passes NOCACHE|QUIET for the existence predicates >>>>>>> origin/main --- lines 336..350 --- <<<<<<< HEAD emit_stat_scratch_open(ctx); emit_url_stat_int_or_fallback(ctx, \"__rt_filesize\", STAT_FIELD_SIZE, URL_STAT_FLAGS_VALUE); emit_stat_failed_warning( ctx, \"_uwmh_head_filesize\", WRAPPER_MISSING_HOOK_HEAD_FILESIZE.len(), \"_stat_failed_tail\", STAT_FAILED_TAIL.len(), StatResultShape::IntPair, ); emit_stat_scratch_close(ctx); ======= emit_url_stat_field_or_fallback(ctx, \"__rt_filesize\", 0, URL_STAT_FLAGS_NOCACHE); >>>>>>> origin/main --- lines 371..615 --- <<<<<<< HEAD /// Emits `is_file()`'s wrapper `url_stat()` mode test, sharing the whole stat family's reader.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "74d3701690d752aa06b5cdf9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:15:22.447Z",
+  "stored_at": "2026-08-20T17:15:22.447Z"
+}

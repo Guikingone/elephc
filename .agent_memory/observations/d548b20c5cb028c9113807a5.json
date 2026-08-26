@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/codegen/spl/exception_trace.rs\")\ns = p.read_text()\nold = '''    assert_eq!(out.exit_code, Some(255));\n    let report = &out.located_diagnostics;'''\nnew = '''    assert_eq!(out.exit_code, Some(255));\n    // The block lands in the PROGRAM stream: its lines carry no `Warning:`-style kind prefix, so\n    // the harness's diagnostic split leaves them where php wrote them.\n    let report = &out.stdout;'''\nassert s.count(old) == 1\ns = s.replace(old, new)\nold = '''    assert!(\n        out.located_diagnostics\n            .contains(\"DirectoryIterato… [+531 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path(\"tests/codegen/spl/exception_trace.rs\") s = p.read_text() old = ''' assert_eq!(out.exit_code, Some(255)); let report = &out.located_diagnostics;''' new",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d548b20c5cb028c9113807a5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T10:06:00.427Z",
+  "stored_at": "2026-08-26T10:06:00.428Z"
+}

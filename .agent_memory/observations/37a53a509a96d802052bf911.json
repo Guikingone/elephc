@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/dynamic-properties-are-a-gate-not-a-feature.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/dynamic-properties-are-a-gate-not-a-feature.md: ---\nname: dynamic-properties-are-a-gate-not-a-feature\ndescription: \"Les propriétés dynamiques MARCHENT DÉJÀ dans elephc sous `#[\\\\AllowDynamicProperties]` — ce qui ma",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/dynamic-properties-are-a-gate-not-a-feature.md: ---\nname: dynamic-properties-are-a-gate-not-a-feature\ndescription: \"Les propriétés dynamiques MARCHENT DÉJÀ dans elephc sous `#[\\\\AllowDynamicProperties]` — ce qui manque est une PORTE et 8 octets par objet, donc c'est un ARBITRAGE, pas un correctif\"\nmetadata:\n  type: project\n---\n\n`$obj->propriétéNonDéclarée = x` est REFUSÉ à la compilation par elephc (`Undefined property: P::extra`), là où php 8.2+ émet `Deprecated: Creation of dynamic property P::$extra is deprecated` puis **fonctionne**.\n\n🔑 **Mais toute la mécanique existe et est CORRECTE.** Mesuré: la même classe avec `#[\\AllowDynamicPrope",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "37a53a509a96d802052bf911",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:47:54.626Z",
+  "stored_at": "2026-08-17T21:47:54.628Z"
+}

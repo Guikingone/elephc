@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/selfcap.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/selfcap.py: \"\"\"Issue #382's shapes: a closure that captures the very name it is being assigned to.\"\"\"\nimport pathlib, subprocess, sys\n\nD = pathlib.",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/selfcap.py: \"\"\"Issue #382's shapes: a closure that captures the very name it is being assigned to.\"\"\"\nimport pathlib, subprocess, sys\n\nD = pathlib.Path(__file__).parent\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nELEPHC = ROOT / 'target/debug/elephc'\n\nCASES = {\n    'self_capture_byval': '<?php $f = function() use($f) { return $f; }; var_dump($f());',\n    'self_capture_byref': '<?php $f = function() use(&$f) { return is_callable($f); }; var_dump($f());',\n    'byref_other_name':   '<?php $g = function() use(&$h) { return $h; }; var_dump(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee4120ebdbcf6d7ea0ee43c9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:40:20.143Z",
+  "stored_at": "2026-08-20T19:40:20.143Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -c \"^<<<<<<<\\|^=======\\|^>>>>>>>\" src/codegen_support/runtime/io/stream_wrapper_register.rs; echo \"--- conflict regions ---\"; grep -n \"^<<<<<<<\\|^>>>>>>>\" src/codegen_support/runtime/io/stream_wrapper_register.rs | head -10",
+  "summary": "About to run: grep -c \"^<<<<<<<\\|^=======\\|^>>>>>>>\" src/codegen_support/runtime/io/stream_wrapper_register.rs; echo \"--- conflict regions ---\"; grep -n \"^<<<<<<<\\|^>>>>>>>\" src/codegen_support/runtime/io/stream_wr",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d5b14035855fcd33e654a3f5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:38:03.215Z",
+  "stored_at": "2026-08-22T06:38:03.215Z"
+}

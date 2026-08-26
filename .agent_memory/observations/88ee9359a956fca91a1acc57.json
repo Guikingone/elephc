@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"label_global(\\\"__rt_itoa\\\")\\|label_global(\\\"__rt_ftoa\\|label_global(\\\"__rt_float_to\\|label_global(\\\"__rt_dtoa\" src/codegen_support/runtime/ | head -6",
+  "summary": "About to run: grep -rn \"label_global(\\\"__rt_itoa\\\")\\|label_global(\\\"__rt_ftoa\\|label_global(\\\"__rt_float_to\\|label_global(\\\"__rt_dtoa\" src/codegen_support/runtime/ | head -6",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "88ee9359a956fca91a1acc57",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:12:01.441Z",
+  "stored_at": "2026-08-22T12:12:01.441Z"
+}

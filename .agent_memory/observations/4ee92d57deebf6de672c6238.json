@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn updated_array_property_assign_type' -A 70 src/types/checker/stmt_check/assignments/properties.rs | head -80",
+  "summary": "grep -n 'fn updated_array_property_assign_type' -A 70 src/types/checker/stmt_check/assignments/properties.rs | head -80: if elem_ty.as_ref() == val_ty { 663- Ok(PhpType::Array(elem_ty.clone())) 664- } else { 665- let merged_ty = checker 666- .merge_array_element_type(elem_ty, val_ty) 667- .unwrap_or(PhpType::Mixed); 66",
+  "text": "grep -n 'fn updated_array_property_assign_type' -A 70 src/types/checker/stmt_check/assignments/properties.rs | head -80: if elem_ty.as_ref() == val_ty { 663- Ok(PhpType::Array(elem_ty.clone())) 664- } else { 665- let merged_ty = checker 666- .merge_array_element_type(elem_ty, val_ty) 667- .unwrap_or(PhpType::Mixed); 668- Ok(PhpType::Array(Box::new(merged_ty))) 669- } 670- } 671- PhpType::AssocArray { 672- key, 673- value: existing_value, 674- } => { 675- if property_has_declared_type { 676- checker.require_compatible_arg_type( 677- existing_value.as_ref(), 678- val_ty, 679- span, 680- &format!(\"Property {}::${}[]\", class_name, property), 681- )?; 682- } 683- let merged_key = merge_array_key_types(*key.clone(), normalized_idx_ty.clone()); 684- let merged_value = if property_has_declared_type || existing_value.as_ref() == val_ty { 685- *existing_value.clone() 686- } else { 687- checker 688- .merge_array_element_type(existing_value, val_ty) 689- .unwrap_or(PhpType::Mixed) 690- }; 691- Ok(PhpType::AssocArray {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4ee92d57deebf6de672c6238",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:55:08.590Z",
+  "stored_at": "2026-08-26T07:55:08.590Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"specialize_generic_array_param_hint\" -B25 -A12 src/types/checker/functions/resolution/specialization.rs | head -45",
+  "summary": "rtk proxy rg -n \"specialize_generic_array_param_hint\" -B25 -A12 src/types/checker/functions/resolution/specialization.rs | head -45: e array type so an all-`array<int>` 269- // parameter is not immediately polluted back to `array<mixed>` by unioning with 270- // its own declaration. The seen set marks the discard, so e",
+  "text": "rtk proxy rg -n \"specialize_generic_array_param_hint\" -B25 -A12 src/types/checker/functions/resolution/specialization.rs | head -45: e array type so an all-`array<int>` 269- // parameter is not immediately polluted back to `array<mixed>` by unioning with 270- // its own declaration. The seen set marks the discard, so every LATER call 271- // widens instead of re-adopting — which is the whole point. 272- self.param_specialization_seen.insert(key); 273: let specialized = Self::specialize_generic_array_param_hint( 274- &param_types[seen_idx].1, 275- &actual_ty, 276- ); 277- if param_types[seen_idx].1 != specialized { 278- param_types[seen_idx].1 = specialized; 279- changed = true; 280- } 281- } else if param_types[seen_idx].1 == PhpType::Int && !seen { 282- // Discard the `Int` fallback exactly once: adopt the type of the 283- // first call so an all-`Str` (etc.) parameter is not polluted by 284- // unioning the fallback. The seen set marks the discard so a real 285- // later int call still widens instead of re-adopting.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9b2419760633e155e63b1576",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:44:07.582Z",
+  "stored_at": "2026-08-16T19:44:07.582Z"
+}

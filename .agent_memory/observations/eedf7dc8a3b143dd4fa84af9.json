@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\n\nedits = [\n  ('tests/codegen/io/streams.rs',\n   '''        !out.stderr.contains(\"Warning\"),\n        \"a descriptor that exists warned about itself, got stderr={}\",\n        out.stderr''',\n   '''        !out.diagnostics.contains(\"Warning\"),\n        \"a descriptor that exists warned about itself, got diagnostics={}\",\n        out.diagnostics'''),\n  ('tests/codegen/io/streams.rs',\n   '''        !out.stderr.contains(\"Failed to open\"),\n        \"registered user wrapper should not produce the failed-to-open warning, got stderr: {:?}\",\n        out.stderr,''',\n   '''… [+1580 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib edits = [ ('tests/codegen/io/streams.rs', ''' !out.stderr.contains(\"Warning\"), \"a descriptor that exists warned about itself, got stderr={}\", out.stderr''', ''' !out.di",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eedf7dc8a3b143dd4fa84af9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:14:13.307Z",
+  "stored_at": "2026-08-18T15:14:13.308Z"
+}

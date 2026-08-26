@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests io:: 2>&1 | tail -12",
+  "summary": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests io:: 2>&1 | tail -12: and_gzdecode_round_trip_at_every_level ... ok test codegen::io::zlib_string_functions::test_the_decoders_refuse_what_they_cannot_frame ... ok test codegen::io::zlib_string_functions::test_the_decoders_honour_a_max_length ... ok ",
+  "text": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests io:: 2>&1 | tail -12: and_gzdecode_round_trip_at_every_level ... ok test codegen::io::zlib_string_functions::test_the_decoders_refuse_what_they_cannot_frame ... ok test codegen::io::zlib_string_functions::test_the_decoders_honour_a_max_length ... ok test codegen::io::zlib_string_functions::test_the_encoding_constants_are_phps_window_bits ... ok test codegen::io::zlib_string_functions::test_the_gzip_framing_is_phps ... ok test codegen::io::zlib_string_functions::test_the_raw_and_deflate_encodings_are_the_existing_primitives ... ok test codegen::io::zlib_string_functions::test_the_value_errors_carry_phps_wording ... ok test codegen::io::zlib_string_functions::test_zlib_decode_detects_all_three_framings ... ok test codegen::io::zlib_string_functions::test_zlib_get_coding_type_reports_no_output_compression ... ok test result: ok. 1015 passed; 0 failed; 8 ignored; 0 measured; 7759 filtered out; finished in 290.34s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6a6063cae3bd8e47bcfb5060",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:41:32.502Z",
+  "stored_at": "2026-08-21T17:41:32.503Z"
+}

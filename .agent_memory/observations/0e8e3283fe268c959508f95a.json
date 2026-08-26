@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t4.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t4.php: <?php\n$h = fopen(\"php://memory\", \"r+\");\nfwrite($h, \"a,b\\n\");\nrewind($h);\ntry {\n    fgetcsv($h, 0, \";;\");\n} catch (ValueError $e) {\n    ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t4.php: <?php\n$h = fopen(\"php://memory\", \"r+\");\nfwrite($h, \"a,b\\n\");\nrewind($h);\ntry {\n    fgetcsv($h, 0, \";;\");\n} catch (ValueError $e) {\n    echo \"1:\", $e->getMessage(), \"\\n\";\n}\ntry {\n    fputcsv($h, [\"a\"], \";;\");\n} catch (ValueError $e) {\n    echo \"2:\", $e->getMessage(), \"\\n\";\n}\ntry {\n    str_getcsv(\"a,b\", \";;\");\n} catch (ValueError $e) {\n    echo \"3:\", $e->getMessage(), \"\\n\";\n}\nrewind($h);\necho \"4:\", json_encode(fgetcsv($h)), \"\\n\";\nfclose($h);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0e8e3283fe268c959508f95a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:27:57.398Z",
+  "stored_at": "2026-08-18T09:27:57.399Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'MAY_WARN' src/ir_lower/expr/method*.rs src/ir_lower/expr/*method* 2>/dev/null | head -10; grep -rln 'fn method_call_effects\\|method_effects' src/ir_lower/ | head -5",
+  "summary": "grep -rn 'MAY_WARN' src/ir_lower/expr/method*.rs src/ir_lower/expr/*method* 2>/dev/null | head -10; grep -rln 'fn method_call_effects\\|method_effects' src/ir_lower/ | head -5 completed",
+  "text": "grep -rn 'MAY_WARN' src/ir_lower/expr/method*.rs src/ir_lower/expr/*method* 2>/dev/null | head -10; grep -rln 'fn method_call_effects\\|method_effects' src/ir_lower/ | head -5 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e66ee47550c204d35247fb5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T06:40:50.165Z",
+  "stored_at": "2026-08-26T06:40:50.165Z"
+}

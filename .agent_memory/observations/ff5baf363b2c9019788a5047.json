@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"emit_boxed_filter_handle\" -A 25 src/codegen/lower_inst/builtins/io/stream_filters.rs | head -30",
+  "summary": "grep -n \"emit_boxed_filter_handle\" -A 25 src/codegen/lower_inst/builtins/io/stream_filters.rs | head -30: n\" unconditionally. 645- ctx.emitter.instruction(\"mov x2, #1\"); // registry-owned resource marker 646- ctx.emitter.instruction(\"mov x0, #9\"); // runtime tag 9 = resource 647- } 648- Arch::X86_64 => { 649- ctx.emitt",
+  "text": "grep -n \"emit_boxed_filter_handle\" -A 25 src/codegen/lower_inst/builtins/io/stream_filters.rs | head -30: n\" unconditionally. 645- ctx.emitter.instruction(\"mov x2, #1\"); // registry-owned resource marker 646- ctx.emitter.instruction(\"mov x0, #9\"); // runtime tag 9 = resource 647- } 648- Arch::X86_64 => { 649- ctx.emitter.instruction(\"mov rdi, rax\"); // resource payload = the filter handle 650- // The high word is the registry-ownership marker, not padding: only the 651- // marked values make is_resource()/get_resource_type() consult the 652- // registry. Leaving it zero routed them down the legacy branch, which 653- // answers \"stream\" and \"open\" unconditionally. 654- ctx.emitter.instruction(\"mov esi, 1\"); // registry-owned resource marker 655- ctx.emitter.instruction(\"mov eax, 9\"); // runtime tag 9 = resource 656- } 657- } 658- abi::emit_call_label(ctx.emitter, \"__rt_mixed_from_value\"); 659-} 660- 661-/// Lowers `stream_filter_remove(resource)`. 662-pub(crate) fn lower_stream_filter_remove(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ff5baf363b2c9019788a5047",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:37:52.749Z",
+  "stored_at": "2026-08-17T14:37:52.750Z"
+}

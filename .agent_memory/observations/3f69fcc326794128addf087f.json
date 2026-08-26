@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"mov x0, #4096\\|mov rax, 4096\\|mov eax, 4096\" src/codegen_support/runtime/resources/stream/aarch64.rs src/codegen_support/runtime/resources/stream/x86_64.rs | head; grep -rn \"STREAM_DEFAULT_CHUNK\\|default chunk\" src/ | head -5",
+  "summary": "grep -n \"mov x0, #4096\\|mov rax, 4096\\|mov eax, 4096\" src/codegen_support/runtime/resources/stream/aarch64.rs src/codegen_support/runtime/resources/stream/x86_64.rs | head; grep -rn \"STREAM_DEFAULT_CHUNK\\|default chunk\" src/ | head -5: untime/resources/stream/aarch64.rs:423: emitter.instruction(\"mov x0, #4096\"); // pre",
+  "text": "grep -n \"mov x0, #4096\\|mov rax, 4096\\|mov eax, 4096\" src/codegen_support/runtime/resources/stream/aarch64.rs src/codegen_support/runtime/resources/stream/x86_64.rs | head; grep -rn \"STREAM_DEFAULT_CHUNK\\|default chunk\" src/ | head -5: untime/resources/stream/aarch64.rs:423: emitter.instruction(\"mov x0, #4096\"); // preserve the current read-loop default src/codegen/lower_inst/builtins/io/stream_copy_queries.rs:80: // php-src rejects a negative budget outright, and reads its default chunk when the src/codegen/lower_inst/builtins/io/stream_copy_queries.rs:91: .instruction(&format!(\"mov x9, #{}\", STREAM_GET_LINE_DEFAULT_CHUNK)); // php-src's default chunk src/codegen/lower_inst/builtins/io/stream_copy_queries.rs:93: ctx.emitter.instruction(\"csel x0, x9, x0, eq\"); // zero means the default chunk, not an empty read src/codegen/lower_inst/builtins/io/stream_copy_queries.rs:97: .instruction(&format!(\"mov ecx, {}\", STREAM_GET_LINE_DEFAULT_CHUNK)); // php-src's default chunk src/codegen/lower_inst/builtins/io/stream_copy_queries.rs:99: ctx.emitter.instruction(\"cmove rax, rcx\"); // zero means the default chunk, not an empty read",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3f69fcc326794128addf087f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:55:06.147Z",
+  "stored_at": "2026-08-21T09:55:06.147Z"
+}

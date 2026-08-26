@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"sub rsp,\" src/codegen_support/runtime/io/user_filter_brigade.rs | tail -2; grep -n \"invoke filter()\" src/codegen_support/runtime/io/user_filter_brigade.rs | tail -2; sed -n '/emit_user_filter_brigade_invoke_linux_x86_64/,$p' src/codegen_support/runtime/io/user_filter_brigade.rs | grep -n \"call rax\\|call r8\\|invoke filter\" | head -4",
+  "summary": "grep -n \"sub rsp,\" src/codegen_support/runtime/io/user_filter_brigade.rs | tail -2; grep -n \"invoke filter()\" src/codegen_support/runtime/io/user_filter_brigade.rs | tail -2; sed -n '/emit_user_filter_brigade_invoke_linux_x86_64/,$p' src/codegen_support/runtime/io/user_filter_brigade.rs | grep -n \"call rax\\|call r8\\|in",
+  "text": "grep -n \"sub rsp,\" src/codegen_support/runtime/io/user_filter_brigade.rs | tail -2; grep -n \"invoke filter()\" src/codegen_support/runtime/io/user_filter_brigade.rs | tail -2; sed -n '/emit_user_filter_brigade_invoke_linux_x86_64/,$p' src/codegen_support/runtime/io/user_filter_brigade.rs | grep -n \"call rax\\|call r8\\|invoke filter\" | head -4: 393: emitter.instruction(\"sub rsp, 128\"); // local frame (16-byte aligned: prior call pushed ret, push rbp → 0-mod-16; -128 stays 0-mod-16) 240: emitter.instruction(\"blr x5\"); // invoke filter() 189: emitter.instruction(\"blr x5\"); // invoke filter()",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dbb49bc6b68c10bd36e09fd1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:30:40.841Z",
+  "stored_at": "2026-08-17T18:30:40.842Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/array_keys_union.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/array_keys_union.py: \"\"\"`array_keys(stat($p))` was a compile error where php compiles and throws at RUN time.\n\nMEASURED on `php -n` 8.5.6: `array_",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/array_keys_union.py: \"\"\"`array_keys(stat($p))` was a compile error where php compiles and throws at RUN time.\n\nMEASURED on `php -n` 8.5.6: `array_keys(stat($existing))` answers 26 keys, and\n`array_keys(stat(\"/no/such/file\"))` warns from `stat()` and then throws\n`TypeError: array_keys(): Argument #1 ($array) must be of type array, false given`. Eight of one\naudit round's programs are refused by elephc for writing the first.\n\nThe mechanism for exactly this already exists: `ARRAY_OR_FALSE_ARG_SITES` lists the argument slots\nwhose `array|false` union the lowering unwraps, `array_or_false_member` is the type-side quest",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f71bad3cdb67acf88be959c6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:15:49.133Z",
+  "stored_at": "2026-08-23T09:15:49.133Z"
+}

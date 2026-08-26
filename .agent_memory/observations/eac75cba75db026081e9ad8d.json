@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/ir_lower/program/spl_discovery.rs\")\ns = p.read_text()\nold = '''        .any(|function| {\n            function\n                .instructions\n                .iter()\n                .any(|inst| matches!(inst.op, Op::CallableDescriptorInvoke))\n        })\n}'''\nnew = '''        .any(|function| {\n            function.instructions.iter().any(|inst| {\n                if !matches!(inst.op, Op::CallableDescriptorInvoke) {\n                    return false;\n                }\n                // Only a callable ARRAY can name a method at run time. A clos… [+942 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/ir_lower/program/spl_discovery.rs\")\ns = p.read_text()\nold = '''        .any(|function| {\n            function\n                .instructions\n                .iter()\n                .any(|inst| matches!(inst.op, Op::CallableDescriptorInvoke))\n        })\n}'''\nnew = '''",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/ir_lower/program/spl_discovery.rs\")\ns = p.read_text()\nold = '''        .any(|function| {\n            function\n                .instructions\n                .iter()\n                .any(|inst| matches!(inst.op, Op::CallableDescriptorInvoke))\n        })\n}'''\nnew = '''        .any(|function| {\n            function.instructions.iter().any(|inst| {\n                if !matches!(inst.op, Op::CallableDescriptorInvoke) {\n                    return false;\n                }\n                // Only a callable ARRAY can name a method at run time. A closure call reaches the\n                // same opcode and names none, so accepting it would emit every method of every\n                // class the program built for a program that never dispatches on a name — and one\n                // of those bodies (`SplFileObject::fscanf`) needs an engine the program did not\n                // ask for, which is a link failure rather than a diagnostic.\n                inst.operands.first().copied().is_some_and(|callable| {\n                    matches!(\n                        function.value(callable).map(|value| &value.php_type),\n                        Some(PhpType::Array(_)) | Some(PhpType::AssocArray { .. })\n                    )\n                })\n            })\n        })\n}'''\nassert s.count(old) == 1, s.count(old)\np.write_text(s.replace(old, new))\nprint(\"widening narrowed to callable arrays\")\nPY\nCARGO_PROFILE_DEV_DEBUG=false cargo build 2>&1 | grep -E '^error' -A 8 | head -20; echo BUILT: widening narrowed to callable arrays BUILT",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eac75cba75db026081e9ad8d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:38:26.386Z",
+  "stored_at": "2026-08-25T12:38:26.387Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-omitted-param-is-not-a-literal.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-omitted-param-is-not-a-literal.md: ---\nname: byref-omitted-param-is-not-a-literal\ndescription: \"🔑 Un paramètre par référence OMIS ≠ un littéral écrit dedans: après normalisation les deux sont la MÊME expressi",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-omitted-param-is-not-a-literal.md: ---\nname: byref-omitted-param-is-not-a-literal\ndescription: \"🔑 Un paramètre par référence OMIS ≠ un littéral écrit dedans: après normalisation les deux sont la MÊME expression, seule la PROVENANCE les sépare (PlannedRegularArg::Default)\"\nmetadata:\n  node_type: memory\n  type: project\n  modified: 2026-08-21T00:00:00.000Z\n---\n\nCommit `f3a75146f`. Voisin de [[byref-builtin-arg-accepts-literal]].\n\n`stream_socket_client(\"unix://…\", error_message: $why)` était REFUSÉ, avec les mots exacts de php —\n« Argument #2 ($error_code) could not be passed by reference » — pour un argument que le programme\nn'a *",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4eadf12d6c9373e5e3321ab2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:43:49.392Z",
+  "stored_at": "2026-08-21T16:43:49.393Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build --lib 2>&1 | grep -E \"^error\" -A 10 | head -25; cargo build --lib 2>&1 | tail -2",
+  "summary": "cargo build --lib 2>&1 | grep -E \"^error\" -A 10 | head -25; cargo build --lib 2>&1 | tail -2: Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.51s",
+  "text": "cargo build --lib 2>&1 | grep -E \"^error\" -A 10 | head -25; cargo build --lib 2>&1 | tail -2: Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.51s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cb5200c1ba4805d6b1263d45",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:48:45.103Z",
+  "stored_at": "2026-08-22T13:48:45.104Z"
+}

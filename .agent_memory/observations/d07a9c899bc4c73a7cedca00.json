@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"TRY_HANDLER_SLOT_SIZE == 224\" src/ | head",
+  "summary": "grep -rln \"TRY_HANDLER_SLOT_SIZE == 224\" src/ | head: src/codegen_support/runtime/pdo/pdo_call_scalar.rs src/codegen_support/runtime/pdo/pdo_call_collation.rs src/codegen_support/runtime/pdo/pdo_call_agg_final.rs src/codegen_support/runtime/pdo/pdo_call_agg_step.rs",
+  "text": "grep -rln \"TRY_HANDLER_SLOT_SIZE == 224\" src/ | head: src/codegen_support/runtime/pdo/pdo_call_scalar.rs src/codegen_support/runtime/pdo/pdo_call_collation.rs src/codegen_support/runtime/pdo/pdo_call_agg_final.rs src/codegen_support/runtime/pdo/pdo_call_agg_step.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d07a9c899bc4c73a7cedca00",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:46:02.196Z",
+  "stored_at": "2026-08-20T17:46:02.196Z"
+}

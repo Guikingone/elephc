@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log --oneline -3 -- crates/elephc-builtin-contract/src/catalog_data.rs; git log -S \"2.718281828459045\" --oneline -- crates/elephc-builtin-contract/src/catalog_data.rs | head -3",
+  "summary": "git log --oneline -3 -- crates/elephc-builtin-contract/src/catalog_data.rs; git log -S \"2.718281828459045\" --oneline -- crates/elephc-builtin-contract/src/catalog_data.rs | head -3: 360ce8be4 feat(strings): str_replace() accepts an array $search, php's idiomatic form 7f2bd78ad fix(streams): every socket claimed a wrapp",
+  "text": "git log --oneline -3 -- crates/elephc-builtin-contract/src/catalog_data.rs; git log -S \"2.718281828459045\" --oneline -- crates/elephc-builtin-contract/src/catalog_data.rs | head -3: 360ce8be4 feat(strings): str_replace() accepts an array $search, php's idiomatic form 7f2bd78ad fix(streams): every socket claimed a wrapper it had none of, and fsockopen() could not name a transport 6a80a85c2 fix(streams): fwrite() had no $length, quoted-printable escaped whitespace php keeps, and a pathless stream reported a `uri` f1c6002f4 feat(builtins): introduce shared builtin contracts",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "91037798d96e83d328d88bdd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T08:57:35.555Z",
+  "stored_at": "2026-08-18T08:57:35.556Z"
+}

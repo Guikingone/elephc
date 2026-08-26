@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='src/types/checker/functions/resolution/signature.rs'\ns=open(p).read()\nlines = s.split('\\n')\n# find the orphaned doc block: it starts at the \"/// Resolves the provisional...\"-style block\n# ending just before the placeholder, and must move back onto provisional_return_type.\nanchor = \"    fn provisional_return_type_doc_anchor() {}\"\nai = lines.index(anchor)\n# walk back to the start of that doc block\nstart = ai\nwhile start > 0 and lines[start-1].lstrip().startswith('///'):\n    start -= 1\ndoc = lines[start:ai]\n# remove doc + placeholder + the blank line after it\nrest = lines[:sta… [+396 chars truncated]",
+  "summary": "python3 - <<'PY'\np='src/types/checker/functions/resolution/signature.rs'\ns=open(p).read()\nlines = s.split('\\n')\n# find the orphaned doc block: it starts at the \"/// Resolves the provisional...\"-style block\n# ending just before the placeholder, and must move back onto provisional_return_type.\nanchor = \"    fn provisiona",
+  "text": "python3 - <<'PY'\np='src/types/checker/functions/resolution/signature.rs'\ns=open(p).read()\nlines = s.split('\\n')\n# find the orphaned doc block: it starts at the \"/// Resolves the provisional...\"-style block\n# ending just before the placeholder, and must move back onto provisional_return_type.\nanchor = \"    fn provisional_return_type_doc_anchor() {}\"\nai = lines.index(anchor)\n# walk back to the start of that doc block\nstart = ai\nwhile start > 0 and lines[start-1].lstrip().startswith('///'):\n    start -= 1\ndoc = lines[start:ai]\n# remove doc + placeholder + the blank line after it\nrest = lines[:start] + lines[ai+2:]\n# re-attach the doc immediately before `fn provisional_return_type(`\ntarget = \"    fn provisional_return_type(&self, decl: &FnDecl) -> PhpType {\"\nti = rest.index(target)\nout = rest[:ti] + doc + rest[ti:]\nopen(p,'w').write('\\n'.join(out))\nprint('doc block reattached to provisional_return_type')\nPY\nrtk proxy sed -n '330,340p' src/types/checker/functions/resolution/signature.rs: doc block reattached to provisional_return_type ) -> Option<(Vec<(String, PhpType)>, Vec<usize>)> { let mut widened = param_types.to_vec(); let mut widened_indexes = Vec::new(); let mut any = false; for (index, (pname, entry_ty)) in param_types.iter().enumerate() { if !decl.ref_params.get(index).copied().unwrap_or(false) { continue; } let Some(exit_ty) = local_env.get(pname) else { continue; };",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4c73ca5f638159f99db4201d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:50:32.902Z",
+  "stored_at": "2026-08-16T20:50:32.903Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/stream_get_meta_data_dir_basic && rtk proxy grep -n \"__rt_stream_get_meta_data\" stream_get_meta_data_dir_basic.s | head -4; rtk proxy grep -c \"sgmd\" stream_get_meta_data_dir_basic.s",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/stream_get_meta_data_dir_basic && rtk proxy grep -n \"__rt_stream_get_meta_data\" stream_get_meta_data_dir_basic.s | head -4; rtk proxy grep -c \"",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/stream_get_meta_data_dir_basic && rtk proxy grep -n \"__rt_stream_get_meta_data\" stream_get_meta_data_dir_basic.s | head -4; rtk proxy grep -c \"sgmd\" stream_get_meta_data_dir_basic.s failed: Exit code 1 7759: bl __rt_stream_get_meta_data 8761: bl __rt_stream_get_meta_data 0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5ec783bf4c3fd23ea543cb48",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:30:54.855Z",
+  "stored_at": "2026-08-17T07:30:54.855Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md\")\ns = p.read_text()\nold = \"- 🔑★★★ [trace de pile PARTIELLE = FABRIQUÉE](a-partial-stack-trace-fabricates.md) · [conception MESURÉE](stack-trace-subsystem-measured-design.md)\"\nnew = (\"- ✅🔑★★★ [Le bloc `Stack trace:` SORT pour les chaînes prouvables](stack-trace-block-lands-for-provable-chains.md)\"\n       \" — trame de classe builtin au SITE D'APPEL + preuve sur le throwable (@48). 🔴 RESTE: trames utilisateur.\"\n       \"\\n- 🔑★★★ [trace… [+233 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path(\"/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md\") s = p.read_text() old = \"- 🔑★★★ [trace",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "875c37080e34576ae5855523",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T10:13:06.262Z",
+  "stored_at": "2026-08-26T10:13:06.262Z"
+}

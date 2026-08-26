@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '470,510p' tests/codegen/arrays/key_sort.rs",
+  "summary": "sed -n '470,510p' tests/codegen/arrays/key_sort.rs: s its own comparator, and ONLY its own: that per-atom // reference is what lets the linker drop the natural comparators from a program // that never natsorts. for (entry, wanted, unwanted) in [ (\"__rt_hash_natsort\", \"__rt_hash_natcmp\", \"__rt_php_compare\"), (\"__rt_hash",
+  "text": "sed -n '470,510p' tests/codegen/arrays/key_sort.rs: s its own comparator, and ONLY its own: that per-atom // reference is what lets the linker drop the natural comparators from a program // that never natsorts. for (entry, wanted, unwanted) in [ (\"__rt_hash_natsort\", \"__rt_hash_natcmp\", \"__rt_php_compare\"), (\"__rt_hash_natcasesort\", \"__rt_hash_natcasecmp\", \"__rt_php_compare\"), (\"__rt_hash_ksort\", \"__rt_php_compare\", \"__rt_hash_natcmp\"), (\"__rt_hash_asort\", \"__rt_php_compare\", \"__rt_hash_natcmp\"), ] { let body = body_of(entry); assert!( body.contains(wanted), \"{entry} on {target_name} must select {wanted}\" ); assert!( !body.contains(unwanted), \"{entry} on {target_name} must NOT reference {unwanted}: that reference is \\ what keeps the linker from dead-stripping the unused comparator\" ); } // Both adapters tail-branch into php's natural comparator, and guard on the string // tag so a non-string payload can never be dereferenced as a pointer.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "426eea9bbbea314fc8d65f9c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T08:07:00.000Z",
+  "stored_at": "2026-08-21T08:07:00.001Z"
+}

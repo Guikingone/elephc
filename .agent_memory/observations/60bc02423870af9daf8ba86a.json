@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php && cp ../el/sa.php . && php -n sa.php 2>&1 | head -14",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php && cp ../el/sa.php . && php -n sa.php 2>&1 | head -14: array(2) { [\"a\"]=> string(1) \"1\" [\"b\"]=> string(1) \"2\" } int(2) string(1) \"1\" array(2) { ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php && cp ../el/sa.php . && php -n sa.php 2>&1 | head -14: array(2) { [\"a\"]=> string(1) \"1\" [\"b\"]=> string(1) \"2\" } int(2) string(1) \"1\" array(2) { [\"c\"]=> string(1) \"3\" [\"d\"]=> string(1) \"4\" }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "60bc02423870af9daf8ba86a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:57:54.913Z",
+  "stored_at": "2026-08-26T07:57:54.914Z"
+}

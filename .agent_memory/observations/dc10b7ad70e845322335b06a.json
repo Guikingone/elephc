@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/traceshapes/top-level_builtin_throw && rm -f p.s && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q --emit-asm p.php >/dev/null 2>&1; grep -c \"_rt_trace_hash\\|_rt_trace_comma\" p.s; grep -n \"^_rt_trace_hash:\" -A 2 p.s | head -4; grep -n \"__rt_trace_frame_open\" -A 6 p.s | head -12",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/traceshapes/top-level_builtin_throw && rm -f p.s && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/traceshapes/top-level_builtin_throw && rm -f p.s && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q --emit-asm p.php >/dev/null 2>&1; grep -c \"_rt_trace_hash\\|_rt_trace_comma\" p.s; grep -n \"^_rt_trace_hash:\" -A 2 p.s | head -4; grep -n \"__rt_trace_frame_open\" -A 6 p.s | head -12: 0 943: bl __rt_trace_frame_open 944- ldur x1, [x29, #-16] 945- ldur x2, [x29, #-8] 946- mov x2, x1 947- mov x1, x0 948- mov x0, #1 949- bl __rt_trace_arg -- 1091: bl __rt_trace_frame_open 1092- ldur x1, [x29, #-16] 1093- ldur x2, [x29, #-8] 1094- mov x2, x1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dc10b7ad70e845322335b06a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:41:47.200Z",
+  "stored_at": "2026-08-22T12:41:47.201Z"
+}

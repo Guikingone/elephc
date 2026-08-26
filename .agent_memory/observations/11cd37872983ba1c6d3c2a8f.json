@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_resnest.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_resnest.txt: fix(streams): a resource nested in an array printed NULL, and whole-file calls did not spend a resource id\n\nTwo defects that hid each",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_resnest.txt: fix(streams): a resource nested in an array printed NULL, and whole-file calls did not spend a resource id\n\nTwo defects that hid each other, both found while checking `stream_socket_pair()`\nagainst `php -n` 8.5.6.\n\n`var_dump()` of a resource on its own was right, but the same resource inside a\ncontainer printed `NULL`. It is not a socket-pair bug: `var_dump([$fh])`,\n`['h' => $fh]` and `[1, $fh, \"s\"]` all fail identically, because\n`__rt_var_dump_value` routed runtime tag 9 to its NULL arm — the code said so:\n\"tag 8 null / 9 resource -> NULL\". So a live socket pair rendered as\n`[NULL, NULL]`. On",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "11cd37872983ba1c6d3c2a8f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:10:32.664Z",
+  "stored_at": "2026-08-17T13:10:32.666Z"
+}

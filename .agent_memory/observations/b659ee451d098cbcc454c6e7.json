@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"emit_value_error\\|ValueGuard\" src/codegen/lower_inst/builtins/io.rs | head -3; echo \"=== io.rs imports ===\"; sed -n 1,30p src/codegen/lower_inst/builtins/io.rs | grep -n \"use \" | head -12",
+  "summary": "grep -rn \"emit_value_error\\|ValueGuard\" src/codegen/lower_inst/builtins/io.rs | head -3; echo \"=== io.rs imports ===\"; sed -n 1,30p src/codegen/lower_inst/builtins/io.rs | grep -n \"use \" | head -12: === io.rs imports === 12:use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, NULL_SENTINEL}; ",
+  "text": "grep -rn \"emit_value_error\\|ValueGuard\" src/codegen/lower_inst/builtins/io.rs | head -3; echo \"=== io.rs imports ===\"; sed -n 1,30p src/codegen/lower_inst/builtins/io.rs | grep -n \"use \" | head -12: === io.rs imports === 12:use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, NULL_SENTINEL}; 13:use crate::codegen::platform::Arch; 14:use crate::codegen::{CodegenIrError, Result}; 15:use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId}; 16:use crate::codegen_support::runtime::resources::layout::{ 22:use crate::types::PhpType; 24:use super::super::super::context::FunctionContext; 25:use super::{expect_operand, load_value_to_first_int_arg, store_if_result}; 26:use super::super::{resolve_int_operand_to_result, resolve_nullable_int_operand_to_result};",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b659ee451d098cbcc454c6e7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:59:21.371Z",
+  "stored_at": "2026-08-21T17:59:21.372Z"
+}

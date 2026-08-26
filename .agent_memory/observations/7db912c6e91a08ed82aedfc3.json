@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='docs/internals/the-runtime.md'\ns=open(p).read()\nold = \"| `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |\\n\"\nassert s.count(old)==1\ns=s.replace(old, \"\")\nopen(p,'w').write(s)\nprint('docs row removed')\n\np2='tests/codegen/io/streams.rs'\ns2=open(p2).read()\nold2 = \"    // fscanf shares __rt_sscanf, so the new %f branch must work through it too.\\n\"\nassert s2.count(old2)==1\ns2=s2.replace(old2, \"    // fscanf shares the injected scanf prelude, so %f must work through it too.\\n\")\nopen(p2,'w').write(s2)\nprint('test comment updated')\nPY",
+  "summary": "python3 - <<'PY'\np='docs/internals/the-runtime.md'\ns=open(p).read()\nold = \"| `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |\\n\"\nassert s.count(old)==1\ns=s.replace(old, \"\")\nopen(p,'w').write(s)\nprint('docs row removed')\n\np2='tests/codegen/io/streams.rs'\ns2=open(p2).read()\nold2 = \"    // fsca",
+  "text": "python3 - <<'PY'\np='docs/internals/the-runtime.md'\ns=open(p).read()\nold = \"| `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |\\n\"\nassert s.count(old)==1\ns=s.replace(old, \"\")\nopen(p,'w').write(s)\nprint('docs row removed')\n\np2='tests/codegen/io/streams.rs'\ns2=open(p2).read()\nold2 = \"    // fscanf shares __rt_sscanf, so the new %f branch must work through it too.\\n\"\nassert s2.count(old2)==1\ns2=s2.replace(old2, \"    // fscanf shares the injected scanf prelude, so %f must work through it too.\\n\")\nopen(p2,'w').write(s2)\nprint('test comment updated')\nPY: docs row removed test comment updated",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7db912c6e91a08ed82aedfc3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:00:53.773Z",
+  "stored_at": "2026-08-16T17:00:53.774Z"
+}

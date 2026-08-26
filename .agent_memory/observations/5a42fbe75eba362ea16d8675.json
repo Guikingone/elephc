@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -la src/codegen_support/runtime/system/unserialize.rs src/codegen_support/runtime/system/unserialize/mod.rs 2>&1 | head; echo \"--- taille des deux:\"; wc -l src/codegen_support/runtime/system/unserialize.rs 2>/dev/null; ls src/codegen_support/runtime/system/unserialize/ 2>/dev/null",
+  "summary": "About to run: ls -la src/codegen_support/runtime/system/unserialize.rs src/codegen_support/runtime/system/unserialize/mod.rs 2>&1 | head; echo \"--- taille des deux:\"; wc -l src/codegen_support/runtime/system/unseri",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5a42fbe75eba362ea16d8675",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:41:08.011Z",
+  "stored_at": "2026-08-20T17:41:08.011Z"
+}

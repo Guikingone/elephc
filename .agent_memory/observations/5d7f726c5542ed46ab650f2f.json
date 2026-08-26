@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probes8dbg.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probes8dbg.py: \"\"\"Why does none of kimi-k3's php parse? Keep the failures and show the reason.\"\"\"\nimport pathlib\nimport re\nimport subprocess\nimpor",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probes8dbg.py: \"\"\"Why does none of kimi-k3's php parse? Keep the failures and show the reason.\"\"\"\nimport pathlib\nimport re\nimport subprocess\nimport sys\n\nsys.path.insert(0, str(pathlib.Path(__file__).parent))\nfrom detty import replay\n\nHERE = pathlib.Path(__file__).parent\npath = HERE / 'audit' / 'round8-kimi-k3.md'\ntext = replay(path.read_text())\nblocks = re.findall(r'```(?:php)?\\n(.*?)```', text, re.DOTALL)\nkept = 0\nfor block in blocks:\n    if '<?php' not in block and not re.search(\n        r'\\b(fopen|stream_|flock|fwrite|fread|file_get_contents)\\s*\\(', block\n    ):\n        continue\n    kept += 1\n    body = b",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5d7f726c5542ed46ab650f2f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:04:15.721Z",
+  "stored_at": "2026-08-22T21:04:15.721Z"
+}

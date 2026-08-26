@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 8 2>&1 | head -100",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 8 2>&1 | head -100: // writes the quad at this position and the runtime helpers read it from here. pub(crate) const USER_WRAPPER_V",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 8 2>&1 | head -100: // writes the quad at this position and the runtime helpers read it from here. pub(crate) const USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET: usize = USER_WRAPPER_VTABLE_SLOTS * 8; >>>>>>> origin/main --- lines 2614..2636 --- <<<<<<< HEAD // Stored as offset + 1. Zero is a perfectly valid property offset — the first one a class // declares — so a bare offset cannot say \"this wrapper declares no $context\". It used to, // and a wrapper that declared `$context` first was read as declaring none: it never received // its context, and later collected the dynamic-property deprecation meant for classes that // really had not declared it. let context_slot = class_info .properties .iter() .find(|(property, php_type)| { property == \"context\" && matches!(php_type, PhpType::Mixed | PhpType::Void) }) .and_then(|(property, _)| class_info.property_offsets.get(property)) .map(|offset| offset + 1) .unwrap_or(0);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bc4192cd84c7087df4a7af9a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:18:26.643Z",
+  "stored_at": "2026-08-20T17:18:26.643Z"
+}

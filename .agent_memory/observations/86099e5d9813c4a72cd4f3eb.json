@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -40 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py",
+  "summary": "head -40 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py: umeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc' WRAPPER = ''' cl",
+  "text": "head -40 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py: umeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc' WRAPPER = ''' class W { public $context; private $pos = 0; private $data = \"line one\\\\nline two\\\\nline three\\\\n\"; public function stream_open($p, $m, $o, &$op) { return true; } public function stream_read($n) { $out = substr($this->data, $this->pos, $n); $this->pos += strlen($out); return $out; } public function stream_write($s) { return strlen($s); } public function stream_tell() { return $this->pos; } public function stream_eof() { return $this->pos >= strlen($this->data); } public function stream_seek($off, $whence) { if ($whence === SEEK_SET) { $this->pos = $off; } elseif ($whence === SEEK_CUR) { $this->pos += $off; } else { $this->pos = strlen($this->data) + $off; } return true; } public function stream_stat() { return []; } public function url_stat($path, $flags) { return []; } } '''",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "86099e5d9813c4a72cd4f3eb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:07:18.339Z",
+  "stored_at": "2026-08-22T09:07:18.339Z"
+}

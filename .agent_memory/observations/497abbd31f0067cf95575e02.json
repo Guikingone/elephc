@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"BAD_PROTOCOL_WARNING\\|DUPLICATE_PROTOCOL_WARNING\" src/ | grep -v \"^src/codegen_support/runtime/io/stream_wrapper_register.rs:3[01234]\" | head",
+  "summary": "grep -rn \"BAD_PROTOCOL_WARNING\\|DUPLICATE_PROTOCOL_WARNING\" src/ | grep -v \"^src/codegen_support/runtime/io/stream_wrapper_register.rs:3[01234]\" | head: src/codegen_support/runtime/io/mod.rs:257: emit_stream_wrapper_register, BAD_PROTOCOL_WARNING, DUPLICATE_PROTOCOL_WARNING, src/codegen_support/runtime/data/fixed.rs:73",
+  "text": "grep -rn \"BAD_PROTOCOL_WARNING\\|DUPLICATE_PROTOCOL_WARNING\" src/ | grep -v \"^src/codegen_support/runtime/io/stream_wrapper_register.rs:3[01234]\" | head: src/codegen_support/runtime/io/mod.rs:257: emit_stream_wrapper_register, BAD_PROTOCOL_WARNING, DUPLICATE_PROTOCOL_WARNING, src/codegen_support/runtime/data/fixed.rs:736: (\"_swr_bad_proto_msg\", crate::codegen_support::runtime::io::BAD_PROTOCOL_WARNING), src/codegen_support/runtime/data/fixed.rs:737: (\"_swr_dup_proto_msg\", crate::codegen_support::runtime::io::DUPLICATE_PROTOCOL_WARNING),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "497abbd31f0067cf95575e02",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:52:10.657Z",
+  "stored_at": "2026-08-21T16:52:10.658Z"
+}

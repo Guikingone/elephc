@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport pathlib\np = pathlib.Path('tests/codegen/regressions/arrays.rs')\nt = p.read_text()\nold = '''    assert!(\n        out.diagnostics.contains(\\\"HEAP DEBUG: leak summary: clean\\\"),\n        \\\"expected a clean heap, got: {}\\\",\n        out.diagnostics\n    );'''\nnew = '''    // The heap debugger writes to stderr and did NOT move with php's diagnostics: it is elephc's\n    // own instrumentation, not something php emits.\n    assert!(\n        out.stderr.contains(\\\"HEAP DEBUG: leak summary: clean\\\"),\n        \\\"expected a clean heap, got: {}\\\",\n        out.stderr\n    );'''\nassert t.count(… [+250 chars truncated]",
+  "summary": "python3 -c \"\nimport pathlib\np = pathlib.Path('tests/codegen/regressions/arrays.rs')\nt = p.read_text()\nold = '''    assert!(\n        out.diagnostics.contains(\\\"HEAP DEBUG: leak summary: clean\\\"),\n        \\\"expected a clean heap, got: {}\\\",\n        out.diagnostics\n    );'''\nnew = '''    // The heap debugger writes to std",
+  "text": "python3 -c \"\nimport pathlib\np = pathlib.Path('tests/codegen/regressions/arrays.rs')\nt = p.read_text()\nold = '''    assert!(\n        out.diagnostics.contains(\\\"HEAP DEBUG: leak summary: clean\\\"),\n        \\\"expected a clean heap, got: {}\\\",\n        out.diagnostics\n    );'''\nnew = '''    // The heap debugger writes to stderr and did NOT move with php's diagnostics: it is elephc's\n    // own instrumentation, not something php emits.\n    assert!(\n        out.stderr.contains(\\\"HEAP DEBUG: leak summary: clean\\\"),\n        \\\"expected a clean heap, got: {}\\\",\n        out.stderr\n    );'''\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('heap assertion restored to stderr')\n\"\ncargo test --test codegen_tests -- codegen::regressions::arrays::test_ternary_missed_read_normalizes_sentinel_children_in_typed_containers --exact 2>&1 | tail -6: heap assertion restored to stderr running 1 test test codegen::regressions::arrays::test_ternary_missed_read_normalizes_sentinel_children_in_typed_containers ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8452 filtered out; finished in 1.33s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1f531f320b8fd8f4ab4ca681",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:57:52.511Z",
+  "stored_at": "2026-08-18T20:57:52.512Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php/uu.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php/uu.php: <?php\nclass Registry {\n    public array $map = [];\n    public function add(string $k, int $v): void { $this->map[$k] = $v; }\n    publ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php/uu.php: <?php\nclass Registry {\n    public array $map = [];\n    public function add(string $k, int $v): void { $this->map[$k] = $v; }\n    public function drop(string $k): void { unset($this->map[$k]); }\n}\n$r = new Registry();\n$r->add(\"a\", 1);\n$r->add(\"b\", 2);\n$r->add(\"c\", 3);\nvar_dump(count($r->map), array_keys($r->map));\n$r->drop(\"b\");\nvar_dump(count($r->map), array_keys($r->map), $r->map);\nunset($r->map[\"a\"]);\nvar_dump(count($r->map), isset($r->map[\"a\"]), isset($r->map[\"c\"]));\nunset($r->map[\"never there\"]);\nvar_dump(count($r->map));\nforeach ($r->map as $k => $v) { echo $k, \"=\", $v, \";\"; }\necho \"\\n\";\n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "775e5d2600dcc3a2fe8699d4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:34:33.109Z",
+  "stored_at": "2026-08-26T08:34:33.109Z"
+}

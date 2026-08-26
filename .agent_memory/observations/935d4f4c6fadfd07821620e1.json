@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/byref_out_params.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/byref_out_params.py: \"\"\"What does php accept as a by-reference OUT argument, and what does it refuse?\n\nelephc refuses `stream_socket_client(..., er",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/byref_out_params.py: \"\"\"What does php accept as a by-reference OUT argument, and what does it refuse?\n\nelephc refuses `stream_socket_client(..., error_message: $why)` with \"Argument #2 ($error_code)\ncould not be passed by reference\" — for an argument the program never wrote. Normalization\nmaterialises the omitted parameter's `null` default at that position, and the by-ref check then\nsees a literal.\n\nThe question is where php draws the line, so the fix restores the line rather than moving it: an\nOMITTED by-ref parameter is fine, a literal in that position is an Error. Every shape is run under\n`php -n` so the answer",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "935d4f4c6fadfd07821620e1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:12:14.641Z",
+  "stored_at": "2026-08-21T16:12:14.642Z"
+}

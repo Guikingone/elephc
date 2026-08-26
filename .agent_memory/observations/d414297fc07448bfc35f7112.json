@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>b06saeexh</task-id>\n<tool-use-id>toolu_014LMq5UxRJH8JXTaJVfgn8d</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b06saeexh.output</output-file>\n<status>completed</status>\n<summary>Background command \"Run the ownership-sensitive suites\" completed (exit code 0)</summary>\n</task-notification>",
+  "summary": "<task-notification> <task-id>b06saeexh</task-id> <tool-use-id>toolu_014LMq5UxRJH8JXTaJVfgn8d</tool-use-id> <output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8db",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d414297fc07448bfc35f7112",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:43:53.866Z",
+  "stored_at": "2026-08-18T12:43:53.867Z",
+  "low_signal": true
+}

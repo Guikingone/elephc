@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib, re, collections\nd = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes7')\nfiles = sorted(d.glob('*.php'))\nSTREAM = re.compile(r'\\b(fopen|fread|fwrite|fgets|fseek|ftell|rewind|feof|fclose|flock|stream_[a-z_]+|php_user_filter|file_get_contents|file_put_contents|fgetcsv|fputcsv|fpassthru|fscanf|readfile|tmpfile|opendir|readdi… [+608 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib, re, collections\nd = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/s",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib, re, collections\nd = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes7')\nfiles = sorted(d.glob('*.php'))\nSTREAM = re.compile(r'\\b(fopen|fread|fwrite|fgets|fseek|ftell|rewind|feof|fclose|flock|stream_[a-z_]+|php_user_filter|file_get_contents|file_put_contents|fgetcsv|fputcsv|fpassthru|fscanf|readfile|tmpfile|opendir|readdir|glob|ftruncate|fstat|fflush|gz[a-z]+)\\s*\\(')\ncounts = collections.Counter()\nstream_files = 0\nfor f in files:\n    t = f.read_text()\n    names = set(STREAM.findall(t))\n    if names:\n        stream_files += 1\n        counts.update(names)\nprint(f'{len(files)} programs, {stream_files} call at least one stream/file function')\nprint('\\nmost-exercised entry points:')\nfor name, n in counts.most_common(18):\n    print(f'  {name:<26}{n}')\nprint('\\nprograms with NO stream call:')\nfor f in files:\n    if not STREAM.search(f.read_text()):\n        print('  ', f.name, '=>', ' '.join(f.read_text().split())[:88])\nPYEOF: 145 programs, 144 call at least one stream/file function most-exercised entry points: fopen 122 fwrite 54 stream_wrapper_register 45 stream_open 41 stream_eof 38 file_put_contents 38 fread 34 stream_read 33 fclose 31 ftell 25 stream_filter_append 23 file_get_contents 22 rewind 21 stream_get_meta_data 21 stream_stat 17 stream_get_contents 14 stream_write 14 fseek 12 programs with NO stream call: kimi-k3-84.php => <?php // L3 — the variadic override: php FATALS here, this is not a missing missing noti",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c8e98004a8f23066a2012e06",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:22:32.692Z",
+  "stored_at": "2026-08-22T19:22:32.693Z"
+}

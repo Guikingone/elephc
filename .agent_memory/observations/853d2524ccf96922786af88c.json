@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"ProgramOutput\" tests/codegen/support/*.rs | head -5; echo ---; grep -rn \"compile_and_run_in_dir\" tests/codegen/support/*.rs | head -5",
+  "summary": "grep -rn \"ProgramOutput\" tests/codegen/support/*.rs | head -5; echo ---; grep -rn \"compile_and_run_in_dir\" tests/codegen/support/*.rs | head -5: tests/codegen/support/compiler.rs:508:pub(crate) fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput { tests/codegen/support/compiler.rs:534:pub(crate) fn compile_",
+  "text": "grep -rn \"ProgramOutput\" tests/codegen/support/*.rs | head -5; echo ---; grep -rn \"compile_and_run_in_dir\" tests/codegen/support/*.rs | head -5: tests/codegen/support/compiler.rs:508:pub(crate) fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput { tests/codegen/support/compiler.rs:534:pub(crate) fn compile_and_run_capture(source: &str) -> ProgramOutput { tests/codegen/support/compiler.rs:539:pub(crate) fn compile_and_run_capture_with_regex(source: &str) -> ProgramOutput { tests/codegen/support/compiler.rs:547:) -> ProgramOutput { tests/codegen/support/compiler.rs:576:pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput { --- tests/codegen/support/projects.rs:585:pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "853d2524ccf96922786af88c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:09:19.793Z",
+  "stored_at": "2026-08-22T09:09:19.794Z"
+}

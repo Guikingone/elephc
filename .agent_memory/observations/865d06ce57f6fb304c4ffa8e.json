@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"STREAM_PENDING\" src/codegen_support/runtime/io/*.rs | head -8",
+  "summary": "grep -rn \"STREAM_PENDING\" src/codegen_support/runtime/io/*.rs | head -8: ort/runtime/io/stream_pending.rs:69: emitter.instruction(&format!(\"ldr x9, [x0, #{STREAM_PENDING_PTR_OFFSET}]\")); src/codegen_support/runtime/io/stream_pending.rs:78: emitter.instruction(&format!(\"str x0, [x9, #{STREAM_PENDING_PTR_OFFSET}]\")); src",
+  "text": "grep -rn \"STREAM_PENDING\" src/codegen_support/runtime/io/*.rs | head -8: ort/runtime/io/stream_pending.rs:69: emitter.instruction(&format!(\"ldr x9, [x0, #{STREAM_PENDING_PTR_OFFSET}]\")); src/codegen_support/runtime/io/stream_pending.rs:78: emitter.instruction(&format!(\"str x0, [x9, #{STREAM_PENDING_PTR_OFFSET}]\")); src/codegen_support/runtime/io/stream_pending.rs:80: emitter.instruction(&format!(\"str x10, [x9, #{STREAM_PENDING_LEN_OFFSET}]\")); src/codegen_support/runtime/io/stream_pending.rs:81: emitter.instruction(&format!(\"str xzr, [x9, #{STREAM_PENDING_POS_OFFSET}]\")); src/codegen_support/runtime/io/stream_pending.rs:114: emitter.instruction(&format!(\"ldr x9, [x0, #{STREAM_PENDING_PTR_OFFSET}]\")); src/codegen_support/runtime/io/stream_pending.rs:116: emitter.instruction(&format!(\"ldr x10, [x0, #{STREAM_PENDING_LEN_OFFSET}]\")); src/codegen_support/runtime/io/stream_pending.rs:117: emitter.instruction(&format!(\"ldr x11, [x0, #{STREAM_PENDING_POS_OFFSET}]\"));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "865d06ce57f6fb304c4ffa8e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T14:51:50.507Z",
+  "stored_at": "2026-08-19T14:51:50.508Z"
+}

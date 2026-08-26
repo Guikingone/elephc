@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1235,1265p' src/ir/runtime_fn.rs",
+  "summary": "sed -n '1235,1265p' src/ir/runtime_fn.rs: se, } } /// Returns whether this operation requires the optional regex runtime family. pub const fn uses_regex_runtime(self) -> bool { matches!( self, RuntimeFnId::PregMatch | RuntimeFnId::PregMatchAll | RuntimeFnId::PregReplace | RuntimeFnId::PregReplaceCallback | RuntimeFnId:",
+  "text": "sed -n '1235,1265p' src/ir/runtime_fn.rs: se, } } /// Returns whether this operation requires the optional regex runtime family. pub const fn uses_regex_runtime(self) -> bool { matches!( self, RuntimeFnId::PregMatch | RuntimeFnId::PregMatchAll | RuntimeFnId::PregReplace | RuntimeFnId::PregReplaceCallback | RuntimeFnId::PregSplit ) } /// Returns whether this operation requires the optional multibyte-length runtime. pub const fn uses_mb_strlen_runtime(self) -> bool { matches!(self, RuntimeFnId::MbStrlen) } /// Returns the scope-cleanup kind stamped into the resource this operation boxes. /// /// Read twice, and that is the point: the lowering stamps `Some(kind).stamp()` into the /// Mixed high payload word, and `lowered_runtime_features` turns the same answer into the /// runtime feature bit that decides whether `__rt_mixed_free_deep` emits the matching arm. /// One table, so the producer and the destructor cannot drift apart. ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c8d8709b90a7b5722b85f53e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:05:48.272Z",
+  "stored_at": "2026-08-25T13:05:48.272Z"
+}

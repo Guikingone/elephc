@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'sub rsp' src/codegen_support/runtime/io/fgets.rs | head -5; sed -n '425,450p' src/codegen_support/runtime/io/fgets.rs",
+  "summary": "grep -n 'sub rsp' src/codegen_support/runtime/io/fgets.rs | head -5; sed -n '425,450p' src/codegen_support/runtime/io/fgets.rs: aved handle and line metadata emitter.instruction(\"sub rsp, 96\"); // reserve the read-loop temporaries plus the bound and destination slots // Resolution is a call, so it has to happen inside ",
+  "text": "grep -n 'sub rsp' src/codegen_support/runtime/io/fgets.rs | head -5; sed -n '425,450p' src/codegen_support/runtime/io/fgets.rs: aved handle and line metadata emitter.instruction(\"sub rsp, 96\"); // reserve the read-loop temporaries plus the bound and destination slots // Resolution is a call, so it has to happen inside the frame; an invalid stream // therefore leaves through the framed epilogue rather than a bare `ret`. emitter.instruction(\"mov QWORD PTR [rbp - 8], rdi\"); // preserve the opaque stream handle emitter.instruction(\"mov QWORD PTR [rbp - 64], rsi\"); // preserve the caller's length bound emitter.instruction(\"call __rt_stream_fd\"); // resolve the backend descriptor through StreamState emitter.instruction(\"mov QWORD PTR [rbp - 56], rax\"); // preserve the resolved backend descriptor // -- does the stream carry a read-filter chain? -- // See the AArch64 counterpart: probed once, because the answer picks the byte source for // every iteration of the loop and re-resolving the state per byte would cost a call.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eaaa6b8f61ea8b51fd16dacf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:47:47.184Z",
+  "stored_at": "2026-08-25T13:47:47.185Z"
+}

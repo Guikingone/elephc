@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scheme_rule.py 2>&1",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scheme_rule.py 2>&1: SAME a php='bool(true) false' SAME w php='bool(true) false' SAME ab php='bool(true) resource' SAME mw php='bool(true) resour",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scheme_rule.py 2>&1: SAME a php='bool(true) false' SAME w php='bool(true) false' SAME ab php='bool(true) resource' SAME mw php='bool(true) resource' SAME abc php='bool(true) resource' SAME x1 php='bool(true) resource' SAME 1x php='bool(true) resource' SAME a-b php='bool(true) resource' SAME a.b php='bool(true) resource' SAME a+b php='bool(true) resource'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d9b951d5e2b16ea1f08429cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:12:09.061Z",
+  "stored_at": "2026-08-21T09:12:09.062Z"
+}

@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1380,1450p' tests/codegen/io/streams.rs",
+  "summary": "sed -n '1380,1450p' tests/codegen/io/streams.rs: orts_lock(fopen(\"php://memory\", \"w+\")) ? \"L\" : \"n\"; echo stream_supports_lock(fopen(\"php://temp\", \"w+\")) ? \"L\" : \"n\"; echo stream_supports_lock(fopen(\"php://output\", \"w\")) ? \"L\" : \"n\"; echo stream_supports_lock(fopen(\"php://stdout\", \"w\")) ? \"L\" : \"n\"; echo stream_support",
+  "text": "sed -n '1380,1450p' tests/codegen/io/streams.rs: orts_lock(fopen(\"php://memory\", \"w+\")) ? \"L\" : \"n\"; echo stream_supports_lock(fopen(\"php://temp\", \"w+\")) ? \"L\" : \"n\"; echo stream_supports_lock(fopen(\"php://output\", \"w\")) ? \"L\" : \"n\"; echo stream_supports_lock(fopen(\"php://stdout\", \"w\")) ? \"L\" : \"n\"; echo stream_supports_lock(tmpfile()) ? \"L\" : \"n\"; echo stream_supports_lock(STDIN) ? \"L\" : \"n\"; unlink(\"lk.txt\"); \"#, ); assert_eq!(out, \"LnnnLLL\"); let _ = fs::remove_dir_all(&dir); } /// Verifies compiled PHP output for stream get wrappers lists known wrappers. #[test] fn test_stream_get_wrappers_lists_known_wrappers() { // Full PHP-published wrapper list (Phase D: surface 100%). ftps, // compress.*, phar, glob are accepted at runtime but currently // return false from fopen — the listing is the PHP-spec surface. let out = compile_and_run( r#\"<?php $w = stream_get_wrappers(); echo count($w) . \":\" . $w[0] . \",\" . $w[3] . \",\" . $w[5];\"#, );",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d444e02306ff852ab8ef29ce",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:13:34.901Z",
+  "stored_at": "2026-08-14T14:13:34.901Z",
+  "low_signal": true
+}

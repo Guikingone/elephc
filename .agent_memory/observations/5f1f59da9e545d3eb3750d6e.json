@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_other_readers.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_other_readers.py: \"\"\"Do the REMAINING readers see a wrapper's buffered bytes?\n\n`fread`, `fgetc` and `stream_get_contents` were fixed by dra",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/wrapper_other_readers.py: \"\"\"Do the REMAINING readers see a wrapper's buffered bytes?\n\n`fread`, `fgetc` and `stream_get_contents` were fixed by draining inside the wrapper branch of\n`__rt_fread_raw`. The others reach the wrapper by different routes — `stream_get_line` drains at\nits own entry, `fgetcsv`/`fscanf` go through `__rt_fgets` — so whether they agree is a separate\nquestion, and one a fix to `fread` cannot answer.\n\nEach row leaves bytes on the stream with a bounded `fgets`, then asks a DIFFERENT reader for them.\n\"\"\"\nimport pathlib, subprocess\n\nD = pathlib.Path(__file__).parent / 'otherreaders'\nROOT = pathlib.Pat",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f1f59da9e545d3eb3750d6e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:17:43.088Z",
+  "stored_at": "2026-08-21T13:17:43.089Z"
+}

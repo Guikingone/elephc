@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn '\"stream_open\"\\|\"stream_read\"\\|\"stream_write\"\\|\"stream_close\"\\|\"stream_eof\"\\|\"stream_stat\"\\|\"stream_seek\"\\|\"stream_tell\"\\|\"stream_flush\"\\|\"stream_truncate\"\\|\"stream_lock\"\\|\"stream_metadata\"\\|\"stream_set_option\"\\|\"stream_cast\"\\|\"url_stat\"\\|\"dir_opendir\"\\|\"dir_readdir\"\\|\"dir_rewinddir\"\\|\"dir_closedir\"' src crates --include='*.rs' 2>/dev/null | grep -v '/tests/' | sort",
+  "summary": "grep -rn '\"stream_open\"\\|\"stream_read\"\\|\"stream_write\"\\|\"stream_close\"\\|\"stream_eof\"\\|\"stream_stat\"\\|\"stream_seek\"\\|\"stream_tell\"\\|\"stream_flush\"\\|\"stream_truncate\"\\|\"stream_lock\"\\|\"stream_metadata\"\\|\"stream_set_option\"\\|\"stream_cast\"\\|\"url_stat\"\\|\"dir_opendir\"\\|\"dir_readdir\"\\|\"dir_rewinddir\"\\|\"dir_closedir\"' src crate",
+  "text": "grep -rn '\"stream_open\"\\|\"stream_read\"\\|\"stream_write\"\\|\"stream_close\"\\|\"stream_eof\"\\|\"stream_stat\"\\|\"stream_seek\"\\|\"stream_tell\"\\|\"stream_flush\"\\|\"stream_truncate\"\\|\"stream_lock\"\\|\"stream_metadata\"\\|\"stream_set_option\"\\|\"stream_cast\"\\|\"url_stat\"\\|\"dir_opendir\"\\|\"dir_readdir\"\\|\"dir_rewinddir\"\\|\"dir_closedir\"' src crates --include='*.rs' 2>/dev/null | grep -v '/tests/' | sort: ram/metadata.rs:108: let is_wrapper_class = methods.contains_key(\"stream_open\"); src/types/checker/method_pass.rs:223: if !ci.methods.contains_key(\"stream_open\") { src/types/checker/method_pass.rs:280: if !class_info.methods.contains_key(\"stream_open\") { src/types/checker/method_pass.rs:594: \"stream_open\" => vec![PhpType::Str, PhpType::Str, PhpType::Int, PhpType::Str], src/types/checker/method_pass.rs:595: \"stream_write\" => vec![PhpType::Str], src/types/checker/method_pass.rs:596: \"stream_read\" | \"stream_truncate\" | \"stream_lock\" | \"stream_cast\" => ints(1), src/types/checker/method_pass.rs:597: \"stream_seek\" => ints(2), src/types/checker/method_pass.rs:598: \"stream_set_option\" => ints(3), src/types/checker/method_pass.rs:601: \"url_stat\" | \"rmdir\" | \"dir_opendir\" => vec![PhpType::Str, PhpType::Int], src/types/checker/method_pass.rs:616: \"stream_read\" | \"dir_readdir\" => Some(PhpType::Str),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "181a9cd0606ad8a7eaf8ad96",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:04.325Z",
+  "stored_at": "2026-08-14T14:11:04.325Z"
+}

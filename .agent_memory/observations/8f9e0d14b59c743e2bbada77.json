@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '70,115p' tests/codegen/io/streams.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '70,115p' tests/codegen/io/streams.rs:  after it; the bare // `fopen()` this used to assert named neither. assert!( out.diagnostics.contains( \"Warning: fopen(no_such_file.txt): Failed to open stream: No such file or d",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '70,115p' tests/codegen/io/streams.rs:  after it; the bare // `fopen()` this used to assert named neither. assert!( out.diagnostics.contains( \"Warning: fopen(no_such_file.txt): Failed to open stream: No such file or directory\" ), \"expected the path and reason in the warning, got diagnostics={}\", out.diagnostics ); } /// Verifies @-suppression prevents the fopen() warning when opening a non-existent file. #[test] fn test_error_control_suppresses_fopen_missing_warning() { let out = compile_and_run_capture( r#\"<?php $f = @fopen(\"no_such_file.txt\", \"r\"); echo gettype($f) . \"|\"; echo $f === false ? \"false\" : \"resource\"; \"#, ); assert!(out.success, \"program failed: {}\", out.stderr); assert_eq!(out.stdout, \"boolean|false\"); assert_eq!(out.stderr, \"\"); assert_eq!(out.diagnostics, \"\"); } /// Verifies fopen() returns false for invalid or empty mode strings without emitting a warning. #[test] fn test_fopen_invalid_modes_return_false() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8f9e0d14b59c743e2bbada77",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:58:01.402Z",
+  "stored_at": "2026-08-22T20:58:01.402Z"
+}

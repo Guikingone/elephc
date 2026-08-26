@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '225,240p' src/codegen_support/runtime/data/fixed.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '225,240p' src/codegen_support/runtime/data/fixed.rs: (\"_sock_fail_unable\", SOCKET_FAILED_UNABLE), (\"_sock_fail_newline\", \"\\n\"), (\"_sock_fail_open\", SOCKET_FAILED_REASON_OPEN), (\"_sock_fail_unknown\", SOCKET_FAILED_REA",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '225,240p' src/codegen_support/runtime/data/fixed.rs: (\"_sock_fail_unable\", SOCKET_FAILED_UNABLE), (\"_sock_fail_newline\", \"\\n\"), (\"_sock_fail_open\", SOCKET_FAILED_REASON_OPEN), (\"_sock_fail_unknown\", SOCKET_FAILED_REASON_UNKNOWN), (\"_sock_fail_close\", SOCKET_FAILED_REASON_CLOSE), (\"_sock_fail_colon\", \":\"), (\"_diag_newline\", DIAG_NEWLINE), (\"_dyn_prop_dep_head\", DYNAMIC_PROP_DEPRECATED_HEAD), (\"_dyn_prop_dep_tail\", DYNAMIC_PROP_DEPRECATED_TAIL), (\"_disk_free_space_warn\", DISK_FREE_SPACE_WARNING), (\"_disk_total_space_warn\", DISK_TOTAL_SPACE_WARNING), (\"_fgc_mode_r\", \"r\"), (\"_fpc_mode_w\", \"w\"), (\"_fpc_mode_a\", \"a\"), (\"_fgc_filter_fail_tail\", FGC_FILTER_FAIL_TAIL), (\"_pf_w_head\", PF_WARN_HEAD),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8b7581e16d0c156fbecadfb5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:43:10.696Z",
+  "stored_at": "2026-08-24T13:43:10.696Z"
+}

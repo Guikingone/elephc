@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"^use \\|^}\" src/types/checker/functions/resolution/signature.rs | head -12; echo \"---\"; tail -25 src/types/checker/functions/resolution/signature.rs",
+  "summary": "grep -n \"^use \\|^}\" src/types/checker/functions/resolution/signature.rs | head -12; echo \"---\"; tail -25 src/types/checker/functions/resolution/signature.rs: 11:use std::collections::HashMap; 13:use crate::errors::CompileError; 14:use crate::types::{FunctionSig, PhpType, TypeEnv}; 16:use super::super::super::{Checker, ",
+  "text": "grep -n \"^use \\|^}\" src/types/checker/functions/resolution/signature.rs | head -12; echo \"---\"; tail -25 src/types/checker/functions/resolution/signature.rs: 11:use std::collections::HashMap; 13:use crate::errors::CompileError; 14:use crate::types::{FunctionSig, PhpType, TypeEnv}; 16:use super::super::super::{Checker, FnDecl}; 401:} 440:} 456:} 482:} 491:} 501:} 513:} --- _ => false, } } /// Computes the callable signature metadata for matching callable. fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> { let first = return_sigs.first()?.clone(); if return_sigs.iter().all(|sig| sig == &first) { Some(callable_return_codegen_sig(first)) } else { None } } /// Computes the callable signature metadata for callable return codegen. fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig { for (idx, (_, ty)) in sig.params.iter_mut().enumerate() { if !sig.declared_params.get(idx).copied().unwrap_or(false) && matches!(ty, PhpType::Mixed) { *ty = PhpType::Int; } } sig }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4c99530eb1d070a3cd731374",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:07:40.410Z",
+  "stored_at": "2026-08-18T10:07:40.411Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '328,342p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter.rs",
+  "summary": "rtk proxy sed -n '328,342p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter.rs: fau_try_builtin\"); // not a user filter: try the built-in table emitter.instruction(\"str x0, [sp, #24]\"); // save the resolved id across __rt_new_by_name",
+  "text": "rtk proxy sed -n '328,342p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter.rs: fau_try_builtin\"); // not a user filter: try the built-in table emitter.instruction(\"str x0, [sp, #24]\"); // save the resolved id across __rt_new_by_name // -- look up class_name in the registry slot -- emitter.instruction(\"sub x9, x0, #128\"); // slot_index = id - USER_FILTER_ID_BASE abi::emit_symbol_address(emitter, \"x10\", \"_user_filter_registry\"); emitter.instruction(\"add x10, x10, x9, lsl #5\"); // registry entry = base + slot_index * 32 emitter.instruction(\"ldr x1, [x10, #16]\"); // class_name pointer emitter.instruction(\"ldr x2, [x10, #24]\"); // class_name length emitter.instruction(\"bl __rt_new_by_name\"); // x0 = obj or 0 emitter.instruction(\"cbz x0, __rt_sfau_fail_release_params\"); // class missing → fail and release params emitter.instruction(\"str x0, [sp, #32]\"); // save the obj pointer for the instances table // -- seed php_user_filter::$params before onCreate() observes $this --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3056ece695612fb96e165c27",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:31:29.383Z",
+  "stored_at": "2026-08-17T09:31:29.384Z"
+}

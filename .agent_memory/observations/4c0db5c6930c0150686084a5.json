@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_zip_gate.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_zip_gate.py: \"\"\"`ZipArchive` was registered by a gate that could never open for it.\n\n`inject_builtin_spl_classes` inserts `ZipArchive`, but onl",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_zip_gate.py: \"\"\"`ZipArchive` was registered by a gate that could never open for it.\n\n`inject_builtin_spl_classes` inserts `ZipArchive`, but only when `program_may_reference_spl` says\nthe program can reach one of these classes — and that scan reads `SPL_CLASS_NAMES` and\n`PHAR_CLASS_NAMES`, neither of which names it. So a program using `ZipArchive` got \"Undefined\nclass: ZipArchive\" from a compiler that has the class. Five tests, one missing name.\n\nThe name is added, and so is a GATE that reads both sides: every class the registration inserts\nmust be reachable by the scan. That turns the next missing name int",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4c0db5c6930c0150686084a5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:17:06.513Z",
+  "stored_at": "2026-08-21T15:17:06.513Z"
+}

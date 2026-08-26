@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/skip-empty-rule.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/skip-empty-rule.php: <?php\n$cases = [\n    \"empty\"        => \"\",\n    \"one\"          => \"a\",\n    \"one-nl\"       => \"a\\n\",\n    \"blank-middl",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/skip-empty-rule.php: <?php\n$cases = [\n    \"empty\"        => \"\",\n    \"one\"          => \"a\",\n    \"one-nl\"       => \"a\\n\",\n    \"blank-middle\" => \"a\\n\\nb\\n\",\n    \"blank-first\"  => \"\\na\\n\",\n    \"blank-last\"   => \"a\\n\\n\",\n    \"two-blanks\"   => \"a\\n\\n\\nb\\n\",\n];\nforeach ($cases as $label => $body) {\n    file_put_contents(\"f.txt\", $body);\n    foreach ([SplFileObject::SKIP_EMPTY,\n              SplFileObject::DROP_NEW_LINE | SplFileObject::SKIP_EMPTY] as $flags) {\n        $o = new SplFileObject(\"f.txt\");\n        $o->setFlags($flags);\n        echo $label, \"/\", $flags, \"=>\";\n        foreach ($o as $k => $line) { echo $k, \":\", ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1bc6529eac67fcfc11d29ed8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:26:01.367Z",
+  "stored_at": "2026-08-25T09:26:01.368Z"
+}

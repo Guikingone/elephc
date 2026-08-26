@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_hash.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_hash.txt: fix(arrays): a string-keyed array of resources stored INTEGERS, and every reader believed it\n\n    $a = [\"out\" => STDOUT];\n    var_du",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_hash.txt: fix(arrays): a string-keyed array of resources stored INTEGERS, and every reader believed it\n\n    $a = [\"out\" => STDOUT];\n    var_dump($a);\n    php:    resource(2) of type (stream)\n    elephc: int(4294967298)\n\n`codegen_repr()` maps `Resource` to `Int` — one machine word each, so every question about\nREPRESENTATION is answered identically for both. The runtime TAG is not such a question:\n`runtime_value_tag` answers 9 for a resource and 0 for an int, and `gettype()`, `is_resource()`,\n`var_dump()` and every foreach read that byte back out of the table. Both places that choose a\nhash's tag asked t",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "746e5f6ade08cf6802f0f51c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:37:58.381Z",
+  "stored_at": "2026-08-22T17:37:58.382Z"
+}

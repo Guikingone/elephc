@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"Warn\\|Diag\\|Deprecat\" src/ir/op.rs 2>/dev/null | head; echo \"--- ops file:\"; ls src/ir/ | head -20",
+  "summary": "grep -n \"Warn\\|Diag\\|Deprecat\" src/ir/op.rs 2>/dev/null | head; echo \"--- ops file:\"; ls src/ir/ | head -20: --- ops file: block.rs builder.rs effects.rs function.rs function_variants.rs instr.rs mod.rs module.rs print.rs runtime_call.rs runtime_fn.rs tests types.rs validator.rs value.rs",
+  "text": "grep -n \"Warn\\|Diag\\|Deprecat\" src/ir/op.rs 2>/dev/null | head; echo \"--- ops file:\"; ls src/ir/ | head -20: --- ops file: block.rs builder.rs effects.rs function.rs function_variants.rs instr.rs mod.rs module.rs print.rs runtime_call.rs runtime_fn.rs tests types.rs validator.rs value.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d860c1598e55f0cdacdf431c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T19:49:33.337Z",
+  "stored_at": "2026-08-18T19:49:33.337Z"
+}

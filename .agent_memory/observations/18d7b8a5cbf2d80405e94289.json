@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/lock_and_readonly.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/lock_and_readonly.php: <?php\n// flock() itself on the streams that do not support it, and a write to a read-only stream.\n$pair = stream_socket_pai",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/lock_and_readonly.php: <?php\n// flock() itself on the streams that do not support it, and a write to a read-only stream.\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\n$mem = fopen(\"php://memory\", \"w+\");\n$file = tmpfile();\necho \"flock socket  : \", var_export(@flock($pair[0], LOCK_EX), true), \"\\n\";\necho \"flock memory  : \", var_export(@flock($mem, LOCK_EX), true), \"\\n\";\necho \"flock file    : \", var_export(flock($file, LOCK_EX), true), \"\\n\";\n\n$ro = fopen(\"php://temp\", \"r\");\nvar_dump(fwrite($ro, \"\"));\nvar_dump(fwrite($ro, \"abc\"));\n$rofile = tmpfile();\nfwrite($rofile, \"seed\");\n$reopened = fopen(stream",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18d7b8a5cbf2d80405e94289",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:47:26.291Z",
+  "stored_at": "2026-08-23T07:47:26.292Z"
+}

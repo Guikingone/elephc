@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='tests/codegen/php_tags.rs'\ns=open(p).read()\nold='''    // A file may OPEN with one.\n    let opens = compile_and_run(\"<?= 1 + 2 ?>\\\\n<?php echo \\\\\"!\\\\\\\\n\\\\\";\\\\n\");\n    assert_eq!(opens, \"3\\\\n!\\\\n\");'''\nnew='''    // A file may OPEN with one. The `?>` still swallows the newline after it, so nothing\n    // separates the two outputs.\n    let opens = compile_and_run(\"<?= 1 + 2 ?>\\\\n<?php echo \\\\\"!\\\\\\\\n\\\\\";\\\\n\");\n    assert_eq!(opens, \"3!\\\\n\");'''\nassert s.count(ol… [+158 chars truncated]",
+  "summary": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='tests/codegen/php_tags.rs'\ns=open(p).read()\nold='''    // A file may OPEN with one.\n    let opens = compile_and_run(\"<?= 1 + 2 ?>\\\\n<?php echo \\\\\"!\\\\\\\\n\\\\\";\\\\n\");\n    assert_eq!(opens",
+  "text": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='tests/codegen/php_tags.rs'\ns=open(p).read()\nold='''    // A file may OPEN with one.\n    let opens = compile_and_run(\"<?= 1 + 2 ?>\\\\n<?php echo \\\\\"!\\\\\\\\n\\\\\";\\\\n\");\n    assert_eq!(opens, \"3\\\\n!\\\\n\");'''\nnew='''    // A file may OPEN with one. The `?>` still swallows the newline after it, so nothing\n    // separates the two outputs.\n    let opens = compile_and_run(\"<?= 1 + 2 ?>\\\\n<?php echo \\\\\"!\\\\\\\\n\\\\\";\\\\n\");\n    assert_eq!(opens, \"3!\\\\n\");'''\nassert s.count(old)==1\ns=s.replace(old,new)\nopen(p,'w').write(s)\nprint('expectation corrected from php')\nPYEOF\ncargo test --test codegen_tests codegen::php_tags 2>&1 | tail -6: expectation corrected from php test codegen::php_tags::test_closing_tag_emits_the_literal_text_that_follows ... ok test codegen::php_tags::test_short_echo_tag_is_an_opening_tag ... ok test codegen::php_tags::test_closing_tag_supplies_a_semicolon_only_where_one_belongs ... ok test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 8431 filtered out; finished in 6.59s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "84bf36cc22e12e1c1d3f1b1c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:24:12.569Z",
+  "stored_at": "2026-08-17T21:24:12.570Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '400,410p' src/types/checker/method_pass.rs",
+  "summary": "rtk proxy sed -n '400,410p' src/types/checker/method_pass.rs: /// Without that short-circuit an unhinted generator method infers `void` (the /// body has no value return) and a `: Generator` hint trips the /// \"must return a value on every path\" coverage check. fn update_method_return_type( &mut self, class: &Flattened",
+  "text": "rtk proxy sed -n '400,410p' src/types/checker/method_pass.rs: /// Without that short-circuit an unhinted generator method infers `void` (the /// body has no value return) and a `: Generator` hint trips the /// \"must return a value on every path\" coverage check. fn update_method_return_type( &mut self, class: &FlattenedClass, method: &ClassMethod, method_env: &TypeEnv, pass_errors: &mut Vec<CompileError>, ) { let mut return_infos = Vec::new();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ad4f6ffd9047a056544ae478",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:51:36.373Z",
+  "stored_at": "2026-08-16T20:51:36.373Z"
+}

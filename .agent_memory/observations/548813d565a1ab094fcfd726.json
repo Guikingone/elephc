@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/null_to_nonnullable.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/null_to_nonnullable.py: \"\"\"php warns about the NULL before it refuses it.\n\n    stream_context_set_option($c, null);\n    php:  Deprecated: stream_c",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/null_to_nonnullable.py: \"\"\"php warns about the NULL before it refuses it.\n\n    stream_context_set_option($c, null);\n    php:  Deprecated: stream_context_set_option(): Passing null to parameter #2\n          ($wrapper_or_options) of type array|string is deprecated\n          ValueError: ... Argument #3 ($option_name) cannot be null when argument #2\n          ($wrapper_or_options) is a string\n\nphp 8.1 deprecated passing null to a non-nullable INTERNAL parameter, and this one is\n`array|string`. The notice comes first and the coercion still happens — null becomes \"\", which is\nwhy the refusal that follows is the one about a",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "548813d565a1ab094fcfd726",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:12:48.647Z",
+  "stored_at": "2026-08-22T19:12:48.648Z"
+}

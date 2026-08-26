@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"fn dynamic_property_hash_offset_for_object\" -A32 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/ | head -36",
+  "summary": "rtk proxy grep -rn \"fn dynamic_property_hash_offset_for_object\" -A32 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/ | head -36: ture/src/codegen/lower_inst/objects/property_resolution.rs-61- if class_info /Users/guillaumeloulier/PhpstormProjec",
+  "text": "rtk proxy grep -rn \"fn dynamic_property_hash_offset_for_object\" -A32 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/ | head -36: ture/src/codegen/lower_inst/objects/property_resolution.rs-61- if class_info /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/property_resolution.rs-62- .properties /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/property_resolution.rs-63- .iter() /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/property_resolution.rs-64- .any(|(name, _)| name == property) /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/property_resolution.rs-65- { /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/objects/property_resolution.rs-66- return Ok(None);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1b40ec78d29c09d7c8776a70",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:06:55.212Z",
+  "stored_at": "2026-08-17T09:06:55.212Z"
+}

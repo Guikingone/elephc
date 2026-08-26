@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1560,1640p' src/codegen_support/runtime/data/fixed.rs",
+  "summary": "sed -n '1560,1640p' src/codegen_support/runtime/data/fixed.rs: ign 3\\n\"); out.push_str(\".globl _spl_autoload_exts_ptr\\n\"); out.push_str(\"_spl_autoload_exts_ptr:\\n\"); out.push_str(\" .quad _spl_autoload_exts_default\\n\"); out.push_str(\".globl _spl_autoload_exts_len\\n\"); out.push_str(\"_spl_autoload_exts_len:\\n\"); out.push_",
+  "text": "sed -n '1560,1640p' src/codegen_support/runtime/data/fixed.rs: ign 3\\n\"); out.push_str(\".globl _spl_autoload_exts_ptr\\n\"); out.push_str(\"_spl_autoload_exts_ptr:\\n\"); out.push_str(\" .quad _spl_autoload_exts_default\\n\"); out.push_str(\".globl _spl_autoload_exts_len\\n\"); out.push_str(\"_spl_autoload_exts_len:\\n\"); out.push_str(&format!(\" .quad {}\\n\", default.len())); out } #[cfg(test)] mod tests { use super::*; use crate::codegen_support::platform::{Arch, Platform}; /// Every common symbol the runtime data section declares must carry an alignment operand /// the target's own assembler reads as 8 bytes. /// /// This is a whole-section sweep rather than a spot check because the failure is silent at /// assembly time and only shows up at link time, once per program rather than once per /// symbol: `.comm sym, N, 3` means 8-byte alignment to Mach-O's assembler and 3-byte /// alignment to GNU as. An ELF build of an under-aligned symbol assembles fine and then",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ccd899c6686cc65e035f6a7d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:12:52.050Z",
+  "stored_at": "2026-08-14T14:12:52.050Z"
+}

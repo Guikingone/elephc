@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/behavsweep/c18/p.php",
+  "summary": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/behavsweep/c18/p.php: 1 <?php 2 file_put_contents(\"f.txt\", \"abcdef\"); 3 $h = fopen(\"f.txt\", \"r\"); 4 $f = stream_filter_append($h, \"string.toupper\"",
+  "text": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/behavsweep/c18/p.php: 1 <?php 2 file_put_contents(\"f.txt\", \"abcdef\"); 3 $h = fopen(\"f.txt\", \"r\"); 4 $f = stream_filter_append($h, \"string.toupper\", STREAM_FILTER_READ); 5 var_dump(fread($h, 3)); 6 var_dump(stream_filter_remove($f)); 7 var_dump(fread($h, 3)); 8 var_dump(stream_filter_remove($f)); 9 fclose($h);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a145573758fd5c3c839fd2f1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:54:10.187Z",
+  "stored_at": "2026-08-21T18:54:10.187Z"
+}

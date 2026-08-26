@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='tests/codegen/io/streams.rs'\ns=open(p).read()\nanchor = '''/// Verifies a non-zero `$microseconds` beside a null `$seconds` raises php's `ValueError`.'''\nadd = '''/// Verifies `Foo::class` names a stream wrapper/filter class as well as a string literal does.\n///\n/// `Foo::class` does not lower to `Op::ConstStr` — it is its own opcode indexing the class-name\n/// table — so the reachability rule that decides which classes keep their runtime metadata could\n/// not s… [+1935 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import os os.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature') p='tests/codegen/io/streams.rs' s=open(p).read() anchor = '''/// Veri",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c17fe850411c43d1ba28937b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:51:16.787Z",
+  "stored_at": "2026-08-17T09:51:16.788Z"
+}

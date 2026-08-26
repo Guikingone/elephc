@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/buffering-funnel-swallows-unterminated-messages.md",
+  "command": "",
+  "summary": "About to run: Write",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e9bed81d5c809cbd3ce9239a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T14:50:33.156Z",
+  "stored_at": "2026-08-19T14:50:33.156Z",
+  "low_signal": true
+}

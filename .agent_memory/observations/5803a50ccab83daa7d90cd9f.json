@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '381,400p' src/types/checker/method_pass.rs",
+  "summary": "rtk proxy sed -n '381,400p' src/types/checker/method_pass.rs:  exists, `require_declared_return_coverage` /// checks for unreachable returns and `require_compatible_return_type` checks each /// observed return for assignability to the declared type. A `Never` declared return /// suppresses the compatibility check (the ",
+  "text": "rtk proxy sed -n '381,400p' src/types/checker/method_pass.rs:  exists, `require_declared_return_coverage` /// checks for unreachable returns and `require_compatible_return_type` checks each /// observed return for assignability to the declared type. A `Never` declared return /// suppresses the compatibility check (the body is allowed to have no returns when /// it always throws/exits/loops). `Never` combined with a body that *does* contain /// return statements produces a compile error. Generic array hints are passed /// through as-is to preserve inference. /// /// A method body containing `yield` is a generator: calling it produces a /// `Generator` object regardless of what the body's `return` statements say, so /// generator detection short-circuits the whole inference/validation chain the /// same way the free-function path in `functions::resolution::signature` does. /// Without that short-circuit an unhinted generator method infers `void` (the",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5803a50ccab83daa7d90cd9f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:51:30.517Z",
+  "stored_at": "2026-08-16T20:51:30.517Z"
+}

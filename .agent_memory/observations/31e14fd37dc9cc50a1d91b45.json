@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n ctinc.php | od -c | head -4",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n ctinc.php | od -c | head -4: 0000000 b e f o r e i n c l u d e \\n p 0000020 a r t i a l s a y s h i p a 0000040 r t i a l d o n e \\n a f",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n ctinc.php | od -c | head -4: 0000000 b e f o r e i n c l u d e \\n p 0000020 a r t i a l s a y s h i p a 0000040 r t i a l d o n e \\n a f t e r 0000060 i n c l u d e \\n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "31e14fd37dc9cc50a1d91b45",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T07:17:35.845Z",
+  "stored_at": "2026-08-18T07:17:35.845Z"
+}

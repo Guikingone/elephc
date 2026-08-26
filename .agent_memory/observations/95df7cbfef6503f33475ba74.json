@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm43.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm43.php: <?php\n// What can stream_select() actually select on?\n$p = sys_get_temp_dir() . \"/rm43.txt\";\nfile_put_contents($p, \"hello\");\n\n$f = fo",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm43.php: <?php\n// What can stream_select() actually select on?\n$p = sys_get_temp_dir() . \"/rm43.txt\";\nfile_put_contents($p, \"hello\");\n\n$f = fopen($p, \"r\");\n$r = [$f];\n$w = null;\n$e = null;\nvar_dump(stream_select($r, $w, $e, 0));\nvar_dump(count($r));\nfclose($f);\n\n$m = fopen(\"php://memory\", \"w+\");\n$r2 = [$m];\n$w2 = null;\n$e2 = null;\ntry {\n    var_dump(@stream_select($r2, $w2, $e2, 0));\n} catch (ValueError $ex) {\n    echo \"VE: \", $ex->getMessage(), \"\\n\";\n}\nfclose($m);\n\n$f2 = fopen($p, \"r\");\n$m2 = fopen(\"php://memory\", \"w+\");\n$r3 = [$f2, $m2];\n$w3 = null;\n$e3 = null;\ntry {\n    var_dump(@stream_select($r3, ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "95df7cbfef6503f33475ba74",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:18:32.977Z",
+  "stored_at": "2026-08-18T11:18:32.978Z"
+}

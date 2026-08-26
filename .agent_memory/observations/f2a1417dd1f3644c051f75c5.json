@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn normalize_union_type' -A 20 src/types/ | head -30",
+  "summary": "grep -rn 'fn normalize_union_type' -A 20 src/types/ | head -30: ons.rs-28- let mut deduped = Vec::new(); src/types/checker/type_compat/unions.rs-29- for member in flat { src/types/checker/type_compat/unions.rs-30- // `bool` already contains the literal `false` subtype. Keep `False` only when the src/types/checker/type_",
+  "text": "grep -rn 'fn normalize_union_type' -A 20 src/types/ | head -30: ons.rs-28- let mut deduped = Vec::new(); src/types/checker/type_compat/unions.rs-29- for member in flat { src/types/checker/type_compat/unions.rs-30- // `bool` already contains the literal `false` subtype. Keep `False` only when the src/types/checker/type_compat/unions.rs-31- // declaration is specifically false-only (for example `int|false`). src/types/checker/type_compat/unions.rs-32- if member == PhpType::False && deduped.iter().any(|existing| existing == &PhpType::Bool) { src/types/checker/type_compat/unions.rs-33- continue; src/types/checker/type_compat/unions.rs-34- } src/types/checker/type_compat/unions.rs-35- if member == PhpType::Bool { src/types/checker/type_compat/unions.rs-36- deduped.retain(|existing| existing != &PhpType::False); src/types/checker/type_compat/unions.rs-37- } src/types/checker/type_compat/unions.rs-38- if !deduped.iter().any(|existing| existing == &member) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f2a1417dd1f3644c051f75c5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:52:34.655Z",
+  "stored_at": "2026-08-24T18:52:34.656Z"
+}

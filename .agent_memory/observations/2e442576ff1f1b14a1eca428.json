@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-store-in-a-loop-condition-is-outside-the-loop.md",
+  "command": "",
+  "summary": "About to run: Write",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2e442576ff1f1b14a1eca428",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:31:32.828Z",
+  "stored_at": "2026-08-23T13:31:32.828Z",
+  "low_signal": true
+}

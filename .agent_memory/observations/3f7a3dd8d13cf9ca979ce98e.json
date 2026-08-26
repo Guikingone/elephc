@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"SCANF_MAX_VARS\\|pub(crate) const SCANF_MAX_VARS\" src/scanf_prelude.rs | head -3; grep -n \"pub mod scanf_prelude\\|pub(crate) mod scanf_prelude\\|mod scanf_prelude\" src/lib.rs",
+  "summary": "grep -rn \"SCANF_MAX_VARS\\|pub(crate) const SCANF_MAX_VARS\" src/scanf_prelude.rs | head -3; grep -n \"pub mod scanf_prelude\\|pub(crate) mod scanf_prelude\\|mod scanf_prelude\" src/lib.rs: src/scanf_prelude.rs:567:pub(crate) const SCANF_MAX_VARS: usize = 8; src/scanf_prelude.rs:582: for count in 1..=SCANF_MAX_VARS { 77:pub ",
+  "text": "grep -rn \"SCANF_MAX_VARS\\|pub(crate) const SCANF_MAX_VARS\" src/scanf_prelude.rs | head -3; grep -n \"pub mod scanf_prelude\\|pub(crate) mod scanf_prelude\\|mod scanf_prelude\" src/lib.rs: src/scanf_prelude.rs:567:pub(crate) const SCANF_MAX_VARS: usize = 8; src/scanf_prelude.rs:582: for count in 1..=SCANF_MAX_VARS { 77:pub mod scanf_prelude;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3f7a3dd8d13cf9ca979ce98e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:29:35.608Z",
+  "stored_at": "2026-08-18T10:29:35.610Z"
+}

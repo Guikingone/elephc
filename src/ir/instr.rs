@@ -264,6 +264,7 @@ pub enum Op {
     WarnedNull,
     StoreLocal,
     UnsetLocal,
+    ZeroLocalSlot,
     LoadRefCell,
     StoreRefCell,
     PromoteLocalRefCell,
@@ -325,6 +326,7 @@ pub enum Op {
     StrictNotEq,
     LooseEq,
     LooseNotEq,
+    PhpRelCmp,
     Spaceship,
     IsNull,
     IsTruthy,
@@ -484,6 +486,24 @@ pub enum Op {
     /// message prefix (`"E::from(): Argument #1 ($value) must be of type int, "`), to which
     /// codegen appends the runtime type word. Result: `I64`.
     EnumBackingMixedToInt,
+    /// Narrows a `Mixed` value to the raw `I64` payload a packed `int` field stores, WITHOUT
+    /// coercion: only the int tag passes; every other runtime tag throws `TypeError`. A packed
+    /// field is a fixed-layout systems extension, so the PHP coercions `EnumBackingMixedToInt`
+    /// performs (float truncation, numeric strings, null-to-0) would silently corrupt the very
+    /// overflow the boxed value exists to report. Operand: the Mixed value. Immediate: data id
+    /// of the `TypeError` message prefix (`"Packed field C::$f must be of type int, "`), to
+    /// which codegen appends the runtime type word. Result: `I64`.
+    PackedFieldMixedToInt,
+    /// Narrows a value reaching a DECLARED `int` return boundary with PHP's coercive-mode
+    /// verification, replacing the silent truncation the plain int coercion performs.
+    /// Matching `php -n` 8.5: int/bool forward the payload, a numeric string coerces, an
+    /// in-range float truncates, and everything else — a non-numeric string, null, array,
+    /// object, resource, Closure, or a float outside `[-2^63, 2^63)` (NaN included) — throws
+    /// a catchable `TypeError`. Operand: the value (boxed Mixed or raw F64 after constant
+    /// folding). Immediate: data id of the message prefix
+    /// (`"f(): Return value must be of type int, "`), to which codegen appends the runtime
+    /// type word and `" returned"`. Result: `I64`.
+    ReturnBoundaryMixedToInt,
     ClassConstant,
     ScopedConstantGet,
     ClassAttrNames,
@@ -632,9 +652,8 @@ impl Op {
             // Reads nothing — the point is that there is nothing to read — but it WARNS, and
             // `MAY_WARN` is the gate the per-instruction location publisher runs on.
             WarnedNull => E::MAY_WARN,
-            StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | FinallyEnter | FinallyExit => {
-                E::WRITES_LOCAL
-            }
+            StoreLocal | UnsetLocal | ZeroLocalSlot | StoreRefCell | ListUnpack | FinallyEnter
+            | FinallyExit => E::WRITES_LOCAL,
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
@@ -747,7 +766,8 @@ impl Op {
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
             | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
             | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
-            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | Spaceship => {
+            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp
+            | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
             // `++`/`--` on a string reads the operand's payload, may write the shared
@@ -758,7 +778,8 @@ impl Op {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
-            EnumBackingStringToInt | EnumBackingMixedToInt => {
+            EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
+            | ReturnBoundaryMixedToInt => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
@@ -874,6 +895,7 @@ impl Op {
             WarnedNull => "warned_null",
             StoreLocal => "store_local",
             UnsetLocal => "unset_local",
+            ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
@@ -929,6 +951,7 @@ impl Op {
             StrictNotEq => "strict_not_eq",
             LooseEq => "loose_eq",
             LooseNotEq => "loose_not_eq",
+            PhpRelCmp => "php_rel_cmp",
             Spaceship => "spaceship",
             IsNull => "is_null",
             IsTruthy => "is_truthy",
@@ -1042,6 +1065,8 @@ impl Op {
             EvalStaticMethodCall => "eval_static_method_call",
             EnumBackingStringToInt => "enum_backing_string_to_int",
             EnumBackingMixedToInt => "enum_backing_mixed_to_int",
+            PackedFieldMixedToInt => "packed_field_mixed_to_int",
+            ReturnBoundaryMixedToInt => "return_boundary_mixed_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",
             ClassAttrNames => "class_attr_names",

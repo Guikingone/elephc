@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/reassign_diff.py 2>&1 | tail -18",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/reassign_diff.py 2>&1 | tail -18: case php elephc string then int int(5) int(5) int then string string(1) \"a\" string(1) \"a\" both values used 5|43",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/reassign_diff.py 2>&1 | tail -18: case php elephc string then int int(5) int(5) int then string string(1) \"a\" string(1) \"a\" both values used 5|43|int(42) 5|43|int(42) inside a function int(5) int(5) branches then read string(1) \"a\" string string(1) \"a\" string loop reassign int(2) int(2) concat after int n!|N n!|N arith after string 6 6 passed to a function integer integer in an array array(1) { [0]=> int(5 array(1) { [0]=> int(5) } compared bool(true) bool(true) bool(true) bool(true) string interpolation v=two v=two isset and empty bool(true) bool(true) bool(true) bool(true) reassigned three times float(2.5) float(2.5) 14/14 identical",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c41c007b176c7aa7167da1e9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:57:29.532Z",
+  "stored_at": "2026-08-22T12:57:29.532Z"
+}

@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "On reprend, go, on finalise les 5 divergences + 2 refus",
+  "summary": "On reprend, go, on finalise les 5 divergences + 2 refus",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7b14e4cdb59216124f489fec",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T12:41:44.965Z",
+  "stored_at": "2026-08-24T12:41:44.966Z",
+  "low_signal": true
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git cherry-pick ddd1552faa 28ac32bc47 2>&1 | tail -2; git log --format=\"%h %s\" -3",
+  "summary": "git cherry-pick ddd1552faa 28ac32bc47 2>&1 | tail -2; git log --format=\"%h %s\" -3: Date: Sat Aug 15 23:59:27 2026 +0200 4 files changed, 713 insertions(+) 9ea6f1d01e fix(streams): stream_get_meta_data() invented three keys, dropped a data: URI's own, and asked the wrong question about seekability 678d9cc8ce fix(lexer):",
+  "text": "git cherry-pick ddd1552faa 28ac32bc47 2>&1 | tail -2; git log --format=\"%h %s\" -3: Date: Sat Aug 15 23:59:27 2026 +0200 4 files changed, 713 insertions(+) 9ea6f1d01e fix(streams): stream_get_meta_data() invented three keys, dropped a data: URI's own, and asked the wrong question about seekability 678d9cc8ce fix(lexer): both lexers refused `1and 2`, agreeing with each other and diverging from php 1978ff8bb9 fix(scanf): fscanf()/sscanf() swallowed the by-ref $vars and returned the array instead of the count",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8675790b24f4ef8222ef0069",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T06:56:07.696Z",
+  "stored_at": "2026-08-16T06:56:07.697Z"
+}

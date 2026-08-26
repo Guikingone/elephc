@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php/sh.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php/sh.php: <?php\nclass S {\n    public static array $store = [];\n    public static function put(string $k, string $v): void { self::$store[$k] = ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php/sh.php: <?php\nclass S {\n    public static array $store = [];\n    public static function put(string $k, string $v): void { self::$store[$k] = $v; }\n}\nS::put(\"a\", \"1\");\nS::$store[\"b\"] = \"2\";\nS::put(\"a\", \"over\");\nvar_dump(S::$store, count(S::$store), S::$store[\"a\"], isset(S::$store[\"b\"]));\nforeach (S::$store as $key => $value) { echo $key, \"=\", $value, \";\"; }\necho \"\\n\";\nunset(S::$store[\"a\"]);\nvar_dump(count(S::$store), array_keys(S::$store));\n\nclass L {\n    public static array $rows = [];\n}\nL::$rows[] = \"push\";\nL::$rows[1] = \"set\";\nvar_dump(L::$rows, count(L::$rows));\n\nclass Reg {\n    public static array",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "66f5adaaf92c6c9baacc5f96",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:23:06.780Z",
+  "stored_at": "2026-08-26T08:23:06.781Z"
+}

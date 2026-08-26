@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"fn lower_string_replace\" src/ | head -2",
+  "summary": "rg -rn \"fn lower_string_replace\" src/ | head -2: src/codegen/lower_inst/builtins/strings/replace_wrap.rs:pub(crate) n( src/codegen/lower_inst/builtins/strings/replace_wrap.rs:pub(super) n_aarch64(",
+  "text": "rg -rn \"fn lower_string_replace\" src/ | head -2: src/codegen/lower_inst/builtins/strings/replace_wrap.rs:pub(crate) n( src/codegen/lower_inst/builtins/strings/replace_wrap.rs:pub(super) n_aarch64(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3cd1f876611020a25622e4b6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:26:08.015Z",
+  "stored_at": "2026-08-17T21:26:08.016Z"
+}

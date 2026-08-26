@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '195,250p' src/codegen/lower_inst/method_intrinsics.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '195,250p' src/codegen/lower_inst/method_intrinsics.rs: ance method on null. pub(super) fn emit_method_call_on_null_fatal(ctx: &mut FunctionContext<'_>, method_name: &str) { exceptions::emit_error( ctx, &format!(\"Call",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '195,250p' src/codegen/lower_inst/method_intrinsics.rs: ance method on null. pub(super) fn emit_method_call_on_null_fatal(ctx: &mut FunctionContext<'_>, method_name: &str) { exceptions::emit_error( ctx, &format!(\"Call to a member function {}() on null\", method_name), ); } /// Returns the direct runtime intrinsic for built-in `Generator` instance methods. pub(super) fn generator_intrinsic(class_name: &str, method_name: &str) -> Option<IntrinsicCall> { if class_name.trim_start_matches('\\\\') != \"Generator\" { return None; } IntrinsicCall::instance_method(\"Generator\", method_name) } /// Returns the descriptor-backed intrinsic for SPL callback-filter accept trampolines. pub(super) fn callback_filter_intrinsic(class_name: &str, method_name: &str) -> Option<IntrinsicCall> { let intrinsic = IntrinsicCall::instance_method(class_name.trim_start_matches('\\\\'), method_name)?; if intrinsic.kind() == IntrinsicCallKind::CallbackFilterAccept { Some(intrinsic)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "faafe0f6b32a9ad2e5d3bcc3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T11:19:34.874Z",
+  "stored_at": "2026-08-23T11:19:34.874Z"
+}

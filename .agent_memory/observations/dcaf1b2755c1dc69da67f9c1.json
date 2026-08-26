@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 292,315p src/codegen_support/runtime/resources/stream/x86_64.rs",
+  "summary": "sed -n 292,315p src/codegen_support/runtime/resources/stream/x86_64.rs: s state is the answer emitter.instruction(&format!( \"mov r10, QWORD PTR [rax + {}]\", STREAM_FILTERED_BUF_LEN_OFFSET )); // filtered bytes held emitter.instruction(&format!( \"cmp r10, QWORD PTR [rax + {}]\", STREAM_FILTERED_BUF_POS_OFFSET )); // is a",
+  "text": "sed -n 292,315p src/codegen_support/runtime/resources/stream/x86_64.rs: s state is the answer emitter.instruction(&format!( \"mov r10, QWORD PTR [rax + {}]\", STREAM_FILTERED_BUF_LEN_OFFSET )); // filtered bytes held emitter.instruction(&format!( \"cmp r10, QWORD PTR [rax + {}]\", STREAM_FILTERED_BUF_POS_OFFSET )); // is anything still owed to the reader? emitter.instruction(\"jne __rt_stream_eof_get_more\"); // yes: the stream is not finished emitter.instruction(&format!( \"cmp QWORD PTR [rax + {}], 0\", STREAM_FILTERED_FLUSHED_OFFSET )); // has the closing dispatch run? emitter.instruction(\"je __rt_stream_eof_get_more\"); // not yet: the filter may still emit emitter.label(\"__rt_stream_eof_get_backend\"); emitter.instruction(&format!( \"cmp QWORD PTR [rax + {}], 0\", STREAM_EOF_OFFSET )); // test the stream-owned EOF word emitter.instruction(\"setne al\"); // normalize any non-zero state to PHP true emitter.instruction(\"movzx eax, al\"); // widen the strict EOF predicate",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dcaf1b2755c1dc69da67f9c1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:39:23.580Z",
+  "stored_at": "2026-08-21T18:39:23.581Z"
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "branch": "worktree-streams-csv-signature",
+  "head": "034ac0793606439d8aa746a800a1323674793d0a",
+  "merge_base": "68cb75479a5a19b08d18e4efe19ee9a2a6366a5a",
+  "changed_files": [
+    ".agent_memory/packets/repo_map-streams-csv-signature-repo-overview-649cee4c.md",
+    ".agent_memory/packets/repo_map-streams-csv-signature-repo-structure-757b1268.md",
+    ".codebase-memory/artifact.json",
+    ".codebase-memory/graph.db.zst"
+  ],
+  "diff_stat": ".codebase-memory/artifact.json |  12 ++++++------\n .codebase-memory/graph.db.zst  | Bin 37947115 -> 38854582 bytes\n 2 files changed, 6 insertions(+), 6 deletions(-)\n.agent_memory/packets/repo_map-streams-csv-signature-repo-overview-649cee4c.md | untracked\n.agent_memory/packets/repo_map-streams-csv-signature-repo-structure-757b1268.md | untracked",
+  "generated_at": "2026-08-14T14:10:50.554Z",
+  "source": "git_diff",
+  "repo_memory_written": true,
+  "promotion_review_required": true
+}

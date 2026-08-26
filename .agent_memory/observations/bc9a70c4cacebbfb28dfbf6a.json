@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat src/builtins/string/str_replace.rs",
+  "summary": "cat src/builtins/string/str_replace.rs: //! Purpose: //! Home of the PHP `str_replace` builtin: its declaration and semantic metadata. //! //! Called from: //! - Checker, EIR, optimizer, ownership, and callable consumers through //! `crate::builtins::registry`. //! //! Key details: //! - The declared signature includes",
+  "text": "cat src/builtins/string/str_replace.rs: //! Purpose: //! Home of the PHP `str_replace` builtin: its declaration and semantic metadata. //! //! Called from: //! - Checker, EIR, optimizer, ownership, and callable consumers through //! `crate::builtins::registry`. //! //! Key details: //! - The declared signature includes an optional `count` param, but `max_args: 3` //! caps arity so only three arguments are accepted, matching PHP's practical use. builtin! { contract: \"str_replace\", semantics: crate::builtins::semantics::runtime_fn_semantics( crate::ir::RuntimeFnId::StrReplace, ), }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bc9a70c4cacebbfb28dfbf6a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:27:53.696Z",
+  "stored_at": "2026-08-17T21:27:53.696Z"
+}

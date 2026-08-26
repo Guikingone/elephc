@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"__rt_asf_b64e_copyback_x86\\|__rt_asf_b64e_cb_loop_x86\\|__rt_asf_qpe_copyback_x86\\|__rt_asf_qpe_cb_loop_x86\\|__rt_asf_qp_encode_x86\\|__rt_asf_qpe_literal_x86\\|__rt_asf_qpe_escape_x86\\|__rt_asf_b64e_done_x86\\|__rt_asf_qpe_done_x86\" src/codegen_support/runtime/io/stream_filter.rs | head -20",
+  "summary": "About to run: grep -n \"__rt_asf_b64e_copyback_x86\\|__rt_asf_b64e_cb_loop_x86\\|__rt_asf_qpe_copyback_x86\\|__rt_asf_qpe_cb_loop_x86\\|__rt_asf_qp_encode_x86\\|__rt_asf_qpe_literal_x86\\|__rt_asf_qpe_escape_x86\\|__rt_asf",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "992218900c0a07d35d6eca32",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:13:34.973Z",
+  "stored_at": "2026-08-17T14:13:34.974Z",
+  "low_signal": true
+}

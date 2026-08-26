@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; cargo test -p elephc --lib zz_scratch_dump_runtime 2>&1 | grep -A 8 \"panicked\\|error\\[\" | head -20",
+  "summary": "export CARGO_INCREMENTAL=0; cargo test -p elephc --lib zz_scratch_dump_runtime 2>&1 | grep -A 8 \"panicked\\|error\\[\" | head -20: thread 'codegen_support::runtime::emitters::tests::zz_scratch_dump_runtime' (35581185) panicked at src/codegen_support/emit.rs:250:17: C symbol calls are not implemented yet for target macos-x",
+  "text": "export CARGO_INCREMENTAL=0; cargo test -p elephc --lib zz_scratch_dump_runtime 2>&1 | grep -A 8 \"panicked\\|error\\[\" | head -20: thread 'codegen_support::runtime::emitters::tests::zz_scratch_dump_runtime' (35581185) panicked at src/codegen_support/emit.rs:250:17: C symbol calls are not implemented yet for target macos-x86_64 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace failures: codegen_support::runtime::emitters::tests::zz_scratch_dump_runtime test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1502 filtered out; finished in 0.01s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1aa42e64eb3300904076b5a6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:54:32.978Z",
+  "stored_at": "2026-08-21T15:54:32.979Z"
+}

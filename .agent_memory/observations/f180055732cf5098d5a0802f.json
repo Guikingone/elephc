@@ -1,0 +1,17 @@
+{
+  "type": "tool_use",
+  "tool": "TaskOutput",
+  "path": "",
+  "command": "",
+  "summary": "TaskOutput: timeout",
+  "text": "timeout",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f180055732cf5098d5a0802f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T12:16:06.052Z",
+  "stored_at": "2026-08-26T12:16:06.052Z",
+  "low_signal": true
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ensure_stream_resource\" src/builtins/io/ | wc -l; grep -rn \"ensure_stream_resource\" src/ | grep -v \"src/types/checker/builtins/io/common.rs\" | wc -l",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ensure_stream_resource\" src/builtins/io/ | wc -l; grep -rn \"ensure_stream_resource\" src/ | grep -v \"src/types/checker/builtins/io/common.rs\" | wc -l: 59 60",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ensure_stream_resource\" src/builtins/io/ | wc -l; grep -rn \"ensure_stream_resource\" src/ | grep -v \"src/types/checker/builtins/io/common.rs\" | wc -l: 59 60",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "51adf00cb5d2ebbb82c74241",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T18:23:13.481Z",
+  "stored_at": "2026-08-23T18:23:13.481Z"
+}

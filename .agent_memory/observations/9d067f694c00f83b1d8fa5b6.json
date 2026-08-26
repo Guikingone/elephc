@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff src/types/checker/method_pass.rs | head -70",
+  "summary": "git diff src/types/checker/method_pass.rs | head -70: s_ref) + .filter_map(|(index, (name, _, _, _))| { + let exit_ty = method_env.get(name)?; + Some((index, exit_ty.clone())) + }) + .collect(); + if widened.is_empty() { + return; + } + let key = php_symbol_key(&method.name); + let Some(class_info) = self.classes.get_m",
+  "text": "git diff src/types/checker/method_pass.rs | head -70: s_ref) + .filter_map(|(index, (name, _, _, _))| { + let exit_ty = method_env.get(name)?; + Some((index, exit_ty.clone())) + }) + .collect(); + if widened.is_empty() { + return; + } + let key = php_symbol_key(&method.name); + let Some(class_info) = self.classes.get_mut(&class.name) else { + return; + }; + let sig = if method.is_static { + class_info.static_methods.get_mut(&key) + } else { + class_info.methods.get_mut(&key) + }; + let Some(sig) = sig else { + return; + }; + let mut recorded = Vec::new(); + for (index, exit_ty) in widened { + let Some((_, param_ty)) = sig.params.get_mut(index) else { + continue; + }; + if crate::types::checker::array_element_representation_changes(param_ty, &exit_ty) { + *param_ty = exit_ty; + recorded.push(index); + } + } + let owner = format!(\"{}::{}\", class.name, key); + for index in recorded { + self.by_ref_widened_params.insert((owner.clone(), index));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9d067f694c00f83b1d8fa5b6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:50:53.618Z",
+  "stored_at": "2026-08-16T20:50:53.619Z"
+}

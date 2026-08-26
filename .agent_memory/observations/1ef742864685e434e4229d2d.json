@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rln \"__rt_user_wrapper_fwrite\" src/codegen_support/runtime/ | head -3",
+  "summary": "rg -rln \"__rt_user_wrapper_fwrite\" src/codegen_support/runtime/ | head -3: src/codegen_support/runtime/io/fd_write.rs://! tail-calls `ln` (so its return / register contract is src/codegen_support/runtime/io/fd_write.rs:/// wrapper descriptors to `ln` and normal descriptors to src/codegen_support/runtime/io/fd_write.rs:",
+  "text": "rg -rln \"__rt_user_wrapper_fwrite\" src/codegen_support/runtime/ | head -3: src/codegen_support/runtime/io/fd_write.rs://! tail-calls `ln` (so its return / register contract is src/codegen_support/runtime/io/fd_write.rs:/// wrapper descriptors to `ln` and normal descriptors to src/codegen_support/runtime/io/fd_write.rs: emitter.instruction(\"b ln\"); // wrapper fd: tail-call stream_write (uncond → cross-atom safe)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1ef742864685e434e4229d2d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T16:45:14.762Z",
+  "stored_at": "2026-08-17T16:45:14.763Z"
+}

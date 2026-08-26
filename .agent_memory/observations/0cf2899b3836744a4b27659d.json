@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"__rt_php_wrapper_open\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/ | head -4",
+  "summary": "rtk proxy grep -rn \"__rt_php_wrapper_open\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/ | head -4: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io.rs:336: abi::emit_call_label(ctx.e",
+  "text": "rtk proxy grep -rn \"__rt_php_wrapper_open\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/ | head -4: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io.rs:336: abi::emit_call_label(ctx.emitter, \"__rt_php_wrapper_open\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io.rs:384: abi::emit_call_label(ctx.emitter, \"__rt_php_wrapper_open\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/phar_write.rs:242: abi::emit_call_label(ctx.emitter, \"__rt_php_wrapper_open\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/phar_write.rs:331: abi::emit_call_label(ctx.emitter, \"__rt_php_wrapper_open\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0cf2899b3836744a4b27659d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:59:02.614Z",
+  "stored_at": "2026-08-17T07:59:02.615Z"
+}

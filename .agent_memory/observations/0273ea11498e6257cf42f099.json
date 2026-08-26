@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm50.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm50.php: <?php\n// Which stream types can php select() on, and how does it word each refusal?\n$p = sys_get_temp_dir() . \"/rm50.txt\";\nfile_put_c",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm50.php: <?php\n// Which stream types can php select() on, and how does it word each refusal?\n$p = sys_get_temp_dir() . \"/rm50.txt\";\nfile_put_contents($p, \"hello\");\n\nfunction probe(string $label, $s): void\n{\n    $r = [$s];\n    $w = null;\n    $e = null;\n    try {\n        $n = stream_select($r, $w, $e, 0);\n        echo $label, \" => \", var_export($n, true), \"\\n\";\n    } catch (ValueError $ex) {\n        echo $label, \" => VE: \", $ex->getMessage(), \"\\n\";\n    }\n}\n\nprobe(\"file\", fopen($p, \"r\"));\nprobe(\"memory\", fopen(\"php://memory\", \"w+\"));\nprobe(\"temp\", fopen(\"php://temp\", \"w+\"));\nprobe(\"data\", fopen(\"data://te",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0273ea11498e6257cf42f099",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:43:47.801Z",
+  "stored_at": "2026-08-18T11:43:47.801Z"
+}

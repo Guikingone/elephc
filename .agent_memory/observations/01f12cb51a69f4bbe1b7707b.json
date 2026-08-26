@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests test_spl_file_object_read_past_eof 2>&1 | rg \"^test result|FAILED|panicked|left:|right:\" -A3 | head -20",
+  "summary": "cargo test --test codegen_tests test_spl_file_object_read_past_eof 2>&1 | rg \"^test result|FAILED|panicked|left:|right:\" -A3 | head -20: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8397 filtered out; finished in 1.36s",
+  "text": "cargo test --test codegen_tests test_spl_file_object_read_past_eof 2>&1 | rg \"^test result|FAILED|panicked|left:|right:\" -A3 | head -20: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8397 filtered out; finished in 1.36s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "01f12cb51a69f4bbe1b7707b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:45:10.048Z",
+  "stored_at": "2026-08-16T17:45:10.049Z"
+}

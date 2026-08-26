@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"Expected '<\\?php' at start of file\" src --type rust | head -3; rg -rn \"\\\\?>\" src/lexer.rs 2>/dev/null | head -5; ls src/lexer* 2>/dev/null",
+  "summary": "rg -n \"Expected '<\\?php' at start of file\" src --type rust | head -3; rg -rn \"\\\\?>\" src/lexer.rs 2>/dev/null | head -5; ls src/lexer* 2>/dev/null: src/lexer/scan.rs:46: return Err(CompileError::new(span, \"Expected '<?php' at start of file\")); cursor.rs literals literals.rs mod.rs scan.rs token.rs",
+  "text": "rg -n \"Expected '<\\?php' at start of file\" src --type rust | head -3; rg -rn \"\\\\?>\" src/lexer.rs 2>/dev/null | head -5; ls src/lexer* 2>/dev/null: src/lexer/scan.rs:46: return Err(CompileError::new(span, \"Expected '<?php' at start of file\")); cursor.rs literals literals.rs mod.rs scan.rs token.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0bda3d99f771d1620b80ad69",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:41:14.296Z",
+  "stored_at": "2026-08-17T06:41:14.297Z"
+}

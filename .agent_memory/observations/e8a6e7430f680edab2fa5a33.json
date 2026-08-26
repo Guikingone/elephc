@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-out-param-write-never-reaches-a-null-caller.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-out-param-write-never-reaches-a-null-caller.md: ---\nname: byref-out-param-write-never-reaches-a-null-caller\ndescription: \"SILENT: `$x = null; f($x);` avec `function f(&$a){ $a = 5; }` laisse $x à NULL — l'idi",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-out-param-write-never-reaches-a-null-caller.md: ---\nname: byref-out-param-write-never-reaches-a-null-caller\ndescription: \"SILENT: `$x = null; f($x);` avec `function f(&$a){ $a = 5; }` laisse $x à NULL — l'idiome out-param standard de php est FAUX sans aucun diagnostic\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\nMesuré sur `php -n` 8.5.6 vs elephc, branche `feat/streams-csv-signatures` (HEAD `d93fa7a82`).\n\n```php\nfunction f(&$a): void { $a = 5; }\n$a = null;\nf($a);\nvar_dump($a);        // php: int(5)   elephc: NULL\nif ($a === null) {}  // php: FAUX     elephc: VRAI  ⇐ la branche part à l'envers\n```\n\n**SILENCIEUX**. Ni warning, ni erre",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e8a6e7430f680edab2fa5a33",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:44:29.684Z",
+  "stored_at": "2026-08-18T09:44:29.685Z"
+}

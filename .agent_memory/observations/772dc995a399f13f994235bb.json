@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-asm np5.php > /dev/null 2>&1; grep -n \"hash_isset\" -A 30 np5.s | head -36",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-asm np5.php > /dev/null 2>&1;",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-asm np5.php > /dev/null 2>&1; grep -n \"hash_isset\" -A 30 np5.s | head -36:  op=hash_isset 1058- ldur x1, [x29, #-64] 1059- ldur x2, [x29, #-56] 1060- bl __rt_hash_normalize_key 1061- ldur x0, [x29, #-48] 1062- bl __rt_hash_get 1063- cbz x0, _eir_main_isset_hash_missing_23 1064- cmp x3, #8 1065- b.eq _eir_main_isset_hash_missing_23 1066- cmp x3, #7 1067- b.ne _eir_main_isset_hash_concrete_non_null_25 1068- mov x0, x1 1069- cbz x0, _eir_main_isset_hash_missing_23 1070- movz x9, #0xfffe 1071- movk x9, #0xffff, lsl #16 1072- movk x9, #0xffff, lsl #32 1073- movk x9, #0x7fff, lsl #48 1074- cmp x0, x9 1075- b.eq _eir_main_isset_hash_missing_23 1076- bl __rt_mixed_unbox 1077- cmp x0, #8 1078- b.eq _eir_main_isset_hash_missing_23 1079-_eir_main_isset_hash_concrete_non_null_25: 1080- mov x0, #0 1081- b _eir_main_isset_hash_done_24 1082-_eir_main_isset_hash_missing_23: 1083- mov x0, #1 1084-_eir_main_isset_hash_done_24: 1085- cmp x0, #0 1086- cset x0, eq 1087- mov x21, x0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "772dc995a399f13f994235bb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:54:09.593Z",
+  "stored_at": "2026-08-23T08:54:09.593Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 scripts/docs/audit_builtins.py 2>&1 | tail -3",
+  "summary": "About to run: python3 scripts/docs/audit_builtins.py 2>&1 | tail -3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "df0ca6e1d0310f8e0fa1a3db",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:34:01.734Z",
+  "stored_at": "2026-08-21T12:34:01.735Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git commit -q -F - <<'MSG'\nfix(io): `stream_get_wrappers()` listed `file`, and NOTHING honoured it\n\nA fresh 30-program differential sweep of the streams surface turned up one\ndisagreement, and behind it a wrapper advertised but never implemented. MEASURED\nagainst `php -n` 8.5.6 — twelve operations, one URL, every one of them false:\n\n    file_get_contents  fopen  file_exists  filesize  is_file  file\n    copy  file_put_contents  is_dir  mkdir  unlink  rename\n\nphp reads `file:///path` without complaint, and `stream_get_wrappers()` in elephc\nalready promised it would.\n\nTHE RULE, measured rather th… [+2156 chars truncated]",
+  "summary": "About to run: git commit -q -F - <<'MSG' fix(io): `stream_get_wrappers()` listed `file`, and NOTHING honoured it A fresh 30-program differential sweep of the streams surface turned up one disagreement, and behind i",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8f8213769e76228753044d39",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:34:11.894Z",
+  "stored_at": "2026-08-24T18:34:11.894Z"
+}

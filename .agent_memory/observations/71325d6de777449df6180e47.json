@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_nullres.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_nullres.txt: fix(io): a NULL where a stream resource is required REFUSED the program, where php throws a catchable TypeError\n\n    <?php $n = 0",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_nullres.txt: fix(io): a NULL where a stream resource is required REFUSED the program, where php throws a catchable TypeError\n\n    <?php $n = 0; while (fgetc($h) !== false) $n++;   // $h was never assigned\n    php    Warning: Undefined variable $h … Fatal error: Uncaught TypeError: fgetc():\n           Argument #1 ($stream) must be of type resource, null given   (exit 255)\n    elephc error[3:14]: fgetc() expects resource, got null              (nothing ran)\n\nphp raises a real `TypeError` when the call RUNS, which `try { … } catch (TypeError $e)` observes\nand which leaves the rest of the file compiled. Refusi",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "71325d6de777449df6180e47",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:00:58.307Z",
+  "stored_at": "2026-08-24T13:00:58.307Z"
+}

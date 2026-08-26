@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn emit_uncaught_exception_fatal_if_no_handler\" -A 40 src/codegen/lower_inst/exceptions.rs | head -45",
+  "summary": "grep -n \"fn emit_uncaught_exception_fatal_if_no_handler\" -A 40 src/codegen/lower_inst/exceptions.rs | head -45: gister. 471- ctx.emitter.instruction(\"mov r15, rsp\"); // stash the entry rsp in r15, which the flush helper preserves 472- ctx.emitter.instruction(\"and rsp, -16\"); // realign the stack to the 16-byte call bou",
+  "text": "grep -n \"fn emit_uncaught_exception_fatal_if_no_handler\" -A 40 src/codegen/lower_inst/exceptions.rs | head -45: gister. 471- ctx.emitter.instruction(\"mov r15, rsp\"); // stash the entry rsp in r15, which the flush helper preserves 472- ctx.emitter.instruction(\"and rsp, -16\"); // realign the stack to the 16-byte call boundary 473- ctx.emitter.instruction(\"call __rt_ob_flush_all\"); // drain buffered output before the fatal report 474- ctx.emitter.instruction(\"mov rsp, r15\"); // restore the entry rsp once the flush returns 475- abi::emit_symbol_address(ctx.emitter, \"rsi\", fatal_label); 476- abi::emit_load_int_immediate(ctx.emitter, \"rdx\", fatal_len as i64); 477- ctx.emitter.instruction(\"mov edi, 1\"); // fd = stdout, where PHP writes this report 478- ctx.emitter.instruction(\"mov eax, 1\"); // Linux x86_64 syscall 1 = write 479- ctx.emitter.instruction(\"syscall\"); // emit the specific fatal message 480- abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS); 481- } 482- } 483- ctx.emitter.label(&throw_label);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "60a11e3d303da5cd328788ea",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:35:25.368Z",
+  "stored_at": "2026-08-22T12:35:25.368Z"
+}

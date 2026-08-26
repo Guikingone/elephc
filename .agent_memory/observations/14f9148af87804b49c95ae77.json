@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/narrowing_probe.py 2>&1 | tail -12",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/narrowing_probe.py 2>&1 | tail -12: shape php elephc direct literal variable AB AB array_map with a name runs BUILD REFUSED: error[2:9]: Undefine",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/narrowing_probe.py 2>&1 | tail -12: shape php elephc direct literal variable AB AB array_map with a name runs BUILD REFUSED: error[2:9]: Undefined function: strtoupper usort with a name runs BUILD REFUSED: error[2:18]: Undefined function: strcmp foreach over literal names ABab ABab ternary of two names AB AB call_user_func AB AB first-class callable AB AB opaque from argv AB AB",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "14f9148af87804b49c95ae77",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:08:50.430Z",
+  "stored_at": "2026-08-22T11:08:50.431Z"
+}

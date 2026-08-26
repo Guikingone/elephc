@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"local_env\" src/types/checker/functions/resolution/signature.rs | head -20",
+  "summary": "grep -n \"local_env\" src/types/checker/functions/resolution/signature.rs | head -20: 35: let mut local_env: TypeEnv = HashMap::new(); 37: local_env.insert(pname.clone(), pty.clone()); 43: local_env 139: if let Err(error) = checker.check_stmt(stmt, &mut local_env) { 142: checker.collect_return_infos(stmt, &local_env, &mu",
+  "text": "grep -n \"local_env\" src/types/checker/functions/resolution/signature.rs | head -20: 35: let mut local_env: TypeEnv = HashMap::new(); 37: local_env.insert(pname.clone(), pty.clone()); 43: local_env 139: if let Err(error) = checker.check_stmt(stmt, &mut local_env) { 142: checker.collect_return_infos(stmt, &local_env, &mut all_return_infos); 143: checker.collect_return_callable_sigs(stmt, &local_env, &mut callable_return_sigs); 146: &local_env, 158: self.by_ref_array_params_widened_by_body(decl, &param_types, &local_env) 329: local_env: &TypeEnv, 338: let Some(exit_ty) = local_env.get(pname) else {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b3702a6c79428844066c97ac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T19:48:18.580Z",
+  "stored_at": "2026-08-18T19:48:18.580Z"
+}

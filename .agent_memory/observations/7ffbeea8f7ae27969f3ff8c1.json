@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_union.py tests/codegen/arrays/indexed/sorting.rs\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 3 1 2>&1 | head -70",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_union.py tests/codegen/arrays/indexed/sorting.rs\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_union.py tests/codegen/arrays/indexed/sorting.rs\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 3 1 2>&1 | head -70: s the one member of the stat family that never consulted a wrapper — the others /// all probed `url_stat()` first — so `stat(\"scheme://x\")` returned the filesystem's answer for /// a path that only exists inside the wrapper. The flag values are read off reference PHP with /// a wrapper that echoes its `$flags`, not inferred from the two documented /// `STREAM_URL_STAT_*` constants: PHP also sets an internal no-cache bit, so `stat()` arrives /// as 4 and `lstat()` as 4|1. A wrapper that branches on the link bit needs that exact value. #[test] fn test_stat_and_lstat_dispatch_to_wrapper_url_stat() { let (out, dir) = compile_and_run_in_dir( r#\"<?php class StatW { public function url_stat(string $path, int $flags) { echo \"[\", $flags, \"]\"; return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,'uid'=>0,'gid'=>0, 'rdev'=>0,'size'=>77,'atime'=>0,'mtime'=>5,'ctime'=>0, 'blksize'=>4096,'blocks'=>1]; }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7ffbeea8f7ae27969f3ff8c1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:31:22.856Z",
+  "stored_at": "2026-08-20T17:31:22.857Z"
+}

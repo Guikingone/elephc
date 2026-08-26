@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '2340,2385p' src/codegen_support/runtime/data/user.rs",
+  "summary": "sed -n '2340,2385p' src/codegen_support/runtime/data/user.rs: nwrap_or(false); out.push_str(&format!(\" .quad {}\\n\", if brigade_arity { 1 } else { 0 })); let params_offset = class_info .property_offsets .get(\"params\") .copied() .unwrap_or(0); out.push_str(&format!(\" .quad {}\\n\", params_offset)); // -- slot 5: the `filte",
+  "text": "sed -n '2340,2385p' src/codegen_support/runtime/data/user.rs: nwrap_or(false); out.push_str(&format!(\" .quad {}\\n\", if brigade_arity { 1 } else { 0 })); let params_offset = class_info .property_offsets .get(\"params\") .copied() .unwrap_or(0); out.push_str(&format!(\" .quad {}\\n\", params_offset)); // -- slot 5: the `filtername` property's byte offset. // php seeds `$this->filtername` with the name the filter was ATTACHED under, before // `onCreate()` runs — the same class registered twice reports each name in turn. Without the // offset here the property stayed null, so a filter that branches on its own name could not. let filtername_offset = class_info .property_offsets .get(\"filtername\") .copied() .unwrap_or(0); out.push_str(&format!(\" .quad {}\\n\", filtername_offset)); } /// Emits runtime metadata for user wrapper vtable. fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) { if !class_has_user_wrapper_method(class_info) { return; }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "82f70f4bb54cc82314adeb2d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:21:14.699Z",
+  "stored_at": "2026-08-17T18:21:14.699Z"
+}

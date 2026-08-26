@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 95,140p src/codegen_support/runtime/io/stat.rs",
+  "summary": "sed -n 95,140p src/codegen_support/runtime/io/stat.rs:  buffer on stack emitter.syscall(338); // -- check if stat failed -- emitter.instruction(\"cmp x0, #0\"); // check syscall result emitter.instruction(\"b.ne __rt_is_dir_no\"); // if stat failed, not a directory // -- check st_mode & S_IFMT == S_IFDIR -- emitter.instruc",
+  "text": "sed -n 95,140p src/codegen_support/runtime/io/stat.rs:  buffer on stack emitter.syscall(338); // -- check if stat failed -- emitter.instruction(\"cmp x0, #0\"); // check syscall result emitter.instruction(\"b.ne __rt_is_dir_no\"); // if stat failed, not a directory // -- check st_mode & S_IFMT == S_IFDIR -- emitter.instruction(&plat.stat_mode_load_instr(\"w9\", \"sp\", mode_off)); // load st_mode from stat struct emitter.instruction(\"and w9, w9, #0xF000\"); // mask with S_IFMT emitter.instruction(\"mov w10, #0x4000\"); // S_IFDIR = 0x4000 emitter.instruction(\"cmp w9, w10\"); // compare with directory type emitter.instruction(\"cset x0, eq\"); // x0 = 1 if directory emitter.instruction(\"b __rt_is_dir_ret\"); // jump to return emitter.label(\"__rt_is_dir_no\"); emitter.instruction(\"mov x0, #0\"); // not a directory emitter.label(\"__rt_is_dir_ret\"); emitter.instruction(&format!(\"ldp x29, x30, [sp, #{}]\", save_offset)); // restore frame pointer and return address",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "476762171e154b58b7b32685",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:56:32.662Z",
+  "stored_at": "2026-08-22T08:56:32.662Z"
+}

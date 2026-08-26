@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w20 $S/e20; mkdir -p $S/w20 $S/e20; cp $S/probes2/spl-throw-line.php $S/w20/p.php; cp $S/probes2/spl-throw-line.php $S/e20/p.php; cd $S/w20 && php -n p.php",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w20 $S/e20; mkdir -p $S/w20 $S/e20; cp $S/probes2/spl-throw-line.php $S/w20/p.php; cp $S/probes2/spl-throw-line.php $S/e20/p.php; cd $S/w",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w20 $S/e20; mkdir -p $S/w20 $S/e20; cp $S/probes2/spl-throw-line.php $S/w20/p.php; cp $S/probes2/spl-throw-line.php $S/e20/p.php; cd $S/w20 && php -n p.php: DirectoryIterator UnexpectedValueException line=12 file=p.php SplFileObject RuntimeException line=13 file=p.php SplFixedArray ValueError line=14 file=p.php Warning: Undefined array key 99 in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/w20/p.php on line 15 ArrayObject-get no throw intdiv DivisionByZeroError line=16 file=p.php str_repeat ValueError line=17 file=p.php user line=18 file=p.php",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e14fc9b8d45e38b49d2db3a5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:06:13.329Z",
+  "stored_at": "2026-08-24T20:06:13.329Z"
+}

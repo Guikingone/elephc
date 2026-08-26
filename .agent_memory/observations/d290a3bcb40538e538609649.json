@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -30 \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b8ut0d98p.output\"",
+  "summary": "head -30 \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b8ut0d98p.output\": MPILE 83/229 bug79468 COMPILE 84/229 bug79984 COMPILE 85/229 bug80067 COMPILE 86/229 bug81475 COMPILE 87/229 bug81618 COMPILE 88/229",
+  "text": "head -30 \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b8ut0d98p.output\": MPILE 83/229 bug79468 COMPILE 84/229 bug79984 COMPILE 85/229 bug80067 COMPILE 86/229 bug81475 COMPILE 87/229 bug81618 COMPILE 88/229 bug81659 COMPILE 89/229 closelog_basic COMPILE 90/229 convert COMPILE 91/229 dns_check_record_error_conditions COMPILE 92/229 dns_get_record_error_conditions COMPILE 93/229 eagain_is_not_an_error COMPILE 94/229 filter_errors_convert_base64_decode COMPILE 95/229 filter_errors_user COMPILE 96/229 filter_errors_zlib_inflate COMPILE 97/229 fsockopen_basic COMPILE 98/229 fsockopen_error COMPILE 99/229 fsockopen_variation1 COMPILE 100/229 fsockopen_variation2 COMPILE 101/229 ftp_dirstream_oob COMPILE 102/229 gethostbyaddr_basic1 COMPILE 103/229 gethostbyaddr_error COMPILE 104/229 gethostbyname_basic001 COMPILE 105/229 gethostbyname_basic003 COMPILE 106/229 gethostbyname_error001 COMPILE 107/229 gethostbyname_error002 COMPILE 108/229 gethostbyname_error003 COMPILE",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d290a3bcb40538e538609649",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:39:28.595Z",
+  "stored_at": "2026-08-17T06:39:28.595Z"
+}

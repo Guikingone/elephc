@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; ls | head -40",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; ls | head -40: __pycache__ a2s_basic.php a2s_where.php add_copy_test.py add_family_tests.py add_filturi_test.py add_flock_test.py add_hash_test.py a",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; ls | head -40: __pycache__ a2s_basic.php a2s_where.php add_copy_test.py add_family_tests.py add_filturi_test.py add_flock_test.py add_hash_test.py add_meta_test.py add_seek_tests.py add_seekable_test.py add_stat_copy_tests.py add_tentative_test.py add_test.py add_trace_test.py add_two_arg_tests.py all all.php all.s alt_entry.py argnames.php arr2str.php array_keys_union.py array_or_false_survey.py array_run.txt array_to_string.php arraytag.php assign_int.php assign_leak.php assign_sep.php assoc_builtin_type.py audit batch5.php batch5_tests.py bigstr.php cee.txt cep.txt cke.txt ckp.txt computedurl",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4303e6ad94d940763add947d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:24:05.106Z",
+  "stored_at": "2026-08-23T16:24:05.107Z"
+}

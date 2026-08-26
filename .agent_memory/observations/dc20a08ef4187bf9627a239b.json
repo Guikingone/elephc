@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn value_php_type\\|fn raw_value_php_type\" src/codegen/ | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn value_php_type\\|fn raw_value_php_type\" src/codegen/ | head: src/codegen/context.rs:260: pub(super) fn value_php_type(&self, value: ValueId) -> Result<PhpType> { src/codegen/context.rs:281: pub(super) fn raw_valu",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn value_php_type\\|fn raw_value_php_type\" src/codegen/ | head: src/codegen/context.rs:260: pub(super) fn value_php_type(&self, value: ValueId) -> Result<PhpType> { src/codegen/context.rs:281: pub(super) fn raw_value_php_type(&self, value: ValueId) -> Result<PhpType> { src/codegen/lower_inst/runtime_wrappers.rs:209: fn value_php_type(&self, value: ValueId) -> PhpType { src/codegen/lower_inst/objects/property_resolution.rs:143:pub(in crate::codegen::lower_inst) fn raw_value_php_type(ctx: &FunctionContext<'_>, value: ValueId) -> Result<PhpType> {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dc20a08ef4187bf9627a239b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:28:19.361Z",
+  "stored_at": "2026-08-22T17:28:19.362Z"
+}

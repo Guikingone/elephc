@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --lib platform:: 2>&1 | tail -20",
+  "summary": "cargo test --lib platform:: 2>&1 | tail -20: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s Running unittests src/lib.rs (target/debug/deps/elephc_tls-af5d8ad2d2f23ce2) running 0 tests test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished i",
+  "text": "cargo test --lib platform:: 2>&1 | tail -20: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s Running unittests src/lib.rs (target/debug/deps/elephc_tls-af5d8ad2d2f23ce2) running 0 tests test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s Running unittests src/lib.rs (target/debug/deps/elephc_tz-4d4f6a247b14c3f6) running 0 tests test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s Running unittests src/lib.rs (target/debug/deps/elephc_web-ec9f54cfa7485c10) running 0 tests test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 84 filtered out; finished in 0.00s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f8c388e0082220e04295f7f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:06:47.074Z",
+  "stored_at": "2026-08-22T09:06:47.074Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'Array to string conversion' src/ | head -20",
+  "summary": "grep -rn 'Array to string conversion' src/ | head -20: src/lexer/literals/strings.rs:128: // the OPENING `<<<LABEL`, so a diagnostic raised by one — `Array to string conversion`, a src/ir_lower/stmt/statement_basics.rs:66:/// `Array` and raises `Array to string conversion`. Both warnings are raised inside the runtime, ",
+  "text": "grep -rn 'Array to string conversion' src/ | head -20: src/lexer/literals/strings.rs:128: // the OPENING `<<<LABEL`, so a diagnostic raised by one — `Array to string conversion`, a src/ir_lower/stmt/statement_basics.rs:66:/// `Array` and raises `Array to string conversion`. Both warnings are raised inside the runtime, src/codegen/lower_inst/conversions.rs:487:/// The placeholder never travels alone: php raises `Array to string conversion` at EVERY site src/codegen/lower_inst/conversions.rs:499:/// Emits php's `Array to string conversion` warning through the diagnostic funnel. src/codegen/lower_inst/builtins/io/stream_file_ops.rs:941:/// (\"Array to string conversion\"), which is a separate behaviour this writer does not yet carry, src/codegen_support/runtime/data/mod.rs:586:pub(crate) const ARRAY_TO_STRING_MSG: &str = \"Warning: Array to string conversion\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a41a8fd37ab2a44459d012bc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:21:37.958Z",
+  "stored_at": "2026-08-25T13:21:37.959Z"
+}

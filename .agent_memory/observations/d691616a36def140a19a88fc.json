@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"elephcCsvBuild\" src/types/checker/builtin_spl_classes/filesystem.rs | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"elephcCsvBuild\" src/types/checker/builtin_spl_classes/filesystem.rs | head: 474: \"__elephcCsvBuild\", 1628: \"__elephcCsvBuild\",",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"elephcCsvBuild\" src/types/checker/builtin_spl_classes/filesystem.rs | head: 474: \"__elephcCsvBuild\", 1628: \"__elephcCsvBuild\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d691616a36def140a19a88fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:17:43.807Z",
+  "stored_at": "2026-08-24T08:17:43.808Z"
+}

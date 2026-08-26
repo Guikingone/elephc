@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs'\ns = open(p).read()\nold = '''        String::from_utf8_lossy(&output.stderr)\n    );\n\n    String::from_utf8(output.stdout).unwrap()\n}\n\n/// Assembles, links, and runs a happy-path fixture with per-process environment\n/// overrides, returning its UTF-8 stdout.'''\nnew = '''        String::from_utf8_lossy(&output.stderr)\n    );\n\n    // php's diagnostics share stdout with the program's own output; a test reading this wants\n    // what the PROGRAM printe… [+661 chars truncated]",
+  "summary": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs'\ns = open(p).read()\nold = '''        String::from_utf8_lossy(&output.stderr)\n    );\n\n    String::from_utf8(output.stdout).unwrap()\n}\n\n/// Assembles, links, and runs a happ",
+  "text": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs'\ns = open(p).read()\nold = '''        String::from_utf8_lossy(&output.stderr)\n    );\n\n    String::from_utf8(output.stdout).unwrap()\n}\n\n/// Assembles, links, and runs a happy-path fixture with per-process environment\n/// overrides, returning its UTF-8 stdout.'''\nnew = '''        String::from_utf8_lossy(&output.stderr)\n    );\n\n    // php's diagnostics share stdout with the program's own output; a test reading this wants\n    // what the PROGRAM printed. `compile_and_run_capture` keeps both halves apart instead.\n    let raw = String::from_utf8(output.stdout).unwrap();\n    let script_path = dir.join(\"test.php\").to_string_lossy().into_owned();\n    split_php_diagnostics(&raw, &script_path).0\n}\n\n/// Assembles, links, and runs a happy-path fixture with per-process environment\n/// overrides, returning its UTF-8 stdout.'''\nassert old in s, \"assemble_and_run anchor not found\"\ns = s.replace(old, new, 1)\nopen(p, 'w').write(s)\nprint(\"assemble_and_run split wired\")\nPYEOF\ncargo test --test codegen_tests -- codegen::io::streams_ext::test_readfile_missing 2>&1 | grep -E \"^error\\[|left:|right:|test result\" | head -6: assemble_and_run split wired test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8451 filtered out; finished in 1.27s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8ed72a4e779b45d9c5019dbb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T14:00:17.335Z",
+  "stored_at": "2026-08-18T14:00:17.336Z"
+}

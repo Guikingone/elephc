@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"\\\"get_class\\\"\" src/codegen/ src/builtins/ 2>/dev/null | head -5",
+  "summary": "grep -rn \"\\\"get_class\\\"\" src/codegen/ src/builtins/ 2>/dev/null | head -5: src/codegen/lower_inst/builtins/types.rs:1033: if name == \"get_class\" { src/codegen/lower_inst/builtins/types.rs:1091: if name == \"get_class\" { src/codegen/lower_inst/builtins/eval/argument_results.rs:239: \"get_class\" => Ok(EVAL_CLASS_LOOKUP_GET",
+  "text": "grep -rn \"\\\"get_class\\\"\" src/codegen/ src/builtins/ 2>/dev/null | head -5: src/codegen/lower_inst/builtins/types.rs:1033: if name == \"get_class\" { src/codegen/lower_inst/builtins/types.rs:1091: if name == \"get_class\" { src/codegen/lower_inst/builtins/eval/argument_results.rs:239: \"get_class\" => Ok(EVAL_CLASS_LOOKUP_GET_CLASS), src/codegen/lower_inst/runtime_functions/group_02.rs:23: crate::codegen::lower_inst::builtins::types::lower_class_name_lookup(ctx, inst, \"get_class\") src/builtins/callables/get_class.rs:14: contract: \"get_class\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "db062693008fb889ad913fd6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:14:45.426Z",
+  "stored_at": "2026-08-22T12:14:45.427Z"
+}

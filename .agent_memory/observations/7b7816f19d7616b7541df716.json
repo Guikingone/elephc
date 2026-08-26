@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nms=sorted(x['symbol'] for x in d['drifts'] if x['category']=='missing-function')\nprint(len(ms)); print(', '.join(ms))\nprint()\ncs=sorted(x.get('symbol') or x['php'].get('name','?') for x in d['drifts'] if x['category']=='class-surface')\nprint('class-surface:', cs)\n\"",
+  "summary": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nms=sorted(x['symbol'] for x in d['drifts'] if x['category']=='missing-function')\nprint(len(ms)); print(', '.join(ms))\nprint()\ncs=sorted(x.get('symbol') or x['php'].get('name','?') for x in d['drifts'] ",
+  "text": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nms=sorted(x['symbol'] for x in d['drifts'] if x['category']=='missing-function')\nprint(len(ms)); print(', '.join(ms))\nprint()\ncs=sorted(x.get('symbol') or x['php'].get('name','?') for x in d['drifts'] if x['category']=='class-surface')\nprint('class-surface:', cs)\n\":  ftp_put, ftp_quit, ftp_rawlist, get_browser, get_headers, get_meta_tags, getimagesize, getimagesizefromstring, gzclose, gzeof, gzfile, gzgetc, gzgets, gzopen, gzpassthru, gzputs, gzread, gzrewind, gzseek, gztell, gzwrite, hash_hmac_file, hash_update_file, hash_update_stream, highlight_file, mail, md5_file, move_uploaded_file, opcache_compile_file, opcache_invalidate, opcache_is_script_cached, opcache_is_script_cached_in_file_cache, openssl_cms_encrypt, openssl_cms_sign, parse_ini_file, php_strip_whitespace, phpinfo, proc_open, readgzfile, sha1_file, show_source, socket_close, socket_export_stream, socket_import_stream, socket_set_nonblock, str_getcsv, stream_context_set_options class-surface: ['DirectoryIterator', 'FilesystemIterator', 'GlobIterator', 'Phar', 'PharData', 'PharFileInfo', 'RecursiveDirectoryIterator', 'SplFileInfo', 'SplFileObject', 'SplTempFileObject', 'php_user_filter']",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7b7816f19d7616b7541df716",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:20:19.862Z",
+  "stored_at": "2026-08-14T14:20:19.863Z"
+}

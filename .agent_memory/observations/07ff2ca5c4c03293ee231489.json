@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport os, shutil, time, glob\nt = os.environ.get('TMPDIR', '/tmp'); now = time.time(); n = 0; freed = 0\nfor p in glob.glob(os.path.join(t, 'elephc_*')):\n    try:\n        if now - os.path.getmtime(p) > 7200:\n            shutil.rmtree(p, ignore_errors=True); n += 1\n    except OSError: pass\nprint('purged', n, 'stale tmpdirs')\n\"",
+  "summary": "python3 -c \"\nimport os, shutil, time, glob\nt = os.environ.get('TMPDIR', '/tmp'); now = time.time(); n = 0; freed = 0\nfor p in glob.glob(os.path.join(t, 'elephc_*')):\n    try:\n        if now - os.path.getmtime(p) > 7200:\n            shutil.rmtree(p, ignore_errors=True); n += 1\n    except OSError: pass\nprint('purged', n,",
+  "text": "python3 -c \"\nimport os, shutil, time, glob\nt = os.environ.get('TMPDIR', '/tmp'); now = time.time(); n = 0; freed = 0\nfor p in glob.glob(os.path.join(t, 'elephc_*')):\n    try:\n        if now - os.path.getmtime(p) > 7200:\n            shutil.rmtree(p, ignore_errors=True); n += 1\n    except OSError: pass\nprint('purged', n, 'stale tmpdirs')\n\": purged 0 stale tmpdirs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "07ff2ca5c4c03293ee231489",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T16:49:20.957Z",
+  "stored_at": "2026-08-15T16:49:20.958Z"
+}

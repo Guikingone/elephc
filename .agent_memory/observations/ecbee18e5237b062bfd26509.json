@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/php-constants-are-not-the-host-libcs-bits.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/php-constants-are-not-the-host-libcs-bits.md: ---\nname: php-constants-are-not-the-host-libcs-bits\ndescription: php 8.5 ships its own glob, so GLOB_* are php's numbers on every target — forwarding them to libc silen",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/php-constants-are-not-the-host-libcs-bits.md: ---\nname: php-constants-are-not-the-host-libcs-bits\ndescription: php 8.5 ships its own glob, so GLOB_* are php's numbers on every target — forwarding them to libc silently selects a different flag\nmetadata:\n  type: project\n---\n\n`glob()`'s `$flags` ne pouvaient pas être forwardés à la libc : php 8.5 embarque **son propre\nglob**, donc `GLOB_*` sont les nombres de php, identiques sur les trois cibles — y compris\n`GLOB_ONLYDIR = 1<<30` sur Linux, où glibc a le sien à `1<<13`.\n\nMesuré : `GLOB_NOESCAPE` de php vaut **4096**, ce qui est **`GLOB_LIMIT` dans le glob.h de macOS**\net rien du tout chez gl",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ecbee18e5237b062bfd26509",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:07:10.401Z",
+  "stored_at": "2026-08-22T12:07:10.402Z"
+}

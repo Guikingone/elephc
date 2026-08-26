@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py defaultless.php 2>&1 | tail -6; python3 diff1.py multiprop.php 2>&1 | tail -6",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py defaultless.php 2>&1 | tail -6; python3 diff1.py multiprop.php 2>&1 | tail -6: NULL [\"b\"]=> string(1) \"x\" } three done --- exit 0 (",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py defaultless.php 2>&1 | tail -6; python3 diff1.py multiprop.php 2>&1 | tail -6: NULL [\"b\"]=> string(1) \"x\" } three done --- exit 0 (php 0) --- [\"b\"]=> string(1) \"x\" [\"c\"]=> int(0) } --- exit 0 (php 0) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "726c8217ba00f3ae583c6a8a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:57:53.892Z",
+  "stored_at": "2026-08-23T08:57:53.893Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_type\" src/codegen_support/runtime/io/stream_get_meta_data.rs | head -12",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_type\" src/codegen_support/runtime/io/stream_get_meta_data.rs | head -12: ot a descriptor property. The src/codegen_support/runtime/io/stream_get_meta_data.rs:98: emitter.instruction(\"bl __rt_stream_type_name",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_type\" src/codegen_support/runtime/io/stream_get_meta_data.rs | head -12: ot a descriptor property. The src/codegen_support/runtime/io/stream_get_meta_data.rs:98: emitter.instruction(\"bl __rt_stream_type_name\"); // x0 = name or 0, x1 = length src/codegen_support/runtime/io/stream_get_meta_data.rs:109: // false. The lseek answer stays where it is because the stream_type fallback above still src/codegen_support/runtime/io/stream_get_meta_data.rs:198: // stream_type, mode, unread_bytes, seekable — and finally `uri`. elephc had `unread_bytes` src/codegen_support/runtime/io/stream_get_meta_data.rs:199: // third and `stream_type` ahead of `wrapper_type`. Measured key-by-key on `php -n` 8.5.6. src/codegen_support/runtime/io/stream_get_meta_data.rs:232: emit_set_str_slots(emitter, \"_meta_key_stream_type\", 11, 56, 64); src/codegen_support/runtime/io/stream_get_meta_data.rs:446:/// `php://`, the same discriminator `__rt_stream_type_name` uses — `t` is `temp` and nothing",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "65ffe898286eaaf85c6d8301",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:12:49.357Z",
+  "stored_at": "2026-08-22T17:12:49.358Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nfor rel in ('src/codegen_support/runtime/resources/stream/aarch64.rs',\n            'src/codegen_support/runtime/resources/stream/x86_64.rs'):\n    p = ROOT / rel\n    t = p.read_text()\n    old = 'STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_READ_FILTER_HEAD_OFFSET, STREAM_STATE_SIZE,'\n    assert t.count(old) == 1, rel\n    p.write_text(t.replace(old, 'STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_SIZE,'))\n    print(f'{rel}: unused import dropped')\nPY\nexport CAR… [+416 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nfor rel in ('src/codegen_support/runtime/resources/stream/aarch64.rs',\n            'src/codegen_support/runtime/resources/stream/x86_64.rs'):\n    p = ROOT / rel\n    t = p.re",
+  "text": "python3 - <<'PY'\nimport pathlib\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nfor rel in ('src/codegen_support/runtime/resources/stream/aarch64.rs',\n            'src/codegen_support/runtime/resources/stream/x86_64.rs'):\n    p = ROOT / rel\n    t = p.read_text()\n    old = 'STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_READ_FILTER_HEAD_OFFSET, STREAM_STATE_SIZE,'\n    assert t.count(old) == 1, rel\n    p.write_text(t.replace(old, 'STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_SIZE,'))\n    print(f'{rel}: unused import dropped')\nPY\nexport CARGO_INCREMENTAL=0; cargo build -p elephc 2>&1 | grep -E \"^(error|warning)\" | head -4; echo \"--- clean ---\"; cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/feofrule && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php && ./p: src/codegen_support/runtime/resources/stream/aarch64.rs: unused import dropped src/codegen_support/runtime/resources/stream/x86_64.rs: unused import dropped --- clean --- Compiled 'p.php' -> 'p' string(3) \"ABC\" bool(false) bool(true) string(3) \"DEF\" bool(false) string(0) \"\" bool(true) --- filter KEPT, read to the end --- string(6) \"ABCDEF\" bool(false) string(0) \"\" bool(true)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "092206fd2c897bff681c565c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:42:20.680Z",
+  "stored_at": "2026-08-21T18:42:20.681Z"
+}

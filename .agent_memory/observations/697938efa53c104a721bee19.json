@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"emit_static_exception(\" src/ | grep -v \"fn emit_static_exception\" | head -6",
+  "summary": "grep -rn \"emit_static_exception(\" src/ | grep -v \"fn emit_static_exception\" | head -6: src/codegen/lower_inst/exceptions.rs:38: emit_static_exception(ctx, \"Error\", \"_spl_error_class_id\", message); src/codegen/lower_inst/exceptions.rs:43: emit_static_exception(ctx, \"TypeError\", \"_spl_type_error_class_id\", message); src/",
+  "text": "grep -rn \"emit_static_exception(\" src/ | grep -v \"fn emit_static_exception\" | head -6: src/codegen/lower_inst/exceptions.rs:38: emit_static_exception(ctx, \"Error\", \"_spl_error_class_id\", message); src/codegen/lower_inst/exceptions.rs:43: emit_static_exception(ctx, \"TypeError\", \"_spl_type_error_class_id\", message); src/codegen/lower_inst/exceptions.rs:55: emit_static_exception(ctx, \"ValueError\", \"_spl_value_error_class_id\", message); src/codegen/lower_inst/exceptions.rs:237: emit_static_exception( src/codegen/lower_inst/exceptions.rs:252: emit_static_exception(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "697938efa53c104a721bee19",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:06:50.682Z",
+  "stored_at": "2026-08-22T15:06:50.683Z"
+}

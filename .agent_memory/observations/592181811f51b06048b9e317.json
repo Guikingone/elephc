@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r '\nforeach ([42, \"x\", null] as $v) {\n  try { stream_filter_remove($v); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }\n}\n$h = fopen(\"php://memory\",\"w+\"); fclose($h);\ntry { stream_filter_remove($h); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r '\nforeach ([42, \"x\", null] as $v) {\n  try { stream_filter_remove($v); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessa",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n -r '\nforeach ([42, \"x\", null] as $v) {\n  try { stream_filter_remove($v); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }\n}\n$h = fopen(\"php://memory\",\"w+\"); fclose($h);\ntry { stream_filter_remove($h); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }': TypeError: stream_filter_remove(): Argument #1 ($stream_filter) must be of type resource, int given TypeError: stream_filter_remove(): Argument #1 ($stream_filter) must be of type resource, string given TypeError: stream_filter_remove(): Argument #1 ($stream_filter) must be of type resource, null given TypeError: stream_filter_remove(): supplied resource is not a valid stream filter resource",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "592181811f51b06048b9e317",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:53:50.427Z",
+  "stored_at": "2026-08-17T14:53:50.428Z"
+}

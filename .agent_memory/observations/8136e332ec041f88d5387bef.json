@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '185,210p' tests/codegen/undefined_variables.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '185,210p' tests/codegen/undefined_variables.rs:  would still print a well-formed line — with the WRONG number, or /// none. Only an assertion on the located form catches that. #[test] fn test_the_undefined_read_warni",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '185,210p' tests/codegen/undefined_variables.rs:  would still print a well-formed line — with the WRONG number, or /// none. Only an assertion on the located form catches that. #[test] fn test_the_undefined_read_warning_names_its_line() { let out = compile_and_run_capture( r#\"<?php echo \"first\\n\"; echo $absent; echo \"last\\n\"; \"#, ); assert!(out.success, \"program failed: {}\", out.stderr); assert_eq!(out.stdout, \"first\\nlast\\n\"); assert_eq!( out.located_diagnostics, \"Warning: Undefined variable $absent in test.php on line 3\\n\" ); } /// Verifies only the SPINE of a null probe is tolerated: its index subexpression is not. /// /// `isset()`, `empty()`, `unset()` and `??` exist to name storage that may never have been /// declared, so the chain root raises nothing. An index is an ordinary expression that happens to /// sit inside one, and PHP reads it — MEASURED on `php -n` 8.5.6, which warns about `$b` and then /// prints `bool(false)`. ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8136e332ec041f88d5387bef",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:48:24.001Z",
+  "stored_at": "2026-08-23T16:48:24.001Z"
+}

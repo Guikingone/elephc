@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | grep -v \"^docs/internals/builtins/\\|^docs/php/builtins\" | wc -l; echo \"--- répartition des conflits par racine:\"; git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | cut -d/ -f1-2 | sort | uniq -c | sort -rn | head -12",
+  "summary": "git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | grep -v \"^docs/internals/builtins/\\|^docs/php/builtins\" | wc -l; echo \"--- répartition des conflits par racine:\"; git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | cut -d/ -f1-2 | sort | uniq -c | sort -rn | head -12",
+  "text": "git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | grep -v \"^docs/internals/builtins/\\|^docs/php/builtins\" | wc -l; echo \"--- répartition des conflits par racine:\"; git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | tail -n +2 | cut -d/ -f1-2 | sort | uniq -c | sort -rn | head -12: 1371 --- répartition des conflits par racine: 536 Auto-merging docs/internals 531 docs/internals 531 CONFLICT (content): Merge conflict in docs/internals 41 Auto-merging src/codegen 28 Auto-merging src/codegen_support 22 src/codegen 22 CONFLICT (content): Merge conflict in src/codegen 21 src/codegen_support 20 CONFLICT (content): Merge conflict in src/codegen_support 15 Auto-merging tests/codegen 13 Auto-merging docs/php 9 tests/codegen",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fa9f10d1ee97cce2dbce6afb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T16:55:24.483Z",
+  "stored_at": "2026-08-20T16:55:24.484Z"
+}

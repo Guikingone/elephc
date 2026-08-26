@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_zres_test.py && cargo test --test codegen_tests test_inline_shape_filters_still_mint 2>&1 | tail -8",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_zres_test.py && cargo test --test codegen_tests test_inline_shape_filters_still_mint 2>&1 | tail -8: inline-shape resource test added Finished `",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_zres_test.py && cargo test --test codegen_tests test_inline_shape_filters_still_mint 2>&1 | tail -8: inline-shape resource test added Finished `test` profile [unoptimized + debuginfo] target(s) in 39.95s Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-16c45d69d5f633ba) running 1 test test codegen::io::streams::test_inline_shape_filters_still_mint_their_resource ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8422 filtered out; finished in 1.85s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "db0bd0311a210645f4388170",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:21:09.440Z",
+  "stored_at": "2026-08-17T15:21:09.440Z"
+}

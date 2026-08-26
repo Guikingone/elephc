@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '88,135p' src/codegen_support/runtime/exceptions/trace_buffer.rs",
+  "summary": "sed -n '88,135p' src/codegen_support/runtime/exceptions/trace_buffer.rs: ACE_BUF_BYTES - 1)); emitter.instruction(\"cmp x10, x14\"); emitter.instruction(\"csel x10, x14, x10, gt\"); // never report more than the buffer holds abi::emit_symbol_address(emitter, \"x9\", \"_rt_trace_len\"); emitter.instruction(\"str x10, [x9]\"); emi",
+  "text": "sed -n '88,135p' src/codegen_support/runtime/exceptions/trace_buffer.rs: ACE_BUF_BYTES - 1)); emitter.instruction(\"cmp x10, x14\"); emitter.instruction(\"csel x10, x14, x10, gt\"); // never report more than the buffer holds abi::emit_symbol_address(emitter, \"x9\", \"_rt_trace_len\"); emitter.instruction(\"str x10, [x9]\"); emitter.instruction(\"ret\"); // -------------------------------------------------------------- reset --- emitter.blank(); emitter.comment(\"--- runtime: trace_reset ---\"); emitter.label_global(\"__rt_trace_reset\"); abi::emit_symbol_address(emitter, \"x9\", \"_rt_trace_len\"); emitter.instruction(\"str xzr, [x9]\"); abi::emit_symbol_address(emitter, \"x9\", \"_rt_trace_count\"); emitter.instruction(\"str xzr, [x9]\"); emitter.instruction(\"ret\"); // --------------------------------------------------------- frame open --- // Input: x0 = call-site line, x1 = function name pointer, x2 = its length. emitter.blank(); emitter.comment(\"--- runtime: trace_frame_open ---\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5e429a30822d7df7e59252ad",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:43:02.301Z",
+  "stored_at": "2026-08-26T09:43:02.302Z"
+}

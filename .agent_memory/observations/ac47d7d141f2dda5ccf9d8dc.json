@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_flush_shape2.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_flush_shape2.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codeg",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_flush_shape2.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen_support/stream_filters/zlib.rs'\ns = open(p).read()\n\n# --- constructors carry the new label ---\nold = '''pub(crate) fn filter_shape<'a>(\n    fwrite_label: &'a str,\n    close_label: &'a str,\n    skip_label: &'a str,\n    level: i64,\n) -> DeflateShape<'a> {\n    DeflateShape {\n        fwrite_label,\n        close_label,\n        skip_label,\n        level: DeflateLevel::Constant(level),\n        window_bits: -15,\n        sync_flush_on_close: false,\n    }\n}'''\nnew = '''pub(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ac47d7d141f2dda5ccf9d8dc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T19:38:36.668Z",
+  "stored_at": "2026-08-17T19:38:36.670Z"
+}

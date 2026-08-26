@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '205,275p' src/codegen_support/runtime/io/stream_select.rs",
+  "summary": "sed -n '205,275p' src/codegen_support/runtime/io/stream_select.rs:  aligned. emitter.instruction(\"cmn x13, #1\"); // did this entry yield a real descriptor? emitter.instruction(&format!(\"b.eq {}\", next_l)); // -1 contributes nothing to the tally emitter.instruction(\"ldr x17, [sp, #2184]\"); // load the castable-descripto",
+  "text": "sed -n '205,275p' src/codegen_support/runtime/io/stream_select.rs:  aligned. emitter.instruction(\"cmn x13, #1\"); // did this entry yield a real descriptor? emitter.instruction(&format!(\"b.eq {}\", next_l)); // -1 contributes nothing to the tally emitter.instruction(\"ldr x17, [sp, #2184]\"); // load the castable-descriptor tally emitter.instruction(\"add x17, x17, #1\"); // one more selectable entry emitter.instruction(\"str x17, [sp, #2184]\"); // store it back emitter.label(&next_l); emitter.instruction(\"add x11, x11, #1\"); // advance to the next element emitter.instruction(&format!(\"b {}\", loop_l)); // continue scanning the array emitter.label(&done_l); } /// Compacts one resource array in place, keeping only the slots whose /// corresponding pollfd entry has a non-zero `revents`. The pollfd section /// for this array starts at `pollfd_base + section_offset*8`. fn emit_compact_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, suffix: &str) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "97c26c47edecfa7b67afe02c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:44:47.149Z",
+  "stored_at": "2026-08-18T11:44:47.150Z"
+}

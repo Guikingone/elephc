@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/verify_tests.sh 2>&1",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/verify_tests.sh 2>&1: === concat-in-fn === Warning: Undefined variable $nope in concat-in-fn.php on line 2 a [exit 0] === called-vs-uncalled === Warning",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/verify_tests.sh 2>&1: === concat-in-fn === Warning: Undefined variable $nope in concat-in-fn.php on line 2 a [exit 0] === called-vs-uncalled === Warning: Undefined variable $missing_a in called-vs-uncalled.php on line 2 c end [exit 0] === read-before-assign === [ Warning: Undefined variable $later in read-before-assign.php on line 2 ] [set] [exit 0] === short-circuit === [ Warning: Undefined variable $x in short-circuit.php on line 3 ] [exit 0] === params-captures-loop === p|c|0x1y [exit 0] === line-number === first Warning: Undefined variable $absent in line-number.php on line 3 last [exit 0]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6c558a25e49e42dd4763aeed",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T19:47:17.516Z",
+  "stored_at": "2026-08-18T19:47:17.517Z"
+}

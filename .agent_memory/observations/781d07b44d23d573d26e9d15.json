@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub fn lower_instruction\\|fn lower_instruction\" -A18 src/codegen/lower_inst.rs | head -24",
+  "summary": "grep -n \"pub fn lower_instruction\\|fn lower_instruction\" -A18 src/codegen/lower_inst.rs | head -24: xt<'_>, inst_id: InstId) -> Result<()> { 147- ctx.begin_instruction(inst_id); 148- let inst = ctx 149- .function 150- .instruction(inst_id) 151- .cloned() 152- .ok_or_else(|| CodegenIrError::missing_entry(\"instruction\", ",
+  "text": "grep -n \"pub fn lower_instruction\\|fn lower_instruction\" -A18 src/codegen/lower_inst.rs | head -24: xt<'_>, inst_id: InstId) -> Result<()> { 147- ctx.begin_instruction(inst_id); 148- let inst = ctx 149- .function 150- .instruction(inst_id) 151- .cloned() 152- .ok_or_else(|| CodegenIrError::missing_entry(\"instruction\", inst_id.as_raw()))?; 153- match inst.op { 154- Op::ConstI64 => lower_const_i64(ctx, &inst), 155- Op::ConstF64 => floats::lower_const_f64(ctx, &inst), 156- Op::ConstBool => lower_const_bool(ctx, &inst), 157- Op::ConstNull => lower_const_null(ctx, &inst), 158- Op::ConstStr => strings::lower_const_str(ctx, &inst), 159- Op::ConstClassName => strings::lower_const_class_name(ctx, &inst), 160- Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst), 161- Op::LoadLocal => lower_load_local(ctx, &inst), 162- Op::StoreLocal => lower_store_local(ctx, &inst), 163- Op::UnsetLocal => lower_unset_local(ctx, &inst), 164- Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "781d07b44d23d573d26e9d15",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:45:21.489Z",
+  "stored_at": "2026-08-18T13:45:21.490Z"
+}

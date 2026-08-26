@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_memselect.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2",
+  "summary": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_memselect.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2: [worktree-streams",
+  "text": "git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_memselect.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2: [worktree-streams-csv-signature 9cd2d922d] fix(streams): stream_select() reported a php://memory stream READY, where php refuses it 8 files changed, 220 insertions(+), 2 deletions(-) create mode 100644 src/codegen_support/runtime/io/stream_select_memory_guard.rs To github.com:Guikingone/elephc.git 9709fcd20..9cd2d922d worktree-streams-csv-signature -> feat/streams-csv-signatures",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2366ef3e44fdafb1b0b9f310",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:30:51.022Z",
+  "stored_at": "2026-08-18T12:30:51.023Z"
+}

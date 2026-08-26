@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/ | grep -i \"undefined\\|byref\\|by-ref\"",
+  "summary": "ls /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/ | grep -i \"undefined\\|byref\\|by-ref\": -in-a-loop-stores-addresses.md byref-array-param-widening-must-cross-the-boundary.md byref-builtin-arg-accepts-literal.md byref-closure-capture-null-write-corrupts.md byref-conta",
+  "text": "ls /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/ | grep -i \"undefined\\|byref\\|by-ref\": -in-a-loop-stores-addresses.md byref-array-param-widening-must-cross-the-boundary.md byref-builtin-arg-accepts-literal.md byref-closure-capture-null-write-corrupts.md byref-container-writeback-and-widening.md byref-mixed-writeback-rejects-multiword-source.md byref-null-caller-widening-is-mixed-not-a-union.md byref-out-param-write-never-reaches-a-null-caller.md byref-output-type-belongs-in-the-registry.md byref-places-and-empty-arrays-cross-the-boundary.md byref-return-property-aliasing-design.md byref-str-transfer-WIP.patch byref-str-writeback-WIP.patch byref-undeclared-widen-WIP.patch byref-variadic-write-fails-only-in-a-loop.md scanf-by-ref-vars-is-one-wrapper-per-arity.md static-property-closure-byref-blocked.md undefined-variable-php-semantics-spec.md undefined-variable-read-segfaults-in-a-function.md union-receiver-byref-writeback-silently-lost.md variadic-byref-outparams-missing.md",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c632ef20f2ed3b6950bb141e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T21:08:19.389Z",
+  "stored_at": "2026-08-20T21:08:19.390Z"
+}

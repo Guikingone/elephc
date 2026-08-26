@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_sockuri.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_sockuri.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen_su",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_sockuri.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = 'src/codegen_support/runtime/io/stream_transport.rs'\ns = open(p).read()\n\n# -- import the URI slots --\nold = '''    STREAM_TRANSPORT_OFFSET, STREAM_TRANSPORT_TCP, STREAM_TRANSPORT_UDP, STREAM_TRANSPORT_UNIX,'''\nassert s.count(old) == 1\ns = s.replace(old, '''    STREAM_TRANSPORT_OFFSET, STREAM_TRANSPORT_TCP, STREAM_TRANSPORT_UDP, STREAM_TRANSPORT_UNIX,\n    STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,''')\n\n# -- AArch64: keep the address across the state lookup --\nold = '''    em",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ceecbe282571b6419ed1b89e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:19:33.232Z",
+  "stored_at": "2026-08-17T13:19:33.232Z"
+}

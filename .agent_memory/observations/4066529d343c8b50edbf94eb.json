@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --lib 2>&1 | rg \"^test result|FAILED|panicked at\" | head -12",
+  "summary": "cargo test --lib 2>&1 | rg \"^test result|FAILED|panicked at\" | head -12: test ir_lower::tests::corpus::lowers_examples_corpus ... FAILED thread 'ir_lower::tests::corpus::lowers_examples_corpus' (4449547) panicked at src/ir_lower/tests/mod.rs:78:70: test result: FAILED. 1314 passed; 1 failed; 0 ignored; 0 measured; 0 fi",
+  "text": "cargo test --lib 2>&1 | rg \"^test result|FAILED|panicked at\" | head -12: test ir_lower::tests::corpus::lowers_examples_corpus ... FAILED thread 'ir_lower::tests::corpus::lowers_examples_corpus' (4449547) panicked at src/ir_lower/tests/mod.rs:78:70: test result: FAILED. 1314 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.03s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4066529d343c8b50edbf94eb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T18:18:00.761Z",
+  "stored_at": "2026-08-16T18:18:00.761Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"emit_stream_pending_put\\|emit_stream_pending_take\" src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/emitters/platform.rs | head -6",
+  "summary": "grep -rn \"emit_stream_pending_put\\|emit_stream_pending_take\" src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/emitters/platform.rs | head -6: src/codegen_support/runtime/emitters/platform.rs:84: io::emit_stream_pending_put(emitter); src/codegen_support/runtime/emitters/platform.rs:85: io::emit_stream_p",
+  "text": "grep -rn \"emit_stream_pending_put\\|emit_stream_pending_take\" src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/emitters/platform.rs | head -6: src/codegen_support/runtime/emitters/platform.rs:84: io::emit_stream_pending_put(emitter); src/codegen_support/runtime/emitters/platform.rs:85: io::emit_stream_pending_take(emitter); src/codegen_support/runtime/io/mod.rs:280:pub(crate) use stream_pending::{emit_stream_pending_put, emit_stream_pending_take};",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "61068feb61cf2178f3ad17f8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:10:18.405Z",
+  "stored_at": "2026-08-21T14:10:18.406Z"
+}

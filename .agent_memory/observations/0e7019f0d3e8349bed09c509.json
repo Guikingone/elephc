@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 45,90p src/codegen_support/runtime/io/builtin_wrapper_index.rs",
+  "summary": "sed -n 45,90p src/codegen_support/runtime/io/builtin_wrapper_index.rs: truction(\"add x12, x12, #1\"); emitter.instruction(\"b __rt_bwi_bytes\"); emitter.label(\"__rt_bwi_next\"); emitter.instruction(\"add x9, x9, #24\"); // next 3-word entry emitter.instruction(\"b __rt_bwi_entry\"); emitter.label(\"__rt_bwi_hit\"); emitter.instr",
+  "text": "sed -n 45,90p src/codegen_support/runtime/io/builtin_wrapper_index.rs: truction(\"add x12, x12, #1\"); emitter.instruction(\"b __rt_bwi_bytes\"); emitter.label(\"__rt_bwi_next\"); emitter.instruction(\"add x9, x9, #24\"); // next 3-word entry emitter.instruction(\"b __rt_bwi_entry\"); emitter.label(\"__rt_bwi_hit\"); emitter.instruction(\"ldr x0, [x9, #16]\"); // return the built-in index emitter.instruction(\"ret\"); emitter.label(\"__rt_bwi_miss\"); emitter.instruction(\"mov x0, #-1\"); // not a built-in wrapper emitter.instruction(\"ret\"); } /// x86_64 variant of [`emit_builtin_wrapper_index`]. fn emit_builtin_wrapper_index_linux_x86_64(emitter: &mut Emitter) { emitter.blank(); emitter.comment(\"--- runtime: resolve a built-in wrapper scheme name ---\"); emitter.label_global(\"__rt_builtin_wrapper_index\"); abi::emit_symbol_address(emitter, \"r9\", \"_bw_table\"); emitter.label(\"__rt_bwi_entry_x\"); emitter.instruction(\"mov r10, QWORD PTR [r9]\"); emitter.instruction(\"test r10, r10\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0e7019f0d3e8349bed09c509",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:54:33.702Z",
+  "stored_at": "2026-08-21T16:54:33.703Z"
+}

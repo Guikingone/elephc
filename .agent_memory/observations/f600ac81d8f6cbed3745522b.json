@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport re, pathlib\npath = pathlib.Path('tests/codegen/io/streams.rs')\ntext = path.read_text()\n\n# A continuation line carrying only `.stderr` has no receiver on it, so the receiver-anchored\n# rename could not see it. Scope it to the one test that spells its access that way.\nold = \"\"\"    assert_eq!(\n        modern\n            .stderr\n            .matches(\"the $escape parameter must be provided\")\"\"\"\nnew = \"\"\"    assert_eq!(\n        modern\n            .diagnostics\n            .matches(\"the $escape parameter must be provided\")\"\"\"\nassert text.count(old) == 1\ntext = text.replace(old,… [+888 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport re, pathlib\npath = pathlib.Path('tests/codegen/io/streams.rs')\ntext = path.read_text()\n\n# A continuation line carrying only `.stderr` has no receiver on it, so the receiver-anchored\n# rename could not see it. Scope it to the one test that spells its access that way.\nold = \"\"\"    assert_eq!(\n    ",
+  "text": "python3 - <<'PY'\nimport re, pathlib\npath = pathlib.Path('tests/codegen/io/streams.rs')\ntext = path.read_text()\n\n# A continuation line carrying only `.stderr` has no receiver on it, so the receiver-anchored\n# rename could not see it. Scope it to the one test that spells its access that way.\nold = \"\"\"    assert_eq!(\n        modern\n            .stderr\n            .matches(\"the $escape parameter must be provided\")\"\"\"\nnew = \"\"\"    assert_eq!(\n        modern\n            .diagnostics\n            .matches(\"the $escape parameter must be provided\")\"\"\"\nassert text.count(old) == 1\ntext = text.replace(old, new)\n\n# The prose predates the move: the notice now travels on php's stdout diagnostic funnel.\nold_doc = \"\"\"/// `--php-version`, which makes a program built for 8.3 noisier than the interpreter it is\n/// asked to imitate. stderr is what has to be inspected — the notice never touches stdout, so\n/// a stdout-only check reads the same for a gate that works and a gate that is missing.\"\"\"\nnew_doc = \"\"\"/// `--php-version`, which makes a program built for 8.3 noisier than the interpreter it is\n/// asked to imitate. The DIAGNOSTIC stream is what has to be inspected — the notice never\n/// reaches the program's own output, so a stdout-only check reads the same for a gate that\n/// works and a gate that is missing.\"\"\"\nassert text.count(old_doc) == 1\ntext = text.replace(old_doc, new_doc)\n\npath.write_text(text)\nprint(\"fixed\")\nPY\ngrep -rn \"got stderr={}\" tests/codegen/io/streams.rs | wc -l: fixed 49",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f600ac81d8f6cbed3745522b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:11:00.846Z",
+  "stored_at": "2026-08-18T15:11:00.846Z"
+}

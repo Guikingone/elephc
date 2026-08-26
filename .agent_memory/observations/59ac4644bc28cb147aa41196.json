@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -2; RUST_MIN_STACK=33554432 cargo test --test codegen_tests callables 2>&1 | grep -E \"^test result:|^failures:\" -A 6 | tail -12",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -2; RUST_MIN_STACK=33554432 cargo test --test codegen_tests callables 2>&1 | grep -E \"^test result:|^failure",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -2; RUST_MIN_STACK=33554432 cargo test --test codegen_tests callables 2>&1 | grep -E \"^test result:|^failures:\" -A 6 | tail -12: 4 scratch directories: 0 belong to a LIVE process, 4 are debris removed 4 directories, 0.02 GB test result: ok. 586 passed; 0 failed; 0 ignored; 0 measured; 8257 filtered out; finished in 286.78s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "59ac4644bc28cb147aa41196",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:25:26.863Z",
+  "stored_at": "2026-08-22T11:25:26.863Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn lower_runtime_call_args\\|fn lower_builtin_args\\|runtime_call\" src/ir_lower --include=* -l 2>/dev/null | head; grep -rln \"RuntimeFnId\" src/ir_lower | head",
+  "summary": "grep -rn \"fn lower_runtime_call_args\\|fn lower_builtin_args\\|runtime_call\" src/ir_lower --include=* -l 2>/dev/null | head; grep -rln \"RuntimeFnId\" src/ir_lower | head: (eval):1: no matches found: --include=* src/ir_lower/context.rs src/ir_lower/expr/array_builtin_args.rs src/ir_lower/expr/mod.rs src/ir_lower/program/ev",
+  "text": "grep -rn \"fn lower_runtime_call_args\\|fn lower_builtin_args\\|runtime_call\" src/ir_lower --include=* -l 2>/dev/null | head; grep -rln \"RuntimeFnId\" src/ir_lower | head: (eval):1: no matches found: --include=* src/ir_lower/context.rs src/ir_lower/expr/array_builtin_args.rs src/ir_lower/expr/mod.rs src/ir_lower/program/eval_aot.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "750922f3c2afcd120647350b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:58:33.160Z",
+  "stored_at": "2026-08-21T10:58:33.160Z"
+}

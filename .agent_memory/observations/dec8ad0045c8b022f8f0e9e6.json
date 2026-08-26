@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '470,600p' src/codegen_support/runtime/io/stream_select.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '470,600p' src/codegen_support/runtime/io/stream_select.rs:  unchanged, so this stays correct for // transitional int arrays. emitter.instruction(\"mov QWORD PTR [rbp - 2120], r11\"); // spill the array pointer across t",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '470,600p' src/codegen_support/runtime/io/stream_select.rs:  unchanged, so this stays correct for // transitional int arrays. emitter.instruction(\"mov QWORD PTR [rbp - 2120], r11\"); // spill the array pointer across the resolve call emitter.instruction(\"mov QWORD PTR [rbp - 2128], rdi\"); // spill the section length emitter.instruction(\"mov QWORD PTR [rbp - 2136], rsi\"); // spill the element index emitter.instruction(\"mov QWORD PTR [rbp - 2144], r12\"); // spill the value_type tag emitter.instruction(\"mov QWORD PTR [rbp - 2152], r14\"); // spill the running pollfd index emitter.instruction(\"mov rdi, rdx\"); // opaque stream handle → descriptor lookup // See the AArch64 counterpart: a `php://memory` stream has no descriptor to poll, and the // guard answers -1 once it has named the type the way php does. emitter.instruction(\"call __rt_stream_select_memory_guard\"); // -1 once it has warned emitter.instruction(\"cmp rax, -1\"); // did the guard refuse it?",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dec8ad0045c8b022f8f0e9e6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:20:04.327Z",
+  "stored_at": "2026-08-23T07:20:04.328Z"
+}

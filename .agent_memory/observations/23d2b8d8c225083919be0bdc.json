@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"str_getcsv\" src/builtins --include=\"*.rs\" -l | head -3; echo \"=== fopen glob ===\"; grep -rn \"wrapper does not support stream open\\|glob\" src/codegen/lower_inst/builtins/io/fopen_core.rs | head -10",
+  "summary": "grep -rn \"str_getcsv\" src/builtins --include=\"*.rs\" -l | head -3; echo \"=== fopen glob ===\"; grep -rn \"wrapper does not support stream open\\|glob\" src/codegen/lower_inst/builtins/io/fopen_core.rs | head -10: = fopen glob === src/codegen/lower_inst/builtins/io/fopen_core.rs:241:/// parse, and the parse publishes into fi",
+  "text": "grep -rn \"str_getcsv\" src/builtins --include=\"*.rs\" -l | head -3; echo \"=== fopen glob ===\"; grep -rn \"wrapper does not support stream open\\|glob\" src/codegen/lower_inst/builtins/io/fopen_core.rs | head -10: = fopen glob === src/codegen/lower_inst/builtins/io/fopen_core.rs:241:/// parse, and the parse publishes into fixed globals. src/codegen/lower_inst/builtins/io/fopen_core.rs:619:/// Lazily creates the request-default context and leaves its global-owned handle in the result. src/codegen/lower_inst/builtins/io/fopen_core.rs:625: ctx.emitter.instruction(\"ldr x0, [x9]\"); // load the request-global default context handle src/codegen/lower_inst/builtins/io/fopen_core.rs:630: ctx.emitter.instruction(\"mov rax, QWORD PTR [r9]\"); // load the request-global default context handle src/codegen/lower_inst/builtins/io/fopen_core.rs:641: ctx.emitter.instruction(\"str x0, [x9]\"); // transfer the creator reference to the request-global owner src/codegen/lower_inst/builtins/io/fopen_core.rs:645: ctx.emitter.instruction(\"mov QWORD PTR [r9], rax\"); // transfer the creator reference to the request-global owner",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "23d2b8d8c225083919be0bdc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:20:40.973Z",
+  "stored_at": "2026-08-14T14:20:40.973Z"
+}

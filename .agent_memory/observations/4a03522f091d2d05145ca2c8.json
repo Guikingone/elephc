@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 scripts/docs/audit_builtins.py 2>&1 | tail -6",
+  "summary": "python3 scripts/docs/audit_builtins.py 2>&1 | tail -6: Internals pages found: 512 Master index found: 1 Area index checks: 518 Backend contract checks: 14 Override tables checked: 5 Errors: 0",
+  "text": "python3 scripts/docs/audit_builtins.py 2>&1 | tail -6: Internals pages found: 512 Master index found: 1 Area index checks: 518 Backend contract checks: 14 Override tables checked: 5 Errors: 0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4a03522f091d2d05145ca2c8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:40:18.096Z",
+  "stored_at": "2026-08-21T10:40:18.096Z"
+}

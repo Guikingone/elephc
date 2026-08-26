@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '240,255p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/instr.rs",
+  "summary": "rtk proxy sed -n '240,255p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/instr.rs: /// EIR opcode family. #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] pub enum Op { ConstI64, ConstF64, ConstStr, ConstNull, ConstBool, ConstClassName, ConstEnumCase, LoadCalledCl",
+  "text": "rtk proxy sed -n '240,255p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/instr.rs: /// EIR opcode family. #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] pub enum Op { ConstI64, ConstF64, ConstStr, ConstNull, ConstBool, ConstClassName, ConstEnumCase, LoadCalledClassId, DataAddr, LoadLocal, StoreLocal, UnsetLocal, LoadRefCell,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "56210b0cb121bfb705b777ba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:43:42.407Z",
+  "stored_at": "2026-08-17T09:43:42.408Z"
+}

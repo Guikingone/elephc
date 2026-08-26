@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"undefined-variable-read-segfaults-in-a-function\\|undefined-variable-php-semantics-spec\" /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "grep -n \"undefined-variable-read-segfaults-in-a-function\\|undefined-variable-php-semantics-spec\" /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: 92:- 🔴🔴🔴 [SIGSEGV: `return \"a\" . $nope;`](undefined-variable-read-segfaults-in-a-function.md) + [SPEC/PLAN parit",
+  "text": "grep -n \"undefined-variable-read-segfaults-in-a-function\\|undefined-variable-php-semantics-spec\" /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: 92:- 🔴🔴🔴 [SIGSEGV: `return \"a\" . $nope;`](undefined-variable-read-segfaults-in-a-function.md) + [SPEC/PLAN parité php](undefined-variable-php-semantics-spec.md) — cause: `local_type()` rend **Mixed par défaut**; lier `Void` suffit.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f2cd46eaa98a67d6d0b35858",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T21:10:37.702Z",
+  "stored_at": "2026-08-20T21:10:37.703Z"
+}

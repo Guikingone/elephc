@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '9975,10010p' nullprop2.s",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '9975,10010p' nullprop2.s: str x0, [x9] ; @src line=11 col=48 op=const_str adrp x1, _str_65@PAGE add x1, x1, _str_65@PAGEOFF mov x2, #1 sub x",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '9975,10010p' nullprop2.s: str x0, [x9] ; @src line=11 col=48 op=const_str adrp x1, _str_65@PAGE add x1, x1, _str_65@PAGEOFF mov x2, #1 sub x9, x29, #272 str x1, [x9] sub x9, x29, #264 str x2, [x9] ; @src line=11 col=47 end=11:48 op=hash_isset sub x9, x29, #272 ldr x1, [x9] sub x9, x29, #264 ldr x2, [x9] bl __rt_hash_normalize_key sub x9, x29, #256 ldr x0, [x9] bl __rt_hash_get cbz x0, _eir_main_isset_hash_missing_394 cmp x3, #8 b.eq _eir_main_isset_hash_missing_394 cmp x3, #7 b.ne _eir_main_isset_hash_concrete_non_null_396 mov x0, x1 cbz x0, _eir_main_isset_hash_missing_394 bl __rt_mixed_unbox cmp x0, #8 b.eq _eir_main_isset_hash_missing_394 _eir_main_isset_hash_concrete_non_null_396: mov x0, #0 b _eir_main_isset_hash_done_395 _eir_main_isset_hash_missing_394: mov x0, #1 _eir_main_isset_hash_done_395: cmp x0, #0 cset x0, eq",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "98ece4b8b9b4cfe4067e7d3e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:49:56.707Z",
+  "stored_at": "2026-08-23T08:49:56.707Z"
+}

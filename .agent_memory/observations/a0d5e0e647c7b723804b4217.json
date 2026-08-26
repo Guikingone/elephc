@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n oracle2.php 2>&1",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n oracle2.php 2>&1: x10' | '%x' => [int(16)] 'z' | '%x' => [NULL] 'ABCdef' | '%x' => [int(11259375)] 'nan' | '%f' => [NULL] 'inf' | '%f' =",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n oracle2.php 2>&1: x10' | '%x' => [int(16)] 'z' | '%x' => [NULL] 'ABCdef' | '%x' => [int(11259375)] 'nan' | '%f' => [NULL] 'inf' | '%f' => [NULL] '1.5e' | '%f' => [float(1.5)] '.' | '%f' => NULL == char class == 'a-c' | '%[a-c]' => [str('a')] ']x' | '%[]]' => [str(']')] '^x' | '%[^]' => ValueError: Unmatched [ in format string 'abc]' | '%[a-c]]' => [str('abc')] 'a1b2' | '%[a-z0-9]' => [str('a1b2')] 'AbC' | '%[^a-z]' => [str('A')] 'abc' | '%2[a-z]' => [str('ab')] == return counts == 'alpha 12' | '%s %d' x2 => 2 vars='alpha',12 'alpha' | '%s %d' x2 => 1 vars='alpha','B' '' | '%d' x1 => -1 vars='A' 'x' | '%d' x1 => 0 vars='A' '11 22' | '%*d %d' x1 => 2 vars=22 '11 22' | '%d %d' x1 => ValueError: Different numbers of variable names and field specifiers '11' | '%d %d' x2 => 1 vars=11,'B' 'abc' | 'abc' x1 => ValueError: Variable is not assigned by any conversion specifiers '1 2 3' | '%d %d %d' x3 => 3 vars=1,2,3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a0d5e0e647c7b723804b4217",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:47:00.736Z",
+  "stored_at": "2026-08-16T15:47:00.737Z"
+}

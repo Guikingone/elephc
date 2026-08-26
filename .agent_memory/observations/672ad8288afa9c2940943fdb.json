@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '120,175p' src/codegen/lower_inst/builtins/io/phar_write.rs",
+  "summary": "sed -n '120,175p' src/codegen/lower_inst/builtins/io/phar_write.rs: enMode::Fixed(if appending { \"a\" } else { \"w\" }), uri, )?; finish_fopen_context_scope(ctx); match ctx.emitter.target.arch { Arch::AArch64 => { ctx.emitter.instruction(\"ldr x9, [x0]\"); // the boxed open result tag ctx.emitter.instruction(\"cmp x9, #9\"); ",
+  "text": "sed -n '120,175p' src/codegen/lower_inst/builtins/io/phar_write.rs: enMode::Fixed(if appending { \"a\" } else { \"w\" }), uri, )?; finish_fopen_context_scope(ctx); match ctx.emitter.target.arch { Arch::AArch64 => { ctx.emitter.instruction(\"ldr x9, [x0]\"); // the boxed open result tag ctx.emitter.instruction(\"cmp x9, #9\"); // runtime tag 9 identifies a stream resource ctx.emitter.instruction(&format!(\"b.ne {}\", failed)); // a failed open answers php false ctx.emitter.instruction(\"ldr x9, [x0, #8]\"); // the opaque stream handle ctx.emitter.instruction(\"sub sp, sp, #32\"); ctx.emitter.instruction(\"str x9, [sp, #0]\"); load_file_put_contents_payload(ctx, data)?; ctx.emitter.instruction(\"ldr x0, [sp, #0]\"); // the handle; the payload is already in x1/x2 abi::emit_call_label(ctx.emitter, \"__rt_fwrite\"); // reaches the wrapper's stream_write() ctx.emitter.instruction(\"str x0, [sp, #8]\"); // php reports the INPUT byte count ctx.emitter.instruction(\"ldr x0, [sp, #0]\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "672ad8288afa9c2940943fdb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:23:34.882Z",
+  "stored_at": "2026-08-25T09:23:34.883Z"
+}

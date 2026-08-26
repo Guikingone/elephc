@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'function [a-z]*(&\\$' -B12 tests/codegen/array_basics.rs | grep -n \"fn test_\\|^--\" | head -6; head -12 tests/codegen/array_basics.rs",
+  "summary": "grep -n 'function [a-z]*(&\\$' -B12 tests/codegen/array_basics.rs | grep -n \"fn test_\\|^--\" | head -6; head -12 tests/codegen/array_basics.rs: 10:730-fn test_foreach_value_by_reference_rebinds_existing_reference_param() { //! Purpose: //! Integration or regression tests for end-to-end codegen coverage of array literals,",
+  "text": "grep -n 'function [a-z]*(&\\$' -B12 tests/codegen/array_basics.rs | grep -n \"fn test_\\|^--\" | head -6; head -12 tests/codegen/array_basics.rs: 10:730-fn test_foreach_value_by_reference_rebinds_existing_reference_param() { //! Purpose: //! Integration or regression tests for end-to-end codegen coverage of array literals, indexing, and string offsets, including literal and count, access, and access variable index. //! //! Called from: //! - `cargo test` through Rust's test harness. //! //! Key details: //! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures. use crate::support::*; // --- Arrays ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e6eef3c3a4ef5578c800f3d6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:02:25.605Z",
+  "stored_at": "2026-08-18T11:02:25.606Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/seed_filtername2.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/seed_filtername2.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\np = 'src/code",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/seed_filtername2.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\np = 'src/codegen_support/runtime/io/user_filter.rs'\ns = open(p).read()\n\n# --- AArch64: seed $filtername right after $params, before onCreate() ---\nold_a = '''    emitter.label(\"__rt_sfau_params_done\");\n\n    // -- onCreate() lifecycle hook (vtable slot 1). When present, the'''\nnew_a = '''    emitter.label(\"__rt_sfau_params_done\");\n\n    // -- seed php_user_filter::$filtername, also before onCreate() observes $this --\n    // php reports the name the filter was ATTACHED under, not th",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b37fb4426601c0d283a240f5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:32:29.408Z",
+  "stored_at": "2026-08-17T09:32:29.408Z"
+}

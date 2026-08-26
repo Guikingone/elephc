@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/getsprofile.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/getsprofile.php: <?php\n$data = str_repeat(\"abcdefgh\\n\", 100000);\nfile_put_contents(\"big.txt\", $data);\n\n$h = fopen(\"big.txt\", \"rb\");\n$t = microtime",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/getsprofile.php: <?php\n$data = str_repeat(\"abcdefgh\\n\", 100000);\nfile_put_contents(\"big.txt\", $data);\n\n$h = fopen(\"big.txt\", \"rb\");\n$t = microtime(true);\n$k = 0;\nwhile (($line = fgets($h)) !== false) {\n    $k++;\n}\necho \"fgets file    \", round((microtime(true) - $t) * 1000), \"ms $k\\n\";\nfclose($h);\n\n$m = fopen(\"php://memory\", \"w+\");\nfwrite($m, $data);\nrewind($m);\n$t = microtime(true);\n$j = 0;\nwhile (($line = fgets($m)) !== false) {\n    $j++;\n}\necho \"fgets memory  \", round((microtime(true) - $t) * 1000), \"ms $j\\n\";\nfclose($m);\n\nunlink(\"big.txt\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "54cac4e4299e8daeb02fe4e9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T14:54:30.530Z",
+  "stored_at": "2026-08-24T14:54:30.530Z"
+}

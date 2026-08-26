@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test builtin_parity_tests 2>&1 | grep -B3 -A8 panicked | head -16",
+  "summary": "cargo test --test builtin_parity_tests 2>&1 | grep -B3 -A8 panicked | head -16: ---- non_registry_surfaces_have_complete_backend_contracts stdout ---- thread 'non_registry_surfaces_have_complete_backend_contracts' (132271373) panicked at tests/builtin_parity_tests.rs:55:5: assertion `left == right` failed left: {\"dir\",",
+  "text": "cargo test --test builtin_parity_tests 2>&1 | grep -B3 -A8 panicked | head -16: ---- non_registry_surfaces_have_complete_backend_contracts stdout ---- thread 'non_registry_surfaces_have_complete_backend_contracts' (132271373) panicked at tests/builtin_parity_tests.rs:55:5: assertion `left == right` failed left: {\"dir\", \"hash_copy\", \"hash_final\", \"hash_init\", \"hash_update\"} right: {\"hash_copy\", \"hash_final\", \"hash_init\", \"hash_update\"} note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace failures: non_registry_surfaces_have_complete_backend_contracts",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e8ac0e302b191852c4e1285",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T13:35:05.179Z",
+  "stored_at": "2026-08-15T13:35:05.179Z"
+}

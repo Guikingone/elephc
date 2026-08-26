@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'chown' src/codegen/lower_inst/builtins/io/ | head -10",
+  "summary": "grep -rn 'chown' src/codegen/lower_inst/builtins/io/ | head -10: esystem_principals.rs:50: Arch::AArch64 => lower_chown_or_chgrp_aarch64(ctx, path, principal, name, kind)?, src/codegen/lower_inst/builtins/io/filesystem_principals.rs:51: Arch::X86_64 => lower_chown_or_chgrp_x86_64(ctx, path, principal, name, kind)?, src",
+  "text": "grep -rn 'chown' src/codegen/lower_inst/builtins/io/ | head -10: esystem_principals.rs:50: Arch::AArch64 => lower_chown_or_chgrp_aarch64(ctx, path, principal, name, kind)?, src/codegen/lower_inst/builtins/io/filesystem_principals.rs:51: Arch::X86_64 => lower_chown_or_chgrp_x86_64(ctx, path, principal, name, kind)?, src/codegen/lower_inst/builtins/io/filesystem_principals.rs:56:/// Materializes `chown()`/`chgrp()` operands for the ARM64 runtime ABI. src/codegen/lower_inst/builtins/io/filesystem_principals.rs:57:pub(super) fn lower_chown_or_chgrp_aarch64( src/codegen/lower_inst/builtins/io/filesystem_principals.rs:87:/// Materializes `chown()`/`chgrp()` operands for the Linux x86_64 runtime ABI. src/codegen/lower_inst/builtins/io/filesystem_principals.rs:88:pub(super) fn lower_chown_or_chgrp_x86_64( src/codegen/lower_inst/builtins/io/filesystem_principals.rs:118:/// Lowers the native symlink-aware path/principal convention for `lchown()` and `lchgrp()`.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2fa77cf8f2650ed8ea1f4f00",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:08:33.605Z",
+  "stored_at": "2026-08-24T19:08:33.606Z"
+}

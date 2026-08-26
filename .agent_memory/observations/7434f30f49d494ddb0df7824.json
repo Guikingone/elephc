@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1086,1140p' tests/codegen/support/runner.rs; echo ---; grep -rn \"fn compile_and_run_expect_failure\" -A 20 tests/codegen/support/*.rs | head -40",
+  "summary": "About to run: sed -n '1086,1140p' tests/codegen/support/runner.rs; echo ---; grep -rn \"fn compile_and_run_expect_failure\" -A 20 tests/codegen/support/*.rs | head -40",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7434f30f49d494ddb0df7824",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:09:03.306Z",
+  "stored_at": "2026-08-18T15:09:03.307Z"
+}

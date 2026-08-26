@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/unset-property-array-element-not-lowered.md",
+  "command": "",
+  "summary": "About to run: Write",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ae22414b6da3572b4a14aeb6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:50:18.703Z",
+  "stored_at": "2026-08-26T08:50:18.703Z",
+  "low_signal": true
+}

@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -v 2>&1 | head -2",
+  "summary": "php -v 2>&1 | head -2: PHP 8.5.6 (cli) (built: May 5 2026 21:19:36) (NTS) Copyright (c) The PHP Group",
+  "text": "php -v 2>&1 | head -2: PHP 8.5.6 (cli) (built: May 5 2026 21:19:36) (NTS) Copyright (c) The PHP Group",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ab9782a3d0825e4d2b708d46",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:12:39.610Z",
+  "stored_at": "2026-08-20T19:12:39.611Z",
+  "low_signal": true
+}

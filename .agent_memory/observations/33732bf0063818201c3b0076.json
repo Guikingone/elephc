@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "wc -l src/pdo_prelude/build.rs; echo \"--- its idiom ---\"; sed -n 1,45p src/pdo_prelude/build.rs",
+  "summary": "wc -l src/pdo_prelude/build.rs; echo \"--- its idiom ---\"; sed -n 1,45p src/pdo_prelude/build.rs: en //! profiles and all seven optional drivers separately and diffing the results declaration by //! declaration (`pdo_variance.py`, `pdo_drv_variance.py`) puts the real number at SIX of 188: //! //! - `PDO` — 5 bodies acro",
+  "text": "wc -l src/pdo_prelude/build.rs; echo \"--- its idiom ---\"; sed -n 1,45p src/pdo_prelude/build.rs: en //! profiles and all seven optional drivers separately and diffing the results declaration by //! declaration (`pdo_variance.py`, `pdo_drv_variance.py`) puts the real number at SIX of 188: //! //! - `PDO` — 5 bodies across versions (8.0-8.1, 8.2-8.3, 8.4, 8.5, 8.6), and every optional //! driver adds constants to it. //! - `PDOStatement` — 3 bodies (8.0, 8.1-8.4, 8.5-8.6). //! - `PDORow` — 2 bodies (8.0, then the rest). //! - the braced `namespace Pdo` block — 8.4 and up only; DBLIB/FIREBIRD/IBM/ODBC change it. //! - `PDO_ODBC_TYPE` — exists only with ODBC. //! - `pdo_drivers()` — one body with SQLSRV, another without. //! //! The other 182 are identical everywhere. The driver deltas seen so far are ADDITIVE //! (constant blocks inserted at a marked point), not rewrites of existing members. #![allow(dead_code)] #![allow(clippy::too_many_lines)] use crate::pdo_prelude::OptionalDrivers;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "33732bf0063818201c3b0076",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:18:27.457Z",
+  "stored_at": "2026-08-22T07:18:27.457Z"
+}

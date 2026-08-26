@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/pm; rm -rf $D; mkdir -p $D; cat > $D/p.php <<'PHP'\n<?php\n$ok = preg_match(\"/(a)?(b)/\", \"b\", $matches);\necho $ok;\necho \":\";\necho count($matches);\necho \":\";\necho \"[\" . $matches[0] . \"]\";\necho \"[\" . $matches[1] . \"]\";\necho \"[\" . $matches[2] . \"]\";\n$matches = [\"old\"];\n$miss = preg_match(\"/x/\", \"abc\", $matches);\necho \":\";\necho $miss;\necho \":\";\necho count($matches);\nPHP\ncd $D && php -n p.php; echo \" <= php ($?)\"; /Users/guillaumeloulier… [+145 chars truncated]",
+  "summary": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/pm; rm -rf $D; mkdir -p $D; cat > $D/p.php <<'PHP'\n<?php\n$ok = preg_match(\"/(a)?(b)/\", \"b\", $matches);\necho $ok;\necho \":\";\necho count($matches);\necho \":\";",
+  "text": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/pm; rm -rf $D; mkdir -p $D; cat > $D/p.php <<'PHP'\n<?php\n$ok = preg_match(\"/(a)?(b)/\", \"b\", $matches);\necho $ok;\necho \":\";\necho count($matches);\necho \":\";\necho \"[\" . $matches[0] . \"]\";\necho \"[\" . $matches[1] . \"]\";\necho \"[\" . $matches[2] . \"]\";\n$matches = [\"old\"];\n$miss = preg_match(\"/x/\", \"abc\", $matches);\necho \":\";\necho $miss;\necho \":\";\necho count($matches);\nPHP\ncd $D && php -n p.php; echo \" <= php ($?)\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc p.php -o p 2>&1 | tail -5 && ./p; echo \" <= elephc ($?)\" failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Split it into plain, separate commands and run them from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d10f33159fb11dad614f8cf0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:00:48.482Z",
+  "stored_at": "2026-08-25T13:00:48.483Z"
+}

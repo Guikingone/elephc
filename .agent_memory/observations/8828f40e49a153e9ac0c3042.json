@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"STREAM_URI_PTR_OFFSET\" src/codegen_support/runtime/resources/registry/*.rs | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"STREAM_URI_PTR_OFFSET\" src/codegen_support/runtime/resources/registry/*.rs | head -20: src/codegen_support/runtime/resources/registry/aarch64.rs:20: STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_O",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"STREAM_URI_PTR_OFFSET\" src/codegen_support/runtime/resources/registry/*.rs | head -20: src/codegen_support/runtime/resources/registry/aarch64.rs:20: STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_OFFSET, src/codegen_support/runtime/resources/registry/aarch64.rs:141: \"str x16, [x17, #{}]\", STREAM_URI_PTR_OFFSET src/codegen_support/runtime/resources/registry/x86_64.rs:20: STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_OFFSET, src/codegen_support/runtime/resources/registry/x86_64.rs:133: \"mov QWORD PTR [r10 + {}], rax\", STREAM_URI_PTR_OFFSET",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8828f40e49a153e9ac0c3042",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:58:56.114Z",
+  "stored_at": "2026-08-23T07:58:56.115Z"
+}

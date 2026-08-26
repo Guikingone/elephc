@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '460,490p' src/types/checker/builtin_spl_classes/filesystem.rs; echo \"=== body builder ===\"; rtk proxy sed -n '1736,1770p' src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "rtk proxy sed -n '460,490p' src/types/checker/builtin_spl_classes/filesystem.rs; echo \"=== body builder ===\"; rtk proxy sed -n '1736,1770p' src/types/checker/builtin_spl_classes/filesystem.rs: plFileObject fgetcsv(). fn spl_file_object_fgetcsv_body() -> Vec<Stmt> { vec![ assign_stmt( \"row\", function_call( \"fgetcsv\", ve",
+  "text": "rtk proxy sed -n '460,490p' src/types/checker/builtin_spl_classes/filesystem.rs; echo \"=== body builder ===\"; rtk proxy sed -n '1736,1770p' src/types/checker/builtin_spl_classes/filesystem.rs: plFileObject fgetcsv(). fn spl_file_object_fgetcsv_body() -> Vec<Stmt> { vec![ assign_stmt( \"row\", function_call( \"fgetcsv\", vec![ file_stream_expr(), int_expr(0), csv_control_or_state_expr(\"separator\", \"delimiter\"), csv_control_or_state_expr(\"enclosure\", \"enclosure\"), csv_control_or_state_expr(\"escape\", \"escape\"), ], ), ), property_assign_stmt( this_expr(), \"lineNumber\", binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)), ), return_stmt(var_expr(\"row\")), ] } /// Builds SplFileObject fputcsv(). /// /// `$eol` is FORWARDED. The method declared it and then called the function with five /// arguments, so `$f->fputcsv([\"a\", \"b\"], \",\", '\"', \"\\\\\", \"\")` — php's \"write no terminator\", /// which answers 3 — still wrote a newline and answered 4, and a custom terminator was /// silently discarded. fn spl_file_object_fputcsv_body() -> Vec<Stmt> { let mut body = vec![ assign_stmt( \"bytes\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cf23510b7180f75f2a7e71b2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:03:32.099Z",
+  "stored_at": "2026-08-16T17:03:32.099Z"
+}

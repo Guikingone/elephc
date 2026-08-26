@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && rm -rf feofrule && mkdir feofrule && printf '%s' '<?php\nfile_put_contents(\"f.txt\", \"abcdef\");\n$h = fopen(\"f.txt\", \"r\");\n$f = stream_filter_append($h, \"string.toupper\", STREAM_FILTER_READ);\nvar_dump(fread($h, 3), feof($h));\nvar_dump(stream_filter_remove($f));\nvar_dump(fread($h, 3), feof($h));\nvar_dump(fread($h, 3), feof($h));\nfclose($h);\necho \"--- filter KEPT, read to the end ---\\n\";\n$g = fopen(\"f.txt\", \"r\");\nstream_filter_a… [+345 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && rm -rf feofrule && mkdir fe",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1a6e3180ff395f697dc289aa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:37:51.609Z",
+  "stored_at": "2026-08-21T18:37:51.609Z"
+}

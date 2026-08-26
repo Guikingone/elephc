@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_bzip2.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_bzip2.txt: feat(streams): compress.bzip2:// can write, not only read\n\n`fopen(\"compress.bzip2://out.bz2\", \"w\")` opened the underlying file and then",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_bzip2.txt: feat(streams): compress.bzip2:// can write, not only read\n\n`fopen(\"compress.bzip2://out.bz2\", \"w\")` opened the underlying file and then\nwrote PLAIN bytes through it. The handle looked like it worked — the write\nsucceeded, the byte count was right — and produced a file no bzip2 reader\naccepts. The wrapper carried an explicit guard that downgraded a write open to\nthe read direction, which kept the lie consistent instead of surfacing it.\n\nThe compress side already existed: the `bzip2.compress` FILTER installs exactly\nthe transform this wrapper needs. It is now attached on the write path, with\nphp",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bf3aabca98eb925b5e2bf2f3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:37:14.805Z",
+  "stored_at": "2026-08-18T15:37:14.806Z"
+}

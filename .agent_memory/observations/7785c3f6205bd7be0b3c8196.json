@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '470,535p' src/codegen/lower_inst/exceptions.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '470,535p' src/codegen/lower_inst/exceptions.rs: -relative temporary: this arm's message is a pre-baked label, and // the frame recording reads rbp-relative locals. emit_raising_builtin_trace_frame(ctx); // php's fram",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '470,535p' src/codegen/lower_inst/exceptions.rs: -relative temporary: this arm's message is a pre-baked label, and // the frame recording reads rbp-relative locals. emit_raising_builtin_trace_frame(ctx); // php's frame #0 is the builtin that raised abi::emit_symbol_address(ctx.emitter, \"rsi\", fatal_label); abi::emit_load_int_immediate(ctx.emitter, \"rdx\", fatal_len as i64); ctx.emitter.instruction(\"mov edi, 1\"); // fd = stdout, where PHP writes this report ctx.emitter.instruction(\"mov eax, 1\"); // Linux x86_64 syscall 1 = write ctx.emitter.instruction(\"syscall\"); // emit the specific fatal message abi::emit_load_int_immediate(ctx.emitter, \"rdi\", i64::from(creation_line)); ctx.emitter.instruction(\"call __rt_trace_write_block\"); // this path never reaches the shared report ctx.emitter.instruction(\"mov rsp, r15\"); // restore the entry rsp before leaving abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS); } } ctx.emitter.label(&throw_label);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7785c3f6205bd7be0b3c8196",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:38:30.235Z",
+  "stored_at": "2026-08-22T19:38:30.235Z"
+}

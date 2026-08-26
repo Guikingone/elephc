@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy sed -n '660,760p' $SRC/ext/standard/streamsfuncs.c",
+  "summary": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy sed -n '660,760p' $SRC/ext/standard/streamsfuncs.c: end_array_destroy(ht); } return ret; } /* }}} */ /* {{{ Runs the select() system ",
+  "text": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy sed -n '660,760p' $SRC/ext/standard/streamsfuncs.c: end_array_destroy(ht); } return ret; } /* }}} */ /* {{{ Runs the select() system call on the sets of streams with a timeout specified by tv_sec and tv_usec */ PHP_FUNCTION(stream_select) { zval *r_array, *w_array, *e_array; struct timeval tv, *tv_p = NULL; fd_set rfds, wfds, efds; php_socket_t max_fd = 0; int retval, sets = 0; zend_long sec, usec = 0; bool secnull; bool usecnull = 1; int set_count, max_set_count = 0; ZEND_PARSE_PARAMETERS_START(4, 5) Z_PARAM_ARRAY_EX2(r_array, 1, 1, 0) Z_PARAM_ARRAY_EX2(w_array, 1, 1, 0) Z_PARAM_ARRAY_EX2(e_array, 1, 1, 0) Z_PARAM_LONG_OR_NULL(sec, secnull) Z_PARAM_OPTIONAL Z_PARAM_LONG_OR_NULL(usec, usecnull) ZEND_PARSE_PARAMETERS_END(); FD_ZERO(&rfds); FD_ZERO(&wfds); FD_ZERO(&efds); if (r_array != NULL) { set_count = stream_array_to_fd_set(Z_ARR_P(r_array), &rfds, &max_fd); if (set_count > max_set_count) max_set_count = set_count; sets += set_count; }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "55220007d06dee4e4ce1af8d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:33:33.356Z",
+  "stored_at": "2026-08-17T06:33:33.357Z"
+}

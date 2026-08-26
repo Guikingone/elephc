@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_newtest2.py; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::spl::file_object_lines)' 2>&1 | tail -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_newtest2.py; CARGO_INCREMENTAL=0 RUST_MIN_",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/patch_newtest2.py; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::spl::file_object_lines)' 2>&1 | tail -8: SKIP_EMPTY test added Nextest run ID 9c1144a3-1cca-4497-923c-a078cd1d0d16 with nextest profile: default Starting 4 tests across 1 binary (8925 tests skipped) PASS [ 2.116s] (1/4) elephc::codegen_tests codegen::spl::file_object_lines::test_skip_empty_drops_the_trailing_empty_line PASS [ 2.379s] (2/4) elephc::codegen_tests codegen::spl::file_object_lines::test_drop_new_line_still_yields_the_trailing_empty_line PASS [ 2.697s] (3/4) elephc::codegen_tests codegen::spl::file_object_lines::test_read_csv_has_no_extra_trailing_record PASS [ 3.020s] (4/4) elephc::codegen_tests codegen::spl::file_object_lines::test_the_line_count_follows_phps_stream_driven_iteration ──────────── Summary [ 3.073s] 4 tests run: 4 passed, 8925 skipped",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f3fc15afe887e49a5c492db8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:46:43.066Z",
+  "stored_at": "2026-08-24T08:46:43.067Z"
+}

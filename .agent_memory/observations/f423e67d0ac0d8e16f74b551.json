@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '10,20p' src/parser/ast/types.rs; grep -rn \"pub struct ClassProperty\" -A 3 -B 3 src/parser/ast/*.rs | head -12",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '10,20p' src/parser/ast/types.rs; grep -rn \"pub struct ClassProperty\" -A 3 -B 3 src/parser/ast/*.rs | head -12: use crate::names::Name; #[derive(Debug, Clone, PartialEq, Eq)] /// Type expression in PHP syntax. pub enu",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '10,20p' src/parser/ast/types.rs; grep -rn \"pub struct ClassProperty\" -A 3 -B 3 src/parser/ast/*.rs | head -12: use crate::names::Name; #[derive(Debug, Clone, PartialEq, Eq)] /// Type expression in PHP syntax. pub enum TypeExpr { Int, Float, Bool, /// PHP's literal `false` type, kept distinct from `bool` for flow narrowing. False, src/parser/ast/oop.rs-135- src/parser/ast/oop.rs-136-#[derive(Debug, Clone)] src/parser/ast/oop.rs-137-/// Class property. src/parser/ast/oop.rs:138:pub struct ClassProperty { src/parser/ast/oop.rs-139- pub name: String, src/parser/ast/oop.rs-140- pub visibility: Visibility, src/parser/ast/oop.rs-141- /// PHP 8.4 asymmetric visibility: the write (`set`) visibility when it differs from the",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f423e67d0ac0d8e16f74b551",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:41:36.063Z",
+  "stored_at": "2026-08-23T08:41:36.064Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md')\nt = p.read_text()\nanchor = '## Active work — Streams (\\`feat/streams-csv-signatures\\`)\\n'\nassert t.count(anchor) == 1\nnew = anchor + '''- 🔴🔴🔑★★★ [\\`array_filter()\\` RENUMÉROTAIT ses survivants](array-filter-renumbered-its-survivors.md) \\`ab65a74cc\\` — \\`isset(\\$r[0])\\` rendait true là où php dit false ; 3/13 → 13/13. json_encode masquait la moitié des cas.\n- 🔴🔑★★★ [Les constantes de php ne sont les bits d'AUCUNE libc](php-constants-a… [+1007 chars truncated]",
+  "summary": "python3 -c \"\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md')\nt = p.read_text()\nanchor = '## Active work — Streams (\\`feat/streams-csv-signatures\\`)\\n'\nassert t.count(anchor) == 1\nnew = anchor + '''- 🔴🔴🔑★★★ [\\`array_filter()",
+  "text": "python3 -c \"\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md')\nt = p.read_text()\nanchor = '## Active work — Streams (\\`feat/streams-csv-signatures\\`)\\n'\nassert t.count(anchor) == 1\nnew = anchor + '''- 🔴🔴🔑★★★ [\\`array_filter()\\` RENUMÉROTAIT ses survivants](array-filter-renumbered-its-survivors.md) \\`ab65a74cc\\` — \\`isset(\\$r[0])\\` rendait true là où php dit false ; 3/13 → 13/13. json_encode masquait la moitié des cas.\n- 🔴🔑★★★ [Les constantes de php ne sont les bits d'AUCUNE libc](php-constants-are-not-the-host-libcs-bits.md) \\`a38e51fc9\\` — \\`GLOB_NOESCAPE\\`=4096 = \\`GLOB_LIMIT\\` chez macOS. 🛠 témoin obligatoire (\\`STREAM_PF_INET6\\` 30/10) pour prouver 3 captures.\n- 🔴🔑★★★ [eval résolvait 149 constantes de MOINS que le compilateur](eval-and-compiler-must-share-one-constant-table.md) \\`05262d2bc\\` — 🔴🔴 un fatal php N'EST PAS rattrapable ⇒ UN PROGRAMME PAR CAS. + \\`E_ALL\\` faux, \\`ARRAY_FILTER_USE_VALUE\\` inexistant.\n- 🔑★★★ [36/577 builtins appelables par variable](callable-ladder-is-bounded-by-mentioned-names.md) \\`b2d52ae07\\` — l'échelle est RECOPIÉE PAR SITE (~120 l/builtin) ⇒ borner par le POOL DE CHAÎNES, pas par le narrowing (qui ne suit pas les tableaux).\n- 🎯📐 [Traces de pile: tout est MESURÉ, rien n'est écrit](stack-trace-subsystem-measured-design.md) — prérequis OK (params déversés, \\`@48\\` libre, capture à la CONSTRUCTION), coût ~6 instr/appel. ⚠️ tout incrément partiel FABRIQUE une trace fausse.\n'''\np.write_text(t.replace(anchor, new, 1))\nprint('MEMORY.md updated')\n\": MEMORY.md updated",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "53448d9d897882a62a7067c5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:08:37.965Z",
+  "stored_at": "2026-08-22T12:08:37.965Z"
+}

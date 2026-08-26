@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat > /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/undefined-variable-read-segfaults-in-a-function.md <<'EOF'\n---\nname: undefined-variable-read-segfaults-in-a-function\ndescription: 🔴🔴🔴 SIGSEGV en 3 lignes — lire une variable INDÉFINIE dans une fonction puis l'utiliser plante; au top-level c'est un REFUS de compilation. php avertit et rend NULL.\nmetadata:\n  type: project\n---\n\n**Repro, 3 lignes, sans flux ni bibliothèque:**\n```php\n<?php\nfunction f() { return \"a\" . $nope; }\necho f(), \"\\n\";\n```\n`php -n` 8.5.6 : `Warning: Undefined variable… [+1824 chars truncated]",
+  "summary": "About to run: cat > /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/undefined-variable-read-segfaults-in-a-function.md <<'EOF' --- name: undefined-variable-read-s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b38af90588847f896b8dbdad",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:52:12.395Z",
+  "stored_at": "2026-08-18T15:52:12.396Z"
+}

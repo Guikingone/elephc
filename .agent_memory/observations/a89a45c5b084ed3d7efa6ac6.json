@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/spl_tests.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/spl_tests.py: import pathlib\n\np = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'streams-csv-sign",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/spl_tests.py: import pathlib\n\np = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'streams-csv-signature/tests/codegen/spl/filesystem.rs'\n)\nt = p.read_text()\nANCHOR = '''fn test_spl_file_object_stream_position_methods() {'''\nNEW = '''fn test_spl_file_object_drop_new_line_drops_the_terminator() {\n    let (out, dir) = compile_and_run_in_dir(\n        r#\"<?php\nfile_put_contents(\"dn.txt\", \"a\\\\rb\\\\nc\\\\r\\\\n\\\\nd\");\n$o = new SplFileObject(\"dn.txt\");\n$o->setFlags(SplFileObject::DROP_NEW_LINE);\nforeach ($o as $line) { echo bin2hex($line), \"|\"; }\necho \"\\\\n\";\n$plain = new S",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a89a45c5b084ed3d7efa6ac6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:36:39.873Z",
+  "stored_at": "2026-08-23T09:36:39.873Z"
+}

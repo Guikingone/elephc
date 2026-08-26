@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo check --all-targets 2>&1 | tail -5",
+  "summary": "About to run: cargo check --all-targets 2>&1 | tail -5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "47fc02a712b7ae9fb2fe9272",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:57:07.080Z",
+  "stored_at": "2026-08-20T20:57:07.081Z",
+  "low_signal": true
+}

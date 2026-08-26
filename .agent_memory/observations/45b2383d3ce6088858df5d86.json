@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub fn function_name\\|pub fn name(\" src/ir/builder.rs | head -5; grep -n \"pub name\" src/ir/mod.rs | head -5",
+  "summary": "grep -n \"pub fn function_name\\|pub fn name(\" src/ir/builder.rs | head -5; grep -n \"pub name\" src/ir/mod.rs | head -5 completed",
+  "text": "grep -n \"pub fn function_name\\|pub fn name(\" src/ir/builder.rs | head -5; grep -n \"pub name\" src/ir/mod.rs | head -5 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "45b2383d3ce6088858df5d86",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:37:01.201Z",
+  "stored_at": "2026-08-20T20:37:01.201Z"
+}

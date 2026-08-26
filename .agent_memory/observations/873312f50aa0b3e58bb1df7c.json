@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"ob_active\\|__rt_ob_\\|fn emit_ob\\|buffer\" src/codegen_support/runtime/io/fwrite.rs | head -20",
+  "summary": "grep -rn \"ob_active\\|__rt_ob_\\|fn emit_ob\\|buffer\" src/codegen_support/runtime/io/fwrite.rs | head -20: he `__rt_fwrite` runtime helper, which writes a buffer to a src/codegen_support/runtime/io/fwrite.rs:110: emitter.instruction(\"add x11, x10, #32\"); // upper bound for the 32 buffered PHAR write descriptors src/codege",
+  "text": "grep -rn \"ob_active\\|__rt_ob_\\|fn emit_ob\\|buffer\" src/codegen_support/runtime/io/fwrite.rs | head -20: he `__rt_fwrite` runtime helper, which writes a buffer to a src/codegen_support/runtime/io/fwrite.rs:110: emitter.instruction(\"add x11, x10, #32\"); // upper bound for the 32 buffered PHAR write descriptors src/codegen_support/runtime/io/fwrite.rs:117: emitter.instruction(\"b __rt_phar_write_append\"); // in range: append to the phar buffer (uncond → cross-atom safe) src/codegen_support/runtime/io/fwrite.rs:163: emitter.instruction(\"mov x1, x4\"); // filter target = the scratch buffer src/codegen_support/runtime/io/fwrite.rs:377: emitter.instruction(\"lea r11, [r10 + 32]\"); // upper bound for the 32 buffered PHAR write descriptors src/codegen_support/runtime/io/fwrite.rs:384: emitter.instruction(\"jmp __rt_phar_write_append\"); // append the payload to the selected phar buffer src/codegen_support/runtime/io/fwrite.rs:430: emitter.instruction(\"mov rax, r8\"); // filter target = the scratch buffer",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "873312f50aa0b3e58bb1df7c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:23:42.790Z",
+  "stored_at": "2026-08-14T14:23:42.791Z"
+}

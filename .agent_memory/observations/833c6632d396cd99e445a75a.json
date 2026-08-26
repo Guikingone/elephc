@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '340,352p' src/pipeline.rs",
+  "summary": "sed -n '340,352p' src/pipeline.rs: // `--web` build's own declarations are already present and the redeclaration guard sees // them, and before name resolution so a namespaced caller resolves to the injection. crate::progress::phase(\"version-prelude\"); let phase_started = Instant::now(); let ast = crate::version_prelud",
+  "text": "sed -n '340,352p' src/pipeline.rs: // `--web` build's own declarations are already present and the redeclaration guard sees // them, and before name resolution so a namespaced caller resolves to the injection. crate::progress::phase(\"version-prelude\"); let phase_started = Instant::now(); let ast = crate::version_prelude::inject_if_used( ast, php_version, &mut prelude_inventory, ); timings.record_since(\"version-prelude\", phase_started); crate::progress::phase(\"name-resolve\"); let phase_started = Instant::now();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "833c6632d396cd99e445a75a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:43:29.551Z",
+  "stored_at": "2026-08-21T12:43:29.552Z"
+}

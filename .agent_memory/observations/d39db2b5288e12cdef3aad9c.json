@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Agent",
+  "path": "",
+  "command": "",
+  "summary": "Agent: async_launched a70e7663fda8f8e62 TDD fix: constants filters lists claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé (basé sur `034ac07936`, branche worktree-streams-csv-signature). Chemins absolus partout ; bâtis dans TON worktree (`cargo build`) ; ",
+  "text": "async_launched a70e7663fda8f8e62 TDD fix: constants filters lists claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé (basé sur `034ac07936`, branche worktree-streams-csv-signature). Chemins absolus partout ; bâtis dans TON worktree (`cargo build`) ; ne pousse RIEN ; jamais de Co-Authored-By ; ne stage jamais `.codebase-memory/*`. TDD STRICT : pour chaque item, mesure `php -n` (8.5.6) D'ABORD, écris le test ROUGE, enregistre la sortie rouge dans le doc-comment, puis corrige. Un timeout de lot nextest à 60 s pile sous charge = faux rouge → rejoue isolé (`cargo test`). Si tu touches l'asm runtime, vérifie x86 PAR EXÉCUTION (pipeline : `cargo build --example dump_x86_runtime` ; `target/debug/elephc -q --emit-asm --target linux-x86_64 repro.php` ; docker `elephc-x86-asm` : `as --64`, `gcc -no-pie -lm`, run qemu). MISSION — cluster « constantes, filtres, listes » d'un audit complet de la surface streams (tout mesuré contre php-src PHP-8.4 + php -n 8.5.6) : 1. **STREAM_CLIENT_* PERMUTÉES** (P0) : `src/types/stream_constants.rs:79-81` dit CONNECT=1, PERSISTENT=2, ASYNC_CONNECT=4 ; php dit PERSISTENT=1, ASYNC_CONNECT=2, CONNECT=4 (php-src ex",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d39db2b5288e12cdef3aad9c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:29:04.717Z",
+  "stored_at": "2026-08-14T14:29:04.718Z"
+}

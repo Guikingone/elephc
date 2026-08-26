@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -60 tests/codegen/control_flow/branches_and_loops.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -60 tests/codegen/control_flow/branches_and_loops.rs: o \\\"a\\\"; } else { echo \\\"b\\\"; }\"); assert_eq!(out, \"b\"); } /// Verifies elseif chain takes the second branch when first condition is false. #[test] fn test_if_elseif",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -60 tests/codegen/control_flow/branches_and_loops.rs: o \\\"a\\\"; } else { echo \\\"b\\\"; }\"); assert_eq!(out, \"b\"); } /// Verifies elseif chain takes the second branch when first condition is false. #[test] fn test_if_elseif_else() { let out = compile_and_run( \"<?php $x = 2; if ($x == 1) { echo \\\"one\\\"; } elseif ($x == 2) { echo \\\"two\\\"; } else { echo \\\"other\\\"; }\", ); assert_eq!(out, \"two\"); } /// Verifies elseif/else falls through to the else branch when all conditions are false. #[test] fn test_if_else_falls_through() { let out = compile_and_run( \"<?php $x = 99; if ($x == 1) { echo \\\"a\\\"; } elseif ($x == 2) { echo \\\"b\\\"; } else { echo \\\"c\\\"; }\", ); assert_eq!(out, \"c\"); } // --- while --- /// Verifies a basic while loop iterates 5 times and prints 01234. #[test] fn test_while_loop() { let out = compile_and_run(\"<?php $i = 0; while ($i < 5) { echo $i; $i = $i + 1; }\"); assert_eq!(out, \"01234\"); } /// Verifies while (false) body never executes.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "873176e7f54b171c297e1dad",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:14:39.209Z",
+  "stored_at": "2026-08-23T13:14:39.210Z"
+}

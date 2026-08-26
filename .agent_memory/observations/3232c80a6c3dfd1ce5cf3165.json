@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"_rt_cur_line\\|__rt_set_line\\|current_source_line\" src/codegen_support/runtime/data/*.rs src/codegen/frame.rs 2>/dev/null | head -6",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"_rt_cur_line\\|__rt_set_line\\|current_source_line\" src/codegen_support/runtime/data/*.rs src/codegen/frame.rs 2>/dev/null | head -6 completed",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"_rt_cur_line\\|__rt_set_line\\|current_source_line\" src/codegen_support/runtime/data/*.rs src/codegen/frame.rs 2>/dev/null | head -6 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3232c80a6c3dfd1ce5cf3165",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:22:51.374Z",
+  "stored_at": "2026-08-22T18:22:51.375Z"
+}

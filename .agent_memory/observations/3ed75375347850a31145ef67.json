@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 375,390p src/name_resolver/names.rs",
+  "summary": "sed -n 375,390p src/name_resolver/names.rs: | \"PHP_URL_PATH\" | \"PHP_URL_QUERY\" | \"PHP_URL_FRAGMENT\" | \"FNM_NOESCAPE\" | \"FNM_PATHNAME\" | \"FNM_PERIOD\" | \"FNM_CASEFOLD\" | \"ARRAY_FILTER_USE_VALUE\" | \"ARRAY_FILTER_USE_BOTH\" | \"ARRAY_FILTER_USE_KEY\" | \"STR_PAD_LEFT\" | \"STR_PAD_RIGHT\" | \"STR_PAD_BOTH\" | \"STDIN\" | \"STDOUT\" | \"",
+  "text": "sed -n 375,390p src/name_resolver/names.rs: | \"PHP_URL_PATH\" | \"PHP_URL_QUERY\" | \"PHP_URL_FRAGMENT\" | \"FNM_NOESCAPE\" | \"FNM_PATHNAME\" | \"FNM_PERIOD\" | \"FNM_CASEFOLD\" | \"ARRAY_FILTER_USE_VALUE\" | \"ARRAY_FILTER_USE_BOTH\" | \"ARRAY_FILTER_USE_KEY\" | \"STR_PAD_LEFT\" | \"STR_PAD_RIGHT\" | \"STR_PAD_BOTH\" | \"STDIN\" | \"STDOUT\" | \"STDERR\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3ed75375347850a31145ef67",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:54:51.965Z",
+  "stored_at": "2026-08-22T09:54:51.965Z"
+}

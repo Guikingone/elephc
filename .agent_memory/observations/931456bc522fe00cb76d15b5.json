@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h / | tail -1; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -1; RUST_MIN_STACK=33554432 cargo test --test codegen_tests 2>&1 | grep -E \"^test result:|^failures:\" -A 20 | tail -26",
+  "summary": "df -h / | tail -1; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -1; RUST_MIN_STACK=33554432 cargo test --test codegen_tests 2>&1 | grep -E \"^test result:",
+  "text": "df -h / | tail -1; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/clean_stale_test_dirs.py 2>&1 | tail -1; RUST_MIN_STACK=33554432 cargo test --test codegen_tests 2>&1 | grep -E \"^test result:|^failures:\" -A 20 | tail -26: b7h77hwm5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "931456bc522fe00cb76d15b5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:43:38.510Z",
+  "stored_at": "2026-08-22T13:43:38.511Z"
+}

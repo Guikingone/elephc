@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-literal-index-is-a-second-copy-of-a-table.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-literal-index-is-a-second-copy-of-a-table.md: ---\nname: a-literal-index-is-a-second-copy-of-a-table\ndescription: \"🔴🔑★★★ Un garde EXISTANT qui ne tire JAMAIS: `tst x10, #1` sous le commentaire « index 0 = file », ",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-literal-index-is-a-second-copy-of-a-table.md: ---\nname: a-literal-index-is-a-second-copy-of-a-table\ndescription: \"🔴🔑★★★ Un garde EXISTANT qui ne tire JAMAIS: `tst x10, #1` sous le commentaire « index 0 = file », alors que `file` est à l'index 5. Le correctif d'origine réintroduit en bug par une constante\"\nmetadata:\n  node_type: memory\n  type: feedback\n  modified: 2026-08-22T00:00:00.000Z\n---\n\nCommit `b3985b991`. `stream_wrapper_unregister(\"file\")` rendait `true` et ne changeait **rien**.\n\nLe garde était là — `__rt_fopen` charge le masque des wrappers désactivés et refuse un chemin nu\ntant que `file://` est désenregistré — et il ne pouvait",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e2b7b582b245a992943d0534",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:21:31.129Z",
+  "stored_at": "2026-08-22T08:21:31.129Z"
+}

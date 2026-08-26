@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '60,110p' src/codegen_support/runtime/io/stream_type_name.rs",
+  "summary": "sed -n '60,110p' src/codegen_support/runtime/io/stream_type_name.rs: put\", \"_meta_stype_output\", 6); emit_named_type_aarch64(emitter, \"__rt_stn_input\", \"_meta_stype_input\", 5); emit_named_type_aarch64(emitter, \"__rt_stn_dir\", \"_meta_stype_dir\", 3); emit_named_type_aarch64(emitter, \"__rt_stn_glob\", \"_meta_stype_glob\", 4",
+  "text": "sed -n '60,110p' src/codegen_support/runtime/io/stream_type_name.rs: put\", \"_meta_stype_output\", 6); emit_named_type_aarch64(emitter, \"__rt_stn_input\", \"_meta_stype_input\", 5); emit_named_type_aarch64(emitter, \"__rt_stn_dir\", \"_meta_stype_dir\", 3); emit_named_type_aarch64(emitter, \"__rt_stn_glob\", \"_meta_stype_glob\", 4); emit_named_type_aarch64(emitter, \"__rt_stn_rfc2397\", \"_meta_wrapper_data\", 7); emit_named_type_aarch64(emitter, \"__rt_stn_stdio\", \"_meta_stype_stdio\", 5); emit_named_type_aarch64(emitter, \"__rt_stn_tcp\", \"_meta_stype_tcp\", 14); emit_named_type_aarch64(emitter, \"__rt_stn_udp\", \"_meta_stype_udp\", 10); emit_named_type_aarch64(emitter, \"__rt_stn_unix\", \"_meta_stype_unix\", 11); emit_named_type_aarch64(emitter, \"__rt_stn_generic\", \"_meta_stype_generic\", 14); emitter.label(\"__rt_stn_unknown\"); emitter.instruction(\"mov x0, #0\"); // no recorded name: the caller keeps its fallback emitter.instruction(\"mov x1, #0\"); emitter.label(\"__rt_stn_return\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "daff4d0bc2dbdbd72df8b862",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:16:14.388Z",
+  "stored_at": "2026-08-14T14:16:14.389Z"
+}

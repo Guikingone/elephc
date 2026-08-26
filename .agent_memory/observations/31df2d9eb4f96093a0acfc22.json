@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/wrapper_read_buffer.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/wrapper_read_buffer.rs: /// Verifies three unbounded `fgets` calls walk the whole stream, line by line.\n#[test]\nfn test_unbounded_fgets_walks_every_line() { -> /// Verifies `stream_get_line()` reads one ",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/wrapper_read_buffer.rs: /// Verifies three unbounded `fgets` calls walk the whole stream, line by line.\n#[test]\nfn test_unbounded_fgets_walks_every_line() { -> /// Verifies `stream_get_line()` reads one delimited record from a wrapper.\n#[test]\nfn test_stream_get_line_reads_one_record_from_a_wrapper() {\n    let (out, dir) = run_with_wrapper(\n        r#\"$h = fopen(\"src://x\", \"r\"); var_dump(stream_get_line($h, 100, \"\\n\")); fclose($h);\"#,\n    );\n    assert_eq!(out, \"string(10) \\\"abcdefghij\\\"\\n\");\n    let _ = std::fs::remove_dir_all(&dir);\n}\n\n/// Verifies `stream_get_line()` after an UNBOUNDED `fgets()` reads the NEXT record.\n///\n/// Thi",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "31df2d9eb4f96093a0acfc22",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:47:08.965Z",
+  "stored_at": "2026-08-21T13:47:08.965Z"
+}

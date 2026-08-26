@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; cargo test -p elephc --lib built_declarations_match_the_php_form 2>&1 | tail -12",
+  "summary": "About to run: export CARGO_INCREMENTAL=0; cargo test -p elephc --lib built_declarations_match_the_php_form 2>&1 | tail -12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "725e6b9a31a475fac67df6a1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:43:12.540Z",
+  "stored_at": "2026-08-22T07:43:12.541Z"
+}

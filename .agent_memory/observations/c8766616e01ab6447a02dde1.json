@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_resid.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_resid.py: import os\nimport re\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n# 1. the h",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_resid.py: import os\nimport re\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n# 1. the helper\nopen('src/codegen_support/runtime/io/resource_id_burn.rs', 'w').write('''//! Purpose:\n//! Emits `__rt_resource_id_burn`, which advances the PHP-visible resource-id cursor by one\n//! without creating a resource.\n//!\n//! Called from:\n//! - `crate::codegen::lower_inst::builtins::io`, for the whole-file readers.\n//!\n//! Key details:\n//! - php's `file_get_contents()` and `file_put_contents()` OPEN a stream internally, so each call\n//!   consumes one resource ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c8766616e01ab6447a02dde1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:48:35.695Z",
+  "stored_at": "2026-08-17T12:48:35.695Z"
+}

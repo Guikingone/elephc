@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('scs.php','w').write('''<?php\nclass W {\n    public $context;\n    public $pos = 0;\n    public static array $writes = [];\n    public function stream_open($path, $mode, $options, &$opened) { return true; }\n    public function stream_write($data) { self::$writes[] = strlen($data); return strlen($data); }\n    public function stream_read($n) { return \"\"; }\n    public function stream_eof() { return true;… [+462 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY' open('",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a09d4988b1418f9e2b378616",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T16:44:38.941Z",
+  "stored_at": "2026-08-17T16:44:38.942Z"
+}

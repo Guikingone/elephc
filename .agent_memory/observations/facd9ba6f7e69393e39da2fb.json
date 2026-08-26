@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/emitter-frame-balance-is-a-testable-property.md 2>/dev/null && head -30 /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/emitter-frame-balance-is-a-testable-property.md",
+  "summary": "About to run: ls /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/emitter-frame-balance-is-a-testable-property.md 2>/dev/null && head -30 /Users/guillaumeloulier/.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "facd9ba6f7e69393e39da2fb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:42:27.686Z",
+  "stored_at": "2026-08-21T16:42:27.687Z"
+}

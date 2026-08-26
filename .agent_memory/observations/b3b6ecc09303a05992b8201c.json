@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '150,180p' src/ir_lower/expr/assignments.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '150,180p' src/ir_lower/expr/assignments.rs: rds it, so it has to be released here or it leaks one // block per execution — a leak the old over-release used to cancel, which is why the two // defects hid each other. c",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '150,180p' src/ir_lower/expr/assignments.rs: rds it, so it has to be released here or it leaks one // block per execution — a leak the old over-release used to cancel, which is why the two // defects hid each other. crate::ir_lower::ownership::release_if_owned(ctx, current, Some(expr.span)); store_expr_into_temp(ctx, temp_name, result_type.clone(), default, expr.span); let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), expr.span); // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and // the slot keeps hers for the merge below to hand to the consumer. One store, one owned // load — the merge's — per execution. ctx.with_borrowed_write_operand(|ctx| { lower_non_local_assignment_write(ctx, target, &temp_value, expr.span); }); branch_to(ctx, merge); ctx.builder.position_at_end(keep_block); store_value_into_temp(ctx, temp_name, result_type, current, expr.span); branch_to(ctx, merge);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b3b6ecc09303a05992b8201c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:49:25.010Z",
+  "stored_at": "2026-08-23T12:49:25.010Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '15650,15690p' tests/codegen/io/streams.rs",
+  "summary": "sed -n '15650,15690p' tests/codegen/io/streams.rs: `ABC`. This branch's parent answered /// `ABC`: the inner filter applied, the outer one silently did not. #[test] fn test_a_nested_open_does_not_steal_the_outer_filter_chain() { let out = compile_and_run_capture( r#\"<?php class W1 { public $context; public $fh; public ",
+  "text": "sed -n '15650,15690p' tests/codegen/io/streams.rs: `ABC`. This branch's parent answered /// `ABC`: the inner filter applied, the outer one silently did not. #[test] fn test_a_nested_open_does_not_steal_the_outer_filter_chain() { let out = compile_and_run_capture( r#\"<?php class W1 { public $context; public $fh; public function stream_open($path, $mode, $options, &$opened) { $u = \"php://filter/read=string.toupper/resource=data://text/plain,abc\"; $this->fh = fopen($u, \"r\"); return true; } public function stream_read($n) { return fread($this->fh, $n); } public function stream_eof() { return feof($this->fh); } public function stream_stat() { return array(); } } stream_wrapper_register(\"w1\", \"W1\"); $u = \"php://filter/read=string.rot13/resource=w1://x\"; var_dump(stream_get_contents(fopen($u, \"r\"))); \"#, ); assert!(out.success); assert_eq!(out.stdout, \"string(3) \\\"NOP\\\"\\n\"); assert_eq!(out.stderr, \"\", \"both chains resolve, so neither warns\"); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "60ae4ea182c546167cc5ec6b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:13:29.976Z",
+  "stored_at": "2026-08-21T09:13:29.977Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '256,330p' src/ir_lower/expr/call_arg_coercion.rs",
+  "summary": "rtk proxy sed -n '256,330p' src/ir_lower/expr/call_arg_coercion.rs:  sig.variadic.is_some() { args.len().min(regular_param_count) } else { args.len() }; if sig.variadic.is_none() && fixed_arg_count >= regular_param_count { let operands = args .iter() .enumerate() .map(|(index, arg)| lower_arg_with_signature(ctx, sig, i",
+  "text": "rtk proxy sed -n '256,330p' src/ir_lower/expr/call_arg_coercion.rs:  sig.variadic.is_some() { args.len().min(regular_param_count) } else { args.len() }; if sig.variadic.is_none() && fixed_arg_count >= regular_param_count { let operands = args .iter() .enumerate() .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg)) .collect(); return coerce_operands_to_params(ctx, sig, operands); } let mut operands: Vec<crate::ir::ValueId> = args[..fixed_arg_count] .iter() .enumerate() .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg)) .collect(); for idx in fixed_arg_count..regular_param_count { let Some(Some(default)) = sig.defaults.get(idx) else { break; }; operands.push(lower_expr(ctx, default).value); } if sig.variadic.is_some() { let tail = if args.len() > regular_param_count { &args[regular_param_count..] } else { &[] }; operands.push(lower_variadic_tail_array(ctx, sig, tail).value); } coerce_operands_to_params(ctx, sig, operands) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dc3aab32138a2030c394ba48",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:29:47.501Z",
+  "stored_at": "2026-08-16T19:29:47.502Z"
+}

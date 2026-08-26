@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -la src/codegen_support/runtime/system/unserialize.rs src/codegen_support/runtime/system/unserialize/mod.rs 2>&1 | head; echo \"--- taille des deux:\"; wc -l src/codegen_support/runtime/system/unserialize.rs 2>/dev/null; ls src/codegen_support/runtime/system/unserialize/ 2>/dev/null",
+  "summary": "ls -la src/codegen_support/runtime/system/unserialize.rs src/codegen_support/runtime/system/unserialize/mod.rs 2>&1 | head; echo \"--- taille des deux:\"; wc -l src/codegen_support/runtime/system/unserialize.rs 2>/dev/null; ls src/codegen_support/runtime/system/unserialize/ 2>/dev/null: -rw-r--r--@ 1 guillaumeloulier sta",
+  "text": "ls -la src/codegen_support/runtime/system/unserialize.rs src/codegen_support/runtime/system/unserialize/mod.rs 2>&1 | head; echo \"--- taille des deux:\"; wc -l src/codegen_support/runtime/system/unserialize.rs 2>/dev/null; ls src/codegen_support/runtime/system/unserialize/ 2>/dev/null: -rw-r--r--@ 1 guillaumeloulier staff 128408 Aug 14 13:32 src/codegen_support/runtime/system/unserialize.rs -rw-r--r--@ 1 guillaumeloulier staff 3885 Aug 20 18:56 src/codegen_support/runtime/system/unserialize/mod.rs --- taille des deux: 1370 src/codegen_support/runtime/system/unserialize.rs allowed_classes_aarch64.rs allowed_classes_x86_64.rs context.rs decoder_aarch64.rs decoder_x86_64.rs diagnostics.rs mod.rs storage_aarch64.rs storage_x86_64.rs validator_aarch64.rs validator_x86_64.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3249a896cc9aa8c12bfafd9a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:41:08.500Z",
+  "stored_at": "2026-08-20T17:41:08.501Z"
+}

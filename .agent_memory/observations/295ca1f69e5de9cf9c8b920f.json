@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport json, pathlib\nD = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv')\nbase = {r['example']: r['status'] for r in json.loads((D / 'sweep_baseline.json').read_text())}\nnow = {r['example']: r['status'] for r in json.loads((D / 'sweep_result.json').read_text())}\nchanged = [(k, base.get(k), v) for k, v in now.items() if base.get(k) != v]\nfor name, was, is_ in sorted(changed):\n    print(f'{name}: {was} -> {is_}')\nprint('total changed:', len(change… [+6 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import json, pathlib D = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62ba",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "295ca1f69e5de9cf9c8b920f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:29:18.408Z",
+  "stored_at": "2026-08-20T20:29:18.408Z"
+}

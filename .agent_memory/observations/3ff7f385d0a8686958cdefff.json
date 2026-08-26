@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"^| \\`file()\\`\" docs/php/system-and-io.md",
+  "summary": "grep -n \"^| \\`file()\\`\" docs/php/system-and-io.md: 352:| `file()` | `file($filename, int $flags = 0, $context = null): array\\|false` | Read a path or wrapper URL into an array of lines. `FILE_IGNORE_NEW_LINES` trims each terminator, `FILE_SKIP_EMPTY_LINES` drops lines left empty by that trim, `FILE_USE_INCLUDE_PATH` is",
+  "text": "grep -n \"^| \\`file()\\`\" docs/php/system-and-io.md: 352:| `file()` | `file($filename, int $flags = 0, $context = null): array\\|false` | Read a path or wrapper URL into an array of lines. `FILE_IGNORE_NEW_LINES` trims each terminator, `FILE_SKIP_EMPTY_LINES` drops lines left empty by that trim, `FILE_USE_INCLUDE_PATH` is accepted with no effect, and `$context` is published for the read. |",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3ff7f385d0a8686958cdefff",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:42:10.598Z",
+  "stored_at": "2026-08-22T06:42:10.598Z"
+}

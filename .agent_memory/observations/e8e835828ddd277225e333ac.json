@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '396,430p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '396,430p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs: calars: &[(i64, &str)] = &[(0, \"int\"), (1, \"string\"), (2, \"float\"), (9, \"resource\")]; for (tag, word) in scalars { let skip = ctx.next_label(\"sc",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '396,430p' src/codegen/lower_inst/builtins/io/context_result_helpers.rs: calars: &[(i64, &str)] = &[(0, \"int\"), (1, \"string\"), (2, \"float\"), (9, \"resource\")]; for (tag, word) in scalars { let skip = ctx.next_label(\"sctx_opt_not_scalar\"); match ctx.emitter.target.arch { Arch::AArch64 => { ctx.emitter.instruction(&format!(\"cmp {}, #{}\", tag_reg, tag)); ctx.emitter.instruction(&format!(\"b.ne {}\", skip)); } Arch::X86_64 => { ctx.emitter.instruction(&format!(\"cmp {}, {}\", tag_reg, tag)); ctx.emitter.instruction(&format!(\"jne {}\", skip)); } } super::super::exceptions::emit_type_error(ctx, &format!(\"{prefix}{word} given\")); ctx.emitter.label(&skip); } // A bool names its own value. let not_bool = ctx.next_label(\"sctx_opt_not_bool\"); let is_false = ctx.next_label(\"sctx_opt_false\"); match ctx.emitter.target.arch { Arch::AArch64 => { ctx.emitter.instruction(&format!(\"cmp {}, #3\", tag_reg)); // runtime tag 3 = bool ctx.emitter.instruction(&format!(\"b.ne {}\", not_bool));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e8e835828ddd277225e333ac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:55:42.009Z",
+  "stored_at": "2026-08-22T18:55:42.009Z"
+}

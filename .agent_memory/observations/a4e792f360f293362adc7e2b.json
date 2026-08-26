@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"\\-\\-run\\|\\\"-q\\\"\\|'-q'\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/main.rs 2>/dev/null | head -20; echo \"=== cli files ===\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -40",
+  "summary": "grep -rn \"\\-\\-run\\|\\\"-q\\\"\\|'-q'\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/main.rs 2>/dev/null | head -20; echo \"=== cli files ===\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -40: === cli files === aut",
+  "text": "grep -rn \"\\-\\-run\\|\\\"-q\\\"\\|'-q'\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/main.rs 2>/dev/null | head -20; echo \"=== cli files ===\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -40: === cli files === autoload builtin_metadata.rs builtins cli.rs codegen codegen_support conditional debug_info.rs errors eval_aot eval_aot.rs exports.rs func_args hash_prelude hash_prelude.rs image_prelude image_prelude.rs intrinsics.rs ir ir_lower ir_passes lexer lib.rs link_plan.rs link_planning.rs linker list_id_prelude list_id_prelude.rs magic_constants magic_constants.rs main.rs name_resolver names.rs native_deps opcache opcache_prelude opcache_prelude.rs optimize optimize.rs parser",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a4e792f360f293362adc7e2b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:02.649Z",
+  "stored_at": "2026-08-14T14:11:02.650Z"
+}

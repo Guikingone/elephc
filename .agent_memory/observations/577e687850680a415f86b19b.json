@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"resolve_function_signature\\|initial_function_param_types\" src/types/checker/functions/ | grep -v \"^.*fn resolve_function_signature\" | head -20",
+  "summary": "grep -rn \"resolve_function_signature\\|initial_function_param_types\" src/types/checker/functions/ | grep -v \"^.*fn resolve_function_signature\" | head -20: src/types/checker/functions/resolution/specialization.rs:56: self.resolve_function_signature(name, &decl, param_types)?; src/types/checker/functions/resolution/specia",
+  "text": "grep -rn \"resolve_function_signature\\|initial_function_param_types\" src/types/checker/functions/ | grep -v \"^.*fn resolve_function_signature\" | head -20: src/types/checker/functions/resolution/specialization.rs:56: self.resolve_function_signature(name, &decl, param_types)?; src/types/checker/functions/resolution/specialization.rs:78: self.resolve_function_signature(variant, &decl, variant_param_types)?; src/types/checker/functions/resolution/specialization.rs:263: // A BY-REFERENCE parameter that `resolve_function_signature` already widened src/types/checker/functions/resolution/call.rs:460: self.resolve_function_signature(name, &decl, param_types) src/types/checker/functions/resolution/signature.rs:173: let resolved = self.resolve_function_signature(name, decl, widened);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "577e687850680a415f86b19b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T16:04:20.628Z",
+  "stored_at": "2026-08-18T16:04:20.629Z"
+}

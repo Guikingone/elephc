@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub fn function(&self)\\|pub fn func(&self)\\|fn current_function\" src/ir/builder.rs | head -5",
+  "summary": "grep -n \"pub fn function(&self)\\|pub fn func(&self)\\|fn current_function\" src/ir/builder.rs | head -5 completed",
+  "text": "grep -n \"pub fn function(&self)\\|pub fn func(&self)\\|fn current_function\" src/ir/builder.rs | head -5 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7925b6ff0d476b8ad96f4d1a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:37:09.866Z",
+  "stored_at": "2026-08-20T20:37:09.867Z"
+}

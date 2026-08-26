@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'Op::MethodCall' -A 25 src/ir_lower/program/spl_discovery.rs | head -35",
+  "summary": "grep -n 'Op::MethodCall' -A 25 src/ir_lower/program/spl_discovery.rs | head -35: 129: Op::MethodCall | Op::NullsafeMethodCall => { 130- let Some(receiver) = inst.operands.first().copied() else { 131- continue; 132- }; 133- let Some(receiver_ty) = function 134- .value(receiver) 135- .map(|value| value.php_type.codegen_r",
+  "text": "grep -n 'Op::MethodCall' -A 25 src/ir_lower/program/spl_discovery.rs | head -35: 129: Op::MethodCall | Op::NullsafeMethodCall => { 130- let Some(receiver) = inst.operands.first().copied() else { 131- continue; 132- }; 133- let Some(receiver_ty) = function 134- .value(receiver) 135- .map(|value| value.php_type.codegen_repr()) 136- else { 137- continue; 138- }; 139- let Some(method_name) = string_data_name(module, inst) else { 140- continue; 141- }; 142- let method_key = php_method_key(method_name); 143- match receiver_ty { 144- PhpType::Object(class_name) => { 145- let normalized = class_name.trim_start_matches('\\\\'); 146- push_supported_builtin_spl_method_for_receiver( 147- &mut methods, 148- module, 149- normalized, 150- &method_key, 151- ); 152- } 153- // A Mixed/Union receiver dispatches at runtime over every class whose 154- // flattened method set contains this name (mirrors `mixed_method_candidates`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b9ba37016e0d7a31b8703187",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:18:58.908Z",
+  "stored_at": "2026-08-25T14:18:58.909Z"
+}

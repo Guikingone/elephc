@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "echo \"--- missing stream_read/write ---\"; php -n -r 'class W { public $context; public function stream_open($p,$m,$o,&$op): bool { return true; } } stream_wrapper_register(\"w1\",\"W\"); $f=fopen(\"w1://x\",\"r+\"); var_dump(fread($f,4)); var_dump(fwrite($f,\"ab\")); var_dump(feof($f)); var_dump(ftell($f)); var_dump(fseek($f,3)); var_dump(fstat($f)); fclose($f);' 2>&1 | head -40\necho \"--- missing url_stat ---\"; php -n -r 'class W { public $context; public function stream_open($p,$m,$o,&$op): bool { return true; } } stream_wrapper_register(\"w1\",\"W\"); var_dump(file_exists(\"w1://x\")); var_dump(filesize(\"w1… [+54 chars truncated]",
+  "summary": "About to run: echo \"--- missing stream_read/write ---\"; php -n -r 'class W { public $context; public function stream_open($p,$m,$o,&$op): bool { return true; } } stream_wrapper_register(\"w1\",\"W\"); $f=fopen(\"w1://x\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ba1131ea9bee413b08c7848d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:17:51.858Z",
+  "stored_at": "2026-08-14T14:17:51.859Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_round8c.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_round8c.txt: fix(streams): an unassigned select set was read as eight elements, a socket claimed to lock, and an empty write refused\n\n`stream_",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_round8c.txt: fix(streams): an unassigned select set was read as eight elements, a socket claimed to lock, and an empty write refused\n\n`stream_select($r, $w, $e, 0)` with `$w` and `$e` never assigned is ordinary legacy php: the\nby-reference binding creates them and php sees null. elephc loaded them as boxed `Mixed` cells and\nhanded the CELL pointer to a helper that reads `[ptr]` as an array length — the null cell's tag\nword is 8, so each of the two sets contributed eight words of the cell's neighbourhood. MEASURED:\n`int(15)` where php answers `int(1)`. The runtime's null test knows a zero pointer and the in",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d0e177880ba1eb4ef7e44043",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:58:40.955Z",
+  "stored_at": "2026-08-23T07:58:40.956Z"
+}

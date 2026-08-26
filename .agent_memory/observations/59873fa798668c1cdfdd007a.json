@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '10080,10105p' nullprop2.s",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '10080,10105p' nullprop2.s: ldr x1, [sp] add sp, sp, #32 bl _fn__u__u_elephc_u_var_u_export_u_str sub x9, x29, #328 str x1, [x9] sub x9, x29,",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; sed -n '10080,10105p' nullprop2.s: ldr x1, [sp] add sp, sp, #32 bl _fn__u__u_elephc_u_var_u_export_u_str sub x9, x29, #328 str x1, [x9] sub x9, x29, #320 str x2, [x9] ldr x0, [sp] bl __rt_decref_mixed add sp, sp, #16 ; @src line=11 col=1 end=11:5 op=echo_value sub x9, x29, #328 ldr x1, [x9] sub x9, x29, #320 ldr x2, [x9] ; echo mov x0, x1 mov x1, x2 bl __rt_stdout_write ; @src line=11 col=1 end=11:5 op=release sub x9, x29, #328 ldr x1, [x9] sub x9, x29, #320 ldr x2, [x9] mov x0, x1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "59873fa798668c1cdfdd007a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:53:31.468Z",
+  "stored_at": "2026-08-23T08:53:31.468Z"
+}

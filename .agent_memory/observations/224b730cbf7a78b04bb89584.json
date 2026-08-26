@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo nextest run -E 'binary(codegen_tests)' --no-fail-fast -j 2 2>&1 | rg \"FAIL \\[|Summary|TRY 1 FAIL\" | head -40",
+  "summary": "cargo nextest run -E 'binary(codegen_tests)' --no-fail-fast -j 2 2>&1 | rg \"FAIL \\[|Summary|TRY 1 FAIL\" | head -40: bjjljuqvg",
+  "text": "cargo nextest run -E 'binary(codegen_tests)' --no-fail-fast -j 2 2>&1 | rg \"FAIL \\[|Summary|TRY 1 FAIL\" | head -40: bjjljuqvg",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "224b730cbf7a78b04bb89584",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:48:03.187Z",
+  "stored_at": "2026-08-16T20:48:03.187Z"
+}

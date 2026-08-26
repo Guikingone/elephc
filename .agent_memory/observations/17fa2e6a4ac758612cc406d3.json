@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'Undefined array key' src/ | head -10",
+  "summary": "grep -rn 'Undefined array key' src/ | head -10: hey are src/codegen_support/runtime/arrays/nan_bool_coercion_warning.rs:28://! compare — php-src reports `Undefined array key` / `must not be accessed before src/codegen_support/runtime/arrays/nan_bool_coercion_warning.rs:118: emitter.instruction(\"b.eq __rt_warn_nan_coerc",
+  "text": "grep -rn 'Undefined array key' src/ | head -10: hey are src/codegen_support/runtime/arrays/nan_bool_coercion_warning.rs:28://! compare — php-src reports `Undefined array key` / `must not be accessed before src/codegen_support/runtime/arrays/nan_bool_coercion_warning.rs:118: emitter.instruction(\"b.eq __rt_warn_nan_coerced_bool_done\"); // php reports Undefined array key for that, never the NAN warning src/codegen_support/runtime/arrays/nan_bool_coercion_warning.rs:165: emitter.instruction(\"je __rt_warn_nan_coerced_bool_done_linux_x86_64\"); // php reports Undefined array key for that, never the NAN warning src/codegen_support/runtime/arrays/undefined_array_key_warning.rs:16:const UNDEFINED_ARRAY_KEY_PREFIX_LEN: usize = \"Warning: Undefined array key \".len(); src/codegen_support/runtime/data/fixed.rs:891: out.push_str(\".globl _diag_undefined_array_key_prefix\\n_diag_undefined_array_key_prefix:\\n .ascii \\\"Warning: Undefined array key \\\"\\n\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "17fa2e6a4ac758612cc406d3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:40:13.429Z",
+  "stored_at": "2026-08-25T14:40:13.430Z"
+}

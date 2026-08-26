@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"contract: \\\"dir\\\"\\|\\\"Directory\\\"\" --include=\"*.rs\" src crates | head -10; echo \"=== dir() in registry/docs ===\"; grep -rn \"^| \\`dir(\" docs/php/builtins/*.md 2>/dev/null | head; ls docs/php/builtins 2>/dev/null | head -30",
+  "summary": "About to run: grep -rn \"contract: \\\"dir\\\"\\|\\\"Directory\\\"\" --include=\"*.rs\" src crates | head -10; echo \"=== dir() in registry/docs ===\"; grep -rn \"^| \\`dir(\" docs/php/builtins/*.md 2>/dev/null | head; ls docs/php/b",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d2ba80853f2024c039d91761",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:17:22.791Z",
+  "stored_at": "2026-08-14T14:17:22.792Z"
+}

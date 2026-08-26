@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"__rt_user_wrapper_stream_cast\" src/codegen_support/runtime/ --glob '*.rs' | rg \"label_global|fn \" | head -3; rg -rn \"stream_cast\" src/codegen_support/runtime/data/user.rs | head -4",
+  "summary": "rg -rn \"__rt_user_wrapper_stream_cast\" src/codegen_support/runtime/ --glob '*.rs' | rg \"label_global|fn \" | head -3; rg -rn \"stream_cast\" src/codegen_support/runtime/data/user.rs | head -4: src/codegen_support/runtime/io/user_wrapper_cast.rs: emitter.label_global(\"n\"); src/codegen_support/runtime/io/user_wrapper_cast.r",
+  "text": "rg -rn \"__rt_user_wrapper_stream_cast\" src/codegen_support/runtime/ --glob '*.rs' | rg \"label_global|fn \" | head -3; rg -rn \"stream_cast\" src/codegen_support/runtime/data/user.rs | head -4: src/codegen_support/runtime/io/user_wrapper_cast.rs: emitter.label_global(\"n\"); src/codegen_support/runtime/io/user_wrapper_cast.rs: emitter.label_global(\"n\"); /// as the dispatch is filled in: 10 n, 11 stream_lock (`flock()`), \"n\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fb946122b6b0848008263bcf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T17:56:20.323Z",
+  "stored_at": "2026-08-17T17:56:20.323Z"
+}

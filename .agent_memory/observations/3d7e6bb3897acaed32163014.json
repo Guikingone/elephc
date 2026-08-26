@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h / | tail -1; RUST_MIN_STACK=33554432 cargo test --lib 2>&1 | grep -E \"FAILED|failed;\" | grep -v \" 0 failed\" | head -8; echo \"--- lib done ---\"",
+  "summary": "df -h / | tail -1; RUST_MIN_STACK=33554432 cargo test --lib 2>&1 | grep -E \"FAILED|failed;\" | grep -v \" 0 failed\" | head -8; echo \"--- lib done ---\": /dev/disk3s1s1 460Gi 12Gi 8.3Gi 59% 459k 87M 1% / --- lib done ---",
+  "text": "df -h / | tail -1; RUST_MIN_STACK=33554432 cargo test --lib 2>&1 | grep -E \"FAILED|failed;\" | grep -v \" 0 failed\" | head -8; echo \"--- lib done ---\": /dev/disk3s1s1 460Gi 12Gi 8.3Gi 59% 459k 87M 1% / --- lib done ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3d7e6bb3897acaed32163014",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:57:53.060Z",
+  "stored_at": "2026-08-22T12:57:53.060Z"
+}

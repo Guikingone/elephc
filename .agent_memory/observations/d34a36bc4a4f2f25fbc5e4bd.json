@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/filter_tests.rs",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/filter_tests.rs: /// Verifies a filter name held in a VARIABLE reaches the same filters a literal one does.\n///\n/// `$name = \"zlib.deflate\"; stream_fi",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/filter_tests.rs: /// Verifies a filter name held in a VARIABLE reaches the same filters a literal one does.\n///\n/// `$name = \"zlib.deflate\"; stream_filter_append($h, $name);` attached NOTHING and answered\n/// `false`, while the identical call with the literal compresses. php makes no such distinction,\n/// and a name in a variable is ordinary PHP — a config value, a loop over a list, exactly what\n/// this test does. The five are unreachable through the run-time name table on purpose: that\n/// table lists what a chain node can apply, and each of these installs a per-fd handle and a\n/// program-local helper thunk",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d34a36bc4a4f2f25fbc5e4bd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:00:58.250Z",
+  "stored_at": "2026-08-18T10:00:58.251Z"
+}

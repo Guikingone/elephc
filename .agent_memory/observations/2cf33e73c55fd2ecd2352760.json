@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:4c8140cdf54c5f22b81651a944d85cd94f057281 2>&1 | tail -1; git log --format=\"%h %s\" -1",
+  "summary": "git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:4c8140cdf54c5f22b81651a944d85cd94f057281 2>&1 | tail -1; git log --format=\"%h %s\" -1: 4c8140cdf5..dd9717c1f0 HEAD -> feat/streams-csv-signatures dd9717c1f0 fix(streams): the x86_64 dynamic php://fd/N neve",
+  "text": "git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:4c8140cdf54c5f22b81651a944d85cd94f057281 2>&1 | tail -1; git log --format=\"%h %s\" -1: 4c8140cdf5..dd9717c1f0 HEAD -> feat/streams-csv-signatures dd9717c1f0 fix(streams): the x86_64 dynamic php://fd/N never reached the opener that words php's refusals",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2cf33e73c55fd2ecd2352760",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T13:07:16.639Z",
+  "stored_at": "2026-08-16T13:07:16.640Z"
+}

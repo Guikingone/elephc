@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm12 2>&1",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm12 2>&1: rm12 DIFF: 4c4 < string(4) \"abcd\" --- > string(5) \"ab\"cd\" 9c9 < string(4) \"abcd\" --- > string(5) \"ab\"cd\" 21c21 < string(5",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm12 2>&1: rm12 DIFF: 4c4 < string(4) \"abcd\" --- > string(5) \"ab\"cd\" 9c9 < string(4) \"abcd\" --- > string(5) \"ab\"cd\" 21c21 < string(5) \"a\\\"b\"\" --- > string(6) \"a\\\"\"b\"\" 26c26 < string(5) \"ab cd\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4a56937bff4ecb52f072c0a2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:18:16.471Z",
+  "stored_at": "2026-08-18T09:18:16.471Z"
+}

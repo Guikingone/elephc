@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_uncaught_dynamic_throwable_fatal_if_no_handler\" -A 45 src/codegen/lower_inst/exceptions.rs | head -50",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_uncaught_dynamic_throwable_fatal_if_no_handler\" -A 45 src/codegen/lower_inst/exceptions.rs | head -50: mporary stack slots, which `and rsp, -16` 586- // alone would move out from under it. r15 is callee-save",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_uncaught_dynamic_throwable_fatal_if_no_handler\" -A 45 src/codegen/lower_inst/exceptions.rs | head -50: mporary stack slots, which `and rsp, -16` 586- // alone would move out from under it. r15 is callee-saved and the flush helper 587- // touches no callee-saved register. 588- ctx.emitter.instruction(\"mov r15, rsp\"); // stash the entry rsp in r15, which the flush helper preserves 589- ctx.emitter.instruction(\"and rsp, -16\"); // realign the stack to the 16-byte call boundary 590- ctx.emitter.instruction(\"call __rt_ob_flush_all\"); // drain buffered output before the fatal report 591- ctx.emitter.instruction(\"mov rsp, r15\"); // restore the entry rsp so the message stack slots stay addressable 592- abi::emit_symbol_address(ctx.emitter, \"rsi\", &prefix_label); 593- abi::emit_load_int_immediate(ctx.emitter, \"rdx\", prefix_len as i64); 594- ctx.emitter.instruction(\"mov edi, 1\"); // fd = stdout for the dynamic-error prefix 595- ctx.emitter.instruction(\"mov eax, 1\"); // Linux x86_64 syscall 1 = write",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cced438242228726124ab5da",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T10:54:36.644Z",
+  "stored_at": "2026-08-23T10:54:36.645Z"
+}

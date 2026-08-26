@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/string-conversion-failures-must-be-catchable.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/string-conversion-failures-must-be-catchable.md: ---\nname: string-conversion-failures-must-be-catchable\ndescription: \"echo $obj sans __toString TUAIT le processus (stderr, exit 1) là où php lève une Error RATTRAPAB",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/string-conversion-failures-must-be-catchable.md: ---\nname: string-conversion-failures-must-be-catchable\ndescription: \"echo $obj sans __toString TUAIT le processus (stderr, exit 1) là où php lève une Error RATTRAPABLE — et rendre le throw rattrapable ne suffit pas: la DCE try/catch, qui est SYNTAXIQUE, avait déjà supprimé le catch.\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\n```php\nclass A {}\n$o = new A();\ntry { echo $o; } catch (Error $e) { echo \"caught: \", $e->getMessage(), \"\\n\"; }\necho \"still running\\n\";\n```\nphp : `caught: Object of class A could not be converted to string` + `still running`, **exit 0**.\nelephc : `Fatal error: …` s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3992cbbec615809f21dba49b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T18:40:26.316Z",
+  "stored_at": "2026-08-23T18:40:26.316Z"
+}

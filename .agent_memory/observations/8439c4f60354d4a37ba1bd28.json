@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 8 2>&1 | head -95",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 8 2>&1 | head -95: keep calling `__rt_resource_type_name` — the ONE place that maps a /// payload to a name — rather than re-deriv",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 8 2>&1 | head -95: keep calling `__rt_resource_type_name` — the ONE place that maps a /// payload to a name — rather than re-deriving the predicate here, and it must /// compare the returned POINTER against the `_resource_type_unknown` literal rather /// than its length: PHP has resource type names this compiler does not model yet /// (`stream-context`, `stream filter`), and a length test would call every one of /// them closed the day they land. #[test] fn aarch64_asks_the_registry_whether_a_host_resource_is_closed() { let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64)); assert!( asm.contains( \"__elephc_eval_resource_is_closed:\\n\\ \\x20 sub sp, sp, #16\\n\\ \\x20 stp x29, x30, [sp]\\n\\ \\x20 mov x29, sp\\n\\ \\x20 bl __rt_resource_type_name\\n\\ \\x20 adrp x9, _resource_type_unknown@PAGE\\n\\ \\x20 add x9, x9, _resource_type_unknown@PAGEOFF\\n\\ \\x20 cmp x1, x9\\n\\ \\x20 cset x0, eq\\n\\ \\x20 ldp x29, x30, [sp]\\n\\",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8439c4f60354d4a37ba1bd28",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:23:01.024Z",
+  "stored_at": "2026-08-20T17:23:01.025Z"
+}

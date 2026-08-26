@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/cross_symbol_branches.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/cross_symbol_branches.py: \"\"\"Does any runtime helper branch INTO another helper's body?\n\nThat is what broke `__rt_tmpfile_named`: it fell into `__",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/cross_symbol_branches.py: \"\"\"Does any runtime helper branch INTO another helper's body?\n\nThat is what broke `__rt_tmpfile_named`: it fell into `__rt_tmpfile`'s epilogue through a local\nlabel, which is correct in the object file and disassembles identically — and then the linker,\nwhich strips by SYMBOL, removed `__rt_tmpfile` from a program that only called `tmpfile()` and the\nbranch landed in whatever took its place.\n\nThis asks the whole emitted runtime the same question: for every branch, does its target lie inside\na DIFFERENT global symbol than the instruction? A tail call to another symbol's ENTRY (offset 0) is\nfine",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "132108bdcc66e78f682ce7c9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:19:36.127Z",
+  "stored_at": "2026-08-23T08:19:36.127Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"_script_source_file\" src/codegen_support/runtime --include=*.rs 2>/dev/null | grep -v \"user.rs\" | head -5; grep -rn \"_script_source_file\" src/codegen 2>/dev/null | head -5",
+  "summary": "grep -rn \"_script_source_file\" src/codegen_support/runtime --include=*.rs 2>/dev/null | grep -v \"user.rs\" | head -5; grep -rn \"_script_source_file\" src/codegen 2>/dev/null | head -5: (eval):1: no matches found: --include=*.rs src/codegen/lower_inst/throwable_methods.rs:206: abi::emit_symbol_address(ctx.emitter, ptr_reg",
+  "text": "grep -rn \"_script_source_file\" src/codegen_support/runtime --include=*.rs 2>/dev/null | grep -v \"user.rs\" | head -5; grep -rn \"_script_source_file\" src/codegen 2>/dev/null | head -5: (eval):1: no matches found: --include=*.rs src/codegen/lower_inst/throwable_methods.rs:206: abi::emit_symbol_address(ctx.emitter, ptr_reg, \"_script_source_file\"); src/codegen/lower_inst/throwable_methods.rs:207: abi::emit_load_symbol_to_reg(ctx.emitter, len_reg, \"_script_source_file_len\", 0);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6f831ebd460b295ed6c093d5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:43:33.984Z",
+  "stored_at": "2026-08-18T13:43:33.985Z"
+}

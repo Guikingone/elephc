@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockpair.php','w').write('''<?php\n$p = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nvar_dump(is_array($p), count($p));\nvar_dump($p);\nvar_dump(is_resource($p[0]), get_resource_type($p[0]));\nfwrite($p[0], \"ping\");\nvar_dump(fread($p[1], 4));\nforeach ($p as $i => $s) { var_dump($i, is_resource($s)); }\nfclose($p[0]); fclose($p[1]);\n''')\nprint(\"written\")\nPY\nzsh difftests.sh sockpair 2>&1 |… [+9 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockpair.php','w').write('''<?php\n$p = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nvar_dump(is_array($p),",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockpair.php','w').write('''<?php\n$p = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nvar_dump(is_array($p), count($p));\nvar_dump($p);\nvar_dump(is_resource($p[0]), get_resource_type($p[0]));\nfwrite($p[0], \"ping\");\nvar_dump(fread($p[1], 4));\nforeach ($p as $i => $s) { var_dump($i, is_resource($s)); }\nfclose($p[0]); fclose($p[1]);\n''')\nprint(\"written\")\nPY\nzsh difftests.sh sockpair 2>&1 | head -14: written sockpair DIFF: 5c5 < resource(4) of type (stream) --- > NULL 7c7 < resource(5) of type (stream) --- > NULL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5d41f82c0419682d5ce2ff26",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:33:49.655Z",
+  "stored_at": "2026-08-17T12:33:49.655Z"
+}

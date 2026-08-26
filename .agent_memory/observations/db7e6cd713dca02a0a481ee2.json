@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/sctswarn.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/sctswarn.php: <?php\n\nclass NoSeek\n{\n    public $context;\n    public $b = \"abcdef\";\n    public function stream_open($p, $m, $o, &$op)\n    {\n       ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/sctswarn.php: <?php\n\nclass NoSeek\n{\n    public $context;\n    public $b = \"abcdef\";\n    public function stream_open($p, $m, $o, &$op)\n    {\n        return true;\n    }\n    public function stream_read($c)\n    {\n        $r = substr($this->b, 0, $c);\n        $this->b = substr($this->b, $c);\n        return $r;\n    }\n    public function stream_eof()\n    {\n        return $this->b === \"\";\n    }\n}\nclass RefusesSeek extends NoSeek\n{\n    public function stream_seek($o, $w)\n    {\n        return false;\n    }\n}\nclass Snk\n{\n    public $context;\n    public $b = \"\";\n    public function stream_open($p, $m, $o, &$op)\n    {\n   ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "db7e6cd713dca02a0a481ee2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:47:48.622Z",
+  "stored_at": "2026-08-22T20:47:48.623Z"
+}

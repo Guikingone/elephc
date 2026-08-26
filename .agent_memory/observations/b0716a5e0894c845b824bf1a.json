@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests -- --skip fibers::scenarios::test_suspended_fiber_recursion_budget 2>&1 | tail -30",
+  "summary": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests -- --skip fibers::scenarios::test_suspended_fiber_recursion_budget 2>&1 | tail -30: b1b9z9412",
+  "text": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests -- --skip fibers::scenarios::test_suspended_fiber_recursion_budget 2>&1 | tail -30: b1b9z9412",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b0716a5e0894c845b824bf1a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:56:30.695Z",
+  "stored_at": "2026-08-21T19:56:30.696Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests test_short_echo_tag_is_an_opening_tag 2>&1 | rg -B 3 -A 6 \"left:\" | head -14",
+  "summary": "cargo test --test codegen_tests test_short_echo_tag_is_an_opening_tag 2>&1 | rg -B 3 -A 6 \"left:\" | head -14: thread 'codegen::php_tags::test_short_echo_tag_is_an_opening_tag' (6197264) panicked at tests/codegen/php_tags.rs:90:5: assertion `left == right` failed left: \"3!\\n\" right: \"3\\n!\\n\" note: run with `RUST_BACKTRA",
+  "text": "cargo test --test codegen_tests test_short_echo_tag_is_an_opening_tag 2>&1 | rg -B 3 -A 6 \"left:\" | head -14: thread 'codegen::php_tags::test_short_echo_tag_is_an_opening_tag' (6197264) panicked at tests/codegen/php_tags.rs:90:5: assertion `left == right` failed left: \"3!\\n\" right: \"3\\n!\\n\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace failures: codegen::php_tags::test_short_echo_tag_is_an_opening_tag",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "83bad6b8ddad9deb50ceff93",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:23:24.387Z",
+  "stored_at": "2026-08-17T21:23:24.388Z"
+}

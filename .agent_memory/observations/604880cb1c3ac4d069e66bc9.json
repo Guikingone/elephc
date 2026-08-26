@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/seven-path-builtins-failed-in-silence.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/seven-path-builtins-failed-in-silence.md: ---\nname: seven-path-builtins-failed-in-silence\ndescription: \"16 avertissements chez php, 9 chez elephc dont 2 au MAUVAIS nom — et les sept formes ne sont PAS une seule for",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/seven-path-builtins-failed-in-silence.md: ---\nname: seven-path-builtins-failed-in-silence\ndescription: \"16 avertissements chez php, 9 chez elephc dont 2 au MAUVAIS nom — et les sept formes ne sont PAS une seule forme\"\nmetadata:\n  type: project\n---\n\nSeize appels de chemin qui échouent dans un programme. `php -n` 8.5.6 imprime **SEIZE**\navertissements ; elephc en imprimait **NEUF**, dont deux nommant une fonction que le programme\nn'avait jamais appelée.\n\n    unlink  rmdir  rename  mkdir  opendir  touch  chmod   → RIEN du tout\n    readfile  file                                        → « file_get_contents(…) »\n\nUn script qui testait la v",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "604880cb1c3ac4d069e66bc9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:53:40.516Z",
+  "stored_at": "2026-08-24T19:53:40.516Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_diag_notice\\|Notice: \" src/codegen_support/runtime/ | head -6",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_diag_notice\\|Notice: \" src/codegen_support/runtime/ | head -6: src/codegen_support/runtime/io/builtin_wrapper_index.rs:146: // -- Notice: \"<prefix><scheme>:// was never changed, nothing to restore\" -- src/code",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_diag_notice\\|Notice: \" src/codegen_support/runtime/ | head -6: src/codegen_support/runtime/io/builtin_wrapper_index.rs:146: // -- Notice: \"<prefix><scheme>:// was never changed, nothing to restore\" -- src/codegen_support/runtime/io/builtin_wrapper_index.rs:193: // -- Notice: \"<prefix><scheme>:// was never changed, nothing to restore\" -- src/codegen_support/runtime/data/mod.rs:38:pub(crate) const SWR_NTC_PREFIX: &str = \"Notice: stream_wrapper_restore(): \"; src/codegen_support/runtime/data/mod.rs:425:/// php then says `Notice: filetype(): Unknown file type (12288)` before answering `\"unknown\"`. The src/codegen_support/runtime/data/mod.rs:428:pub(crate) const FILETYPE_UNKNOWN_HEAD: &str = \"Notice: filetype(): Unknown file type (\"; src/codegen_support/runtime/data/mod.rs:470: \"Notice: ob_end_flush(): Failed to delete and flush buffer. No buffer to delete or flush\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ceb83cec885c3189f7b4dd9d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:33:37.973Z",
+  "stored_at": "2026-08-24T13:33:37.974Z"
+}

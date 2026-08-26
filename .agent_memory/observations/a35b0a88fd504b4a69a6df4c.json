@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git reset -q --soft HEAD~1 && git restore --staged .cargo && git commit -q -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg29.txt && git log --oneline -1; echo \"--- now the cargo config on its own ---\"; git status --short | grep -v codebase-memory | head -3",
+  "summary": "git reset -q --soft HEAD~1 && git restore --staged .cargo && git commit -q -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg29.txt && git log --oneline -1; echo \"--- now the cargo config on its ow",
+  "text": "git reset -q --soft HEAD~1 && git restore --staged .cargo && git commit -q -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg29.txt && git log --oneline -1; echo \"--- now the cargo config on its own ---\"; git status --short | grep -v codebase-memory | head -3: 9ce0d8eb7 fix(codegen): a builtin's throwable names the line it was raised on --- now the cargo config on its own --- ?? .agent_memory/ ?? .cargo/",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a35b0a88fd504b4a69a6df4c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:37:30.992Z",
+  "stored_at": "2026-08-22T06:37:30.993Z"
+}

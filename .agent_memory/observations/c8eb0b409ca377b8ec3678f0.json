@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('zres4.php','w').write('''<?php\n$h = fopen(\"php://memory\", \"w+\");\nstream_filter_append($h, \"zlib.deflate\", STREAM_FILTER_WRITE);\nfwrite($h, str_repeat(\"a\", 400));\nrewind($h);\n$c = (string) stream_get_contents($h);\nfclose($h);\nvar_dump(strlen($c) < 400, bin2hex(substr($c, 0, 4)));\n// and the round trip through the inflate filter\n$h2 = fopen(\"php://memory\", \"w+\");\nfwrite($h2, $c);\nrewind($h2);\nstream… [+419 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('zres4.php','w').write('''<?php\n$h = fopen(\"php://memory\", \"w+\");\nstream_filter_append($h, \"zlib.deflate\", STREAM_FILTER_",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('zres4.php','w').write('''<?php\n$h = fopen(\"php://memory\", \"w+\");\nstream_filter_append($h, \"zlib.deflate\", STREAM_FILTER_WRITE);\nfwrite($h, str_repeat(\"a\", 400));\nrewind($h);\n$c = (string) stream_get_contents($h);\nfclose($h);\nvar_dump(strlen($c) < 400, bin2hex(substr($c, 0, 4)));\n// and the round trip through the inflate filter\n$h2 = fopen(\"php://memory\", \"w+\");\nfwrite($h2, $c);\nrewind($h2);\nstream_filter_append($h2, \"zlib.inflate\", STREAM_FILTER_READ);\nvar_dump(strlen((string) stream_get_contents($h2)));\nfclose($h2);\n// bzip2 round trip\n$h3 = fopen(\"php://memory\", \"w+\");\nstream_filter_append($h3, \"bzip2.compress\", STREAM_FILTER_WRITE);\nfwrite($h3, str_repeat(\"b\", 400));\nrewind($h3);\n$b = (string) stream_get_contents($h3);\nfclose($h3);\nvar_dump(strlen($b) < 400);\n''')\nPY\nzsh difftests.sh zres4 2>&1 | head -15: zres4 DIFF: 2,3c2,3 < string(8) \"4a4c1c05\" < int(400) --- > string(0) \"\" > int(0)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c8eb0b409ca377b8ec3678f0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:10:14.179Z",
+  "stored_at": "2026-08-17T15:10:14.180Z"
+}

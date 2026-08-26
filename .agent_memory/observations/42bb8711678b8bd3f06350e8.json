@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -30 tests/codegen/objects/untyped_property_defaults.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -30 tests/codegen/objects/untyped_property_defaults.rs: PHP initializes untyped properties //! without a default (and with an explicit `= null` default) to null, even when later //! assignments give the slot a concrete ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -30 tests/codegen/objects/untyped_property_defaults.rs: PHP initializes untyped properties //! without a default (and with an explicit `= null` default) to null, even when later //! assignments give the slot a concrete scalar/array type. //! //! Called from: //! - `cargo test` through Rust's test harness. //! //! Key details: //! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures. //! - Untyped null-defaulted properties must ride the same nullable storage as typed `?T` properties. use super::*; /// Verifies that an untyped instance property with no default reads as null before any assignment. #[test] fn test_untyped_property_without_default_defaults_to_null() { let out = compile_and_run( r#\"<?php class Car { public $never; } $c = new Car(); var_dump($c->never); \"#, ); assert_eq!(out, \"NULL\\n\"); } /// Verifies that an untyped no-default property later assigned an int still defaults to null.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "42bb8711678b8bd3f06350e8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:01:16.071Z",
+  "stored_at": "2026-08-23T09:01:16.071Z"
+}

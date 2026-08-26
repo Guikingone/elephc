@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub struct ParamSpec\" -A 14 crates/elephc-builtin-contract/src/spec.rs; grep -n \"pub params\\|pub variadic\\|pub struct BuiltinSpec\" -A 2 crates/elephc-builtin-contract/src/spec.rs | head -20",
+  "summary": "grep -n \"pub struct ParamSpec\" -A 14 crates/elephc-builtin-contract/src/spec.rs; grep -n \"pub params\\|pub variadic\\|pub struct BuiltinSpec\" -A 2 crates/elephc-builtin-contract/src/spec.rs | head -20: None` for in-out or by-value 137- /// parameters. Keeping the written type beside the slot it is written 138- /// into s",
+  "text": "grep -n \"pub struct ParamSpec\" -A 14 crates/elephc-builtin-contract/src/spec.rs; grep -n \"pub params\\|pub variadic\\|pub struct BuiltinSpec\" -A 2 crates/elephc-builtin-contract/src/spec.rs | head -20: None` for in-out or by-value 137- /// parameters. Keeping the written type beside the slot it is written 138- /// into stops the two from drifting apart. 139- pub writes: Option<TypeSpec>, 140-} 150: pub params: &'static [ParamSpec], 151- /// PHP-visible variadic parameter name, when present. 152: pub variadic: Option<&'static str>, 153- /// Explicit required-parameter count for non-trailing default shapes. 154- pub required_param_count: Option<usize>, -- 205: pub params: &'static [ParamSpec], 206- /// PHP-visible variadic parameter name, when present. 207: pub variadic: Option<&'static str>, 208- /// For a variadic tail the builtin only WRITES: the type each caller variable 209- /// holds afterwards. `None` for a by-value tail, which is nearly all of them. -- 215: pub variadic_writes: Option<TypeSpec>, 216- /// Optional supported minimum-arity override. 217- pub min_args: Option<usize>,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5d24519bb8a5d7247d8814f3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:06:41.445Z",
+  "stored_at": "2026-08-22T11:06:41.445Z"
+}

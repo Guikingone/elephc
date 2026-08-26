@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg46.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg46.txt: fix(streams): a scalar $options was accepted in silence where php raises a TypeError\n\n    stream_context_create(json_decode('\"x\"', true)",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg46.txt: fix(streams): a scalar $options was accepted in silence where php raises a TypeError\n\n    stream_context_create(json_decode('\"x\"', true));\n    php:    TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, string given\n    elephc: accepted\n\nKimi K3 named this arm in round 4 of the audit, and it was right for the third time. The unboxing\nadded two commits ago zeroed anything that was not a container, and a zero candidate reads to the\nshape guard as \"no options\". `null` reading that way is CORRECT — php declares `?array` and\naccepts it, measured — but a string, an int",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "faebbf2f5af55f3a3463a6f7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:11:34.467Z",
+  "stored_at": "2026-08-22T16:11:34.467Z"
+}

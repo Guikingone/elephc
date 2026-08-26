@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '1,60p' src/ir_lower/stmt/repr_fixpoint.rs",
+  "summary": "rtk proxy sed -n '1,60p' src/ir_lower/stmt/repr_fixpoint.rs: ray_to_mixed` rewrites the slots IN PLACE at refcount 1 — so running the conversion on /// the `default` path (where today it does not run) would corrupt an argument that is already /// correct. Hoisting to the STATEMENT is safe precisely because argument 0 i",
+  "text": "rtk proxy sed -n '1,60p' src/ir_lower/stmt/repr_fixpoint.rs: ray_to_mixed` rewrites the slots IN PLACE at refcount 1 — so running the conversion on /// the `default` path (where today it does not run) would corrupt an argument that is already /// correct. Hoisting to the STATEMENT is safe precisely because argument 0 is then re-lowered too. /// /// The discovery pass is what makes this cost anything, so it is gated three times: no convertible /// array local in scope, or a statement that cannot syntactically touch one, skips it entirely; and /// a statement lowered INSIDE a discovery pass runs no discovery of its own (`is_speculating`), /// which keeps the total lowering cost linear in nesting depth instead of exponential. pub(super) fn lower_stmt_at_type_fixpoint(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) { lower_region_at_type_fixpoint( ctx, stmt.span, |candidates| may_convert_array_local(stmt, candidates), |ctx| lower_stmt_once(ctx, stmt),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2d5f123b95b80982d480215d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:26:37.286Z",
+  "stored_at": "2026-08-16T19:26:37.286Z"
+}

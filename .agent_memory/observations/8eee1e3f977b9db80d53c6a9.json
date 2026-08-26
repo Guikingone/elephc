@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh run view 31812772462 -R Guikingone/elephc --json jobs --jq '.jobs[] | select(.conclusion == \"failure\") | \"\\(.databaseId) \\(.name)\"'",
+  "summary": "gh run view 31812772462 -R Guikingone/elephc --json jobs --jq '.jobs[] | select(.conclusion == \"failure\") | \"\\(.databaseId) \\(.name)\"': 94808855025 Eval Codegen Tests (macos-aarch64 2/16)",
+  "text": "gh run view 31812772462 -R Guikingone/elephc --json jobs --jq '.jobs[] | select(.conclusion == \"failure\") | \"\\(.databaseId) \\(.name)\"': 94808855025 Eval Codegen Tests (macos-aarch64 2/16)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8eee1e3f977b9db80d53c6a9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T16:42:14.273Z",
+  "stored_at": "2026-08-14T16:42:14.274Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/one-question-asked-in-three-helpers.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/one-question-asked-in-three-helpers.md: ---\nname: one-question-asked-in-three-helpers\ndescription: \"🔑★★★ « un filtre est-il ATTACHÉ ? » posée dans 3 helpers là où la question est « ce flux a-t-il un TAMPON filtré ?",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/one-question-asked-in-three-helpers.md: ---\nname: one-question-asked-in-three-helpers\ndescription: \"🔑★★★ « un filtre est-il ATTACHÉ ? » posée dans 3 helpers là où la question est « ce flux a-t-il un TAMPON filtré ? » — stream_filter_remove perdait 8 182 octets sur 10 000, en silence\"\nmetadata:\n  node_type: memory\n  type: project\n  modified: 2026-08-21T00:00:00.000Z\n---\n\nCommit `151bb7bbc`. Un filtre de lecture lit TOUTE son entrée pour produire quelques octets, donc\nle retirer en cours de lecture laisse un reste sur le flux. php le sert ; elephc le perdait.\n\n| | php | elephc (avant) |\n|---|---|---|\n| `fread($h,3)` | `\"ABC\"` ftell 3 ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5eff951cd26db560c436f138",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:03:30.468Z",
+  "stored_at": "2026-08-21T19:03:30.469Z"
+}

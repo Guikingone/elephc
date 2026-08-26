@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io:: 2>&1 | tail -6",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io:: 2>&1 | tail -6: test codegen::io::zlib_string_functions::test_the_value_errors_carry_phps_wording ... ok test codegen::io::zlib_string_function",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io:: 2>&1 | tail -6: test codegen::io::zlib_string_functions::test_the_value_errors_carry_phps_wording ... ok test codegen::io::zlib_string_functions::test_zlib_decode_detects_all_three_framings ... ok test codegen::io::zlib_string_functions::test_zlib_get_coding_type_reports_no_output_compression ... ok test result: ok. 1057 passed; 0 failed; 8 ignored; 0 measured; 7814 filtered out; finished in 317.78s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "236c26c915b98d6cd3448396",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:37:04.827Z",
+  "stored_at": "2026-08-23T07:37:04.827Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn store_int_output_to_local\" -A 40 src/ | head -45",
+  "summary": "About to run: grep -rn \"fn store_int_output_to_local\" -A 40 src/ | head -45",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "35ff19cc68653e45a2cd3d85",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:20:20.335Z",
+  "stored_at": "2026-08-21T16:20:20.336Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_probe.py 2>&1 | tail -15",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_probe.py 2>&1 | tail -15: constant php elephc eval SEEK_SET 0 Fatal error: eval() runtim <-- DIFFERS FILE_APPEND 8 Fatal error: eva",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_probe.py 2>&1 | tail -15: constant php elephc eval SEEK_SET 0 Fatal error: eval() runtim <-- DIFFERS FILE_APPEND 8 Fatal error: eval() runtim <-- DIFFERS STREAM_FILTER_READ 1 Fatal error: eval() runtim <-- DIFFERS SCANDIR_SORT_DESCENDING 1 Fatal error: eval() runtim <-- DIFFERS E_ALL 30719 Fatal error: eval() runtim <-- DIFFERS ENT_QUOTES 3 Fatal error: eval() runtim <-- DIFFERS ZLIB_ENCODING_GZIP 31 Fatal error: eval() runtim <-- DIFFERS LOCK_EX 2 2 GLOB_MARK 8 8 2/9 resolve identically",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fb9850d0ad6066d76cddcc69",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:44:35.179Z",
+  "stored_at": "2026-08-22T09:44:35.179Z"
+}

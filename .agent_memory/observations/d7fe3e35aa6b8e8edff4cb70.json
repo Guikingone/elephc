@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff HEAD 0133cceeede73c7cc5815dbc7efe2a614145302a --stat | wc -l; git push fork +0133cceeede73c7cc5815dbc7efe2a614145302a:refs/heads/ci/streams-csv-fullci 2>&1 | tail -1; python3 -c \"\np='/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/watch_fullci2.sh'\ns=open(p).read().replace('797fec72c7','0133cceeed').replace('tree == 9f91d6c32e','tree == 88844601fe')\nopen(p,'w').write(s)\nprint('ok')\n\"",
+  "summary": "git diff HEAD 0133cceeede73c7cc5815dbc7efe2a614145302a --stat | wc -l; git push fork +0133cceeede73c7cc5815dbc7efe2a614145302a:refs/heads/ci/streams-csv-fullci 2>&1 | tail -1; python3 -c \"\np='/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f7",
+  "text": "git diff HEAD 0133cceeede73c7cc5815dbc7efe2a614145302a --stat | wc -l; git push fork +0133cceeede73c7cc5815dbc7efe2a614145302a:refs/heads/ci/streams-csv-fullci 2>&1 | tail -1; python3 -c \"\np='/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/watch_fullci2.sh'\ns=open(p).read().replace('797fec72c7','0133cceeed').replace('tree == 9f91d6c32e','tree == 88844601fe')\nopen(p,'w').write(s)\nprint('ok')\n\": 0 + 797fec72c7...0133cceeed 0133cceeede73c7cc5815dbc7efe2a614145302a -> ci/streams-csv-fullci (forced update) ok",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d7fe3e35aa6b8e8edff4cb70",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T12:15:45.436Z",
+  "stored_at": "2026-08-15T12:15:45.437Z"
+}

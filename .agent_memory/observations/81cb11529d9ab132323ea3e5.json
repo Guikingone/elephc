@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test loop_edge_store_leak_tests --test codegen_tests --no-fail-fast --final-status-level fail -E 'binary(loop_edge_store_leak_tests) or test(test_for_comma) or test(test_for_clause_accepts) or test(codegen::control_flow::branches_and_loops)' 2>&1 | tail -14",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test loop_edge_store_leak_tests --test codegen_tests --no-fail-fast --final-status-level fail -E 'binary(loop_edge_store_leak_tests) or test(test_for_comma) or ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test loop_edge_store_leak_tests --test codegen_tests --no-fail-fast --final-status-level fail -E 'binary(loop_edge_store_leak_tests) or test(test_for_comma) or test(test_for_clause_accepts) or test(codegen::control_flow::branches_and_loops)' 2>&1 | tail -14: anches_and_loops::test_while_zero_iterations PASS [ 7.063s] (26/32) elephc::loop_edge_store_leak_tests the_value_assigned_in_a_condition_survives_the_loop PASS [ 13.510s] (27/32) elephc::loop_edge_store_leak_tests a_byte_at_a_time_fgetc_loop_reads_a_900k_file PASS [ 14.870s] (28/32) elephc::loop_edge_store_leak_tests assignment_in_a_for_update_does_not_grow_the_heap PASS [ 15.397s] (29/32) elephc::loop_edge_store_leak_tests assignment_in_a_for_condition_does_not_grow_the_heap PASS [ 15.920s] (30/32) elephc::loop_edge_store_leak_tests assignment_in_a_do_while_condition_does_not_grow_the_heap PASS [ 12.461s] (31/32) elephc::loop_edge_store_leak_tests object_assigned_in_a_while_condition_does_not_grow_the_heap PASS [ 15.664s] (32/32) elephc::loop_edge_store_leak_tests assignment_in_a_while_condition_does_not_grow_the_heap ──────────── Summary [ 26.417s] 32 tests run: 32 passed, 8873 skipped",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "81cb11529d9ab132323ea3e5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T15:48:54.393Z",
+  "stored_at": "2026-08-23T15:48:54.394Z"
+}

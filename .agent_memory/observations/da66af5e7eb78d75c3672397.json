@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '447,462p' .github/workflows/ci.yml",
+  "summary": "rtk proxy sed -n '447,462p' .github/workflows/ci.yml: - name: Run codegen test shard env: CARGO_NET_OFFLINE: \"true\" ELEPHC_TEST_PREBUILT_BRIDGES: \"1\" run: | cargo nextest run --profile ci \\ --archive-file \"$RUNNER_TEMP/nextest-archive.tar.zst\" \\ --workspace-remap . \\ -E 'binary(codegen_tests) and not test(~codegen::eva",
+  "text": "rtk proxy sed -n '447,462p' .github/workflows/ci.yml: - name: Run codegen test shard env: CARGO_NET_OFFLINE: \"true\" ELEPHC_TEST_PREBUILT_BRIDGES: \"1\" run: | cargo nextest run --profile ci \\ --archive-file \"$RUNNER_TEMP/nextest-archive.tar.zst\" \\ --workspace-remap . \\ -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' \\ --partition hash:${{ matrix.shard }}/16 \\ --no-fail-fast --retries 1 --flaky-result pass \\ -j 1 codegen-tests-linux-x86_64: name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16) needs: build-archive-linux-x86_64",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "da66af5e7eb78d75c3672397",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:32:26.888Z",
+  "stored_at": "2026-08-16T16:32:26.889Z"
+}

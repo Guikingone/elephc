@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Agent",
+  "path": "",
+  "command": "",
+  "summary": "Agent: async_launched af32c140cac10332d TDD fix: url_stat dispatch + dir() claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `4e5b8a3b86` (branche worktree-streams-csv-signature) ; si ton worktree a é",
+  "text": "async_launched af32c140cac10332d TDD fix: url_stat dispatch + dir() claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `4e5b8a3b86` (branche worktree-streams-csv-signature) ; si ton worktree a été créé depuis main/ailleurs, fais `git reset --hard 4e5b8a3b86` AVANT tout (deux agents précédents ont été livrés sur la mauvaise base). Chemins absolus ; ne pousse RIEN ; pas de Co-Authored-By ; jamais `.codebase-memory/*` stagé. ⚠️ DISCIPLINE RESSOURCES (le disque hôte n'a que ~49 GiB libres, la RAM est comptée) : UN SEUL cargo à la fois ; builds debug uniquement ; purge `$TMPDIR/elephc_*` de plus de 2h AVANT de commencer et en cas de `No space left` ; supprime tes fichiers scratch à la fin ; si tu dois vérifier x86 par exécution (asm runtime touché SEULEMENT), utilise docker avec `-j2` et supprime le volume après. Si nextest timeout à 60 s pile sous charge = faux rouge → rejoue isolé via `cargo test`. TDD STRICT : mesure `php -n` (8.5.6) D'ABORD, test ROUGE avec sortie enregistrée dans le doc-comment, puis correctif ; ne jamais affaiblir un test pour passer. MISSION — deux trous de s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e808b1bcf5971e9c1eacf12",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T09:33:00.798Z",
+  "stored_at": "2026-08-15T09:33:00.798Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rmA rmB rmD rmF rmG rmH rmI 2>&1",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rmA rmB rmD rmF rmG rmH rmI 2>&1: rmA DIFF: 1c1 < int(5) --- > NULL rmB IDENTICAL rmD IDENTICAL rmF DIFF: 1c1 < string(1) \"s\" --- > ",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rmA rmB rmD rmF rmG rmH rmI 2>&1: rmA DIFF: 1c1 < int(5) --- > NULL rmB IDENTICAL rmD IDENTICAL rmF DIFF: 1c1 < string(1) \"s\" --- > NULL rmG DIFF: 0a1 > NULL 2d2 < int(2) rmH DIFF: 1,2c1 < array(0) { < } --- > NULL rmI DIFF: 1c1 < changed --- > still null",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "63b9a28080ff549087684e25",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:09:06.041Z",
+  "stored_at": "2026-08-18T10:09:06.041Z"
+}

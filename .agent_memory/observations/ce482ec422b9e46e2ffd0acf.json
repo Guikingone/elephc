@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n vd.php > vd_php.txt; python3 -c \"print(repr(open('vd_php.txt').read()))\"",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n vd.php > vd_php.txt; python3 -c \"print(repr(open('vd_php.txt').read()))\": 'out=resource,true|list=resource|array(1) {\\n [\"out\"]=>\\n resource(",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n vd.php > vd_php.txt; python3 -c \"print(repr(open('vd_php.txt').read()))\": 'out=resource,true|list=resource|array(1) {\\n [\"out\"]=>\\n resource(2) of type (stream)\\n}\\n'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ce482ec422b9e46e2ffd0acf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:54:32.222Z",
+  "stored_at": "2026-08-22T16:54:32.222Z"
+}

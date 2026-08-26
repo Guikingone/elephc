@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/file-info-stat-throws.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/file-info-stat-throws.php: <?php\nfile_put_contents(\"f.txt\", \"1234\");\n$ok = new SplFileInfo(\"f.txt\");\necho \"size \", $ok->getSize(), \"\\n\";\n",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/file-info-stat-throws.php: <?php\nfile_put_contents(\"f.txt\", \"1234\");\n$ok = new SplFileInfo(\"f.txt\");\necho \"size \", $ok->getSize(), \"\\n\";\n$m = new SplFileInfo(\"nope.txt\");\nforeach ([\"getSize\", \"getOwner\", \"getGroup\", \"getATime\", \"getMTime\", \"getCTime\", \"getPerms\", \"getInode\"] as $call) {\n    try { $v = $m->$call(); echo $call, \" \", var_export($v, true), \"\\n\"; }\n    catch (Throwable $t) { echo $call, \" \", get_class($t), \": \", $t->getMessage(), \"\\n\"; }\n}\necho \"type \";\ntry { echo $m->getType(), \"\\n\"; } catch (Throwable $t) { echo get_class($t), \": \", $t->getMessage(), \"\\n\"; }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "272c024ddd867ca6294f1afe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:32:30.289Z",
+  "stored_at": "2026-08-25T09:32:30.290Z"
+}

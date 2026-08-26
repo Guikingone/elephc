@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '13,60p' src/ir_lower/stmt/local_assignments.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '13,60p' src/ir_lower/stmt/local_assignments.rs: tion_arg_array_binding_for_expr(value); let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value); let callable_array = lower_callable_array_for_ass",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '13,60p' src/ir_lower/stmt/local_assignments.rs: tion_arg_array_binding_for_expr(value); let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value); let callable_array = lower_callable_array_for_assignment(ctx, value, static_callable.as_ref()); let lowered = callable_array .as_ref() .map(|assignment| assignment.value) .or_else(|| lower_closure_for_assignment(ctx, name, value)) .or_else(|| { bound_closure .then(|| crate::ir_lower::expr::lower_bound_closure_for_assignment(ctx, value)) .flatten() }) .unwrap_or_else(|| lower_expr(ctx, value)); let (lowered, php_type) = contextualize_local_assignment(ctx, name, value, lowered, span); ctx.store_local(name, lowered, php_type, Some(span)); let callable_result = if direct_closure { ctx.take_pending_static_callable_result() } else { ctx.clear_pending_static_callable_result(); None }; let static_callable = callable_array .map(|assignment| assignment.target) .or(static_callable)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5538e3217ee0cb9052005769",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:51:47.255Z",
+  "stored_at": "2026-08-23T12:51:47.256Z"
+}

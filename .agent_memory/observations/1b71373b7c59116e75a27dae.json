@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"elephcFirstMatch\" src/types/checker/builtin_spl_classes/regex.rs | head -10",
+  "summary": "grep -rn \"elephcFirstMatch\" src/types/checker/builtin_spl_classes/regex.rs | head -10: src/types/checker/builtin_spl_classes/regex.rs:160: \"__elephcFirstMatch\", src/types/checker/builtin_spl_classes/regex.rs:427: \"__elephcFirstMatch\",",
+  "text": "grep -rn \"elephcFirstMatch\" src/types/checker/builtin_spl_classes/regex.rs | head -10: src/types/checker/builtin_spl_classes/regex.rs:160: \"__elephcFirstMatch\", src/types/checker/builtin_spl_classes/regex.rs:427: \"__elephcFirstMatch\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1b71373b7c59116e75a27dae",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:38:23.396Z",
+  "stored_at": "2026-08-20T20:38:23.397Z"
+}

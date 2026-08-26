@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/spltests.rs",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/spltests.rs: /// Verifies `SplFileObject::fscanf()` scans one line through php's scanf engine.\n///\n/// The method did not exist: `$f->fscanf('%d %s')`",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/spltests.rs: /// Verifies `SplFileObject::fscanf()` scans one line through php's scanf engine.\n///\n/// The method did not exist: `$f->fscanf('%d %s')` was `Undefined method`. It reads a line the\n/// way `fgets()` does and hands it to the shared engine, so a `%d` field comes back as an INT.\n///\n/// The LINE NUMBER rule is php's own and is NOT `fgets()`'s: measured on `php -n` 8.5.6, the\n/// FIRST `fscanf()` of a fresh object leaves `key()` where it was and only later reads advance\n/// it, so on a three-line file the keys run 0, 1, 2 where `fgets()` gives 1, 2, 3. Mixing the\n/// two shows it is the first REA",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bd131e2685fcb2debee8d062",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:44:39.719Z",
+  "stored_at": "2026-08-16T17:44:39.720Z"
+}

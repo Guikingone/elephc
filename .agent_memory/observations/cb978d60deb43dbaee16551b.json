@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_hash_map\" src/codegen_support/runtime/ | grep -v label_global | head -3; grep -rn \"Input:.*hash_map\\|/// Input\" -B 6 -A 3 src/codegen_support/runtime/arrays/hash_map.rs 2>/dev/null | head -25; ls src/codegen_support/runtime/arrays/ | grep -i \"hash\" | head -20",
+  "summary": "grep -rn \"__rt_hash_map\" src/codegen_support/runtime/ | grep -v label_global | head -3; grep -rn \"Input:.*hash_map\\|/// Input\" -B 6 -A 3 src/codegen_support/runtime/arrays/hash_map.rs 2>/dev/null | head -25; ls src/codegen_support/runtime/arrays/ | grep -i \"hash\" | head -20 failed: This session is isolated in the workt",
+  "text": "grep -rn \"__rt_hash_map\" src/codegen_support/runtime/ | grep -v label_global | head -3; grep -rn \"Input:.*hash_map\\|/// Input\" -B 6 -A 3 src/codegen_support/runtime/arrays/hash_map.rs 2>/dev/null | head -25; ls src/codegen_support/runtime/arrays/ | grep -i \"hash\" | head -20 failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command runs a string through hash, which can't be verified to stay inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Run git directly with literal arguments from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cb978d60deb43dbaee16551b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:34:34.447Z",
+  "stored_at": "2026-08-22T11:34:34.447Z"
+}

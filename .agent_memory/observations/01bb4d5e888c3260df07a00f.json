@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; cargo test -p elephc --lib every_runtime_helper_returns 2>&1 | tail -25",
+  "summary": "export CARGO_INCREMENTAL=0; cargo test -p elephc --lib every_runtime_helper_returns 2>&1 | tail -25: ance_tests::every_runtime_helper_returns_on_a_balanced_stack' (35616078) panicked at src/codegen_support/runtime/emitters/frame_balance_tests.rs:392:5: these runtime helpers moved their stack pointer by an amount this g",
+  "text": "export CARGO_INCREMENTAL=0; cargo test -p elephc --lib every_runtime_helper_returns 2>&1 | tail -25: ance_tests::every_runtime_helper_returns_on_a_balanced_stack' (35616078) panicked at src/codegen_support/runtime/emitters/frame_balance_tests.rs:392:5: these runtime helpers moved their stack pointer by an amount this gate cannot read, so it is NOT checking them. Either the movement is by design — add it to DYNAMIC_STACK_HELPERS with the reason — or it is the defect this gate exists to find: [\"__rt_preg_match\", \"__rt_json_error_message\", \"__rt_mb_ereg_match\", \"__rt_preg_replace\", \"__rt_preg_match_all\", \"__rt_preg_split\", \"__rt_preg_match_capture\"] note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace failures: codegen_support::runtime::emitters::frame_balance_tests::every_runtime_helper_returns_on_a_balanced_stack test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1502 filtered out; finished in 0.32s error: test failed, to rerun pass `-p elephc --lib`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "01bb4d5e888c3260df07a00f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:03:52.228Z",
+  "stored_at": "2026-08-21T16:03:52.228Z"
+}

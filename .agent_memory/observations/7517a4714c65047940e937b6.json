@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && rtk proxy grep -n \"_eir_main_value_guard_ok_913\" -B46 classconst.s | rtk proxy head -22",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && rtk proxy grep -n \"_eir_main_value_guard_ok_913\" -B46 classconst.s | rtk proxy head -22: 21617- ; @src line=12 col=1 end=12:53 op=runtime_call ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && rtk proxy grep -n \"_eir_main_value_guard_ok_913\" -B46 classconst.s | rtk proxy head -22: 21617- ; @src line=12 col=1 end=12:53 op=runtime_call 21618- ldur x1, [x29, #-16] 21619- ldur x2, [x29, #-8] 21620- cmp x2, #1 21621- b.ge _eir_main_value_guard_ok_911 21622- adrp x9, _exc_handler_top@PAGE 21623- add x9, x9, _exc_handler_top@PAGEOFF 21624- ldr x9, [x9] 21625- cbnz x9, _eir_main_static_exception_throw_912 21626- adrp x1, _str_54@PAGE 21627- add x1, x1, _str_54@PAGEOFF 21628- mov x2, #114 21629- mov x0, #2 21630- mov x16, #4 21631- svc #0x80 21632- bl __rt_ob_flush_all 21633- mov x0, #255 21634- mov x16, #1 21635- svc #0x80 21636-_eir_main_static_exception_throw_912: 21637- mov x0, #56 21638- bl __rt_heap_alloc",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7517a4714c65047940e937b6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:38:49.203Z",
+  "stored_at": "2026-08-17T09:38:49.203Z"
+}

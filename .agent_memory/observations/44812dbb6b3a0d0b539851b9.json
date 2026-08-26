@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat src/builtins/io/fscanf.rs; echo \"=== contract ===\"; grep -n -A30 '\"fscanf\"' crates/elephc-builtin-contract/src/catalog_data.rs | head -45",
+  "summary": "cat src/builtins/io/fscanf.rs; echo \"=== contract ===\"; grep -n -A30 '\"fscanf\"' crates/elephc-builtin-contract/src/catalog_data.rs | head -45: oweringError> { crate::builtins::string::sscanf::lower_scanf_engine_call(ctx, call, FSCANF_ENGINE_FUNCTION) } === contract === 6953: id: BuiltinId::from_canonical_name(\"fscanf\")",
+  "text": "cat src/builtins/io/fscanf.rs; echo \"=== contract ===\"; grep -n -A30 '\"fscanf\"' crates/elephc-builtin-contract/src/catalog_data.rs | head -45: oweringError> { crate::builtins::string::sscanf::lower_scanf_engine_call(ctx, call, FSCANF_ENGINE_FUNCTION) } === contract === 6953: id: BuiltinId::from_canonical_name(\"fscanf\"), 6954: name: \"fscanf\", 6955- area: Area::Io, 6956- kind: BuiltinKind::Function, 6957- params: &[ 6958- ParamSpec { 6959- name: \"stream\", 6960- ty: TypeSpec::Mixed, 6961- default: None, 6962- by_ref: false, 6963-writes: None, 6964- }, 6965- ParamSpec { 6966- name: \"format\", 6967- ty: TypeSpec::Str, 6968- default: None, 6969- by_ref: false, 6970-writes: None, 6971- }, 6972- ], 6973- variadic: Some(\"vars\"), 6974- min_args: None, 6975- max_args: None, 6976- arity_error: None, 6977- returns: TypeSpec::Mixed, 6978- by_ref_return: false, 6979- summary: \"Parses input from a file according to a format.\", 6980- examples: &[ 6981- ], 6982- php_manual: Some(\"function.fscanf\"), 6983- deprecation: None, 6984- extension: false,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "44812dbb6b3a0d0b539851b9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:24:42.714Z",
+  "stored_at": "2026-08-18T09:24:42.717Z"
+}

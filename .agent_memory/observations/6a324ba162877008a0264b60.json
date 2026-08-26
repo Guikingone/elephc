@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/file-scheme4.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/file-scheme4.php: <?php\n$dir = getcwd();\nfile_put_contents(\"u.txt\", \"content\\n\");\nmkdir(\"sub\");\n\necho \"chdir \", var_export(@chdir(\"file:",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/file-scheme4.php: <?php\n$dir = getcwd();\nfile_put_contents(\"u.txt\", \"content\\n\");\nmkdir(\"sub\");\n\necho \"chdir \", var_export(@chdir(\"file://$dir/sub\"), true), \" cwd-is-sub \", var_export(basename(getcwd()) === \"sub\", true), \"\\n\";\nchdir($dir);\necho \"symlink \", var_export(@symlink(\"file://$dir/u.txt\", \"file://$dir/ln.txt\"), true), \"\\n\";\necho \"is_link \", var_export(@is_link(\"file://$dir/ln.txt\"), true), \"\\n\";\necho \"readlink \", var_export(@readlink(\"file://$dir/ln.txt\"), true), \"\\n\";\necho \"lstat \", var_export(is_array(@lstat(\"file://$dir/ln.txt\")), true), \"\\n\";\necho \"linkinfo \", gettype(@linkinfo(\"file://$dir/ln.txt\")",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6a324ba162877008a0264b60",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:08:49.410Z",
+  "stored_at": "2026-08-24T18:08:49.410Z"
+}

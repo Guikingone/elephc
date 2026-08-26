@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "for loc in \"tests/codegen/eval.rs 9374 9392\" \"tests/codegen/eval.rs 9460 9470\" \"tests/codegen/exceptions.rs 576 604\" \"tests/codegen/runtime_gc/regressions.rs 2012 2022\" \"tests/codegen/regressions/arrays.rs 1450 1460\"; do set -- $loc; echo \"=== $1:$2 ===\"; sed -n \"$2,$3p\" \"$1\"; done",
+  "summary": "for loc in \"tests/codegen/eval.rs 9374 9392\" \"tests/codegen/eval.rs 9460 9470\" \"tests/codegen/exceptions.rs 576 604\" \"tests/codegen/runtime_gc/regressions.rs 2012 2022\" \"tests/codegen/regressions/arrays.rs 1450 1460\"; do set -- $loc; echo \"=== $1:$2 ===\"; sed -n \"$2,$3p\" \"$1\"; done failed: This session is isolated in t",
+  "text": "for loc in \"tests/codegen/eval.rs 9374 9392\" \"tests/codegen/eval.rs 9460 9470\" \"tests/codegen/exceptions.rs 576 604\" \"tests/codegen/runtime_gc/regressions.rs 2012 2022\" \"tests/codegen/regressions/arrays.rs 1450 1460\"; do set -- $loc; echo \"=== $1:$2 ===\"; sed -n \"$2,$3p\" \"$1\"; done failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree; break it into plain, separate commands. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Run the equivalent from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature without the redirect.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a91c1c42d0b6473fefe90f11",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:17:42.344Z",
+  "stored_at": "2026-08-18T15:17:42.344Z"
+}

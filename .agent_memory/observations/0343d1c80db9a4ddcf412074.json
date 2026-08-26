@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\nroot = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = root / 'src/codegen/lower_inst/builtins/io/stream_context.rs'\nt = p.read_text()\nold = \"const STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL: &str =\"\nassert t.count(old) == 1\nt = t.replace(old, \"pub(super) const STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL: &str =\", 1)\np.write_text(t)\n\nq = root / 'src/codegen/lower_inst/builtins/io/context_result_he… [+317 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\nroot = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = root / 'src/codegen/lower_inst/builtins/io/stream_context.rs'\nt = p.re",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\nroot = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = root / 'src/codegen/lower_inst/builtins/io/stream_context.rs'\nt = p.read_text()\nold = \"const STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL: &str =\"\nassert t.count(old) == 1\nt = t.replace(old, \"pub(super) const STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL: &str =\", 1)\np.write_text(t)\n\nq = root / 'src/codegen/lower_inst/builtins/io/context_result_helpers.rs'\nt = q.read_text()\nold = \"                super::super::io::STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL,\"\nassert t.count(old) == 1\nt = t.replace(old, \"                super::stream_context::STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL,\", 1)\nq.write_text(t)\nprint('the ValueError constant is shared')\nPYEOF: the ValueError constant is shared",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0343d1c80db9a4ddcf412074",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:56:34.283Z",
+  "stored_at": "2026-08-22T18:56:34.284Z"
+}

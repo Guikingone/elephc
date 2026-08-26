@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/measure_wrb_extra.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/measure_wrb_extra.py: \"\"\"php's answers for the three cases the wrapper read-buffer tests still need.\n\n`feof()` while bytes are held, `fpassthru()` ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/measure_wrb_extra.py: \"\"\"php's answers for the three cases the wrapper read-buffer tests still need.\n\n`feof()` while bytes are held, `fpassthru()` after a bounded read, and `fpassthru()` from the\nstart — the last one there to pin that the fix did not change the ordinary path.\n\"\"\"\nimport pathlib, subprocess\n\nD = pathlib.Path(__file__).parent / 'wrbextra'\nD.mkdir(parents=True, exist_ok=True)\n\nWRAPPER = r'''<?php\nclass Src {\n    public $context;\n    private int $pos = 0;\n    private string $data = \"\";\n    public function stream_open($path, $mode, $options, &$opened) {\n        $this->data = \"abcdefghij\\nklmnopqrst\\nuvw",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0da47dbbc1e906aad694168f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:28:55.709Z",
+  "stored_at": "2026-08-21T13:28:55.711Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"\\.warning(&format!\\|\\.warning(\\\"\" crates/elephc-magician/src/ | grep -c \"Warning: \"; echo \"--- sample:\"; grep -rn \"\\.warning(&format!\\|\\.warning(\\\"\" crates/elephc-magician/src/ | head -4",
+  "summary": "grep -rn \"\\.warning(&format!\\|\\.warning(\\\"\" crates/elephc-magician/src/ | grep -c \"Warning: \"; echo \"--- sample:\"; grep -rn \"\\.warning(&format!\\|\\.warning(\\\"\" crates/elephc-magician/src/ | head -4: 0 --- sample: crates/elephc-magician/src/interpreter/include_exec.rs:63: values.warning(&format!( crates/elephc-magician/s",
+  "text": "grep -rn \"\\.warning(&format!\\|\\.warning(\\\"\" crates/elephc-magician/src/ | grep -c \"Warning: \"; echo \"--- sample:\"; grep -rn \"\\.warning(&format!\\|\\.warning(\\\"\" crates/elephc-magician/src/ | head -4: 0 --- sample: crates/elephc-magician/src/interpreter/include_exec.rs:63: values.warning(&format!( crates/elephc-magician/src/interpreter/include_exec.rs:66: values.warning(&format!( crates/elephc-magician/src/interpreter/dynamic_functions/function_binding.rs:338: values.warning(&format!( crates/elephc-magician/src/interpreter/dynamic_functions/closure_execution.rs:159: values.warning(\"Cannot bind an instance to a static closure\")?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3f0b7dc14036c84a987a1683",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T21:01:17.334Z",
+  "stored_at": "2026-08-18T21:01:17.334Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probe.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probe.php: <?php\n\nclass Thing\n{\n}\n\n$heterogeneous = [new Thing(), 1, fopen(\"php://memory\", \"r\")];\n\n$cases = [\n    \"json-object\" => json_decode('{\"",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probe.php: <?php\n\nclass Thing\n{\n}\n\n$heterogeneous = [new Thing(), 1, fopen(\"php://memory\", \"r\")];\n\n$cases = [\n    \"json-object\" => json_decode('{\"a\":1}'),\n    \"user-object\" => $heterogeneous[0],\n    \"resource\"    => $heterogeneous[2],\n];\n\nforeach ($cases as $name => $value) {\n    try {\n        stream_context_create($value);\n        echo $name, \" => accepted\\n\";\n    } catch (Throwable $t) {\n        echo $name, \" => \", get_class($t), \": \", $t->getMessage(), \"\\n\";\n    }\n}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1632dd3e557d53801960fba1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:19:04.724Z",
+  "stored_at": "2026-08-22T16:19:04.725Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '80,95p' src/types/checker/driver/init.rs; echo \"=== stream_resource ===\"; grep -rn \"fn stream_resource\" -A 8 src/types --include='*.rs' | head -15",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '80,95p' src/types/checker/driver/init.rs; echo \"=== stream_resource ===\"; grep -rn \"fn stream_re",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5e73e5acce4d982489ebc0e2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:41:28.952Z",
+  "stored_at": "2026-08-22T16:41:28.952Z"
+}

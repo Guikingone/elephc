@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_uri.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_uri.php: <?php\n// Does the file tmpfile() names actually exist while the handle is open?\n$h = tmpfile();\nfwrite($h, \"seed\");\nfflush($h);\n$",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_uri.php: <?php\n// Does the file tmpfile() names actually exist while the handle is open?\n$h = tmpfile();\nfwrite($h, \"seed\");\nfflush($h);\n$uri = stream_get_meta_data($h)[\"uri\"];\necho \"uri looks like a path: \", var_export(is_string($uri) && $uri !== \"\", true), \"\\n\";\necho \"file_exists         : \", var_export(file_exists($uri), true), \"\\n\";\necho \"is_file             : \", var_export(is_file($uri), true), \"\\n\";\necho \"filesize            : \", var_export(@filesize($uri), true), \"\\n\";\n$re = @fopen($uri, \"r\");\necho \"reopened            : \", var_export($re !== false, true), \"\\n\";\nif ($re !== false) {\n    echo \"re",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bba796be9e023808b6dd8418",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:47:50.830Z",
+  "stored_at": "2026-08-23T07:47:50.831Z"
+}

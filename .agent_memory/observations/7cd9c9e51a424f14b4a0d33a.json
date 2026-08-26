@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md\")\ns = p.read_text()\nanchor = \"- ✅🔑★★★ [Une exception INTERNE nomme le SITE D'APPEL]\"\nassert s.count(anchor) == 1\nadded = (\n    \"- ✅📏🔑★★★ [`php://temp` est à EOF UN READ plus tôt](php-temp-reports-eof-one-read-early.md) \"\n    \"— seulement pour un lecteur de LIGNE, et ça DÉCIDE le nombre d'éléments qu'itère un \"\n    \"SplFileObject (`\\\"a\\\\n\\\"` → plain 2, temp 1).\\n\"\n    \"- 🔴🔴🔑★★★ [Un appel VIRTUEL a besoin du corps de la SOUS-CLASSE]… [+351 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md\")\ns = p.read_text()\nanchor = \"- ✅🔑★★★ [Une exception INTERNE nomme le SITE D'APPEL]\"\nassert s.count(anchor) == 1\nadded = (\n    \"- ✅📏🔑★★★ [`php://temp` est à EOF",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md\")\ns = p.read_text()\nanchor = \"- ✅🔑★★★ [Une exception INTERNE nomme le SITE D'APPEL]\"\nassert s.count(anchor) == 1\nadded = (\n    \"- ✅📏🔑★★★ [`php://temp` est à EOF UN READ plus tôt](php-temp-reports-eof-one-read-early.md) \"\n    \"— seulement pour un lecteur de LIGNE, et ça DÉCIDE le nombre d'éléments qu'itère un \"\n    \"SplFileObject (`\\\"a\\\\n\\\"` → plain 2, temp 1).\\n\"\n    \"- 🔴🔴🔑★★★ [Un appel VIRTUEL a besoin du corps de la SOUS-CLASSE]\"\n    \"(a-virtual-call-needs-the-subclasss-body.md) — SIGSEGV via un paramètre typé parent ; \"\n    \"la MÊME liste d'émission produit 3 symptômes différents.\\n\"\n)\np.write_text(s.replace(anchor, added + anchor))\nprint(\"index updated\")\nPY\nwc -c /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: index updated 25296 /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7cd9c9e51a424f14b4a0d33a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:39:01.611Z",
+  "stored_at": "2026-08-25T14:39:01.612Z"
+}

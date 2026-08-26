@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo check --workspace 2>&1 | grep -E \"^error\" -A 3 | head -40",
+  "summary": "About to run: cargo check --workspace 2>&1 | grep -E \"^error\" -A 3 | head -40",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3a27efefdd40e20006fa3371",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:39:58.503Z",
+  "stored_at": "2026-08-20T17:39:58.504Z",
+  "low_signal": true
+}

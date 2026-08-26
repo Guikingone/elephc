@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg4.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg4.txt: fix(arrays): krsort declared an argument lowering the merge left with no arm\n\n`BuiltinArgumentLowering` is a four-sided contract: the enu",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg4.txt: fix(arrays): krsort declared an argument lowering the merge left with no arm\n\n`BuiltinArgumentLowering` is a four-sided contract: the enum declares a variant, a builtin\nselects it, the docs generator names it, and one arm in the argument lowering does the work.\nThe origin/main merge resolved the conflict in `array_builtin_args.rs` toward this branch's own\ncopy, which predates upstream's `ReverseKeySort` — so three sides survived and the one that acts\ndid not.\n\nNothing said so. The variant fell through to the default arm, `krsort($a)` never promoted its\npacked receiver to key-preserving hash st",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "07a032f1237e80e1d8e5696b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:44:29.880Z",
+  "stored_at": "2026-08-21T07:44:29.881Z"
+}

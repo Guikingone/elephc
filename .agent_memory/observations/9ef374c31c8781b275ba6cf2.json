@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "find . -name \"gen_builtins.rs\" -not -path \"./target/*\" | head",
+  "summary": "find . -name \"gen_builtins.rs\" -not -path \"./target/*\" | head: ./tools/gen_builtins.rs",
+  "text": "find . -name \"gen_builtins.rs\" -not -path \"./target/*\" | head: ./tools/gen_builtins.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9ef374c31c8781b275ba6cf2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:05:21.739Z",
+  "stored_at": "2026-08-18T11:05:21.740Z"
+}

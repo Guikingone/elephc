@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"label_global(\\\"__rt_diag_warning\\\")\" -B 25 src/codegen_support/runtime/ 2>/dev/null | grep -E \"^\\S+[-:]//|Key details|line\" | head -12",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"label_global(\\\"__rt_diag_warning\\\")\" -B 25 src/codegen_support/runtime/ 2>/dev/null | grep -E \"^\\S+[-:]//|Key details|line\" | head -12 completed",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"label_global(\\\"__rt_diag_warning\\\")\" -B 25 src/codegen_support/runtime/ 2>/dev/null | grep -E \"^\\S+[-:]//|Key details|line\" | head -12 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "11f77b163a74636b01720e39",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:22:24.217Z",
+  "stored_at": "2026-08-22T18:22:24.218Z"
+}

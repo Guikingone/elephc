@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 328,348p src/types/checker/functions/call_validation.rs",
+  "summary": "sed -n 328,348p src/types/checker/functions/call_validation.rs: e, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) => true, (PhpType::Union(expected_members), PhpType::Union(actual_members)) => actual_members .iter() .all(|actual_member| { expected_members.iter().any(|expected_member| { Self::types_",
+  "text": "sed -n 328,348p src/types/checker/functions/call_validation.rs: e, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) => true, (PhpType::Union(expected_members), PhpType::Union(actual_members)) => actual_members .iter() .all(|actual_member| { expected_members.iter().any(|expected_member| { Self::types_compatible(expected_member, actual_member) }) }), (PhpType::Union(members), _) => members .iter() .any(|member| Self::types_compatible(member, actual)), ( PhpType::AssocArray { key, value }, PhpType::Array(_) | PhpType::AssocArray { .. }, ) if **key == PhpType::Mixed && **value == PhpType::Mixed => true, // An EMPTY array literal is `array<never>` and is every array shape at once: php has // one `[]`. `$h = []; fill_keyed($h);` with `function fill_keyed(array &$a)` whose // body writes string keys re-types the parameter to a hash, and the call site would // otherwise reject the very literal that started it. The lowering converts it with",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7ae83f8baffc2489a9e13e5d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:28:17.203Z",
+  "stored_at": "2026-08-21T17:28:17.203Z"
+}

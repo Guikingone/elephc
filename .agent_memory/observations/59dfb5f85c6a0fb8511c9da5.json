@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/p.php <<'PHPEOF'\n<?php\nnamespace App\\Deep;\nclass Thing {}\n$cases = [\n    \"stdClass\"  => new \\stdClass(),\n    \"user\"      => new Thing(),\n    \"closure\"   => function () {},\n    \"array-obj\" => new \\ArrayObject([1, 2]),\n];\nforeach ($cases as $name =>… [+354 chars truncated]",
+  "summary": "About to run: mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat > /private/tmp/cla",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "59dfb5f85c6a0fb8511c9da5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:15:12.226Z",
+  "stored_at": "2026-08-22T16:15:12.226Z"
+}

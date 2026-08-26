@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test -p elephc-builtin-contract 2>&1 | grep -E \"^test |assertion|left|right|test result\" | head -20",
+  "summary": "cargo test -p elephc-builtin-contract 2>&1 | grep -E \"^test |assertion|left|right|test result\" | head -20: ests::exceptional_backend_routes_are_explicit ... ok test aot_profile::tests::hash_init_retains_the_prelude_signature_subset ... ok test registry::tests::catalog_is_valid_and_complete_for_all_contract_surfaces ...",
+  "text": "cargo test -p elephc-builtin-contract 2>&1 | grep -E \"^test |assertion|left|right|test result\" | head -20: ests::exceptional_backend_routes_are_explicit ... ok test aot_profile::tests::hash_init_retains_the_prelude_signature_subset ... ok test registry::tests::catalog_is_valid_and_complete_for_all_contract_surfaces ... ok test eval_profile::tests::canonical_signature_is_the_default_eval_profile ... ok test aot_profile::tests::canonical_signature_is_the_default_aot_profile ... ok test registry::tests::assembled_contracts_include_neutral_requirements ... ok test eval_profile::tests::eval_profile_retains_runtime_signature_extensions ... ok test registry::tests::id_and_name_lookup_agree ... ok test support::tests::every_contract_has_a_backend_support_record ... FAILED test support::tests::every_eval_binding_has_a_documented_execution_route ... ok assertion `left == right` failed left: 544 right: 543 test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1d99847c50e76d483e82fe9f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:00:39.957Z",
+  "stored_at": "2026-08-20T18:00:39.957Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp; cat > \"$D/php/r.php\" <<'PHP'\n<?php\nfunction probe(string $label, $h): void {\n    fwrite($h, \"abcde\");\n    rewind($h);\n    echo $label, \": \";\n    echo \"read3=\", var_export(fread($h, 3), true), \" eof=\", var_export(feof($h), true), \" tell=\", ftell($h), \" | \";\n    echo \"read2=\", var_export(fread($h, 2), true), \" eof=\", var_export(feof($h), true), \" tell=\", ftell($h), \" | \";\n    echo \"read1=\", var_export(fread($h, 1), true), \" eo… [+956 chars truncated]",
+  "summary": "About to run: D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp; cat > \"$D/php/r.php\" <<'PHP'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "056a3d6f7005ff36ddf3ebf2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:42:26.351Z",
+  "stored_at": "2026-08-25T13:42:26.352Z"
+}

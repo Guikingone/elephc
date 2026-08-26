@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 1,40p src/codegen_support/runtime/io/fread_filtered.rs",
+  "summary": "sed -n 1,40p src/codegen_support/runtime/io/fread_filtered.rs: d: they never hold a pointer into the stream's own buffer. //! - Streams with no read-filter chain tail-call the raw helper, leaving that hot path untouched. use crate::codegen_support::abi; use crate::codegen_support::{emit::Emitter, platform::Arch}; use c",
+  "text": "sed -n 1,40p src/codegen_support/runtime/io/fread_filtered.rs: d: they never hold a pointer into the stream's own buffer. //! - Streams with no read-filter chain tail-call the raw helper, leaving that hot path untouched. use crate::codegen_support::abi; use crate::codegen_support::{emit::Emitter, platform::Arch}; use crate::codegen_support::runtime::resources::layout::{ STREAM_EOF_OFFSET, STREAM_FILTERED_BUF_CAP_OFFSET, STREAM_FILTERED_BUF_LEN_OFFSET, STREAM_FILTERED_BUF_POS_OFFSET, STREAM_FILTERED_BUF_PTR_OFFSET, STREAM_FILTERED_FLUSHED_OFFSET, STREAM_FILTERED_POS_OFFSET, STREAM_READ_FILTER_HEAD_OFFSET, }; /// Bytes pulled from the backend per dispatch while the filter is still withholding output. const FILTERED_READ_CHUNK: i64 = 8192; /// Emits `__rt_stream_filtered_append` and the buffered `__rt_fread` wrapper. pub fn emit_fread_filtered(emitter: &mut Emitter) { match emitter.target.arch { Arch::AArch64 => { emit_filtered_append_aarch64(emitter);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "67742571371ab8790aab2c4c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:32:25.729Z",
+  "stored_at": "2026-08-21T18:32:25.729Z"
+}

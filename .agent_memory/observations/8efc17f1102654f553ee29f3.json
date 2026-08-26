@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/p.php",
+  "summary": "php -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/p.php: stdClass=TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, stdClass given user=TypeError: stream_context_",
+  "text": "php -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/p.php: stdClass=TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, stdClass given user=TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, App\\Deep\\Thing given closure=TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, Closure given array-obj=TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, ArrayObject given",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8efc17f1102654f553ee29f3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:15:24.871Z",
+  "stored_at": "2026-08-22T16:15:24.871Z"
+}

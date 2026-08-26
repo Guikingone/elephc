@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"GLOB_ONLYDIR\\|GLOB_BRACE\\|GLOB_MARK\" crates/elephc-magician/src/ | head -5; echo \"--- magician deps ---\"; sed -n 1,25p crates/elephc-magician/Cargo.toml",
+  "summary": "grep -rn \"GLOB_ONLYDIR\\|GLOB_BRACE\\|GLOB_MARK\" crates/elephc-magician/src/ | head -5; echo \"--- magician deps ---\"; sed -n 1,25p crates/elephc-magician/Cargo.toml: --- magician deps --- [package] name = \"elephc-magician\" version = \"0.1.0\" edition = \"2021\" license = \"MIT\" description = \"Optional eval bridge staticlib fo",
+  "text": "grep -rn \"GLOB_ONLYDIR\\|GLOB_BRACE\\|GLOB_MARK\" crates/elephc-magician/src/ | head -5; echo \"--- magician deps ---\"; sed -n 1,25p crates/elephc-magician/Cargo.toml: --- magician deps --- [package] name = \"elephc-magician\" version = \"0.1.0\" edition = \"2021\" license = \"MIT\" description = \"Optional eval bridge staticlib for elephc compiled PHP programs\" publish = false [lib] crate-type = [\"staticlib\", \"rlib\"] [dependencies] elephc-builtin-contract = { path = \"../elephc-builtin-contract\" } elephc-crypto = { path = \"../elephc-crypto\" } elephc-phar = { path = \"../elephc-phar\" } flate2 = \"1\" inventory = \"0.3\" libc = \"0.2\" unicode-segmentation = \"1\" [dev-dependencies] elephc-bcmath = { path = \"../elephc-bcmath\" } serde_json = \"1\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4a8d543263c7008d52fa743f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:13:47.824Z",
+  "stored_at": "2026-08-22T09:13:47.824Z"
+}

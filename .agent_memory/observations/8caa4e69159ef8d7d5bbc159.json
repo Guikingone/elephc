@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/run_named.py 2>&1 | sed -n '6,60p'",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/run_named.py 2>&1 | sed -n '6,60p':  w: php : #0",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/run_named.py 2>&1 | sed -n '6,60p':  w: php : #0 {main} elephc: w+: php : thrown in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8 elephc: a: ... ### kimi-k2.7-code-11 php : Deprecated: Return type of PrependFilter::filter($in, $out, &$consumed, $closing) should either be compatible with php_user_filter elephc: Deprecated: Return type of PrependFilter::filter($in, $out, &$consumed, $closing) should either be compatible with php_user_filter ### kimi-k2.7-code-12 php : 404 elephc: 0 ### kimi-k2.7-code-21 php : A elephc: AD php : Deprecated: ob_flush(): Producing output from user output handler ob is deprecated in /private/tmp/claude-501/-Users-guillaumeloul elephc: <missing> php : elephc: <missing> php : Deprecated: ob_end_clean(): Producing output from user output handler ob is deprecated in /private/tmp/claude-501/-Users-guillaume elephc: <missing> ...",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8caa4e69159ef8d7d5bbc159",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:31:31.978Z",
+  "stored_at": "2026-08-22T18:31:31.978Z"
+}

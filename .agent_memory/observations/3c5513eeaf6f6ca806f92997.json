@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/warn_literals.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/warn_literals.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signatur",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/warn_literals.py: import pathlib\n\nROOT = pathlib.Path(\n    \"/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature\"\n)\n\n# 1) the wording, measured on php -n 8.5.6\np = ROOT / \"src/codegen_support/runtime/data/mod.rs\"\ns = p.read_text()\nanchor = '''/// Head of the second warning, which names the error NUMBER rather than the path.\npub(crate) const SCANDIR_ERRNO_WARNING_HEAD: &str = \"Warning: scandir(): (errno \";'''\nassert s.count(anchor) == 1, (\"anchor\", s.count(anchor))\nblock = '''/// The wording php prints when a filesystem PATH OPERATION fails.\n///\n/// MEASURED on php 8.5.6, a",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3c5513eeaf6f6ca806f92997",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:39:14.879Z",
+  "stored_at": "2026-08-24T18:39:14.879Z"
+}

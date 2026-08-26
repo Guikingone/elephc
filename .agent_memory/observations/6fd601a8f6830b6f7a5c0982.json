@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && mkdir -p constprobe && printf '<?php var_dump(FILE_USE_INCLUDE_PATH);\\n' > constprobe/t.php && php -n constprobe/t.php && cd constprobe && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q t.php && ./t",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && mkdir -p constprobe && printf '<?php var_dump(FILE_USE_INCLUDE_PATH);\\n' > constprobe/t.php && php -n constprobe/t.php && cd constprobe && /Users/g",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && mkdir -p constprobe && printf '<?php var_dump(FILE_USE_INCLUDE_PATH);\\n' > constprobe/t.php && php -n constprobe/t.php && cd constprobe && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q t.php && ./t: int(1) Compiled 't.php' -> 't' int(1)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6fd601a8f6830b6f7a5c0982",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:47:07.214Z",
+  "stored_at": "2026-08-21T11:47:07.214Z"
+}

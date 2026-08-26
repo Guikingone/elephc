@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log --oneline -8",
+  "summary": "git log --oneline -8: fa323 fix(streams): a resource nested in an array printed NULL, and whole-file calls did not spend a resource id 42fbf8d12 fix(streams): a filter that REFUSED the data emptied the read instead of failing it 3a3e38768 fix(streams): `Foo::class` registered a wrapper that never worked, `data:` was un",
+  "text": "git log --oneline -8: fa323 fix(streams): a resource nested in an array printed NULL, and whole-file calls did not spend a resource id 42fbf8d12 fix(streams): a filter that REFUSED the data emptied the read instead of failing it 3a3e38768 fix(streams): `Foo::class` registered a wrapper that never worked, `data:` was unreadable by name, and a context accepted any shape a45141784 fix(streams): stream_filter_register() replaced any name it was given, and the registry kept a pointer it did not own 1d659fc96 fix(streams): an `a` mode on php://memory silently overwrote instead of appending 6a80a85c2 fix(streams): fwrite() had no $length, quoted-printable escaped whitespace php keeps, and a pathless stream reported a `uri` 3fb364c2a fix(streams): stream_select() SEGFAULTED on a closed stream, and answered a count where php throws 8523b627e feat(checker): a PROPERTY could not be passed by reference to a user function",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e500d73888ff1dcfd1a896a9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:14:36.332Z",
+  "stored_at": "2026-08-17T13:14:36.333Z"
+}

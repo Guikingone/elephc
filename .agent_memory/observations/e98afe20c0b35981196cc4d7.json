@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fgetcsv.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fgetcsv.rs: // -- state 3: AfterEscape (esc mode only) --\n    emitter.label(\"__rt_fgetcsv_x_st3\");\n    emitter.instruction(\"movzx ecx, BYTE PTR [rbp - 16]\");                -> // -- state 3",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fgetcsv.rs: // -- state 3: AfterEscape (esc mode only) --\n    emitter.label(\"__rt_fgetcsv_x_st3\");\n    emitter.instruction(\"movzx ecx, BYTE PTR [rbp - 16]\");                -> // -- state 3: AfterEscape (esc mode only) --\n    //\n    // See the AArch64 counterpart: php KEEPS the escape byte whatever it precedes.\n    emitter.label(\"__rt_fgetcsv_x_st3\");\n    emitter.instruction(\"movzx ecx, BYTE PTR [rbp - 24]\");                      // load esc\n    emitter.instruction(\"mov BYTE PTR [r15], cl\");                              // *write_ptr = esc (php keeps it)\n    emitter.instruction(\"add r15, 1\");                                          // write_ptr++\n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e98afe20c0b35981196cc4d7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:16:43.656Z",
+  "stored_at": "2026-08-18T09:16:43.657Z"
+}

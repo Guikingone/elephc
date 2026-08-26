@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && rm -rf fpcarray && mkdir fpcarray && printf '%s' '<?php\nvar_dump(file_put_contents(\"a.txt\", [\"a\", \"b\", \"c\"]));\nvar_dump(file_get_contents(\"a.txt\"));\nvar_dump(file_put_contents(\"b.txt\", [1, 2.5, true, null]));\nvar_dump(file_get_contents(\"b.txt\"));\nvar_dump(file_put_contents(\"c.txt\", []));\nvar_dump(file_get_contents(\"c.txt\"));\n$h = fopen(\"d.txt\", \"w\");\nvar_dump(fwrite($h, \"x\"));\nfclose($h);\nvar_dump(file_put_contents(\"e.txt\",… [+351 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && rm -rf fpcarray && mkdir fp",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b9ef8c37c93903b99917481a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:05:43.715Z",
+  "stored_at": "2026-08-21T20:05:43.715Z"
+}

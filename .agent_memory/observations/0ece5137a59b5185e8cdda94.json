@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"\\\"MEMORY\\\"\\|MEMORY\" src/codegen_support/runtime/io/stream_type_name.rs src/codegen_support/runtime/io/stream_get_meta_data.rs 2>/dev/null | head -10; echo \"=== resource type names ===\"; grep -rn \"stream-context\\|stream filter\" src/ crates/elephc-magician/src/interpreter/builtins/filesystem/ 2>/dev/null | head -10",
+  "summary": "grep -rn \"\\\"MEMORY\\\"\\|MEMORY\" src/codegen_support/runtime/io/stream_type_name.rs src/codegen_support/runtime/io/stream_get_meta_data.rs 2>/dev/null | head -10; echo \"=== resource type names ===\"; grep -rn \"stream-context\\|stream filter\" src/ crates/elephc-magician/src/interpreter/builtins/filesystem/ 2>/dev/null | head",
+  "text": "grep -rn \"\\\"MEMORY\\\"\\|MEMORY\" src/codegen_support/runtime/io/stream_type_name.rs src/codegen_support/runtime/io/stream_get_meta_data.rs 2>/dev/null | head -10; echo \"=== resource type names ===\"; grep -rn \"stream-context\\|stream filter\" src/ crates/elephc-magician/src/interpreter/builtins/filesystem/ 2>/dev/null | head -10: libraries. src/codegen/lower_inst/builtins/types.rs:660: ctx.emitter.instruction(&format!(\"b.eq {}\", context_label)); // contexts use PHP's stream-context resource label src/codegen/lower_inst/builtins/types.rs:661: ctx.emitter.instruction(\"cmp x0, #3\"); // registry kind 3 identifies stream filters src/codegen/lower_inst/builtins/types.rs:662: ctx.emitter.instruction(&format!(\"b.eq {}\", filter_label)); // filters use PHP's \"stream filter\" resource label src/codegen/lower_inst/builtins/types.rs:668: ctx.emitter.instruction(&format!(\"je {}\", context_label)); // contexts use PHP's stream-context resource label src/codegen/lower_inst/builtins/types.rs:669: ctx.emitter.instruction(\"cmp rax, 3\"); // registry kind 3 identifies stream filters src/codegen/lower_inst/builtins/types.rs:670: ctx.emitter.instruction(&format!(\"je {}\", filter_label)); // filters use PHP's \"stream filter\" resource label",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0ece5137a59b5185e8cdda94",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:21:29.677Z",
+  "stored_at": "2026-08-14T14:21:29.678Z"
+}

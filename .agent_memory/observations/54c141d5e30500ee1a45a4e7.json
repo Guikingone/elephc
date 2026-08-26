@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_rule3.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_rule3.php: <?php\n// One variable per case (a reassignment across array element types is a separate question), and\n// the call is made BEFOR",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/select_rule3.php: <?php\n// One variable per case (a reassignment across array element types is a separate question), and\n// the call is made BEFORE anything is echoed, so a throw does not truncate a half-written line.\n$s1 = tmpfile();\n$s2 = tmpfile();\n$closed = tmpfile();\nfclose($closed);\n$none = null;\n\n$a = [42];\ntry { $n = stream_select($a, $none, $none, 0); echo \"only a non-stream          int($n)\\n\"; }\ncatch (Throwable $t) { echo \"only a non-stream          \", get_class($t), \": \", $t->getMessage(), \"\\n\"; }\n\n$b = [42, 43];\ntry { $n = stream_select($b, $none, $none, 0); echo \"two non-streams            int($n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "54c141d5e30500ee1a45a4e7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:17:05.356Z",
+  "stored_at": "2026-08-23T07:17:05.356Z"
+}

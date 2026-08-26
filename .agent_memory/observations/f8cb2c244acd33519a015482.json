@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"fn emit_socket_open_failure_warning\" -A 30 src/codegen/lower_inst/builtins/io/*.rs | rg \"port|None|fn emit_socket\" | head -12",
+  "summary": "rg -rn \"fn emit_socket_open_failure_warning\" -A 30 src/codegen/lower_inst/builtins/io/*.rs | rg \"port|None|fn emit_socket\" | head -12: h_helpers.rs- port: Option<ValueId>, src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs- match port { src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs- Some(port",
+  "text": "rg -rn \"fn emit_socket_open_failure_warning\" -A 30 src/codegen/lower_inst/builtins/io/*.rs | rg \"port|None|fn emit_socket\" | head -12: h_helpers.rs- port: Option<ValueId>, src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs- match port { src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs- Some(port) => { src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs- ctx.load_value_to_result(port)?; // the port PHP appends to the host src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs- None => ctx.emitter.instruction(\"mov x0, #-1\"), // the address already carries its port src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs- abi::emit_pop_reg(ctx.emitter, \"x3\"); // the port argument src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs- ctx.emitter.instruction(&format!(\"mov x0, #{}\", kind)); // which builtin is reporting src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs- match port { src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs- Some(port) => {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f8cb2c244acd33519a015482",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:22:54.533Z",
+  "stored_at": "2026-08-17T13:22:54.533Z"
+}

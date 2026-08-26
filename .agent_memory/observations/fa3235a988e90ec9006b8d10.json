@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"var_export\\|SplFixedArray\\|LimitIterator\\|Iterator\" examples/spl-decorators/main.php | head -20",
+  "summary": "About to run: grep -n \"var_export\\|SplFixedArray\\|LimitIterator\\|Iterator\" examples/spl-decorators/main.php | head -20",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fa3235a988e90ec9006b8d10",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:36:06.019Z",
+  "stored_at": "2026-08-20T20:36:06.020Z"
+}

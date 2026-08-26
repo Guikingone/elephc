@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn value_is_definitely_null\" -A20 -r src/ir_lower/ | head -25",
+  "summary": "grep -n \"fn value_is_definitely_null\" -A20 -r src/ir_lower/ | head -25:  => true, src/ir_lower/expr/property_access.rs-149- PhpType::Union(members) => members.iter().any(|member| matches!(member, PhpType::Void)), src/ir_lower/expr/property_access.rs-150- _ => false, src/ir_lower/expr/property_access.rs-151- } src/ir_lo",
+  "text": "grep -n \"fn value_is_definitely_null\" -A20 -r src/ir_lower/ | head -25:  => true, src/ir_lower/expr/property_access.rs-149- PhpType::Union(members) => members.iter().any(|member| matches!(member, PhpType::Void)), src/ir_lower/expr/property_access.rs-150- _ => false, src/ir_lower/expr/property_access.rs-151- } src/ir_lower/expr/property_access.rs-152-} src/ir_lower/expr/property_access.rs-153- src/ir_lower/expr/property_access.rs-154-/// Returns precise PHP metadata for a named property read when class metadata is available. src/ir_lower/expr/property_access.rs-155-pub(super) fn property_get_result_type( src/ir_lower/expr/property_access.rs-156- ctx: &LoweringContext<'_, '_>, src/ir_lower/expr/property_access.rs-157- object: crate::ir::ValueId, src/ir_lower/expr/property_access.rs-158- property: &str, src/ir_lower/expr/property_access.rs-159- op: Op, src/ir_lower/expr/property_access.rs-160- expr: &Expr, src/ir_lower/expr/property_access.rs-161-) -> PhpType {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4765f83710d223e427176d5d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T21:12:44.182Z",
+  "stored_at": "2026-08-20T21:12:44.182Z"
+}

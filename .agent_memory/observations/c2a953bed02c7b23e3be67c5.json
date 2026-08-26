@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd ~/.cache/elephc; objdump -d --start-address=0x33150 --stop-address=0x33180 runtime-v0.26.5-macos-aarch64-rtdf0d2c118e429349-heap8388608.o 2>/dev/null | tail -14",
+  "summary": "cd ~/.cache/elephc; objdump -d --start-address=0x33150 --stop-address=0x33180 runtime-v0.26.5-macos-aarch64-rtdf0d2c118e429349-heap8388608.o 2>/dev/null | tail -14: 33150: 90000009 adrp x9, 0x33000 <__rt_file_split+0x9c> 33154: 91000129 add x9, x9, #0x0 33158: f940012a ldr x10, [x9] 3315c: f27b015f tst x10, #0x20 33160",
+  "text": "cd ~/.cache/elephc; objdump -d --start-address=0x33150 --stop-address=0x33180 runtime-v0.26.5-macos-aarch64-rtdf0d2c118e429349-heap8388608.o 2>/dev/null | tail -14: 33150: 90000009 adrp x9, 0x33000 <__rt_file_split+0x9c> 33154: 91000129 add x9, x9, #0x0 33158: f940012a ldr x10, [x9] 3315c: f27b015f tst x10, #0x20 33160: 54000060 b.eq 0x3316c <__rt_is_dir_core> 33164: d2800000 mov x0, #0x0 ; =0 33168: d65f03c0 ret 000000000003316c <__rt_is_dir_core>: 3316c: d102c3ff sub sp, sp, #0xb0 33170: a90a7bfd stp x29, x30, [sp, #0xa0] 33174: 910283fd add x29, sp, #0xa0 33178: 94000000 bl 0x33178 <__rt_is_dir_core+0xc> 3317c: 910003e1 mov x1, sp",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c2a953bed02c7b23e3be67c5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:21:04.322Z",
+  "stored_at": "2026-08-23T12:21:04.322Z"
+}

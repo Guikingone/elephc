@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"__rt_apply_stream_filter\" src/ --glob '*.rs' | rg -v \"^src/codegen_support/runtime/io/stream_filter.rs\" | head -12",
+  "summary": "rg -rn \"__rt_apply_stream_filter\" src/ --glob '*.rs' | rg -v \"^src/codegen_support/runtime/io/stream_filter.rs\" | head -12: rc/codegen_support/runtime/io/fread.rs: emitter.instruction(\"call n\"); // transform in place src/codegen_support/runtime/io/fwrite.rs: emitter.instruction(\"bl n\"); // transform the scratch copy in",
+  "text": "rg -rn \"__rt_apply_stream_filter\" src/ --glob '*.rs' | rg -v \"^src/codegen_support/runtime/io/stream_filter.rs\" | head -12: rc/codegen_support/runtime/io/fread.rs: emitter.instruction(\"call n\"); // transform in place src/codegen_support/runtime/io/fwrite.rs: emitter.instruction(\"bl n\"); // transform the scratch copy in place; x2 = (possibly compacted) length src/codegen_support/runtime/io/fwrite.rs: emitter.instruction(\"call n\"); // transform the scratch copy in place; rdx = (possibly compacted) length src/codegen_support/runtime/resources/filter.rs:/// Built-in nodes reuse `n`, which transforms in place and src/codegen_support/runtime/resources/filter.rs: emitter.instruction(\"bl n\"); // transform in place; x2 = new length src/codegen_support/runtime/resources/filter.rs: emitter.instruction(\"call n\"); // transform in place; rdx = new length src/codegen_support/runtime/io/builtin_filter_id.rs:/// `n`, a byte-transform helper. `zlib.*`, `bzip2.*` and src/codegen_support/runtime/io/user_filter.rs://! `n` invoke.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e0cfaa893bfbcbcada48ff05",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:53:19.198Z",
+  "stored_at": "2026-08-17T13:53:19.198Z"
+}

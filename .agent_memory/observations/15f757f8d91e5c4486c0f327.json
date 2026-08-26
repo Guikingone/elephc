@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '640,720p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs",
+  "summary": "sed -n '640,720p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs: lse store_if_result(ctx, inst) } /// Lowers `str_getcsv(string, separator?, enclosure?, escape?)` through the shared CSV /// state machine, packing separator/enclosure/escape into the same `csv_opts` word /// `fgetcsv()` uses. /// /// The parser u",
+  "text": "sed -n '640,720p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs: lse store_if_result(ctx, inst) } /// Lowers `str_getcsv(string, separator?, enclosure?, escape?)` through the shared CSV /// state machine, packing separator/enclosure/escape into the same `csv_opts` word /// `fgetcsv()` uses. /// /// The parser unescapes IN PLACE, so the runtime helper copies the subject first — the /// argument here may be a literal in read-only memory. pub(crate) fn lower_str_getcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { ensure_arg_count_between(inst, \"str_getcsv\", 1, 4)?; emit_csv_escape_deprecation(ctx, inst, \"str_getcsv\", 3); let subject = expect_operand(inst, 0)?; let arch = ctx.emitter.target.arch; // -- pack csv_opts: (esc << 16) | (enc << 8) | sep -- // // The DEFAULT escape is spelled out rather than left as the zero the runtime reads as RFC // 4180 doubling: php's `str_getcsv($s)` uses `\"\\\\\"`, the same byte `fgetcsv()` defaults to,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "15f757f8d91e5c4486c0f327",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:24:05.050Z",
+  "stored_at": "2026-08-18T09:24:05.050Z"
+}

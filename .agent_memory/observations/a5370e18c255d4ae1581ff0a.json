@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '_rt_trace_main\\|_rt_trace_header' src/codegen_support/runtime/exceptions/trace_buffer.rs | head -5; grep -n 'fn trace_literal_len' -A 8 src/codegen_support/runtime/exceptions/trace_buffer.rs | head -10",
+  "summary": "grep -n '_rt_trace_main\\|_rt_trace_header' src/codegen_support/runtime/exceptions/trace_buffer.rs | head -5; grep -n 'fn trace_literal_len' -A 8 src/codegen_support/runtime/exceptions/trace_buffer.rs | head -10: 60: (\"_rt_trace_header\", \"Stack trace:\\n\"), 61: (\"_rt_trace_main\", \" {main}\\n\"), 610: abi::emit_symbol_addre",
+  "text": "grep -n '_rt_trace_main\\|_rt_trace_header' src/codegen_support/runtime/exceptions/trace_buffer.rs | head -5; grep -n 'fn trace_literal_len' -A 8 src/codegen_support/runtime/exceptions/trace_buffer.rs | head -10: 60: (\"_rt_trace_header\", \"Stack trace:\\n\"), 61: (\"_rt_trace_main\", \" {main}\\n\"), 610: abi::emit_symbol_address(emitter, \"x1\", \"_rt_trace_header\"); 611: emitter.instruction(&format!(\"mov x2, #{}\", trace_literal_len(\"_rt_trace_header\"))); 631: abi::emit_symbol_address(emitter, \"x1\", \"_rt_trace_main\"); 68:pub(crate) fn trace_literal_len(symbol: &str) -> usize { 69- TRACE_LITERALS 70- .iter() 71- .find(|(name, _)| *name == symbol) 72- .unwrap_or_else(|| panic!(\"{symbol} must be a published trace literal\")) 73- .1 74- .len() 75-} 76-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a5370e18c255d4ae1581ff0a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:41:46.174Z",
+  "stored_at": "2026-08-26T09:41:46.174Z"
+}

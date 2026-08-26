@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "./target/debug/deps/codegen_tests-16c45d69d5f633ba codegen::types 2>&1 | tail -3",
+  "summary": "About to run: ./target/debug/deps/codegen_tests-16c45d69d5f633ba codegen::types 2>&1 | tail -3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a1238355380e1c8c94d89da4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T06:45:22.446Z",
+  "stored_at": "2026-08-18T06:45:22.446Z"
+}

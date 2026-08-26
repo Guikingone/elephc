@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/filturi.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/filturi.php: <?php\n\n$path = tempnam(sys_get_temp_dir(), \"flt\");\nfile_put_contents($path, \"hello\");\n\n$literal = fopen(\"php://filter/read=string.tou",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/filturi.php: <?php\n\n$path = tempnam(sys_get_temp_dir(), \"flt\");\nfile_put_contents($path, \"hello\");\n\n$literal = fopen(\"php://filter/read=string.toupper/resource=/etc/hostname\", \"r\");\n$computed = fopen(\"php://filter/read=string.toupper/resource=\" . $path, \"r\");\n\nforeach ([\"literal\" => $literal, \"computed\" => $computed] as $name => $h) {\n    if (!is_resource($h)) {\n        echo $name, \" => not-a-resource\\n\";\n        continue;\n    }\n    $m = stream_get_meta_data($h);\n    echo $name, \" wrapper=\", $m[\"wrapper_type\"], \" stream=\", $m[\"stream_type\"];\n    echo \" uri=\", $m[\"uri\"] ?? \"(none)\", \"\\n\";\n}\necho \"read=\", st",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a537e385c637db5196d7e871",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:16:31.755Z",
+  "stored_at": "2026-08-22T19:16:31.756Z"
+}

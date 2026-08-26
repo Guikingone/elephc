@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\nd=json.load(open('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json'))\nitems = d if isinstance(d,list) else list(d.values())\nfor n in ('gzopen','gzread','readgzfile','dir','hash_init','hash_final'):\n    for b in items:\n        if b.get('canonical_name')==n:\n            low = b.get('lowering') or {}\n            print(f'{n:12} {low.get(\\\"codegen_file\\\")}:{low.get(\\\"codegen_line\\\")}')\n\"",
+  "summary": "About to run: python3 -c \" import json d=json.load(open('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json')) items = d if isinstance(d,l",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d51388e213aa5fd17565f218",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:33:53.140Z",
+  "stored_at": "2026-08-21T12:33:53.141Z"
+}

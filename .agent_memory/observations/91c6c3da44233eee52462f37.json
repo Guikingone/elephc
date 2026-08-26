@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && sed -n '5570,5598p' b6.s",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && sed -n '5570,5598p' b6.s: ; @src line=3 col=1 end=3:3 op=acquire ldur x0, [x29, #-8] str x0, [sp, #-16]! bl __rt_incref ldr x0, [sp], #16 stur ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && sed -n '5570,5598p' b6.s: ; @src line=3 col=1 end=3:3 op=acquire ldur x0, [x29, #-8] str x0, [sp, #-16]! bl __rt_incref ldr x0, [sp], #16 stur x0, [x29, #-40] ; @src line=3 col=1 end=3:3 op=store_local ldur x0, [x29, #-40] stur x0, [x29, #-120] ; @src line=3 col=1 end=3:3 op=release ldur x0, [x29, #-8] bl __rt_decref_array ; @src line=4 col=1 end=4:5 op=concat_reset ldur x10, [x29, #-136] adrp x9, _concat_off@PAGE add x9, x9, _concat_off@PAGEOFF str x10, [x9] ; @src line=4 col=6 end=4:8 op=load_local ldur x0, [x29, #-120] stur x0, [x29, #-48] ; @src line=4 col=1 end=4:9 op=call sub x0, x29, #120 str x0, [sp, #-16]! ldr x0, [sp] add sp, sp, #16 bl _fn_ints movz x0, #0xfffe movk x0, #0xffff, lsl #16 movk x0, #0xffff, lsl #32",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "91c6c3da44233eee52462f37",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:30:47.156Z",
+  "stored_at": "2026-08-16T19:30:47.156Z"
+}

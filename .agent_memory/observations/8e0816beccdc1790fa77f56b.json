@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,45p' src/codegen_support/runtime/io/fread.rs | grep -n \"use \\|^//!\" | head -12; echo \"=== offsets ===\"; grep -n \"STREAM_PENDING_LEN_OFFSET\\|STREAM_PENDING_POS_OFFSET\" src/codegen_support/runtime/resources/layout.rs",
+  "summary": "sed -n '1,45p' src/codegen_support/runtime/io/fread.rs | grep -n \"use \\|^//!\" | head -12; echo \"=== offsets ===\"; grep -n \"STREAM_PENDING_LEN_OFFSET\\|STREAM_PENDING_POS_OFFSET\" src/codegen_support/runtime/resources/layout.rs: 1://! Purpose: 2://! Emits `__rt_fread_raw`, the unbuffered read behind `fread()`. 3://! 4://!",
+  "text": "sed -n '1,45p' src/codegen_support/runtime/io/fread.rs | grep -n \"use \\|^//!\" | head -12; echo \"=== offsets ===\"; grep -n \"STREAM_PENDING_LEN_OFFSET\\|STREAM_PENDING_POS_OFFSET\" src/codegen_support/runtime/resources/layout.rs: 1://! Purpose: 2://! Emits `__rt_fread_raw`, the unbuffered read behind `fread()`. 3://! 4://! `__rt_fread` itself lives in `fread_filtered`: it wraps this helper with the per-stream 5://! filtered-read buffer PHP keeps, and tail-calls straight here when the stream has no read 6://! filter chain. This helper therefore does NOT apply that chain — the wrapper does, because it 7://! is the only place that can re-read when a filter withholds its output. 8://! Keeps PHP filesystem/resource behavior, libc calls, and target-specific ABI variants in one focused emitter. 9://! 10://! Called from: 11://! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`. 12://! === offsets === 261:pub(crate) const STREAM_PENDING_LEN_OFFSET: i64 = 248; 264:pub(crate) const STREAM_PENDING_POS_OFFSET: i64 = 256;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e0816beccdc1790fa77f56b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:03:38.058Z",
+  "stored_at": "2026-08-21T13:03:38.058Z"
+}

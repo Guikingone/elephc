@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/strings.md",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/strings.md: | `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %f, %s, %%). Matched fields are returned as substrings (e.g. `%f` yields `\"3.14\"`), m -> | `sscanf()` | `sscanf($str, $fmt):",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/strings.md: | `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %f, %s, %%). Matched fields are returned as substrings (e.g. `%f` yields `\"3.14\"`), m -> | `sscanf()` | `sscanf($str, $fmt): array\\|null` | Parse a string with php's scanner, which is implemented in full: widths (`%5s`), `*` suppression (`%*d`), `%[...]` character classes with ranges and negation, the conversions `%c`, `%d`, `%D`, `%e`, `%E`, `%f`, `%g`, `%i`, `%n`, `%o`, `%s`, `%u`, `%x`, `%X`, the `l`/`h`/`L` length modifiers, and php's own `ValueError` wording for a format it refuses. Fields come back in php's TYPES — `%d` yields an `int` and `%f` a `float`, n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e6c902b7b77ca57e5d26f203",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:24:23.743Z",
+  "stored_at": "2026-08-17T06:24:23.743Z"
+}

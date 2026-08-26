@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh byref_stress blast sortref b1 b2 b4 b5 pushref 2>&1 | head -16; echo \"--- method sort ---\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run sortmethod.php 2>&1 | head -2 && ./sortmethod",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh byref_stress blast sortref b1 b2 b4 b5 pushref 2>&1 | head -16; echo \"--- method sort ---\"; /Users/guillaumeloulier/PhpstormPr",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh byref_stress blast sortref b1 b2 b4 b5 pushref 2>&1 | head -16; echo \"--- method sort ---\"; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run sortmethod.php 2>&1 | head -2 && ./sortmethod: byref_stress DIFF: 7c7 < 5b: 3,6 --- > 5b: 4301606848,4301607040 blast IDENTICAL sortref IDENTICAL b1 IDENTICAL b2 IDENTICAL b4 IDENTICAL b5 IDENTICAL pushref IDENTICAL --- method sort --- Compiled 'sortmethod.php' -> 'sortmethod' 1,2,3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4480d5553a3b135946c946e9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:35:39.478Z",
+  "stored_at": "2026-08-16T20:35:39.479Z"
+}

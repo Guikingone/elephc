@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'DynamicMethodCall\\|dynamic method' src/parser/expr/*.rs 2>/dev/null | head -5; echo ---; grep -rn '\\$name()' src/parser/ | head -3; grep -rn 'fn parse_dynamic_method\\|CallableArray' src/parser/*.rs | head -5",
+  "summary": "About to run: grep -rn 'DynamicMethodCall\\|dynamic method' src/parser/expr/*.rs 2>/dev/null | head -5; echo ---; grep -rn '\\$name()' src/parser/ | head -3; grep -rn 'fn parse_dynamic_method\\|CallableArray' src/pars",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a1fe18727f155e29964535b9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:35:20.883Z",
+  "stored_at": "2026-08-25T12:35:20.883Z"
+}

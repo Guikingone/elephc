@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"SPL_FILE_DROP_NEW_LINE\" src/types/checker/builtin_spl_classes/filesystem.rs | head -10",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"SPL_FILE_DROP_NEW_LINE\" src/types/checker/builtin_spl_classes/filesystem.rs | head -10: 23:const SPL_FILE_DROP_NEW_LINE: i64 = 1; 215: class_const(\"DROP_NEW_LINE\", SPL_FILE_DROP_NEW_LINE), 1630: let mask = SPL_FILE_",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"SPL_FILE_DROP_NEW_LINE\" src/types/checker/builtin_spl_classes/filesystem.rs | head -10: 23:const SPL_FILE_DROP_NEW_LINE: i64 = 1; 215: class_const(\"DROP_NEW_LINE\", SPL_FILE_DROP_NEW_LINE), 1630: let mask = SPL_FILE_READ_CSV | SPL_FILE_SKIP_EMPTY | SPL_FILE_DROP_NEW_LINE;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d27848acd20391a043a9be7f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:28:35.082Z",
+  "stored_at": "2026-08-23T09:28:35.083Z"
+}

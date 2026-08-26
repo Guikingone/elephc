@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && grep -rn \"Stack trace\" Zend/zend_exceptions.c | head; echo \"=== getTraceAsString empty case ===\"; grep -n \"#0 {main}\\|{main}\" Zend/zend_exceptions.c | head",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && grep -rn \"Stack trace\" Zend/zend_exceptions.c | head; echo \"=== getTraceAsString empty case ===\"; grep -n \"#0 {main}\\|{main}\" Zend/zend_except",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && grep -rn \"Stack trace\" Zend/zend_exceptions.c | head; echo \"=== getTraceAsString empty case ===\"; grep -n \"#0 {main}\\|{main}\" Zend/zend_exceptions.c | head: Zend/zend_exceptions.c:756: str = zend_strpprintf_unchecked(0, \"%S: %S in %S:\" ZEND_LONG_FMT \"\\nStack trace:\\n%S%s%S\", Zend/zend_exceptions.c:760: str = zend_strpprintf_unchecked(0, \"%S in %S:\" ZEND_LONG_FMT \"\\nStack trace:\\n%S%s%S\", === getTraceAsString empty case === 653: smart_str_appends(&str, \" {main}\"); 748: : ZSTR_INIT_LITERAL(\"#0 {main}\\n\", false);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c255197af3d0ef7cfeea2d4b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:44:55.550Z",
+  "stored_at": "2026-08-18T15:44:55.550Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'label_global\\|^use \\|^pub fn \\|^fn ' src/codegen_support/runtime/io/stream_pending.rs",
+  "summary": "grep -n 'label_global\\|^use \\|^pub fn \\|^fn ' src/codegen_support/runtime/io/stream_pending.rs: t_stream_pending_put\"); 99:fn emit_take_aarch64(emitter: &mut Emitter) { 102: emitter.label_global(\"__rt_stream_pending_take\"); 163:pub fn emit_stream_pending_clear(emitter: &mut Emitter) { 168: emitter.label_global(\"__rt_st",
+  "text": "grep -n 'label_global\\|^use \\|^pub fn \\|^fn ' src/codegen_support/runtime/io/stream_pending.rs: t_stream_pending_put\"); 99:fn emit_take_aarch64(emitter: &mut Emitter) { 102: emitter.label_global(\"__rt_stream_pending_take\"); 163:pub fn emit_stream_pending_clear(emitter: &mut Emitter) { 168: emitter.label_global(\"__rt_stream_pending_clear\"); 189: emitter.label_global(\"__rt_stream_pending_clear\"); 230:pub fn emit_stream_pending_consume(emitter: &mut Emitter) { 235: emitter.label_global(\"__rt_stream_pending_consume\"); 264: emitter.label_global(\"__rt_stream_pending_consume\"); 313:pub fn emit_stream_pending_held(emitter: &mut Emitter) { 318: emitter.label_global(\"__rt_stream_pending_held\"); 338: emitter.label_global(\"__rt_stream_pending_held\"); 366:fn emit_put_x86_64(emitter: &mut Emitter) { 369: emitter.label_global(\"__rt_stream_pending_put\"); 422:fn emit_take_x86_64(emitter: &mut Emitter) { 425: emitter.label_global(\"__rt_stream_pending_take\"); 505:fn _abi_used(emitter: &mut Emitter) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "571f0a3c269fbd29d1b213ee",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:04:28.700Z",
+  "stored_at": "2026-08-24T17:04:28.700Z"
+}

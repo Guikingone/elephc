@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn runtime_fn_semantics\" -A 30 src/builtins/semantics.rs 2>/dev/null | grep -nE \"callable|Dynamic|StaticOnly\" | head -6 || grep -rn \"fn runtime_fn_semantics\" -A 30 src/builtins/ | grep -E \"callable|Dynamic|StaticOnly\" | head -6",
+  "summary": "About to run: grep -rn \"fn runtime_fn_semantics\" -A 30 src/builtins/semantics.rs 2>/dev/null | grep -nE \"callable|Dynamic|StaticOnly\" | head -6 || grep -rn \"fn runtime_fn_semantics\" -A 30 src/builtins/ | grep -E \"c",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9065402528951dfb0bd4d84f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:31:17.244Z",
+  "stored_at": "2026-08-21T18:31:17.244Z"
+}

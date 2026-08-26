@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"specialize|param_types\" src/types/checker/functions/resolution/call.rs | head -12",
+  "summary": "About to run: rtk proxy rg -n \"specialize|param_types\" src/types/checker/functions/resolution/call.rs | head -12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "92e96f4886e117c7936b4870",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:40:47.507Z",
+  "stored_at": "2026-08-16T19:40:47.508Z"
+}

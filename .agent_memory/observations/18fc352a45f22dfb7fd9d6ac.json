@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn load_value_to_result' -A 12 src/codegen/lower_inst/context.rs 2>/dev/null | head -16 || grep -rn 'fn load_value_to_result' -A 12 src/codegen/ | head -18",
+  "summary": "grep -n 'fn load_value_to_result' -A 12 src/codegen/lower_inst/context.rs 2>/dev/null | head -16 || grep -rn 'fn load_value_to_result' -A 12 src/codegen/ | head -18 completed",
+  "text": "grep -n 'fn load_value_to_result' -A 12 src/codegen/lower_inst/context.rs 2>/dev/null | head -16 || grep -rn 'fn load_value_to_result' -A 12 src/codegen/ | head -18 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18fc352a45f22dfb7fd9d6ac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:10:30.256Z",
+  "stored_at": "2026-08-24T19:10:30.256Z"
+}

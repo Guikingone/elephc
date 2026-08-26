@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 205,215p src/types/checker/stmt_check/assignments/locals.rs; grep -n \"merge_local_assignment_type\" src/types/checker/stmt_check/assignments/locals.rs | head -3; sed -n 195,212p src/types/checker/stmt_check/assignments/locals.rs | head -6",
+  "summary": "sed -n 205,215p src/types/checker/stmt_check/assignments/locals.rs; grep -n \"merge_local_assignment_type\" src/types/checker/stmt_check/assignments/locals.rs | head -3; sed -n 195,212p src/types/checker/stmt_check/assignments/locals.rs | head -6: }; if let Err(error) = metadata_result { poison_unbound_local(env, name); ",
+  "text": "sed -n 205,215p src/types/checker/stmt_check/assignments/locals.rs; grep -n \"merge_local_assignment_type\" src/types/checker/stmt_check/assignments/locals.rs | head -3; sed -n 195,212p src/types/checker/stmt_check/assignments/locals.rs | head -6: }; if let Err(error) = metadata_result { poison_unbound_local(env, name); return Err(error); } update_reflection_class_assignment_metadata(checker, name, reflection_class_target); merge_local_assignment_type(checker, name, &ty, span, env) } /// Type-checks a reference alias assignment (`$target =& <source>`). /// 211: merge_local_assignment_type(checker, name, &ty, span, env) 749:pub(crate) fn merge_local_assignment_type( // Error recovery: the initializer failed to type, but the assignment // still names `$name`, so register it before propagating the real RHS // error. Without this, every later use of `$name` produces a // misleading follow-on `Undefined variable: $name` that buries the one // genuine diagnostic. Poison it as `Mixed` (unknown) only when it is // not already bound, so a valid earlier binding is preserved and no new",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1458d064d65119bb03fccdbe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:45:32.644Z",
+  "stored_at": "2026-08-22T13:45:32.644Z"
+}

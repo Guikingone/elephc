@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"mov QWORD PTR [rbp - 24], rax\");\n            emitter.instruction(\"mov QWORD PTR [rbp - 32], rdx\");\n            // See the AArch64 counterpa -> emitter.instruc",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"mov QWORD PTR [rbp - 24], rax\");\n            emitter.instruction(\"mov QWORD PTR [rbp - 32], rdx\");\n            // See the AArch64 counterpa -> emitter.instruction(\"mov QWORD PTR [rbp - 24], rax\");\n            emitter.instruction(\"mov QWORD PTR [rbp - 32], rdx\");\n\n            emitter.instruction(\"mov rdi, QWORD PTR [rbp - 8]\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0d8e1a4039f48cab36754e06",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:07:25.210Z",
+  "stored_at": "2026-08-23T20:07:25.211Z"
+}

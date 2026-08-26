@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sselb.php','w').write('''<?php\n// a stream with BUFFERED data php can answer without polling\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nfwrite($pair[1], \"hello\\\\nworld\\\\n\");\n// read one line, leaving the rest in php's buffer\nvar_dump(fgets($pair[0]));\n$r = [$pair[0]];\n$w = [$pair[1]];\n$e = null;\n$n = stream_select($r, $w, $e, 0, 0);\nprintf(\"n=%d read=%d write=%d\\\\n\", $n, co… [+137 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sselb.php','w').write('''<?php\n// a stream with BUFFERED data php can answer without polling\n$pair = stream_socket_pair(",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sselb.php','w').write('''<?php\n// a stream with BUFFERED data php can answer without polling\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nfwrite($pair[1], \"hello\\\\nworld\\\\n\");\n// read one line, leaving the rest in php's buffer\nvar_dump(fgets($pair[0]));\n$r = [$pair[0]];\n$w = [$pair[1]];\n$e = null;\n$n = stream_select($r, $w, $e, 0, 0);\nprintf(\"n=%d read=%d write=%d\\\\n\", $n, count($r), count($w));\nfclose($pair[0]);\nfclose($pair[1]);\n''')\nPY\nzsh difftests.sh sselb 2>&1 | head -12; echo \"=== php:\"; cat sselb_p.txt: sselb DIFF: 3c3 < n=1 read=1 write=0 --- > n=2 read=1 write=1 === php: string(6) \"hello \" n=1 read=1 write=0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6c9b0eca7440a13008b68848",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T19:57:32.249Z",
+  "stored_at": "2026-08-17T19:57:32.250Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn require_supported_hash_value\" -A 25 src/codegen/lower_inst/hashes.rs | head -35; echo \"=== value tag ===\"; grep -rn \"fn hash_value_tag\\|value_tag\" src/codegen/lower_inst/hashes.rs | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn require_supported_hash_value\" -A 25 src/codegen/lower_inst/hashes.rs | head -35; echo \"=== value tag ===\"; grep -rn \"fn hash_value_tag\\|value_tag\" src/codegen/lower_inst/hashes.rs | head: (ctx.emitter, \"rsi\", va",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn require_supported_hash_value\" -A 25 src/codegen/lower_inst/hashes.rs | head -35; echo \"=== value tag ===\"; grep -rn \"fn hash_value_tag\\|value_tag\" src/codegen/lower_inst/hashes.rs | head: (ctx.emitter, \"rsi\", value_tag); src/codegen/lower_inst/hashes.rs:568: abi::emit_load_int_immediate(ctx.emitter, \"x5\", hash_set_value_tag(value_ty, storage_value_ty)); src/codegen/lower_inst/hashes.rs:590: abi::emit_load_int_immediate(ctx.emitter, \"x5\", hash_set_value_tag(value_ty, storage_value_ty)); src/codegen/lower_inst/hashes.rs:610: abi::emit_load_int_immediate(ctx.emitter, \"r9\", hash_set_value_tag(value_ty, storage_value_ty)); src/codegen/lower_inst/hashes.rs:632: abi::emit_load_int_immediate(ctx.emitter, \"r9\", hash_set_value_tag(value_ty, storage_value_ty)); src/codegen/lower_inst/hashes.rs:1207:fn hash_set_value_tag(value_ty: &PhpType, storage_value_ty: &PhpType) -> i64 { src/codegen/lower_inst/hashes.rs:1210: return crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64; src/codegen/lower_inst/hashes.rs:1212: crate::codegen::runtime_value_tag(&value_ty.codegen_repr()) as i64",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cfc84a21b6cae3a6a9ef08e0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:44:28.877Z",
+  "stored_at": "2026-08-22T16:44:28.878Z"
+}

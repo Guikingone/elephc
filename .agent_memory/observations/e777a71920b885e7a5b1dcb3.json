@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"escape parameter must be\" src crates | head -10",
+  "summary": "grep -rn \"escape parameter must be\" src crates | head -10: ted: {function}(): the $escape parameter must be provided as its default value will change\\n\" src/codegen_support/runtime/data/fixed.rs:706: out.push_str(\".globl _diag_csv_escape_deprecated_fgetcsv_msg\\n_diag_csv_escape_deprecated_fgetcsv_msg:\\n .ascii \\\"Deprec",
+  "text": "grep -rn \"escape parameter must be\" src crates | head -10: ted: {function}(): the $escape parameter must be provided as its default value will change\\n\" src/codegen_support/runtime/data/fixed.rs:706: out.push_str(\".globl _diag_csv_escape_deprecated_fgetcsv_msg\\n_diag_csv_escape_deprecated_fgetcsv_msg:\\n .ascii \\\"Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change\\\\n\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs:707: out.push_str(\".globl _diag_csv_escape_deprecated_fputcsv_msg\\n_diag_csv_escape_deprecated_fputcsv_msg:\\n .ascii \\\"Deprecated: fputcsv(): the $escape parameter must be provided as its default value will change\\\\n\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs:708: out.push_str(\".globl _diag_csv_escape_deprecated_str_getcsv_msg\\n_diag_csv_escape_deprecated_str_getcsv_msg:\\n .ascii \\\"Deprecated: str_getcsv(): the $escape parameter must be provided as its default value will change\\\\n\\\"\\n\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e777a71920b885e7a5b1dcb3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:23:45.729Z",
+  "stored_at": "2026-08-18T09:23:45.730Z"
+}

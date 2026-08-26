@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== t1 ===\" && php -n t1.php && echo \"=== t2 ===\" && php -n t2.php && echo \"=== t3 ===\" && php -n t3.php && echo \"=== t4 ===\" && php -n t4.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== t1 ===\" && php -n t1.php && echo \"=== t2 ===\" && php -n t2.php && echo \"=== t3 ===\" && php -n t3.php && echo \"=== t4 ===\" && php -n t",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== t1 ===\" && php -n t1.php && echo \"=== t2 ===\" && php -n t2.php && echo \"=== t3 ===\" && php -n t3.php && echo \"=== t4 ===\" && php -n t4.php: === t1 === [\"a\\\\\\\"b\"]|[\"a\\\\\\\"b\"] [\"x\\\\\\\"\",\"y\"]|[\"x\\\\\\\"\",\"y\"] [\"a\\\\\\\\b\"]|[\"a\\\\\\\\b\"] [\"a\\\\,b\"]|[\"a\\\\,b\"] === t2 === [\"abcd\"] [\"abcd\",\"e\"] [\"abc\\\"d\\\"\"] [\"ab cd\"] [\"ab\\\"cd\"] === t3 === [\"a\",\"b\"] [\"a\",\"b\"] [\" a\",\"b\"] [\"a\",\"b\"] [\" x\\\"a\\\"\",\"b\"] [\"a \",\"b\"] [\"a\"] === t4 === 1:fgetcsv(): Argument #3 ($separator) must be a single character 2:fputcsv(): Argument #3 ($separator) must be a single character 3:str_getcsv(): Argument #2 ($separator) must be a single character 4: Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t4.php on line 21 [\"a\",\"b\"]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0a4fe8bf48107b6901e3beba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:28:06.840Z",
+  "stored_at": "2026-08-18T09:28:06.840Z"
+}

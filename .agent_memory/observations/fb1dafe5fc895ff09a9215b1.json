@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r '\necho \"== php://output with ob_start ==\\n\";\nob_start();\n$o = fopen(\"php://output\",\"w\"); fwrite($o,\"[via-output]\"); fclose($o);\necho \"[via-echo]\";\n$s = fopen(\"php://stdout\",\"w\"); fwrite($s,\"[via-stdout]\"); fclose($s);\n$c = ob_get_clean();\nvar_dump($c);\necho \"\\n== php://input on CLI with no stdin ==\\n\";\nvar_dump(file_get_contents(\"php://input\"));\n$i = fopen(\"php://input\",\"r\"); var_dump(fread($i, 10)); var_dump(feof($i)); fclose($i);\necho \"== php://input opened for write ==\\n\";\nvar_dump(@fopen(\"php://input\",\"w\"));\necho \"== php://stdin write ==\\n\";\nvar_dump(@fopen(\"php://stdin\",\"w\"));\ne… [+311 chars truncated]",
+  "summary": "php -n -r '\necho \"== php://output with ob_start ==\\n\";\nob_start();\n$o = fopen(\"php://output\",\"w\"); fwrite($o,\"[via-output]\"); fclose($o);\necho \"[via-echo]\";\n$s = fopen(\"php://stdout\",\"w\"); fwrite($s,\"[via-stdout]\"); fclose($s);\n$c = ob_get_clean();\nvar_dump($c);\necho \"\\n== php://input on CLI with no stdin ==\\n\";\nvar_du",
+  "text": "php -n -r '\necho \"== php://output with ob_start ==\\n\";\nob_start();\n$o = fopen(\"php://output\",\"w\"); fwrite($o,\"[via-output]\"); fclose($o);\necho \"[via-echo]\";\n$s = fopen(\"php://stdout\",\"w\"); fwrite($s,\"[via-stdout]\"); fclose($s);\n$c = ob_get_clean();\nvar_dump($c);\necho \"\\n== php://input on CLI with no stdin ==\\n\";\nvar_dump(file_get_contents(\"php://input\"));\n$i = fopen(\"php://input\",\"r\"); var_dump(fread($i, 10)); var_dump(feof($i)); fclose($i);\necho \"== php://input opened for write ==\\n\";\nvar_dump(@fopen(\"php://input\",\"w\"));\necho \"== php://stdin write ==\\n\";\nvar_dump(@fopen(\"php://stdin\",\"w\"));\necho \"== php://fd/2 ==\\n\";\n$f = fopen(\"php://fd/2\",\"w\"); var_dump(is_resource($f)); fwrite($f,\"[fd2-line]\\n\"); fclose($f);\necho \"== unknown php:// target ==\\n\";\nvar_dump(@fopen(\"php://nope\",\"r\"));\nvar_dump(@fopen(\"php://\",\"r\"));\necho \"== php://memory meta on ftell after write ==\\n\";\n' </dev/null 2>&1 | head -50: == php://output with ob_start == [via-stdout]string(22) \"[via-output][via-echo]\" == php://input on CLI with no stdin == string(0) \"\" string(0) \"\" bool(true) == php://input opened for write == resource(11) of type (stream) == php://stdin write == resource(12) of type (stream) == php://fd/2 == bool(true) [fd2-line] == unknown php:// target == bool(false) bool(false) == php://memory meta on ftell after write ==",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fb1dafe5fc895ff09a9215b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:17:11.192Z",
+  "stored_at": "2026-08-14T14:17:11.193Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn closure_signature_from_ast\" -A50 src/ | head -60",
+  "summary": "About to run: grep -rn \"fn closure_signature_from_ast\" -A50 src/ | head -60",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a8811e7faa6a0c8816cea26e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:29:23.640Z",
+  "stored_at": "2026-08-20T19:29:23.640Z"
+}

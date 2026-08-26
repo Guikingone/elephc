@@ -463,43 +463,6 @@ pub(super) fn box_owned_pathinfo_array_as_mixed(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Boxes the raw stat integer payload into PHP `int|false` Mixed form.
-pub(super) fn box_stat_int_or_false_result(ctx: &mut FunctionContext<'_>) {
-    let false_label = ctx.next_label("stat_int_false");
-    let done_label = ctx.next_label("stat_int_done");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // box PHP false when the runtime success flag is unset
-            ctx.emitter.instruction("mov x2, xzr");                             // integer Mixed payloads do not use a high word
-            ctx.emitter.instruction("mov x1, x0");                              // pass the stat integer as the Mixed low payload word
-            ctx.emitter.instruction("mov x0, #0");                              // select runtime tag 0 for an integer Mixed value
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the integer Mixed result
-            ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("mov x1, #0");                              // use zero as the false payload for the Mixed bool box
-            ctx.emitter.instruction("mov x2, #0");                              // clear the unused high payload word for bool Mixed boxes
-            ctx.emitter.instruction("mov x0, #3");                              // select runtime tag 3 for a boolean false Mixed value
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.label(&done_label);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("test rdx, rdx");                           // test whether the runtime success flag is set
-            ctx.emitter.instruction(&format!("jz {}", false_label));            // box PHP false when the stat helper failed
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the stat integer as the Mixed low payload word
-            ctx.emitter.instruction("xor esi, esi");                            // integer Mixed payloads do not use a high word
-            ctx.emitter.instruction("xor eax, eax");                            // select runtime tag 0 for an integer Mixed value
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the integer Mixed result
-            ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box
-            ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for bool Mixed boxes
-            ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for a boolean false Mixed value
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.label(&done_label);
-        }
-    }
-}
-
 /// Boxes a raw float payload into PHP `float|false` Mixed form.
 ///
 /// Sibling of `box_stat_int_or_false_result`, sharing its success-flag register. The
@@ -674,6 +637,43 @@ fn box_array_or_false_result(ctx: &mut FunctionContext<'_>, tag: u64, label_pref
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the owned array pointer in the Mixed cell
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], 0");             // array Mixed payloads do not use a high word
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the array Mixed result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box
+            ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for bool Mixed boxes
+            ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for a boolean false Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
+/// Boxes the raw stat integer payload into PHP `int|false` Mixed form.
+pub(super) fn box_stat_int_or_false_result(ctx: &mut FunctionContext<'_>) {
+    let false_label = ctx.next_label("stat_int_false");
+    let done_label = ctx.next_label("stat_int_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // box PHP false when the runtime success flag is unset
+            ctx.emitter.instruction("mov x2, xzr");                             // integer Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x1, x0");                              // pass the stat integer as the Mixed low payload word
+            ctx.emitter.instruction("mov x0, #0");                              // select runtime tag 0 for an integer Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the integer Mixed result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x1, #0");                              // use zero as the false payload for the Mixed bool box
+            ctx.emitter.instruction("mov x2, #0");                              // clear the unused high payload word for bool Mixed boxes
+            ctx.emitter.instruction("mov x0, #3");                              // select runtime tag 3 for a boolean false Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdx, rdx");                           // test whether the runtime success flag is set
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // box PHP false when the stat helper failed
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the stat integer as the Mixed low payload word
+            ctx.emitter.instruction("xor esi, esi");                            // integer Mixed payloads do not use a high word
+            ctx.emitter.instruction("xor eax, eax");                            // select runtime tag 0 for an integer Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the integer Mixed result
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box
             ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for bool Mixed boxes

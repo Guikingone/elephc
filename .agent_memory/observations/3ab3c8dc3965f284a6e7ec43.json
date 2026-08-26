@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_filter\\b\" src/codegen/lower_inst/builtins/io/resource_handles.rs | head -5; grep -rn \"fn .*param_name\\|first_param_name\\|parameter_name\" src/builtins/*.rs src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null | head -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_filter\\b\" src/codegen/lower_inst/builtins/io/resource_handles.rs | head -5; grep -rn \"fn .*param_name\\|first_param_name\\|parameter_name\" src/builtins/*.rs src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_filter\\b\" src/codegen/lower_inst/builtins/io/resource_handles.rs | head -5; grep -rn \"fn .*param_name\\|first_param_name\\|parameter_name\" src/builtins/*.rs src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null | head -8: src/codegen/lower_inst/builtins/io/resource_handles.rs:276:/// `emit_stream_type_error_case` already spells with the catalog's `$stream_filter`. Measured on src/codegen/lower_inst/builtins/io/resource_handles.rs:376:/// stream_filter_remove(\"x\") ... Argument #1 ($stream_filter) ... src/builtins/registry.rs:246: let callback_names = definition.spec.callback_parameter_names(); src/codegen/lower_inst/builtins/io/resource_handles.rs:384:fn first_parameter_name(function_name: &str) -> &'static str { src/codegen/lower_inst/builtins/io/resource_handles.rs:405: first_parameter_name(function_name),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3ab3c8dc3965f284a6e7ec43",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:16:55.107Z",
+  "stored_at": "2026-08-23T09:16:55.107Z"
+}

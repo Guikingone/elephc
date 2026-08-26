@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git show origin/main:crates/elephc-builtin-contract/src/registry.rs 2>/dev/null | grep -n \"contracts().len()\" | head -3; echo \"--- mine ---\"; grep -n \"contracts().len()\" crates/elephc-builtin-contract/src/registry.rs | head -3",
+  "summary": "About to run: git show origin/main:crates/elephc-builtin-contract/src/registry.rs 2>/dev/null | grep -n \"contracts().len()\" | head -3; echo \"--- mine ---\"; grep -n \"contracts().len()\" crates/elephc-builtin-contract",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e2443196d93272c8c79dda41",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:07:32.969Z",
+  "stored_at": "2026-08-21T19:07:32.970Z"
+}

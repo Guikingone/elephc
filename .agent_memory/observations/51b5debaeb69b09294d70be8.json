@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"label_global\\(\\\"__rt_hash_get|label_global\\(\\\"__rt_hash_find|label_global\\(\\\"__rt_hash_lookup\" src/codegen_support/runtime/ | head -8",
+  "summary": "rg -rn \"label_global\\(\\\"__rt_hash_get|label_global\\(\\\"__rt_hash_find|label_global\\(\\\"__rt_hash_lookup\" src/codegen_support/runtime/ | head -8: src/codegen_support/runtime/arrays/hash_get.rs: emitter.n\"); src/codegen_support/runtime/arrays/hash_get.rs: emitter.n\");",
+  "text": "rg -rn \"label_global\\(\\\"__rt_hash_get|label_global\\(\\\"__rt_hash_find|label_global\\(\\\"__rt_hash_lookup\" src/codegen_support/runtime/ | head -8: src/codegen_support/runtime/arrays/hash_get.rs: emitter.n\"); src/codegen_support/runtime/arrays/hash_get.rs: emitter.n\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "51b5debaeb69b09294d70be8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:55:18.330Z",
+  "stored_at": "2026-08-17T13:55:18.330Z"
+}

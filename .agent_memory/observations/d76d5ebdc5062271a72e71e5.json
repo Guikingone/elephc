@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"fn emit_record_stream_transport_after_boxed\" src/ | head -3",
+  "summary": "rg -rn \"fn emit_record_stream_transport_after_boxed\" src/ | head -3: src/codegen/lower_inst/builtins/io/boxing_helpers.rs:pub(super) n(",
+  "text": "rg -rn \"fn emit_record_stream_transport_after_boxed\" src/ | head -3: src/codegen/lower_inst/builtins/io/boxing_helpers.rs:pub(super) n(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d76d5ebdc5062271a72e71e5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:17:57.878Z",
+  "stored_at": "2026-08-17T13:17:57.879Z"
+}

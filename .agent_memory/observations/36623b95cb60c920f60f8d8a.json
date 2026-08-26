@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"local_types.insert\\|local_types = \\|fn seed_local_types\\|local_types\\b\" src/ir_lower/context.rs | head -20",
+  "summary": "About to run: grep -n \"local_types.insert\\|local_types = \\|fn seed_local_types\\|local_types\\b\" src/ir_lower/context.rs | head -20",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "36623b95cb60c920f60f8d8a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T16:11:43.348Z",
+  "stored_at": "2026-08-18T16:11:43.349Z"
+}

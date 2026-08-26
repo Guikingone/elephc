@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "awk '/^__rt_csv_parse_buffer:/{f=1} f{print; n++} n>12{exit}' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rt_aarch64.s",
+  "summary": "awk '/^__rt_csv_parse_buffer:/{f=1} f{print; n++} n>12{exit}' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rt_aarch64.s: __rt_csv_parse_buffer: mov x21, x1 add x22, x1, x2 mov x0, #8 mov x1, #16 bl ",
+  "text": "awk '/^__rt_csv_parse_buffer:/{f=1} f{print; n++} n>12{exit}' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rt_aarch64.s: __rt_csv_parse_buffer: mov x21, x1 add x22, x1, x2 mov x0, #8 mov x1, #16 bl __rt_array_new mov x20, x0 mov x23, x21 mov x24, x21 mov w25, #0 __rt_fgetcsv_loop: cmp x21, x22 b.ge __rt_fgetcsv_end_line",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "219b7a897f13092064e639a4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:56:55.706Z",
+  "stored_at": "2026-08-21T15:56:55.707Z"
+}

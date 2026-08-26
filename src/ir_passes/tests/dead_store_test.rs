@@ -279,3 +279,44 @@ fn slot_aliased_by_other_op_is_ineligible() {
     );
     assert!(validate_function(&function).is_ok());
 }
+
+/// A store stays live when the slot is also named by a `zero_local_slot`, the op the local-retype
+/// `unset` kill lowers to (`LoweringContext::release_and_abandon_local_binding`). Mirrors
+/// `slot_aliased_by_other_op_is_ineligible` for `unset_local`: `eligible_slots`' default-deny scan
+/// only exempts plain `load_local`/`store_local`, so `zero_local_slot` disqualifies the slot the
+/// same way — the doc comment on `eligible_slots` was updated to name it explicitly, but the code
+/// already covered it before that comment existed.
+#[test]
+fn zero_local_slot_makes_a_slot_ineligible() {
+    let mut function = Function::new("killed".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let slot = add_int_local(&mut builder, "x");
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let value = builder.emit_const_i64(1);
+        builder.emit_store_local(slot, value); // would look dead by load/store alone
+        // The unset kill's `zero_local_slot` names the slot, marking it ineligible.
+        builder.emit(
+            Op::ZeroLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+
+    assert!(
+        !run_once(&mut function),
+        "a slot named by zero_local_slot is ineligible for DSE"
+    );
+    assert_eq!(
+        function.instructions[1].op,
+        Op::StoreLocal,
+        "store to the killed slot stays"
+    );
+    assert!(validate_function(&function).is_ok());
+}

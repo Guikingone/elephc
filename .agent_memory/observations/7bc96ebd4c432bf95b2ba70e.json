@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"558\\b\" docs/php/compatibility.md src/builtins/registry.rs crates/elephc-builtin-contract/src/*.rs 2>/dev/null | head -10",
+  "summary": "grep -rn \"558\\b\" docs/php/compatibility.md src/builtins/registry.rs crates/elephc-builtin-contract/src/*.rs 2>/dev/null | head -10: crates/elephc-builtin-contract/src/registry.rs:137: assert_eq!(contracts().len(), 558);",
+  "text": "grep -rn \"558\\b\" docs/php/compatibility.md src/builtins/registry.rs crates/elephc-builtin-contract/src/*.rs 2>/dev/null | head -10: crates/elephc-builtin-contract/src/registry.rs:137: assert_eq!(contracts().len(), 558);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7bc96ebd4c432bf95b2ba70e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:21:13.137Z",
+  "stored_at": "2026-08-21T12:21:13.137Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"Op::LoadGlobal\\|Op::StoreGlobal\" src/codegen/lower_inst.rs | head -5; echo ---; grep -n \"fn expect_global_name\" -A 10 src/codegen/lower_inst/mod.rs 2>/dev/null || grep -rn \"fn expect_global_name\" -A 10 src/codegen/",
+  "summary": "grep -rn \"Op::LoadGlobal\\|Op::StoreGlobal\" src/codegen/lower_inst.rs | head -5; echo ---; grep -n \"fn expect_global_name\" -A 10 src/codegen/lower_inst/mod.rs 2>/dev/null || grep -rn \"fn expect_global_name\" -A 10 src/codegen/: ), --- src/codegen/lower_inst/instruction_helpers.rs:199:pub(super) fn expect_global_name(inst",
+  "text": "grep -rn \"Op::LoadGlobal\\|Op::StoreGlobal\" src/codegen/lower_inst.rs | head -5; echo ---; grep -n \"fn expect_global_name\" -A 10 src/codegen/lower_inst/mod.rs 2>/dev/null || grep -rn \"fn expect_global_name\" -A 10 src/codegen/: ), --- src/codegen/lower_inst/instruction_helpers.rs:199:pub(super) fn expect_global_name(inst: &Instruction) -> Result<crate::ir::DataId> { src/codegen/lower_inst/instruction_helpers.rs-200- match inst.immediate { src/codegen/lower_inst/instruction_helpers.rs-201- Some(Immediate::GlobalName(value)) => Ok(value), src/codegen/lower_inst/instruction_helpers.rs-202- _ => Err(CodegenIrError::invalid_module(format!( src/codegen/lower_inst/instruction_helpers.rs-203- \"{} missing global-name immediate\", src/codegen/lower_inst/instruction_helpers.rs-204- inst.op.name() src/codegen/lower_inst/instruction_helpers.rs-205- ))), src/codegen/lower_inst/instruction_helpers.rs-206- } src/codegen/lower_inst/instruction_helpers.rs-207-} src/codegen/lower_inst/instruction_helpers.rs-208- src/codegen/lower_inst/instruction_helpers.rs-209-/// Returns the operand at `index` or reports a malformed instruction.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c8316afaabe947a4f5d39943",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:19:48.440Z",
+  "stored_at": "2026-08-18T15:19:48.440Z"
+}

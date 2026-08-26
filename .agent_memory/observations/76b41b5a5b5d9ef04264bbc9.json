@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/php_tags.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/php_tags.rs: //! Purpose:\n//! Integration tests for PHP's tag boundaries: the `?>` closing tag and the literal text it hands\n//! to the output, and `<?=`, the short echo tag.\n//!\n//! Called from:\n//! - `cargo",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/php_tags.rs: //! Purpose:\n//! Integration tests for PHP's tag boundaries: the `?>` closing tag and the literal text it hands\n//! to the output, and `<?=`, the short echo tag.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout, so what is\n//!   pinned here is what the program PRINTS, not how the lexer got there.\n//! - Every expectation is measured against `php -n` 8.5.6.\n\nuse crate::support::*;\n\n/// Verifies the `?>` closing tag and the literal text that follows it.\n///\n/// elephc h",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "76b41b5a5b5d9ef04264bbc9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:22:38.540Z",
+  "stored_at": "2026-08-17T21:22:38.540Z"
+}

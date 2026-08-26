@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn emit_store_reg_to_symbol\" -A 32 src/",
+  "summary": "grep -rn \"fn emit_store_reg_to_symbol\" -A 32 src/: ch emitter.target.arch { src/codegen_support/abi/symbols.rs-266- Arch::AArch64 => { src/codegen_support/abi/symbols.rs-267- emit_symbol_address(emitter, \"x9\", symbol); src/codegen_support/abi/symbols.rs-268- if byte_offset == 0 { src/codegen_support/abi/symbols.rs-269-",
+  "text": "grep -rn \"fn emit_store_reg_to_symbol\" -A 32 src/: ch emitter.target.arch { src/codegen_support/abi/symbols.rs-266- Arch::AArch64 => { src/codegen_support/abi/symbols.rs-267- emit_symbol_address(emitter, \"x9\", symbol); src/codegen_support/abi/symbols.rs-268- if byte_offset == 0 { src/codegen_support/abi/symbols.rs-269- emitter.instruction(&format!(\"str {}, [x9]\", reg)); // store the register payload directly into the symbol base slot src/codegen_support/abi/symbols.rs-270- } else { src/codegen_support/abi/symbols.rs-271- emitter.instruction(&format!(\"str {}, [x9, #{}]\", reg, byte_offset)); // store the register payload into the requested symbol byte offset src/codegen_support/abi/symbols.rs-272- } src/codegen_support/abi/symbols.rs-273- } src/codegen_support/abi/symbols.rs-274- Arch::X86_64 => { src/codegen_support/abi/symbols.rs-275- let scratch = symbol_scratch_reg(emitter); src/codegen_support/abi/symbols.rs-276- if byte_offset == 0 {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4f8712d55bb3f24f56d444b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:31:37.739Z",
+  "stored_at": "2026-08-18T15:31:37.739Z"
+}

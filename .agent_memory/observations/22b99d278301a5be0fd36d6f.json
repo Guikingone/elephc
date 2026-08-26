@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"macro_rules! surface\" -A 30 crates/elephc-builtin-contract/src/catalog_surfaces.rs | head -40",
+  "summary": "grep -n \"macro_rules! surface\" -A 30 crates/elephc-builtin-contract/src/catalog_surfaces.rs | head -40: 37:macro_rules! surface { 38- ( 39- $name:literal, $area:ident, $kind:ident, 40- [$($param:expr),* $(,)?], $variadic:expr, $returns:ident, 41- $summary:literal $(, extension: $extension:expr)? 42- ) => { 43- BuiltinC",
+  "text": "grep -n \"macro_rules! surface\" -A 30 crates/elephc-builtin-contract/src/catalog_surfaces.rs | head -40: 37:macro_rules! surface { 38- ( 39- $name:literal, $area:ident, $kind:ident, 40- [$($param:expr),* $(,)?], $variadic:expr, $returns:ident, 41- $summary:literal $(, extension: $extension:expr)? 42- ) => { 43- BuiltinContract { 44- id: BuiltinId::from_canonical_name($name), 45- name: $name, 46- area: Area::$area, 47- kind: BuiltinKind::$kind, 48- params: &[$($param),*], 49- variadic: $variadic, 50- variadic_writes: None, 51- min_args: None, 52- max_args: None, 53- arity_error: None, 54- returns: TypeSpec::$returns, 55- by_ref_return: false, 56- summary: $summary, 57- examples: &[], 58- php_manual: None, 59- deprecation: None, 60- extension: surface!(@bool $($extension)?), 61- internal: false, 62- requirements: &[], 63- } 64- }; 65- (@bool $value:expr) => { $value }; 66- (@bool) => { false }; 67-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "22b99d278301a5be0fd36d6f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:18:47.040Z",
+  "stored_at": "2026-08-21T12:18:47.041Z"
+}

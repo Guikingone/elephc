@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && php -n -r '\n$d = \"test payload for zlib\\n\";\nfile_put_contents(\"__probe_z.gz\", gzencode($d));\nvar_dump(file_get_contents(\"compress.zlib://__probe_z.gz\"));\n$h = fopen(\"compress.zlib://__probe_z.gz\",\"r\"); var_dump(fread($h,100)); print_r(stream_get_meta_data($h));\nunlink(\"__probe_z.gz\");\n' 2>&1",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && php -n -r ' $d = \"test payload",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e49ac8a0707f8744e63179ba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:34.136Z",
+  "stored_at": "2026-08-14T14:15:34.137Z"
+}

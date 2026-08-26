@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/extract.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/extract.py: \"\"\"Extracts the runnable body of php-src `.phpt` tests into standalone `.php` files.\n\nphp's own test suite is the specification, so r",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/extract.py: \"\"\"Extracts the runnable body of php-src `.phpt` tests into standalone `.php` files.\n\nphp's own test suite is the specification, so running it through BOTH implementations and\ndiffing is a far better oracle than any hand-written probe. The `--EXPECT--` sections are\nignored on purpose: `php -n` is the oracle, which sidesteps `--EXPECTF--` wildcards entirely\nand measures the interpreter actually installed rather than what the file claims.\n\nSkipped, with the reason recorded so nothing is silently dropped:\n- `--SKIPIF--` bodies that need an extension elephc does not target,\n- tests needing externa",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "880e808a7209f6b1a6204a88",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:37:27.707Z",
+  "stored_at": "2026-08-17T06:37:27.709Z"
+}

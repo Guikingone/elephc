@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 measure_zlib_tests.py 2>&1",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 measure_zlib_tests.py 2>&1: SAME roundtrip php : 'bool(true)\\nbool(true)\\nbool(true)\\n' SAME encodings php : 'bool(true)\\nbool(true)\\nbool(",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 measure_zlib_tests.py 2>&1: SAME roundtrip php : 'bool(true)\\nbool(true)\\nbool(true)\\n' SAME encodings php : 'bool(true)\\nbool(true)\\nbool(true)\\n' SAME framing php : 'string(8) \"1f8b0800\"\\nstring(8) \"00000000\"\\nstring(16) \"3bcee2ea17000000\"\\nbool(true)\\n' SAME decode_refusals php : 'bool(false)\\nbool(false)\\nbool(false)\\n' SAME zlib_decode_framings php : 'bool(true)\\nbool(true)\\nbool(true)\\n' SAME value_errors php : 'string(114) \"gzencode(): Argument #3 ($encoding) must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE\"\\nstring(57) \"gzencode(): Argument #2 ($level) must be between -1 and 9\"\\nstring(117) \"zlib_encode(): Argument #2 ($encoding) must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE\"\\n' SAME max_length php : 'bool(true)\\nbool(true)\\nbool(true)\\n'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6bb17962ec00f8c6e0fda1c6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:49:27.569Z",
+  "stored_at": "2026-08-21T14:49:27.569Z"
+}

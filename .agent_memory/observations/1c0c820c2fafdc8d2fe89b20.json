@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -50 tests/codegen/nullable_builtin_arguments.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -50 tests/codegen/nullable_builtin_arguments.rs: ate answer to a different call — which is why nothing looked wrong. #[test] fn test_substr_with_a_null_length_reads_to_the_end() { let out = compile_and_run_capture(\"<?ph",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; head -50 tests/codegen/nullable_builtin_arguments.rs: ate answer to a different call — which is why nothing looked wrong. #[test] fn test_substr_with_a_null_length_reads_to_the_end() { let out = compile_and_run_capture(\"<?php var_dump(substr(\\\"hello\\\", 1, null));\\n\"); assert!(out.success, \"program failed: {}\", out.stderr); assert_eq!(out.stdout, \"string(4) \\\"ello\\\"\\n\"); } /// Verifies the same rule holds when the offset is negative, so the fix is about the LENGTH. #[test] fn test_substr_with_a_negative_offset_and_null_length() { let out = compile_and_run_capture(\"<?php var_dump(substr(\\\"hello\\\", -3, null));\\n\"); assert!(out.success, \"program failed: {}\", out.stderr); assert_eq!(out.stdout, \"string(3) \\\"llo\\\"\\n\"); } /// Verifies a null length on `stream_get_contents` reads the whole stream. #[test] fn test_stream_get_contents_with_a_null_length_reads_everything() { let out = compile_and_run_capture( r#\"<?php $h = fopen(\"php://memory\", \"w+\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1c0c820c2fafdc8d2fe89b20",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:34:04.907Z",
+  "stored_at": "2026-08-23T17:34:04.908Z"
+}

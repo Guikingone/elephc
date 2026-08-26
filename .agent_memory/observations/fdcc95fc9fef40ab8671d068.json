@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 249,320p src/codegen_support/runtime/io/phar_read.rs | grep -nE \"user_wrapper|path_is_wrapper|bl __rt_|label\\(\" | head -18",
+  "summary": "sed -n 249,320p src/codegen_support/runtime/io/phar_read.rs | grep -nE \"user_wrapper|path_is_wrapper|bl __rt_|label\\(\" | head -18: 1: emitter.label(\"__rt_fgc_phar_check\"); 31: emitter.instruction(\"bl __rt_phar_read_entry\"); // x0 = entry stream fd (-1 on missing archive/entry) 32: emitter.label(\"__rt_fgc_archive_have_f",
+  "text": "sed -n 249,320p src/codegen_support/runtime/io/phar_read.rs | grep -nE \"user_wrapper|path_is_wrapper|bl __rt_|label\\(\" | head -18: 1: emitter.label(\"__rt_fgc_phar_check\"); 31: emitter.instruction(\"bl __rt_phar_read_entry\"); // x0 = entry stream fd (-1 on missing archive/entry) 32: emitter.label(\"__rt_fgc_archive_have_fd\"); 37: emitter.instruction(\"bl __rt_stream_get_contents\"); // (x0=fd) → x1 = string ptr, x2 = length 45: emitter.label(\"__rt_fgc_phar_fail\"); 51: emitter.label(\"__rt_fgc_phar_plain\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fdcc95fc9fef40ab8671d068",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:53:13.472Z",
+  "stored_at": "2026-08-21T17:53:13.474Z"
+}

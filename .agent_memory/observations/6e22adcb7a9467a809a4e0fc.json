@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/hrc.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/hrc.php: <?php\n\nvar_dump(http_response_code());\nvar_dump(http_response_code(404));\nvar_dump(http_response_code());\nvar_dump(http_response_code(200",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/hrc.php: <?php\n\nvar_dump(http_response_code());\nvar_dump(http_response_code(404));\nvar_dump(http_response_code());\nvar_dump(http_response_code(200));\nvar_dump(http_response_code());\nvar_dump(http_response_code(0));\nvar_dump(http_response_code());\nvar_dump(http_response_code(-5));\nvar_dump(http_response_code());",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6e22adcb7a9467a809a4e0fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:48:17.861Z",
+  "stored_at": "2026-08-22T18:48:17.862Z"
+}

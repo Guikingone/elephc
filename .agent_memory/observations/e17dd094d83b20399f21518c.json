@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"label_global\" src/codegen_support/runtime/io/user_wrapper.rs | head -8; echo \"=== unregister ===\"; grep -n \"label_global\" src/codegen_support/runtime/io/stream_wrapper_unregister.rs | head -4",
+  "summary": "About to run: grep -rn \"label_global\" src/codegen_support/runtime/io/user_wrapper.rs | head -8; echo \"=== unregister ===\"; grep -n \"label_global\" src/codegen_support/runtime/io/stream_wrapper_unregister.rs | head -",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e17dd094d83b20399f21518c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:54:49.792Z",
+  "stored_at": "2026-08-21T16:54:49.793Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'name: \"fgetcsv\"' -A 40 crates/elephc-builtin-contract/src/catalog_data.rs | grep -E \"name:|ty:|default:|returns:\" | head -16",
+  "summary": "grep -n 'name: \"fgetcsv\"' -A 40 crates/elephc-builtin-contract/src/catalog_data.rs | grep -E \"name:|ty:|default:|returns:\" | head -16: 6160: name: \"fgetcsv\", 6165- name: \"stream\", 6166- ty: TypeSpec::Mixed, 6167- default: None, 6172- name: \"length\", 6173- ty: TypeSpec::Int, 6174- default: Some(DefaultSpec::Null), 6179-",
+  "text": "grep -n 'name: \"fgetcsv\"' -A 40 crates/elephc-builtin-contract/src/catalog_data.rs | grep -E \"name:|ty:|default:|returns:\" | head -16: 6160: name: \"fgetcsv\", 6165- name: \"stream\", 6166- ty: TypeSpec::Mixed, 6167- default: None, 6172- name: \"length\", 6173- ty: TypeSpec::Int, 6174- default: Some(DefaultSpec::Null), 6179- name: \"separator\", 6180- ty: TypeSpec::Str, 6181- default: Some(DefaultSpec::Str(\",\")), 6186- name: \"enclosure\", 6187- ty: TypeSpec::Str, 6188- default: Some(DefaultSpec::Str(\"\\\"\")), 6193- name: \"escape\", 6194- ty: TypeSpec::Str, 6195- default: Some(DefaultSpec::Str(\"\\\\\")),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6b068349cd0a7b15987075d6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:39:27.346Z",
+  "stored_at": "2026-08-22T06:39:27.346Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn lower_file_put_contents\" src/ | head -2",
+  "summary": "grep -rn \"fn lower_file_put_contents\" src/ | head -2: src/codegen/lower_inst/builtins/io/phar_write.rs:13:pub(crate) fn lower_file_put_contents( src/codegen/lower_inst/builtins/io/seek_hash_arch.rs:241:pub(super) fn lower_file_put_contents_arm64(",
+  "text": "grep -rn \"fn lower_file_put_contents\" src/ | head -2: src/codegen/lower_inst/builtins/io/phar_write.rs:13:pub(crate) fn lower_file_put_contents( src/codegen/lower_inst/builtins/io/seek_hash_arch.rs:241:pub(super) fn lower_file_put_contents_arm64(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "32a11170ac386dcd9c935d05",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:54:42.017Z",
+  "stored_at": "2026-08-21T17:54:42.018Z"
+}

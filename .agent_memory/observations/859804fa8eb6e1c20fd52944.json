@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"check_stmts|check_block|fn_env|local_env\" src/types/checker/functions/resolution/signature.rs | head -12",
+  "summary": "rtk proxy rg -n \"check_stmts|check_block|fn_env|local_env\" src/types/checker/functions/resolution/signature.rs | head -12: 35: let mut local_env: TypeEnv = HashMap::new(); 37: local_env.insert(pname.clone(), pty.clone()); 43: local_env 139: if let Err(error) = checker.check_stmt(stmt, &mut local_env) { 142: checker.col",
+  "text": "rtk proxy rg -n \"check_stmts|check_block|fn_env|local_env\" src/types/checker/functions/resolution/signature.rs | head -12: 35: let mut local_env: TypeEnv = HashMap::new(); 37: local_env.insert(pname.clone(), pty.clone()); 43: local_env 139: if let Err(error) = checker.check_stmt(stmt, &mut local_env) { 142: checker.collect_return_infos(stmt, &local_env, &mut all_return_infos); 143: checker.collect_return_callable_sigs(stmt, &local_env, &mut callable_return_sigs); 146: &local_env,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "859804fa8eb6e1c20fd52944",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:02:04.526Z",
+  "stored_at": "2026-08-16T20:02:04.527Z"
+}

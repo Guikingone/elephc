@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -d /var/folders/*/*/T/elephc_test_* 2>/dev/null | grep -v \"elephc_test_25886_\" | head -0; ls -d /var/folders/*/*/T/elephc_test_* 2>/dev/null | grep -v \"elephc_test_25886_\" | wc -l; echo \"--- size of the stale ones ---\"; ls -d /var/folders/*/*/T/elephc_test_* 2>/dev/null | grep -v \"elephc_test_25886_\" | head -400 | xargs du -sc 2>/dev/null | tail -1",
+  "summary": "ls -d /var/folders/*/*/T/elephc_test_* 2>/dev/null | grep -v \"elephc_test_25886_\" | head -0; ls -d /var/folders/*/*/T/elephc_test_* 2>/dev/null | grep -v \"elephc_test_25886_\" | wc -l; echo \"--- size of the stale ones ---\"; ls -d /var/folders/*/*/T/elephc_test_* 2>/dev/null | grep -v \"elephc_test_25886_\" | head -400 | x",
+  "text": "ls -d /var/folders/*/*/T/elephc_test_* 2>/dev/null | grep -v \"elephc_test_25886_\" | head -0; ls -d /var/folders/*/*/T/elephc_test_* 2>/dev/null | grep -v \"elephc_test_25886_\" | wc -l; echo \"--- size of the stale ones ---\"; ls -d /var/folders/*/*/T/elephc_test_* 2>/dev/null | grep -v \"elephc_test_25886_\" | head -400 | xargs du -sc 2>/dev/null | tail -1: head: illegal line count -- 0 1576 --- size of the stale ones --- 1509520 total",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8cc50bca9b8b66186b4b0e99",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:59:12.001Z",
+  "stored_at": "2026-08-21T20:59:12.001Z"
+}

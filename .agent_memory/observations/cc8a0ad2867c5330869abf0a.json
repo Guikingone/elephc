@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen/lower_inst/method_resolution.rs\")\ns = p.read_text()\nold = '''    if !ctx.is_main {\n        return;\n    }\n    let Some((frame_name, arguments)) = internal_call_frame_shape(ctx, inst, class_name) else {\n        return;\n    };'''\nnew = '''    // A call that cannot THROW contributes no frame to anyone's trace, and recording one would do\n    // worse than waste work: the buffer holds one trace at a time, so `$e->getTraceAsString()` —\n    // itself a call into a builtin class — replaced the frames it was being asked to render with a\n    /… [+457 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path(\"src/codegen/lower_inst/method_resolution.rs\") s = p.read_text() old = ''' if !ctx.is_main { return; } let Some((frame_name, arguments)) = internal_cal",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cc8a0ad2867c5330869abf0a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:47:10.701Z",
+  "stored_at": "2026-08-26T09:47:10.702Z"
+}

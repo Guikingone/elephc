@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '5355,5370p' tests/ir_backend_smoke_test.rs",
+  "summary": "sed -n '5355,5370p' tests/ir_backend_smoke_test.rs: ); } /// Verifies basic associative-array allocation, lookup, update, and count lowering. #[test] fn ir_backend_handles_basic_associative_arrays() { for (name, source, expected) in [ (\"hash_count\", \"<?php $h = [\\\"a\\\" => 1, \\\"b\\\" => 2]; echo count($h);\", \"2\"), (\"hash_g",
+  "text": "sed -n '5355,5370p' tests/ir_backend_smoke_test.rs: ); } /// Verifies basic associative-array allocation, lookup, update, and count lowering. #[test] fn ir_backend_handles_basic_associative_arrays() { for (name, source, expected) in [ (\"hash_count\", \"<?php $h = [\\\"a\\\" => 1, \\\"b\\\" => 2]; echo count($h);\", \"2\"), (\"hash_get_int\", \"<?php $h = [\\\"a\\\" => 1]; echo $h[\\\"a\\\"];\", \"1\"), (\"hash_get_string\", \"<?php $h = [\\\"a\\\" => \\\"z\\\"]; echo $h[\\\"a\\\"];\", \"z\"), (\"hash_get_float\", \"<?php $h = [\\\"a\\\" => 1.5]; echo $h[\\\"a\\\"];\", \"1.5\"), (\"hash_get_miss\", \"<?php $h = [\\\"a\\\" => 1]; echo $h[\\\"missing\\\"];\", \"\"), (\"hash_int_key\", \"<?php $h = [1 => \\\"one\\\"]; echo $h[1];\", \"one\"), (\"hash_set_updates_local\", \"<?php $h = [\\\"a\\\" => 1]; $h[\\\"a\\\"] = 7; echo $h[\\\"a\\\"];\", \"7\"), (\"hash_set_string_value\", \"<?php $h = [\\\"a\\\" => \\\"x\\\"]; $h[\\\"a\\\"] = \\\"y\\\"; echo $h[\\\"a\\\"];\", \"y\"), ] {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "884368d7f86765a43456bbba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:46:33.950Z",
+  "stored_at": "2026-08-25T08:46:33.950Z"
+}

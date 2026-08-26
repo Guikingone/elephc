@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn assemble_and_run' -A 30 tests/codegen/support/ | grep -E 'stdout|stderr|Command|output' | head -12",
+  "summary": "grep -rn 'fn assemble_and_run' -A 30 tests/codegen/support/ | grep -E 'stdout|stderr|Command|output' | head -12: un_binary(&bin_path, dir); tests/codegen/support/runner.rs-969- output.status.success(), tests/codegen/support/runner.rs-970- \"binary exited with status {}\\nstdout: {}\\nstderr: {}\", tests/codegen/support/run",
+  "text": "grep -rn 'fn assemble_and_run' -A 30 tests/codegen/support/ | grep -E 'stdout|stderr|Command|output' | head -12: un_binary(&bin_path, dir); tests/codegen/support/runner.rs-969- output.status.success(), tests/codegen/support/runner.rs-970- \"binary exited with status {}\\nstdout: {}\\nstderr: {}\", tests/codegen/support/runner.rs-971- output.status, tests/codegen/support/runner.rs-972- String::from_utf8_lossy(&output.stdout), tests/codegen/support/runner.rs-973- String::from_utf8_lossy(&output.stderr) tests/codegen/support/runner.rs-1006- let output = run_binary_with_env(&bin_path, dir, env); tests/codegen/support/runner.rs-1008- output.status.success(), tests/codegen/support/runner.rs-1010- String::from_utf8_lossy(&output.stderr) tests/codegen/support/runner.rs-1012- String::from_utf8(output.stdout).unwrap() tests/codegen/support/runner.rs-1015-// Captures stdout and stderr from a compiled binary, along with its exit status. tests/codegen/support/runner.rs-1139- let output = run_binary(&bin_path, dir);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "672523527104586db18ce8ed",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:34:40.885Z",
+  "stored_at": "2026-08-24T19:34:40.890Z"
+}

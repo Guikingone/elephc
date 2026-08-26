@@ -1,0 +1,16 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/r6.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/r6.php: <?php\n$h = fopen(\"php://memory\", \"r+\");\n$t = microtime(true);\nfor ($i = 0; $i < 100000; $i++) { fwrite($h, \"line$i\\n\"); }\necho \"writ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/r6.php: <?php\n$h = fopen(\"php://memory\", \"r+\");\n$t = microtime(true);\nfor ($i = 0; $i < 100000; $i++) { fwrite($h, \"line$i\\n\"); }\necho \"write  \", (int)((microtime(true) - $t) * 1000), \"ms\\n\";\nrewind($h);\n$t = microtime(true);\n$n = 0;\nwhile (($l = fgets($h)) !== false) { $n++; }\necho \"read   \", (int)((microtime(true) - $t) * 1000), \"ms \", $n, \"\\n\";\nfclose($h);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8bc40aeccb7527b8f0408448",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:23:45.324Z",
+  "stored_at": "2026-08-24T17:23:45.325Z",
+  "low_signal": true
+}

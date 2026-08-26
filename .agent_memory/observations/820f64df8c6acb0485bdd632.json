@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '\"fgets\"\\|\"eof\"\\|\"ftell\"\\|\"fseek\"' src/types/checker/builtin_spl_classes/filesystem.rs | sed -n '1,12p'",
+  "summary": "grep -n '\"fgets\"\\|\"eof\"\\|\"ftell\"\\|\"fseek\"' src/types/checker/builtin_spl_classes/filesystem.rs | sed -n '1,12p': h_body(\"eof\", Vec::new(), Some(TypeExpr::Bool), return_body(function_call(\"feof\", vec![file_stream_expr()]))), 413: method_with_body(\"fgets\", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()), 43",
+  "text": "grep -n '\"fgets\"\\|\"eof\"\\|\"ftell\"\\|\"fseek\"' src/types/checker/builtin_spl_classes/filesystem.rs | sed -n '1,12p': h_body(\"eof\", Vec::new(), Some(TypeExpr::Bool), return_body(function_call(\"feof\", vec![file_stream_expr()]))), 413: method_with_body(\"fgets\", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()), 438: method_with_body(\"ftell\", Vec::new(), Some(TypeExpr::Int), return_body(function_call(\"ftell\", vec![file_stream_expr()]))), 440: \"fseek\", 529: method_with_body(\"eof\", Vec::new(), Some(TypeExpr::Bool), spl_temp_file_object_eof_body()), 530: method_with_body(\"fgets\", Vec::new(), Some(mixed_type()), spl_temp_file_object_fgets_body()), 542: method_with_body(\"ftell\", Vec::new(), Some(TypeExpr::Int), spl_temp_file_object_ftell_body()), 544: \"fseek\", 961: assign_stmt(\"__splPos\", function_call(\"ftell\", vec![file_stream_expr()])), 965: assign_expr(\"__splLine\", function_call(\"fgets\", vec![file_stream_expr()])), 972: \"fseek\", 1078: return_body(function_call(\"fgets\", vec![file_stream_expr()])),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "820f64df8c6acb0485bdd632",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:42:33.307Z",
+  "stored_at": "2026-08-24T20:42:33.308Z"
+}

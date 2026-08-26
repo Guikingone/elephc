@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/guard_stat_family.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/guard_stat_family.py: \"\"\"Guards the stat family against a bare path while `file://` is unregistered.\n\nphp answers `false` for all seven while the p",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/guard_stat_family.py: \"\"\"Guards the stat family against a bare path while `file://` is unregistered.\n\nphp answers `false` for all seven while the plain-files wrapper is gone — MEASURED. The failure\nVALUE differs: the predicates answer 0, and `filesize`/`filemtime` answer -1, which is what their\ncallers box into php's `false`. Getting that wrong would turn a refusal into a size of zero, which\nis why each entry names its own.\n\"\"\"\nimport pathlib, re\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = ROOT / 'src/codegen_support/runtime/io/stat.rs'\nt =",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bd988846e2318f10cb47d4d1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:26:15.304Z",
+  "stored_at": "2026-08-22T08:26:15.305Z"
+}

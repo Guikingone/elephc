@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-null-caller-widening-is-mixed-not-a-union.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-null-caller-widening-is-mixed-not-a-union.md: ---\nname: byref-null-caller-widening-is-mixed-not-a-union\ndescription: \"CORRIGÉ: l'écriture by-ref vers un appelant NULL — et le piège qui SEGFAULTE: élargir vers",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-null-caller-widening-is-mixed-not-a-union.md: ---\nname: byref-null-caller-widening-is-mixed-not-a-union\ndescription: \"CORRIGÉ: l'écriture by-ref vers un appelant NULL — et le piège qui SEGFAULTE: élargir vers `int|null` au lieu de `mixed`\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\nCorrectif de [[byref-out-param-write-never-reaches-a-null-caller]], branche\n`feat/streams-csv-signatures`. Mesuré contre `php -n` 8.5.6.\n\n**Les TROIS moitiés** (il en faut trois, pas deux) :\n1. `by_ref_array_params_widened_by_body` (`functions/resolution/signature.rs`) — ajouter la règle\n   « type d'ENTRÉE = `Void` et le corps écrit autre chose ⇒ élargi",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7ed38317949c83d12a8d3edf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:41:56.242Z",
+  "stored_at": "2026-08-18T10:41:56.243Z"
+}

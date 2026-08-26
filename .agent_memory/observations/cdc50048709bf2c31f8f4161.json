@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests exception 2>&1 | tail -6",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests exception 2>&1 | tail -6: test codegen::pdo::test_pdo_get_attribute_unknown_throws_im001_under_exception ... ok test codegen::pdo::test_pdo_exception_error_info_usable ... ok test codegen::pdo::test_pdo_fetch_into_without_ta",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests exception 2>&1 | tail -6: test codegen::pdo::test_pdo_get_attribute_unknown_throws_im001_under_exception ... ok test codegen::pdo::test_pdo_exception_error_info_usable ... ok test codegen::pdo::test_pdo_fetch_into_without_target_raises_hy000_under_exception ... ok test result: ok. 125 passed; 0 failed; 0 ignored; 0 measured; 8824 filtered out; finished in 57.60s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cdc50048709bf2c31f8f4161",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:51:38.611Z",
+  "stored_at": "2026-08-24T17:51:38.611Z"
+}

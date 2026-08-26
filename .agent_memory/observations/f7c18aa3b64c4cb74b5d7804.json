@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_compress_mode_literal.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_compress_mode_literal.py: \"\"\"The run-time mode rule has to serve the LITERAL url too.\n\n`fopen(\"compress.zlib://o.gz\", $m)` — a literal URL with",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_compress_mode_literal.py: \"\"\"The run-time mode rule has to serve the LITERAL url too.\n\n`fopen(\"compress.zlib://o.gz\", $m)` — a literal URL with a computed mode — takes the shared literal\nopener, not the dynamic-URL path, and that opener had the same `unwrap_or_else(|| \"r\")` fallback.\nMEASURED: it opened for reading and warned about a file it was asked to create, and `$m = \"r+\"` or\n`\"\"` — both of which php REFUSES — opened successfully.\n\nSo the classification stops owning the store: it leaves a boxed result and joins, and each caller\ndoes what it already does with an open result. That is what lets one copy of php's rule",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f7c18aa3b64c4cb74b5d7804",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:05:27.006Z",
+  "stored_at": "2026-08-21T12:05:27.007Z"
+}

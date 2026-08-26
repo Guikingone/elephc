@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/lock_and_empty.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/lock_and_empty.php: <?php\n// Which streams say they support locking, and what does an empty write answer?\n$file = tmpfile();\n$mem = fopen(\"php://m",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/lock_and_empty.php: <?php\n// Which streams say they support locking, and what does an empty write answer?\n$file = tmpfile();\n$mem = fopen(\"php://memory\", \"w+\");\n$tmp = fopen(\"php://temp\", \"w+\");\n$out = fopen(\"php://output\", \"w\");\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\n$pipe = popen(\"true\", \"r\");\n$data = fopen(\"data:text/plain,abc\", \"r\");\n\nforeach ([[\"file\", $file], [\"memory\", $mem], [\"temp\", $tmp], [\"output\", $out],\n          [\"socketpair\", $pair[0]], [\"pipe\", $pipe], [\"data\", $data]] as $case) {\n    echo str_pad($case[0], 12), \"lock=\", var_export(stream_supports_lock($case[1]), true),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a15f5a0a5cd41c07d965ae70",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:43:31.673Z",
+  "stored_at": "2026-08-23T07:43:31.673Z"
+}

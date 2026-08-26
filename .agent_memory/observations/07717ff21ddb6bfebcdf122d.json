@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && rtk proxy rg -n \"op=array_to_mixed|op=store_ref_cell|op=load_ref_cell|@fn name=\" b6.s | head -12",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && rtk proxy rg -n \"op=array_to_mixed|op=store_ref_cell|op=load_ref_cell|@fn name=\" b6.s | head -12: 1: ; @fn name=ints symbol=_fn_ints 40: ; @src",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && rtk proxy rg -n \"op=array_to_mixed|op=store_ref_cell|op=load_ref_cell|@fn name=\" b6.s | head -12: 1: ; @fn name=ints symbol=_fn_ints 40: ; @src line=2 col=43 end=2:45 op=load_ref_cell 45: ; @src line=2 col=43 end=2:45 op=array_to_mixed 60: ; @src line=2 col=43 end=2:45 op=store_ref_cell 65: ; @src line=2 col=43 end=2:45 op=load_ref_cell 581: ; @src line=2 col=61 end=2:63 op=load_ref_cell 629: ; @src line=2 col=61 end=2:63 op=store_ref_cell 677: ; @fn name=_class_propinit_2 symbol=_class_propinit_2 synthetic=1 773: ; @fn name=_class_propinit_3 symbol=_class_propinit_3 synthetic=1 869: ; @fn name=_class_propinit_4 symbol=_class_propinit_4 synthetic=1 965: ; @fn name=_class_propinit_5 symbol=_class_propinit_5 synthetic=1 1061: ; @fn name=_class_propinit_8 symbol=_class_propinit_8 synthetic=1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "07717ff21ddb6bfebcdf122d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:33:15.381Z",
+  "stored_at": "2026-08-16T19:33:15.382Z"
+}

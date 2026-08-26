@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ZLIB_INT_CONSTANTS\" crates/elephc-magician/src/interpreter/constant_eval.rs | head -2; sed -n '245,275p' crates/elephc-magician/src/interpreter/constant_eval.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ZLIB_INT_CONSTANTS\" crates/elephc-magician/src/interpreter/constant_eval.rs | head -2; sed -n '245,275p' crates/elephc-magician/src/interpreter/constant_eval.rs: ec::new(); for table in elephc_builtin_contract::php",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ZLIB_INT_CONSTANTS\" crates/elephc-magician/src/interpreter/constant_eval.rs | head -2; sed -n '245,275p' crates/elephc-magician/src/interpreter/constant_eval.rs: ec::new(); for table in elephc_builtin_contract::php_constants::ALL_INT_CONSTANT_TABLES { for (name, _) in table.iter() { if eval_predefined_constant_value(name).is_none() { missing.push(*name); } } } assert!( missing.is_empty(), \"eval() cannot resolve {} declared constants: {missing:?}\", missing.len() ); } #[test] /// Where the hand-written arms and the shared tables both answer, they answer the same. /// /// The table lookup runs after the arms, so an arm that disagreed would simply win and the /// two engines would quietly hold different numbers for one php constant. fn the_hand_written_arms_agree_with_the_tables() { let mut disagreements = Vec::new(); for table in elephc_builtin_contract::php_constants::ALL_INT_CONSTANT_TABLES { for (name, declared) in table.iter() { if let Some(EvalPredefinedConstant::Int(resolved)) = eval_predefined_constant_value(name) { if resolved != *declared {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b6e251655aaad2bda520271a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:41:54.284Z",
+  "stored_at": "2026-08-23T09:41:54.285Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/add_seek_tests.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/add_seek_tests.py: \"\"\"Pins php's userspace-wrapper position rules, which are surprising enough to be worth naming.\n\nThree of these four are the sa",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/add_seek_tests.py: \"\"\"Pins php's userspace-wrapper position rules, which are surprising enough to be worth naming.\n\nThree of these four are the same rule seen from different sides: php keeps the position for a\nuserspace stream ITSELF, advances it by what each read and write moved, and asks `stream_tell` for\nit in exactly one place — after a successful `stream_seek`.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\np = ROOT / 'tests/codegen/io/streams.rs'\n\nTESTS = r'''\n\n/// Verifies a WRITE through a userspace wrapper move",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8b4edaffc0f9cfb8046d879e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:04:43.225Z",
+  "stored_at": "2026-08-22T18:04:43.226Z"
+}

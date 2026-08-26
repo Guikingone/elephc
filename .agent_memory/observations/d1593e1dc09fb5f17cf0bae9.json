@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '95,160p' tests/codegen/io/filesystem.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '95,160p' tests/codegen/io/filesystem.rs: hp file_put_contents(\"orig.txt\", \"content\"); copy(\"orig.txt\", \"dup.txt\"); echo file_get_contents(\"dup.txt\"); unlink(\"dup.txt\"); if (!file_exists(\"dup.txt\")) { echo \"|gone\"; } ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '95,160p' tests/codegen/io/filesystem.rs: hp file_put_contents(\"orig.txt\", \"content\"); copy(\"orig.txt\", \"dup.txt\"); echo file_get_contents(\"dup.txt\"); unlink(\"dup.txt\"); if (!file_exists(\"dup.txt\")) { echo \"|gone\"; } unlink(\"orig.txt\"); \"#, ); assert_eq!(out, \"content|gone\"); let _ = fs::remove_dir_all(&dir); } /// Verifies rename by creating a file, renaming it, confirming the new name /// holds the data, confirming the old name is gone, and cleaning up. #[test] fn test_rename_file() { let (out, dir) = compile_and_run_in_dir( r#\"<?php file_put_contents(\"old.txt\", \"data\"); rename(\"old.txt\", \"new.txt\"); echo file_get_contents(\"new.txt\"); if (!file_exists(\"old.txt\")) { echo \"|moved\"; } unlink(\"new.txt\"); \"#, ); assert_eq!(out, \"data|moved\"); let _ = fs::remove_dir_all(&dir); } /// Verifies getcwd returns a non-empty string (platform-independent check). #[test] fn test_getcwd() { let out = compile_and_run( r#\"<?php $cwd = getcwd();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d1593e1dc09fb5f17cf0bae9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:16:29.746Z",
+  "stored_at": "2026-08-22T21:16:29.747Z"
+}

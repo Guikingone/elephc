@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub struct Module\" -A 30 src/ir/module.rs | head -35",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub struct Module\" -A 30 src/ir/module.rs | head -35: ub declared_class_names: Vec<String>, 69- pub declared_interface_names: Vec<String>, 70- pub declared_trait_names: Vec<String>, 71- pub declared_trait_source_lin",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"pub struct Module\" -A 30 src/ir/module.rs | head -35: ub declared_class_names: Vec<String>, 69- pub declared_interface_names: Vec<String>, 70- pub declared_trait_names: Vec<String>, 71- pub declared_trait_source_lines: HashMap<String, u32>, 72- pub declared_trait_uses: HashMap<String, Vec<String>>, 73- pub declared_trait_method_names: HashMap<String, Vec<String>>, 74- pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>, 75- pub declared_trait_property_names: HashMap<String, Vec<String>>, 76- pub declared_trait_constant_names: HashMap<String, Vec<String>>, 77- pub declared_trait_constants: HashMap<String, HashMap<String, crate::parser::ast::Expr>>, 78- pub declared_trait_constant_types: 79- HashMap<String, HashMap<String, crate::parser::ast::TypeExpr>>, 80- pub declared_trait_constant_visibilities: HashMap<String, HashMap<String, Visibility>>, 81- pub declared_trait_final_constants: HashMap<String, HashSet<String>>,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "83cd112363f2c005c0813781",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:24:20.612Z",
+  "stored_at": "2026-08-22T18:24:20.613Z"
+}

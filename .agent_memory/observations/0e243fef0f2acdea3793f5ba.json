@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log --oneline HEAD..origin/main | head -35",
+  "summary": "git log --oneline HEAD..origin/main | head -35: p the mysqli compound-DDL scanner exemption (END; DROP tail) c1fe31098 fix: close mysqli scanner CREATE bypass, guard all statement ops, encode DSN credentials a53875629 fix: harden the mysqli surface after review 0887a20c9 docs: document the mysqli subset and --with-mysq",
+  "text": "git log --oneline HEAD..origin/main | head -35: p the mysqli compound-DDL scanner exemption (END; DROP tail) c1fe31098 fix: close mysqli scanner CREATE bypass, guard all statement ops, encode DSN credentials a53875629 fix: harden the mysqli surface after review 0887a20c9 docs: document the mysqli subset and --with-mysqli 0794f81f1 feat: mysqli_multi_query via next_rowset d8c6d10e6 feat: mysqli prepared statements on the pdo bridge 6cc8bf597 feat: buffered mysqli_query and mysqli_result dddce58db feat: connect, escape, and transactions for mysqli 229eab966 feat: inject a mysqli prelude without leaking PDO cab8cd911 fix: report PDO from the injected surface, not the archive ed4cb6e63 refactor: share elephc_pdo externs for a second PHP surface b7325fe0a Merge pull request #739 from illegalstudio/fix/eval-readonly-test-timeout 435e90e32 ci: raise the slow-timeout for the eval readonly-property test 1c6bb5e34 chore: update repository stats",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0e243fef0f2acdea3793f5ba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:06:47.364Z",
+  "stored_at": "2026-08-21T19:06:47.365Z"
+}

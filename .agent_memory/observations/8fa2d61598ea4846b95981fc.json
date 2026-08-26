@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "L=/Users/guillaumeloulier/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186; grep -rn \"GLOB_\" \"$L/src/unix/bsd/apple/mod.rs\" | head -20; echo \"--- SDK header (ground truth) ---\"; H=$(xcrun --show-sdk-path 2>/dev/null)/usr/include/glob.h; grep -n \"define[[:space:]]*GLOB_\" \"$H\" | head -25",
+  "summary": "About to run: L=/Users/guillaumeloulier/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186; grep -rn \"GLOB_\" \"$L/src/unix/bsd/apple/mod.rs\" | head -20; echo \"--- SDK header (ground truth) ---\"; H=$(x",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8fa2d61598ea4846b95981fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:54:31.466Z",
+  "stored_at": "2026-08-22T08:54:31.466Z"
+}

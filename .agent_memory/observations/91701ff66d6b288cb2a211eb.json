@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r 'file_put_contents(\"/tmp/a_probe.txt\",\"one\\ntwo\\n\"); $c=new SplFileObject(\"/tmp/a_probe.txt\"); $c->setFlags(SplFileObject::READ_CSV); $c->setCsvControl(\"n\"); $row=$c->current(); var_dump($row); echo $row[0],\":\",$row[1],\"|END\\n\"; unlink(\"/tmp/a_probe.txt\");'",
+  "summary": "About to run: php -n -r 'file_put_contents(\"/tmp/a_probe.txt\",\"one\\ntwo\\n\"); $c=new SplFileObject(\"/tmp/a_probe.txt\"); $c->setFlags(SplFileObject::READ_CSV); $c->setCsvControl(\"n\"); $row=$c->current(); var_dump($ro",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "91701ff66d6b288cb2a211eb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T20:22:02.568Z",
+  "stored_at": "2026-08-14T20:22:02.569Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"context\" src/codegen_support/runtime/io/user_wrapper.rs | grep -n \"184\\|vtable\\|+ 1\\|slot\" | head -6; echo \"--- ses conflits:\"; grep -n \"^<<<<<<<\" src/codegen_support/runtime/io/user_wrapper.rs",
+  "summary": "grep -n \"context\" src/codegen_support/runtime/io/user_wrapper.rs | grep -n \"184\\|vtable\\|+ 1\\|slot\" | head -6; echo \"--- ses conflits:\"; grep -n \"^<<<<<<<\" src/codegen_support/runtime/io/user_wrapper.rs: --- ses conflits: 245:<<<<<<< HEAD 309:<<<<<<< HEAD 320:<<<<<<< HEAD 360:<<<<<<< HEAD",
+  "text": "grep -n \"context\" src/codegen_support/runtime/io/user_wrapper.rs | grep -n \"184\\|vtable\\|+ 1\\|slot\" | head -6; echo \"--- ses conflits:\"; grep -n \"^<<<<<<<\" src/codegen_support/runtime/io/user_wrapper.rs: --- ses conflits: 245:<<<<<<< HEAD 309:<<<<<<< HEAD 320:<<<<<<< HEAD 360:<<<<<<< HEAD",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b056bbdfb8e0f743d91ac401",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:21:16.104Z",
+  "stored_at": "2026-08-20T17:21:16.104Z"
+}

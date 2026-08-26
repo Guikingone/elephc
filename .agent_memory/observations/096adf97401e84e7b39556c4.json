@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '60,200p' src/codegen_support/runtime/io/fread.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '60,200p' src/codegen_support/runtime/io/fread.rs: on, zero when plain emitter.instruction(\"cbz x0, __rt_fread_do_syscall\"); // no TLS attached → fall through to read syscall emitter.instruction(\"ldr x1, [sp, #16]\"); ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '60,200p' src/codegen_support/runtime/io/fread.rs: on, zero when plain emitter.instruction(\"cbz x0, __rt_fread_do_syscall\"); // no TLS attached → fall through to read syscall emitter.instruction(\"ldr x1, [sp, #16]\"); // buf ptr: x12 is caller-saved and the call clobbered it emitter.instruction(\"ldr x2, [sp, #8]\"); // len crate::codegen_support::abi::emit_symbol_address(emitter, \"x9\", \"_elephc_tls_read_fn\"); emitter.instruction(\"ldr x9, [x9]\"); // load elephc_tls_read entry pointer emitter.instruction(\"blr x9\"); // x0 = bytes read (>=0) or -1 emitter.instruction(\"cmp x0, #0\"); // value-based check after the TLS call emitter.instruction(\"b.ge __rt_fread_read_ok\"); // continue when TLS read returned >= 0 emitter.instruction(\"str xzr, [sp, #24]\"); // TLS error: zero-length result emitter.instruction(\"str xzr, [sp, #40]\"); // a failed TLS read is a failed read emitter.instruction(\"b __rt_fread_done\"); // and does not exhaust the stream either",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "096adf97401e84e7b39556c4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T19:08:20.868Z",
+  "stored_at": "2026-08-23T19:08:20.869Z"
+}

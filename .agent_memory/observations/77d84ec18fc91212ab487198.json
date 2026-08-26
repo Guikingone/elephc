@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/Research/php-src && git branch -a | grep \"PHP-8\" | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/Research/php-src && git branch -a | grep \"PHP-8\" | head -20: remotes/origin/PHP-8.0 remotes/origin/PHP-8.0.0 remotes/origin/PHP-8.0.1 remotes/origin/PHP-8.0.10 remotes/origin/PHP-8.0.11 remotes/origin/PHP-8.0.12 remotes/origin/PHP-8.0.13 remotes/origin/PHP-8.0.14 remotes/orig",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/Research/php-src && git branch -a | grep \"PHP-8\" | head -20: remotes/origin/PHP-8.0 remotes/origin/PHP-8.0.0 remotes/origin/PHP-8.0.1 remotes/origin/PHP-8.0.10 remotes/origin/PHP-8.0.11 remotes/origin/PHP-8.0.12 remotes/origin/PHP-8.0.13 remotes/origin/PHP-8.0.14 remotes/origin/PHP-8.0.15 remotes/origin/PHP-8.0.16 remotes/origin/PHP-8.0.17 remotes/origin/PHP-8.0.18 remotes/origin/PHP-8.0.19 remotes/origin/PHP-8.0.2 remotes/origin/PHP-8.0.20 remotes/origin/PHP-8.0.21 remotes/origin/PHP-8.0.22 remotes/origin/PHP-8.0.23 remotes/origin/PHP-8.0.24 remotes/origin/PHP-8.0.25",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "77d84ec18fc91212ab487198",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:42:52.049Z",
+  "stored_at": "2026-08-18T15:42:52.050Z"
+}

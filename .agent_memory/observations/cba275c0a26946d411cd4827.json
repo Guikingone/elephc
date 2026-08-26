@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '200,320p' crates/elephc-builtin-contract/src/support.rs",
+  "summary": "rtk proxy sed -n '200,320p' crates/elephc-builtin-contract/src/support.rs: 43); assert_eq!(aot_external, 11); assert_eq!(aot_unsupported, 4); } /// Verifies representative exceptional routes are attached to their contracts. #[test] fn exceptional_backend_routes_are_explicit() { assert_eq!( aot_support(lookup(\"hash_init",
+  "text": "rtk proxy sed -n '200,320p' crates/elephc-builtin-contract/src/support.rs: 43); assert_eq!(aot_external, 11); assert_eq!(aot_unsupported, 4); } /// Verifies representative exceptional routes are attached to their contracts. #[test] fn exceptional_backend_routes_are_explicit() { assert_eq!( aot_support(lookup(\"hash_init\").expect(\"hash_init contract\")), BackendSupport::Implemented(BackendImplementation::Prelude) ); assert_eq!( aot_support(lookup(\"get_object_vars\").expect(\"get_object_vars contract\")), BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection) ); assert_eq!( eval_support(lookup(\"array_all\").expect(\"array_all contract\")), BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending) ); } /// Verifies runtime-only, hybrid, and interpreter adapter routes cover all eval bindings. #[test] fn every_eval_binding_has_a_documented_execution_route() { let mut shared_runtime = 0; let mut hybrid_adapter = 0; let mut interpreter_adapter = 0;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cba275c0a26946d411cd4827",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:45:50.828Z",
+  "stored_at": "2026-08-16T15:45:50.828Z"
+}

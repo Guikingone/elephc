@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 gz_edges.py 2>&1 | grep -E \"^(SAME|DIFFERS)\" | sort | uniq -c",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 gz_edges.py 2>&1 | grep -E \"^(SAME|DIFFERS)\" | sort | uniq -c: 1 DIFFERS encode 1 SAME compress 1 SAME crc32 1 SAME deflate 1 SAME fgets_no",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 gz_edges.py 2>&1 | grep -E \"^(SAME|DIFFERS)\" | sort | uniq -c: 1 DIFFERS encode 1 SAME compress 1 SAME crc32 1 SAME deflate 1 SAME fgets_none 1 SAME fgets_null 1 SAME fopen_3arg 1 SAME fwrite_none 1 SAME fwrite_null 1 SAME gz_incpath 1 SAME gz_wb9 1 SAME mode_rb 1 SAME mode_wb1f 1 SAME mode_wb9",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "147732f899b213fcd27dff55",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:11:31.019Z",
+  "stored_at": "2026-08-21T12:11:31.019Z"
+}

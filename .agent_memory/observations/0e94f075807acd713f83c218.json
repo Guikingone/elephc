@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub fn emit_fread\" -A 12 src/codegen_support/runtime/io/fread.rs | head -16",
+  "summary": "grep -n \"pub fn emit_fread\" -A 12 src/codegen_support/runtime/io/fread.rs | head -16: 47:pub fn emit_fread(emitter: &mut Emitter) { 48- if emitter.target.arch == Arch::X86_64 { 49- emit_fread_linux_x86_64(emitter); 50- return; 51- } 52- 53- emitter.blank(); 54- emitter.comment(\"--- runtime: fread ---\"); 55- emitter.lab",
+  "text": "grep -n \"pub fn emit_fread\" -A 12 src/codegen_support/runtime/io/fread.rs | head -16: 47:pub fn emit_fread(emitter: &mut Emitter) { 48- if emitter.target.arch == Arch::X86_64 { 49- emit_fread_linux_x86_64(emitter); 50- return; 51- } 52- 53- emitter.blank(); 54- emitter.comment(\"--- runtime: fread ---\"); 55- emitter.label_global(\"__rt_fread_raw\"); 56- 57- // -- set up stack frame -- 58- emitter.instruction(\"sub sp, sp, #64\"); // allocate stream, descriptor, and read-result spill slots 59- emitter.instruction(\"stp x29, x30, [sp, #48]\"); // save frame pointer and return address",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0e94f075807acd713f83c218",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:47:46.318Z",
+  "stored_at": "2026-08-21T13:47:46.319Z"
+}

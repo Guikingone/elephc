@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py \"stream_filter_remove\" 2>&1 | head -14",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py \"stream_filter_remove\" 2>&1 | head -14: DIFF stream_filter_remove php: Fatal error: Uncaught TypeError: stream_filter_",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py \"stream_filter_remove\" 2>&1 | head -14: DIFF stream_filter_remove php: Fatal error: Uncaught TypeError: stream_filter_remove(): supplied resource is not a valid stream filter resource in p.php:8 elephc: Fatal error: Uncaught TypeError: stream_filter_remove(): supplied resource is not a valid stream filter resource in p.php:24 php: Stack trace: elephc: <none> php: #0 p.php(8): stream_filter_remove(Resource id #7) elephc: <none> php: #1 {main} elephc: <none> php: thrown in p.php on line 8 elephc: <none> 0 same, 1 differ, 0 do not build, of 1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "56f2f4f3c8f8fc387cbe249b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:53:47.674Z",
+  "stored_at": "2026-08-21T18:53:47.675Z"
+}

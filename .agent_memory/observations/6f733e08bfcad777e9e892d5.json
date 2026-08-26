@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"global_names\" src/ | head -20",
+  "summary": "grep -rn \"global_names\" src/ | head -20: bal_names.iter().enumerate() { src/ir/print.rs:188: .global_names src/ir_lower/context.rs:137: global_names: usize, src/ir_lower/context.rs:150: global_names: data.global_names.len(), src/ir_lower/context.rs:162: data.global_names.truncate(self.global_names); src/codegen/web.rs:",
+  "text": "grep -rn \"global_names\" src/ | head -20: bal_names.iter().enumerate() { src/ir/print.rs:188: .global_names src/ir_lower/context.rs:137: global_names: usize, src/ir_lower/context.rs:150: global_names: data.global_names.len(), src/ir_lower/context.rs:162: data.global_names.truncate(self.global_names); src/codegen/web.rs:83: for name in &module.data.global_names { src/codegen/block_emit.rs:935:/// variable reaching `module.data.global_names`, and its equivalent of \"before src/codegen/block_emit.rs:945: .global_names src/codegen/context.rs:1142: .global_names src/codegen/context.rs:1153: .global_names src/codegen/frame.rs:415: let globals = ctx.module.data.global_names.clone(); src/codegen/frame.rs:1389: .global_names src/codegen/lower_inst/builtins/eval/sync_inventory.rs:73: .global_names src/codegen/lower_inst/builtins/eval/sync_inventory.rs:162: .global_names src/codegen/lower_inst/builtins/eval/scope_access.rs:60: .global_names",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6f733e08bfcad777e9e892d5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:19:11.079Z",
+  "stored_at": "2026-08-18T15:19:11.080Z"
+}

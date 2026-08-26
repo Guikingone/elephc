@@ -1,0 +1,16 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/engine.php",
+  "summary": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/engine.php: if (!$ok) {\n            if ($si >= $sl) {\n                $eof = true;\n                break;\n            }\n            $stop = t",
+  "text": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/engine.php: if (!$ok) {\n            if ($si >= $sl) {\n                $eof = true;\n                break;\n            }\n            $stop = true;\n            if (!$suppress -> if (!$ok) {\n            if ($si >= $sl) {\n                $eof = true;\n            } else {\n                $stop = true;\n            }\n            if (!$suppress) {\n                $values[] = null;\n            }\n            break;\n        }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4f89c2f5c21f7109386fd080",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:53:09.370Z",
+  "stored_at": "2026-08-16T15:53:09.370Z",
+  "low_signal": true
+}

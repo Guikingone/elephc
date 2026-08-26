@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/io/mod.rs\")\ns = p.read_text()\na = \"mod cstr;\\n\"\nassert s.count(a) == 1\ns = s.replace(a, a + \"mod file_scheme;\\n\")\nb = \"pub(crate) use cstr::emit_cstr;\\n\"\nassert s.count(b) == 1\ns = s.replace(b, b + \"pub(crate) use file_scheme::emit_path_cstr;\\n\")\np.write_text(s)\n\np = pathlib.Path(\"src/codegen_support/runtime/emitters/platform.rs\")\ns = p.read_text()\na = \"    io::emit_cstr(emitter);\"\nassert s.count(a) == 1\np.write_text(s.replace(a, a + \"\\n    io::emit_path_cstr(emitter);\"))\nprint(\"registered\")\nPY\nCARGO_PROFILE_DEV_DEBU… [+94 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/io/mod.rs\")\ns = p.read_text()\na = \"mod cstr;\\n\"\nassert s.count(a) == 1\ns = s.replace(a, a + \"mod file_scheme;\\n\")\nb = \"pub(crate) use cstr::emit_cstr;\\n\"\nassert s.count(b) == 1\ns = s.replace(b, b + \"pub(crate) use file_scheme::emit_path_cstr;",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/io/mod.rs\")\ns = p.read_text()\na = \"mod cstr;\\n\"\nassert s.count(a) == 1\ns = s.replace(a, a + \"mod file_scheme;\\n\")\nb = \"pub(crate) use cstr::emit_cstr;\\n\"\nassert s.count(b) == 1\ns = s.replace(b, b + \"pub(crate) use file_scheme::emit_path_cstr;\\n\")\np.write_text(s)\n\np = pathlib.Path(\"src/codegen_support/runtime/emitters/platform.rs\")\ns = p.read_text()\na = \"    io::emit_cstr(emitter);\"\nassert s.count(a) == 1\np.write_text(s.replace(a, a + \"\\n    io::emit_path_cstr(emitter);\"))\nprint(\"registered\")\nPY\nCARGO_PROFILE_DEV_DEBUG=false cargo build 2>&1 | grep -E '^(error|warning: unused)' -A 6 | head -30; echo BUILD_DONE: registered BUILD_DONE",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4ef5c2b1dbba3caf3d2361cd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:15:17.490Z",
+  "stored_at": "2026-08-24T18:15:17.491Z"
+}

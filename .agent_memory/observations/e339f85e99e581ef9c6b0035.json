@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/the-trailing-element-takes-three-shapes.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/the-trailing-element-takes-three-shapes.md: ---\nname: the-trailing-element-takes-three-shapes\ndescription: \"l'élément final d'une itération SplFileObject dépend de DEUX drapeaux — deux lectures successives en ont e",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/the-trailing-element-takes-three-shapes.md: ---\nname: the-trailing-element-takes-three-shapes\ndescription: \"l'élément final d'une itération SplFileObject dépend de DEUX drapeaux — deux lectures successives en ont eu chacune la moitié, faute de faire varier READ_AHEAD\"\nmetadata:\n  type: project\n---\n\nUn fichier dont le dernier octet est `\\n` rend **un élément de plus** que son nombre de lignes. Ce\nque cet élément EST dépend de **deux** drapeaux à la fois. MESURÉ sur la matrice complète\n6 formes de fichier × 8 drapeaux, `php -n` 8.5.6 :\n\n    sans SKIP_EMPTY                → il vaut \"\"\n    SKIP_EMPTY, sans READ_AHEAD    → il vaut false\n    ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e339f85e99e581ef9c6b0035",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T10:09:19.454Z",
+  "stored_at": "2026-08-25T10:09:19.454Z"
+}

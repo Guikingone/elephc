@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '60,175p' src/codegen/lower_inst/call_operands.rs",
+  "summary": "sed -n '60,175p' src/codegen/lower_inst/call_operands.rs: er into the target's first argument register. pub(super) fn move_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) { let result_reg = abi::int_result_reg(ctx.emitter); let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0); if result_reg == arg_reg { re",
+  "text": "sed -n '60,175p' src/codegen/lower_inst/call_operands.rs: er into the target's first argument register. pub(super) fn move_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) { let result_reg = abi::int_result_reg(ctx.emitter); let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0); if result_reg == arg_reg { return; } match ctx.emitter.target.arch { Arch::AArch64 => { ctx.emitter .instruction(&format!(\"mov {}, {}\", arg_reg, result_reg)); // move the loaded value into the runtime helper argument register } Arch::X86_64 => { ctx.emitter .instruction(&format!(\"mov {}, {}\", arg_reg, result_reg)); // move the loaded value into the runtime helper argument register } } } /// Returns the temporary caller-stack pad needed to match incoming stack-arg offsets. pub(in crate::codegen) fn direct_call_stack_pad_bytes( ctx: &FunctionContext<'_>, overflow_bytes: usize, ) -> usize { abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1ffbe019fef7201ed2d25737",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:45:13.389Z",
+  "stored_at": "2026-08-21T10:45:13.389Z"
+}

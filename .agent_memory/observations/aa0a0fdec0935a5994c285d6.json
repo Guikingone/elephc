@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/uwseek.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/uwseek.php: <?php\n\nclass Refuse\n{\n    public $context;\n    private $buf = \"\";\n    public function stream_open($p, $m, $o, &$op)\n    {\n        retu",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/uwseek.php: <?php\n\nclass Refuse\n{\n    public $context;\n    private $buf = \"\";\n    public function stream_open($p, $m, $o, &$op)\n    {\n        return true;\n    }\n    public function stream_write($d)\n    {\n        $this->buf .= $d;\n        return strlen($d);\n    }\n    public function stream_read($n)\n    {\n        return \"\";\n    }\n    public function stream_eof()\n    {\n        return true;\n    }\n    public function stream_seek($o, $w)\n    {\n        return false;\n    }\n}\n\nclass Accept extends Refuse\n{\n    public function stream_seek($o, $w)\n    {\n        return true;\n    }\n}\n\nstream_wrapper_register(\"nope\", \"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aa0a0fdec0935a5994c285d6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:57:12.541Z",
+  "stored_at": "2026-08-22T17:57:12.542Z"
+}

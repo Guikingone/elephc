@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/read_buffer.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/read_buffer.rs: //! Purpose:\n//! Integration tests for php's per-stream READ BUFFER on a regular file: a read takes a whole\n//! chunk from the descriptor and serves the caller out of it.\n//!\n//! Called fro",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/read_buffer.rs: //! Purpose:\n//! Integration tests for php's per-stream READ BUFFER on a regular file: a read takes a whole\n//! chunk from the descriptor and serves the caller out of it.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - elephc read exactly what each call asked for, so `fgetc()` was one `read(2)` per byte —\n//!   MEASURED at 499 ms for 900 000 bytes where php takes 14 ms — and\n//!   `stream_get_meta_data()['unread_bytes']` was a hardcoded zero where php reports what its\n//!   buffer still holds.\n//! - The buffer is what makes those numbers php's, a",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f210d899dfc98e1aa98bf466",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:43:26.931Z",
+  "stored_at": "2026-08-23T20:43:26.932Z"
+}

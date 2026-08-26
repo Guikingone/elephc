@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn current_builtin_frame\" -A 25 src/codegen/context*.rs src/codegen/context/*.rs 2>/dev/null | head -32",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn current_builtin_frame\" -A 25 src/codegen/context*.rs src/codegen/context/*.rs 2>/dev/null |",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a869d4ebbb906e2f3df5dae3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T14:52:29.278Z",
+  "stored_at": "2026-08-24T14:52:29.278Z"
+}

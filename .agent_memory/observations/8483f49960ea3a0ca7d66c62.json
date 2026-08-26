@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps -A -o etime=,comm= | rg nextest | head -1",
+  "summary": "About to run: ps -A -o etime=,comm= | rg nextest | head -1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8483f49960ea3a0ca7d66c62",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:58:08.582Z",
+  "stored_at": "2026-08-17T09:58:08.583Z",
+  "low_signal": true
+}

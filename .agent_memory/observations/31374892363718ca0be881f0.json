@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/samefile.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/samefile.php: <?php\n// Is php's refusal about the PATH being equal, or about the FILE being the same?\nfile_put_contents(\"sf_a.txt\", \"AB\");\nlink(\"s",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/samefile.php: <?php\n// Is php's refusal about the PATH being equal, or about the FILE being the same?\nfile_put_contents(\"sf_a.txt\", \"AB\");\nlink(\"sf_a.txt\", \"sf_hard.txt\");\nsymlink(\"sf_a.txt\", \"sf_soft.txt\");\n\necho \"same path      : \", var_export(copy(\"sf_a.txt\", \"sf_a.txt\"), true), \"\\n\";\necho \"hard link      : \", var_export(copy(\"sf_a.txt\", \"sf_hard.txt\"), true), \"\\n\";\necho \"sym link       : \", var_export(copy(\"sf_a.txt\", \"sf_soft.txt\"), true), \"\\n\";\necho \"./ prefix      : \", var_export(copy(\"sf_a.txt\", \"./sf_a.txt\"), true), \"\\n\";\necho \"content        : \", file_get_contents(\"sf_a.txt\"), \"\\n\";\n\n// And a dest",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "31374892363718ca0be881f0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:10:04.291Z",
+  "stored_at": "2026-08-22T21:10:04.292Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"struct ProgramOutput\" -A 12 tests/codegen/support/compiler.rs; grep -n \"fn compile_and_run_in_dir\" -A 6 tests/codegen/support/compiler.rs | head -12",
+  "summary": "grep -n \"struct ProgramOutput\" -A 12 tests/codegen/support/compiler.rs; grep -n \"fn compile_and_run_in_dir\" -A 6 tests/codegen/support/compiler.rs | head -12 completed",
+  "text": "grep -n \"struct ProgramOutput\" -A 12 tests/codegen/support/compiler.rs; grep -n \"fn compile_and_run_in_dir\" -A 6 tests/codegen/support/compiler.rs | head -12 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ac5741282fd36e8012d59419",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:09:15.642Z",
+  "stored_at": "2026-08-22T09:09:15.642Z"
+}

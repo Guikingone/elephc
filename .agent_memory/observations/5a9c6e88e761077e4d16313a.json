@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"label_global\" src/codegen_support/runtime/io/php_filter_dynamic.rs | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"label_global\" src/codegen_support/runtime/io/php_filter_dynamic.rs | head -20: lter_attach_pending\"); 473: emitter.label_global(\"__rt_php_filter_mode_dirs\"); 524: emitter.label_global(\"__rt_php_filter_suppress_begin",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"label_global\" src/codegen_support/runtime/io/php_filter_dynamic.rs | head -20: lter_attach_pending\"); 473: emitter.label_global(\"__rt_php_filter_mode_dirs\"); 524: emitter.label_global(\"__rt_php_filter_suppress_begin\"); 572: emitter.label_global(\"__rt_php_filter_pending_save\"); 616: emitter.label_global(\"__rt_php_filter_pending_restore\"); 663: emitter.label_global(\"__rt_php_filter_open_failed\"); 725: emitter.label_global(\"__rt_php_filter_unknown_report\"); 835: emitter.label_global(\"__rt_pf_match\"); 862: emitter.label_global(\"__rt_php_filter_parse\"); 1083: emitter.label_global(\"__rt_php_filter_attach_pending\"); 1157: emitter.label_global(\"__rt_php_filter_mode_dirs\"); 1194: emitter.label_global(\"__rt_php_filter_suppress_begin\"); 1230: emitter.label_global(\"__rt_php_filter_pending_save\"); 1269: emitter.label_global(\"__rt_php_filter_pending_restore\"); 1311: emitter.label_global(\"__rt_php_filter_open_failed\"); 1366: emitter.label_global(\"__rt_php_filter_unknown_report\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5a9c6e88e761077e4d16313a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:30:30.419Z",
+  "stored_at": "2026-08-24T07:30:30.420Z"
+}

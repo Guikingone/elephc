@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '30,95p' src/types/checker/stmt_check/control_flow.rs",
+  "summary": "rtk proxy sed -n '30,95p' src/types/checker/stmt_check/control_flow.rs: . } | ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. } ); if is_call { if let Some(cached) = call_types.get(&expr.span) { return Some(cached.clone()); } } let inferred = checker.infer_type(expr, analysis_env).ok()?; if is_call { call_types.",
+  "text": "rtk proxy sed -n '30,95p' src/types/checker/stmt_check/control_flow.rs: . } | ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. } ); if is_call { if let Some(cached) = call_types.get(&expr.span) { return Some(cached.clone()); } } let inferred = checker.infer_type(expr, analysis_env).ok()?; if is_call { call_types.insert(expr.span, inferred.clone()); } Some(inferred) }, ); let recorded = checker.loop_storage_types.entry(key).or_default(); for (name, storage_type) in contracts { recorded.insert(name.clone(), storage_type.clone()); env.insert(name, storage_type); } } /// Restores a narrowed variable in the environment to its previously saved type after a guarded /// branch, removing it when it had no prior type. Used to keep `if`/`else` type narrowing scoped /// to its branch. fn restore_narrowed_var(env: &mut TypeEnv, var: &str, saved: &Option<PhpType>) { match saved { Some(ty) => { env.insert(var.to_string(), ty.clone()); } None => { env.remove(var); } }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "015581510d7cd9a7962fff85",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:40:11.715Z",
+  "stored_at": "2026-08-16T19:40:11.716Z"
+}

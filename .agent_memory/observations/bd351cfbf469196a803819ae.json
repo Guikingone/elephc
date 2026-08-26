@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib, subprocess\nD = pathlib.Path('wrbextra'); D.mkdir(exist_ok=True)\nW = pathlib.Path('wrbexpect/bound_php/bound.php').read_text().split('$h = fopen')[0]\ncases = {\n 'feof_case':      '$h = fopen(\"src://x\", \"r\"); fgets($h, 6); var_dump(feof($h)); var_dump(fgets($h)); fclose($h);',\n 'passthru_after': '$h = fopen(\"src://x\", \"r\"); fgets($h, 6); var_dump(fpassthru($h)); fclose($h);',\n 'passthru_start'… [+314 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib, subprocess\nD = pathlib.Path('wrbextra'); D.mkdir(exist_ok=True)\nW = pathlib.Path('wrbexpect/bound_php/bound.php').",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib, subprocess\nD = pathlib.Path('wrbextra'); D.mkdir(exist_ok=True)\nW = pathlib.Path('wrbexpect/bound_php/bound.php').read_text().split('$h = fopen')[0]\ncases = {\n 'feof_case':      '$h = fopen(\"src://x\", \"r\"); fgets($h, 6); var_dump(feof($h)); var_dump(fgets($h)); fclose($h);',\n 'passthru_after': '$h = fopen(\"src://x\", \"r\"); fgets($h, 6); var_dump(fpassthru($h)); fclose($h);',\n 'passthru_start': '$h = fopen(\"src://x\", \"r\"); var_dump(fpassthru($h)); fclose($h);',\n}\nfor name, body in cases.items():\n    f = D / (name + '.php')\n    f.write_text(W + body + '\\n')\n    r = subprocess.run(['php', '-n', str(f)], capture_output=True, text=True, cwd=str(D), timeout=30)\n    print(name, repr(r.stdout + r.stderr))\nPY failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Split it into plain, separate commands and run them from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bd351cfbf469196a803819ae",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:28:38.247Z",
+  "stored_at": "2026-08-21T13:28:38.249Z"
+}

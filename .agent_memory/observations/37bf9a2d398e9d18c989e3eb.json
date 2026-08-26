@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/strings/formatting.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/strings/formatting.rs: /// sscanf %f captures a float slice. Like %d, sscanf returns the matched\n/// substring (Array(Str)), so the assertion compares the captured text.\n#[test]\nfn te -> /// sscanf %f yield",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/strings/formatting.rs: /// sscanf %f captures a float slice. Like %d, sscanf returns the matched\n/// substring (Array(Str)), so the assertion compares the captured text.\n#[test]\nfn te -> /// sscanf %f yields a FLOAT, so echoing it prints php's float rendering.\n#[test]\nfn test_sscanf_float() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "37bf9a2d398e9d18c989e3eb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:27:21.597Z",
+  "stored_at": "2026-08-16T16:27:21.597Z"
+}

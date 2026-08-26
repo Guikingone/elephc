@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"\\\"prelude\\\"\" scripts/docs/elephc_builtins/registry.py | head -10",
+  "summary": "grep -rn \"\\\"prelude\\\"\" scripts/docs/elephc_builtins/registry.py | head -10 completed",
+  "text": "grep -rn \"\\\"prelude\\\"\" scripts/docs/elephc_builtins/registry.py | head -10 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee3fea1f151487a301e11c10",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:17:59.072Z",
+  "stored_at": "2026-08-21T12:17:59.072Z"
+}

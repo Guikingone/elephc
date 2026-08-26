@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls ~/Library/Caches/elephc 2>/dev/null; ls ~/.cache/elephc 2>/dev/null; find /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T -maxdepth 1 -name 'elephc_test_pcre2*' 2>/dev/null | head",
+  "summary": "ls ~/Library/Caches/elephc 2>/dev/null; ls ~/.cache/elephc 2>/dev/null; find /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T -maxdepth 1 -name 'elephc_test_pcre2*' 2>/dev/null | head: h64 /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_pcre2_shim_78836_macos-aarch64 /private/var/folders/xc",
+  "text": "ls ~/Library/Caches/elephc 2>/dev/null; ls ~/.cache/elephc 2>/dev/null; find /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T -maxdepth 1 -name 'elephc_test_pcre2*' 2>/dev/null | head: h64 /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_pcre2_shim_78836_macos-aarch64 /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_pcre2_shim_4636_macos-aarch64 /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_pcre2_shim_29152_macos-aarch64 /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_pcre2_shim_24245_macos-aarch64 /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_pcre2_shim_47088_macos-aarch64 /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_pcre2_shim_89014_macos-aarch64 /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_pcre2_shim_4219_macos-aarch64 /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_pcre2_shim_4685_macos-aarch64 /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_pcre2_shim_41784_macos-aarch64",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e85856ca801bbfdb424a6252",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:02:44.167Z",
+  "stored_at": "2026-08-25T13:02:44.167Z"
+}

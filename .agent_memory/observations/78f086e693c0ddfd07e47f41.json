@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"^use\\|fn compile_and_run\" tests/codegen/spl/filesystem.rs | head -5; grep -n \"fn test_\" tests/codegen/spl/filesystem.rs | head -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"^use\\|fn compile_and_run\" tests/codegen/spl/filesystem.rs | head -5; grep -n \"fn test_\" tests/codegen/spl/filesystem.rs | head -8: 12:use crate::support::*; 16:fn test_filesystem_spl_classes_are_declared_and_impleme",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"^use\\|fn compile_and_run\" tests/codegen/spl/filesystem.rs | head -5; grep -n \"fn test_\" tests/codegen/spl/filesystem.rs | head -8: 12:use crate::support::*; 16:fn test_filesystem_spl_classes_are_declared_and_implement_contracts() { 99:fn test_spl_file_info_and_file_object_behavior() { 169:fn test_spl_file_info_factory_class_overrides() { 216:fn test_directory_filesystem_and_glob_iterators() { 287:fn test_spl_file_object_stream_position_methods() { 316:fn test_spl_temp_file_object_stream_read_write() { 338:fn test_spl_temp_file_object_memory_buffer_before_spill() { 367:fn test_spl_temp_file_object_spills_after_threshold() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "78f086e693c0ddfd07e47f41",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:36:07.767Z",
+  "stored_at": "2026-08-23T09:36:07.767Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams::test_stream_context_scalar_options 2>&1 | grep -E \"^test |test result|left:|right:\" | head -5",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams::test_stream_context_scalar_options 2>&1 | grep -E \"^test |test result|left:|right:\" | head -5: test codegen::io::streams::test_stream_context_scalar_options_raise_phps_type_error ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8852 ",
+  "text": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams::test_stream_context_scalar_options 2>&1 | grep -E \"^test |test result|left:|right:\" | head -5: test codegen::io::streams::test_stream_context_scalar_options_raise_phps_type_error ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8852 filtered out; finished in 0.90s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ddf98b1acb0452c4c6ae685b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:11:21.086Z",
+  "stored_at": "2026-08-22T16:11:21.086Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; lldb -b -o \"run\" -o \"register read x30 x29 x0 x9\" -o \"memory read --size 8 --format x --count 6 \\$sp\" ./leak3 2>&1 | tail -18",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; lldb -b -o \"run\" -o \"register read x30 x29 x0 x9\" -o \"memory read --size 8 --format x --count 6 \\$sp\" ./leak3 2>&1 | tail -18: (lldb) target create ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; lldb -b -o \"run\" -o \"register read x30 x29 x0 x9\" -o \"memory read --size 8 --format x --count 6 \\$sp\" ./leak3 2>&1 | tail -18: (lldb) target create \"./leak3\" Current executable set to '/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/leak3' (arm64). (lldb) run Process 3185 launched: '/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/leak3' (arm64) Process 3185 stopped * thread #1, queue = 'com.apple.main-thread', stop reason = EXC_BAD_ACCESS (code=1, address=0x6f71385a2d636870) frame #0: 0x0000385a2d636870 error: memory read failed for 0x385a2d636800 Target 0: (leak3) stopped.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b7a0266c46ea0959a145f1d2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:13:33.038Z",
+  "stored_at": "2026-08-23T08:13:33.038Z"
+}

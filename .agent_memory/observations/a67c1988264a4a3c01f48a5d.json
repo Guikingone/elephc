@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"pub struct ParamDef\\|pub struct Param\\b\\|pub ty:\\|pub default\" src/builtins/spec.rs | head -20",
+  "summary": "grep -rn \"pub struct ParamDef\\|pub struct Param\\b\\|pub ty:\\|pub default\" src/builtins/spec.rs | head -20 completed",
+  "text": "grep -rn \"pub struct ParamDef\\|pub struct Param\\b\\|pub ty:\\|pub default\" src/builtins/spec.rs | head -20 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a67c1988264a4a3c01f48a5d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:01:26.434Z",
+  "stored_at": "2026-08-21T11:01:26.435Z"
+}

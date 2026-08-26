@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '255,320p' src/types/checker/functions/resolution/specialization.rs",
+  "summary": "sed -n '255,320p' src/types/checker/functions/resolution/specialization.rs: s[seen_idx].1 = specialized; changed = true; } } else if param_types[seen_idx].1 == PhpType::Int && !seen { // Discard the `Int` fallback exactly once: adopt the type of the // first call so an all-`Str` (etc.) parameter is not polluted by // u",
+  "text": "sed -n '255,320p' src/types/checker/functions/resolution/specialization.rs: s[seen_idx].1 = specialized; changed = true; } } else if param_types[seen_idx].1 == PhpType::Int && !seen { // Discard the `Int` fallback exactly once: adopt the type of the // first call so an all-`Str` (etc.) parameter is not polluted by // unioning the fallback. The seen set marks the discard so a real // later int call still widens instead of re-adopting. self.param_specialization_seen.insert(key); if param_types[seen_idx].1 != actual_ty { param_types[seen_idx].1 = actual_ty.clone(); changed = true; } } else { // Widen to the union so heterogeneous call sites become `Mixed` // rather than a single (wrong) type. A no-op for an already-`Mixed` // or patched parameter (so e.g. `Generator::send`'s value stays // `Mixed`). let widened = Self::union_param_type(&param_types[seen_idx].1, &actual_ty); if param_types[seen_idx].1 != widened { param_types[seen_idx].1 = widened; changed = true; }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "871d2b3ad66b7b76dca11b66",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:43:19.276Z",
+  "stored_at": "2026-08-18T09:43:19.276Z"
+}

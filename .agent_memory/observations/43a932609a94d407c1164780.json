@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub(crate) fn references\" -A 14 src/prelude_prune/usage.rs",
+  "summary": "grep -n \"pub(crate) fn references\" -A 14 src/prelude_prune/usage.rs: 96: pub(crate) fn references(&self, name: &str) -> bool { 97- self.functions.contains(&php_symbol_key(name)) 98- } 99-} 100- 101-/// PHP builtins that hand the whole symbol table to the program. None of them names what it 102-/// will reach, so seeing",
+  "text": "grep -n \"pub(crate) fn references\" -A 14 src/prelude_prune/usage.rs: 96: pub(crate) fn references(&self, name: &str) -> bool { 97- self.functions.contains(&php_symbol_key(name)) 98- } 99-} 100- 101-/// PHP builtins that hand the whole symbol table to the program. None of them names what it 102-/// will reach, so seeing one means the prelude must be kept whole. 103-const INTROSPECTION_BUILTINS: &[&str] = &[ 104- \"eval\", 105- \"get_defined_functions\", 106- \"get_declared_classes\", 107- \"get_declared_interfaces\", 108- \"get_declared_traits\", 109- \"spl_autoload_register\", 110-];",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "43a932609a94d407c1164780",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:32:12.640Z",
+  "stored_at": "2026-08-21T11:32:12.643Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git show 783c63af13bce20312cd093f85a92c83ea4b9aee:crates/elephc-builtin-contract/src/registry.rs 2>/dev/null | grep -n \"assert_eq!(contracts().len()\" | head -2",
+  "summary": "git show 783c63af13bce20312cd093f85a92c83ea4b9aee:crates/elephc-builtin-contract/src/registry.rs 2>/dev/null | grep -n \"assert_eq!(contracts().len()\" | head -2: 137: assert_eq!(contracts().len(), 544);",
+  "text": "git show 783c63af13bce20312cd093f85a92c83ea4b9aee:crates/elephc-builtin-contract/src/registry.rs 2>/dev/null | grep -n \"assert_eq!(contracts().len()\" | head -2: 137: assert_eq!(contracts().len(), 544);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b9ffd0ea6c00e51639f0438c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:07:40.962Z",
+  "stored_at": "2026-08-21T19:07:40.963Z"
+}

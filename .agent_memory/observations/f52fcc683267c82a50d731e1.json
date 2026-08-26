@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub struct Instruction\" -A 18 src/ir/instr.rs | head -22",
+  "summary": "grep -n \"pub struct Instruction\" -A 18 src/ir/instr.rs | head -22: 39:pub struct Instruction { 40- pub op: Op, 41- pub operands: Vec<ValueId>, 42- pub immediate: Option<Immediate>, 43- pub result: Option<ValueId>, 44- pub result_type: IrType, 45- pub result_php_type: PhpType, 46- pub result_ownership: Ownership, 47- pu",
+  "text": "grep -n \"pub struct Instruction\" -A 18 src/ir/instr.rs | head -22: 39:pub struct Instruction { 40- pub op: Op, 41- pub operands: Vec<ValueId>, 42- pub immediate: Option<Immediate>, 43- pub result: Option<ValueId>, 44- pub result_type: IrType, 45- pub result_php_type: PhpType, 46- pub result_ownership: Ownership, 47- pub effects: Effects, 48- pub span: Option<Span>, 49- /// Optimization-pass provenance: set when a pass rewrote this instruction 50- /// (const-fold) or moved it (LICM), so source maps can explain assembly 51- /// that no longer matches the source shape. `None` for instructions 52- /// lowered directly from the AST. A one-byte enum rather than a string: 53- /// `Instruction` sits in the recursive lowering paths' stack frames, and 54- /// growing it measurably shrinks the headroom before test threads overflow. 55- pub origin: Option<PassOrigin>, 56-} 57-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f52fcc683267c82a50d731e1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:23:17.217Z",
+  "stored_at": "2026-08-22T12:23:17.217Z"
+}

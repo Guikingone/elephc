@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 207,265p src/codegen_support/runtime/io/phar_read.rs | grep -nE \"bl __rt_|b __rt_|cbnz|cbz|label\" | head -14",
+  "summary": "sed -n 207,265p src/codegen_support/runtime/io/phar_read.rs | grep -nE \"bl __rt_|b __rt_|cbnz|cbz|label\" | head -14: 4: emitter.label_global(\"__rt_file_get_contents_maybe_phar\"); 41: emitter.instruction(\"bl __rt_zip_open_entry\"); // x0 = entry stream fd (-1 after warning) 42: emitter.instruction(\"b __rt_fgc_archive_hav",
+  "text": "sed -n 207,265p src/codegen_support/runtime/io/phar_read.rs | grep -nE \"bl __rt_|b __rt_|cbnz|cbz|label\" | head -14: 4: emitter.label_global(\"__rt_file_get_contents_maybe_phar\"); 41: emitter.instruction(\"bl __rt_zip_open_entry\"); // x0 = entry stream fd (-1 after warning) 42: emitter.instruction(\"b __rt_fgc_archive_have_fd\"); // join the shared slurp with the descriptor 43: emitter.label(\"__rt_fgc_phar_check\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "469b7a6efc644949beede329",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:53:08.211Z",
+  "stored_at": "2026-08-21T17:53:08.211Z"
+}

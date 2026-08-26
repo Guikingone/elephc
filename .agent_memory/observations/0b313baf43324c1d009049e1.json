@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dropped_upstream_symbols.py')\nt = p.read_text()\nt = t.replace(\"LABEL = re.compile(r'label(?:_global)?\\\\(\\\"([A-Za-z_][\\\\w.$]*)\\\"\\\\)')\",\n              \"# Only GLOBAL entry points: an internal label vanishing means a helper was rewritten,\\n\"\n              \"# a global one vanishing means a helper no longer EXISTS.\\n\"\n              \"LABEL = re.compile(r'label_global\\\\(\\\"([A-Za-z_][\\\\w.… [+282 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dropped_upstream_symbols.py')\nt = p.read_text()\nt = t.replace(\"LABEL = re.compile(r'label(?:_global)?\\\\",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dropped_upstream_symbols.py')\nt = p.read_text()\nt = t.replace(\"LABEL = re.compile(r'label(?:_global)?\\\\(\\\"([A-Za-z_][\\\\w.$]*)\\\"\\\\)')\",\n              \"# Only GLOBAL entry points: an internal label vanishing means a helper was rewritten,\\n\"\n              \"# a global one vanishing means a helper no longer EXISTS.\\n\"\n              \"LABEL = re.compile(r'label_global\\\\(\\\"([A-Za-z_][\\\\w.$]*)\\\"\\\\)')\")\np.write_text(t)\nprint('restricted to globals')\nPY\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dropped_upstream_symbols.py 2>&1 | head -25: restricted to globals base declares 783 runtime labels, this branch 931 present in the BASE and absent here: 1 __rt_sscanf src/codegen_support/runtime/strings/sscanf.rs added by this branch: 149",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0b313baf43324c1d009049e1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:11:53.936Z",
+  "stored_at": "2026-08-21T19:11:53.937Z"
+}

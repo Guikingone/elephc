@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn box_stat_array_or_false_result\\|fn box_array_or_false_result\" src/codegen/lower_inst/builtins/io/boxing_helpers.rs",
+  "summary": "grep -n \"fn box_stat_array_or_false_result\\|fn box_array_or_false_result\" src/codegen/lower_inst/builtins/io/boxing_helpers.rs: 629:pub(super) fn box_stat_array_or_false_result(ctx: &mut FunctionContext<'_>) { 634:fn box_array_or_false_result(ctx: &mut FunctionContext<'_>, tag: u64, label_prefix: &str) {",
+  "text": "grep -n \"fn box_stat_array_or_false_result\\|fn box_array_or_false_result\" src/codegen/lower_inst/builtins/io/boxing_helpers.rs: 629:pub(super) fn box_stat_array_or_false_result(ctx: &mut FunctionContext<'_>) { 634:fn box_array_or_false_result(ctx: &mut FunctionContext<'_>, tag: u64, label_prefix: &str) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b7650fad88a2d1b54d7a183d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:43:06.450Z",
+  "stored_at": "2026-08-20T17:43:06.451Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - 🔴🔴🔴★★★ [SILENT: `$x=null; f($x)` avec `&$a` ne REÇOIT JAMAIS l'écriture](byref-out-param-write-never-reaches-a-null-caller.md) — l'idiome out-param de php; `i -> - ✅🔴🔴🔴★★★ [SILENT: `$x=null; f($x)` a",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - 🔴🔴🔴★★★ [SILENT: `$x=null; f($x)` avec `&$a` ne REÇOIT JAMAIS l'écriture](byref-out-param-write-never-reaches-a-null-caller.md) — l'idiome out-param de php; `i -> - ✅🔴🔴🔴★★★ [SILENT: `$x=null; f($x)` avec `&$a` ne REÇOIT JAMAIS l'écriture](byref-out-param-write-never-reaches-a-null-caller.md) — CORRIGÉ: [3 moitiés, et `int|null` SEGFAUTE](byref-null-caller-widening-is-mixed-not-a-union.md) (seul `mixed` marche; la 3e moitié est le LOWERING, qui a sa propre table de types).\n- ✅🎯 [scanf `&...$vars`: UN WRAPPER PAR ARITÉ](scanf-by-ref-vars-is-one-wrapper-per-arity.md) — dernier P0 streams. 🔑 le compte rendu compte les conversions SUPPRIMÉE",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "072f6316b4062c7b255b8b74",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:42:45.802Z",
+  "stored_at": "2026-08-18T10:42:45.803Z"
+}

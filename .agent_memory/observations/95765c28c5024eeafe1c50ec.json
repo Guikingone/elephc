@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn '_uncaught_exc_prefix\\|_uncaught_exc_in\\b' src/codegen_support/runtime/data/*.rs | head",
+  "summary": "grep -rn '_uncaught_exc_prefix\\|_uncaught_exc_in\\b' src/codegen_support/runtime/data/*.rs | head: src/codegen_support/runtime/data/fixed.rs:751: out.push_str(\".globl _uncaught_exc_prefix\\n_uncaught_exc_prefix:\\n .ascii \\\"\\\\nFatal error: Uncaught \\\"\\n\"); src/codegen_support/runtime/data/fixed.rs:753: out.push_str(\".glob",
+  "text": "grep -rn '_uncaught_exc_prefix\\|_uncaught_exc_in\\b' src/codegen_support/runtime/data/*.rs | head: src/codegen_support/runtime/data/fixed.rs:751: out.push_str(\".globl _uncaught_exc_prefix\\n_uncaught_exc_prefix:\\n .ascii \\\"\\\\nFatal error: Uncaught \\\"\\n\"); src/codegen_support/runtime/data/fixed.rs:753: out.push_str(\".globl _uncaught_exc_in\\n_uncaught_exc_in:\\n .ascii \\\" in \\\"\\n\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "95765c28c5024eeafe1c50ec",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:45:28.425Z",
+  "stored_at": "2026-08-24T17:45:28.425Z"
+}

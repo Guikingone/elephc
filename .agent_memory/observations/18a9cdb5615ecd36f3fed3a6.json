@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test -p elephc --lib file_reports_a_failed_read_as_null_on_every_target 2>&1 | grep -A25 \"panicked at src/codegen_support/runtime/io/file.rs:363\" | head -30",
+  "summary": "About to run: cargo test -p elephc --lib file_reports_a_failed_read_as_null_on_every_target 2>&1 | grep -A25 \"panicked at src/codegen_support/runtime/io/file.rs:363\" | head -30",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18a9cdb5615ecd36f3fed3a6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:42:57.095Z",
+  "stored_at": "2026-08-20T20:42:57.095Z"
+}

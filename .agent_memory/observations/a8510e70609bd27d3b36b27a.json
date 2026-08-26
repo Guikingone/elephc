@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '158,215p' src/codegen_support/runtime/io/stream_get_line.rs",
+  "summary": "sed -n '158,215p' src/codegen_support/runtime/io/stream_get_line.rs: truction(\"ldrb w13, [x1]\"); // the filtered byte emitter.instruction(\"ldr x12, [sp, #48]\"); // the claimed result window emitter.instruction(\"ldr x10, [sp, #56]\"); // running total emitter.instruction(\"strb w13, [x12, x10]\"); // append it to the line ",
+  "text": "sed -n '158,215p' src/codegen_support/runtime/io/stream_get_line.rs: truction(\"ldrb w13, [x1]\"); // the filtered byte emitter.instruction(\"ldr x12, [sp, #48]\"); // the claimed result window emitter.instruction(\"ldr x10, [sp, #56]\"); // running total emitter.instruction(\"strb w13, [x12, x10]\"); // append it to the line emitter.instruction(\"mov x2, #0\"); // release the whole chunk window emitter.instruction(\"bl __rt_concat_publish\"); // hand this byte's scratch window back before the next read emitter.instruction(\"mov x0, x1\"); // chunk ptr for release emitter.instruction(\"bl __rt_decref_any\"); // release the chunk before continuing the line emitter.instruction(\"b __rt_sgl_byte_counted\"); // join the shared count and delimiter scan // -- user-wrapper line read: feof-gated stream_read into _user_wrapper_drain_buf // (a SEPARATE buffer from _concat_buf, which each __rt_fread result may // occupy). [sp,#48] = drain-buf base, [sp,#56] = running length. Stops at",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a8510e70609bd27d3b36b27a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:39:31.730Z",
+  "stored_at": "2026-08-21T13:39:31.730Z"
+}

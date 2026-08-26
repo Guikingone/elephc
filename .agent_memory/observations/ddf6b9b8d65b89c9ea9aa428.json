@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/builtin_spl_classes/filesystem.rs: method_with_body(\"fgets\", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),\n        method_with_body(\"getCurrentLine\", Vec::new(), Some(mixed_type( -> met",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/builtin_spl_classes/filesystem.rs: method_with_body(\"fgets\", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),\n        method_with_body(\"getCurrentLine\", Vec::new(), Some(mixed_type( -> method_with_body(\"fgets\", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),\n        method_with_body(\n            \"fscanf\",\n            vec![param(\"format\", TypeExpr::Str)],\n            Some(mixed_type()),\n            spl_file_object_fscanf_body(),\n        ),\n        method_with_body(\"getCurrentLine\", Vec::new(), Some(mixed_type()), return_body(file_current_line_expr())),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ddf6b9b8d65b89c9ea9aa428",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:35:13.377Z",
+  "stored_at": "2026-08-16T17:35:13.378Z"
+}

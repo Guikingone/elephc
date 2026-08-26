@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '60,175p' tests/fresh_result_ownership_leak_tests.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '60,175p' tests/fresh_result_ownership_leak_tests.rs: aked, each in the repeated-call shape that showed it. // --------------------------------------------------------------------------- /// Verifies repeated `tempnam",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '60,175p' tests/fresh_result_ownership_leak_tests.rs: aked, each in the repeated-call shape that showed it. // --------------------------------------------------------------------------- /// Verifies repeated `tempnam()` calls reclaim every generated path string. /// /// The declared debt reported this as a constant 48-byte leak in /// `tempnam()`/`sys_get_temp_dir()`. Measurement corrected both halves: the leak is PER CALL /// (10 calls left 10 live blocks), and `sys_get_temp_dir()` was never involved — the same leak /// reproduces with a literal `\"/tmp\"` directory argument, which is the shape used here. #[test] fn repeated_tempnam_calls_leave_a_clean_heap() { let source = r#\"<?php for ($i = 0; $i < 5; $i++) { $path = tempnam(\"/tmp\", \"elephc_leakprobe\"); @unlink($path); } echo \"done\\n\"; \"#; assert_output_and_clean_heap(\"elephc_leak_tempnam\", source, \"done\\n\"); } /// Verifies repeated `getcwd()` calls reclaim every returned path string. ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "49c61a40218a7452c4a5c4fd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:13:18.825Z",
+  "stored_at": "2026-08-23T13:13:18.827Z"
+}

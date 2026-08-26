@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"has_prefix\\|starts_with_bytes\\|__rt_str_starts\" src/codegen_support/runtime | head -5",
+  "summary": "grep -rn \"has_prefix\\|starts_with_bytes\\|__rt_str_starts\" src/codegen_support/runtime | head -5: src/codegen_support/runtime/strings/str_starts_with.rs:2://! Emits the `__rt_str_starts_with`, `__rt_str_starts_with_no` runtime helper assembly for str starts with. src/codegen_support/runtime/strings/str_starts_with.rs:25",
+  "text": "grep -rn \"has_prefix\\|starts_with_bytes\\|__rt_str_starts\" src/codegen_support/runtime | head -5: src/codegen_support/runtime/strings/str_starts_with.rs:2://! Emits the `__rt_str_starts_with`, `__rt_str_starts_with_no` runtime helper assembly for str starts with. src/codegen_support/runtime/strings/str_starts_with.rs:25: emitter.label_global(\"__rt_str_starts_with\"); src/codegen_support/runtime/strings/str_starts_with.rs:29: emitter.instruction(\"b.gt __rt_str_starts_with_no\"); // needle longer than haystack, can't match src/codegen_support/runtime/strings/str_starts_with.rs:33: emitter.label(\"__rt_str_starts_with_loop\"); src/codegen_support/runtime/strings/str_starts_with.rs:35: emitter.instruction(\"b.ge __rt_str_starts_with_yes\"); // all matched, haystack starts with needle",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f486fb789f56d6c405ad3be7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:16:44.112Z",
+  "stored_at": "2026-08-18T13:16:44.112Z"
+}

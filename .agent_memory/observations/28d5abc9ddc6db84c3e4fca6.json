@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,80p' src/builtins/system/preg_match.rs",
+  "summary": "sed -n '1,80p' src/builtins/system/preg_match.rs: ics(crate::ir::RuntimeFnId::PregMatch), crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex, ), } /// Validates that `$matches`, when supplied, is a variable expression. /// /// Infers args[0] (pattern) and args[1] (subject) to trigger type-environment ",
+  "text": "sed -n '1,80p' src/builtins/system/preg_match.rs: ics(crate::ir::RuntimeFnId::PregMatch), crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex, ), } /// Validates that `$matches`, when supplied, is a variable expression. /// /// Infers args[0] (pattern) and args[1] (subject) to trigger type-environment side /// effects, but deliberately skips inference of args[2] (`$matches`) because it is a /// write-only output parameter that is undefined before the call. Passing a non-variable /// (such as a literal or function call) to `$matches` is a compile-time error. fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> { cx.checker.infer_type(&cx.args[0], cx.env)?; cx.checker.infer_type(&cx.args[1], cx.env)?; if cx.args.len() == 3 && !matches!(cx.args[2].kind, ExprKind::Variable(_)) { return Err(CompileError::new( cx.args[2].span, \"preg_match() parameter $matches must be passed a variable\", )); } Ok(PhpType::Int) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "28d5abc9ddc6db84c3e4fca6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:05:18.959Z",
+  "stored_at": "2026-08-25T13:05:18.960Z"
+}

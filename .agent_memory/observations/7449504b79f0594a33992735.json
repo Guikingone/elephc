@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '100,120p' src/codegen/lower_inst/builtins/io/filesystem_ops.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '100,120p' src/codegen/lower_inst/builtins/io/filesystem_ops.rs: ut FunctionContext<'_>, inst: &Instruction) -> Result<()> { // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '100,120p' src/codegen/lower_inst/builtins/io/filesystem_ops.rs: ut FunctionContext<'_>, inst: &Instruction) -> Result<()> { // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`. if let Some(path) = inst.operands.get(0).copied() { super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?; } // php names the function the USER called in every one of these warnings. `__rt_copy` is // `__rt_file_get_contents` followed by `__rt_file_put_contents`, and left to themselves those // two name THEMSELVES — so a failed copy reported `file_get_contents(missing.txt)`. emit_open_diag_name(ctx, Some((\"_diag_open_failed_copy_prefix\", \"Warning: copy(\".len(), \"_uww_name_copy\", \"copy\".len()))); let result = lower_binary_path_call_with_context(ctx, inst, \"copy\", \"__rt_copy\"); // Unconditionally: the slots are global, and a name left behind would make the next // `file_get_contents()` in the program call itself `copy`.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7449504b79f0594a33992735",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:11:28.231Z",
+  "stored_at": "2026-08-22T20:11:28.231Z"
+}

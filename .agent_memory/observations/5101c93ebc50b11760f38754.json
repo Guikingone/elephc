@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'php://temp' src/codegen/lower_inst/builtins/io/fopen_core.rs | head -10",
+  "summary": "grep -rn 'php://temp' src/codegen/lower_inst/builtins/io/fopen_core.rs | head -10: src/codegen/lower_inst/builtins/io/fopen_core.rs:288:/// whatever the resource turns out to be — a file, `php://temp`, anything. The filter it named is src/codegen/lower_inst/builtins/io/fopen_core.rs:502:/// Consumes the SECOND php reso",
+  "text": "grep -rn 'php://temp' src/codegen/lower_inst/builtins/io/fopen_core.rs | head -10: src/codegen/lower_inst/builtins/io/fopen_core.rs:288:/// whatever the resource turns out to be — a file, `php://temp`, anything. The filter it named is src/codegen/lower_inst/builtins/io/fopen_core.rs:502:/// Consumes the SECOND php resource id a `php://temp` open takes. src/codegen/lower_inst/builtins/io/fopen_core.rs:559: // A run-time `php://temp` published the flag inside `__rt_php_wrapper_open`; burning it here src/codegen/lower_inst/builtins/io/fopen_core.rs:1162: // `fopen(\"php://temp\",\"a+\")`, write `hello`, `fseek(0)`, write `world` answers src/codegen/lower_inst/builtins/io/fopen_core.rs:1171: // php's `php://temp` wraps a memory stream and registers BOTH, so it consumes the id",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5101c93ebc50b11760f38754",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:43:18.343Z",
+  "stored_at": "2026-08-25T13:43:18.344Z"
+}

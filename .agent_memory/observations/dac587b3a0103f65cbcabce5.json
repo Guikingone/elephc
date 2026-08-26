@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'Op::ToInt\\|ToInt =>' src/codegen/lower_inst/ | head -8",
+  "summary": "grep -rn 'Op::ToInt\\|ToInt =>' src/codegen/lower_inst/ | head -8 completed",
+  "text": "grep -rn 'Op::ToInt\\|ToInt =>' src/codegen/lower_inst/ | head -8 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dac587b3a0103f65cbcabce5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:09:47.230Z",
+  "stored_at": "2026-08-24T19:09:47.230Z"
+}

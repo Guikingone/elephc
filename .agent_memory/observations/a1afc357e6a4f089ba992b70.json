@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn '\"return_type\"' scripts/docs/*.py scripts/docs/elephc_builtins/*.py 2>/dev/null | head -5",
+  "summary": "grep -rn '\"return_type\"' scripts/docs/*.py scripts/docs/elephc_builtins/*.py 2>/dev/null | head -5: scripts/docs/elephc_builtins/extract.py:665: \"return_type\": b.sig.return_type,",
+  "text": "grep -rn '\"return_type\"' scripts/docs/*.py scripts/docs/elephc_builtins/*.py 2>/dev/null | head -5: scripts/docs/elephc_builtins/extract.py:665: \"return_type\": b.sig.return_type,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a1afc357e6a4f089ba992b70",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:05:52.740Z",
+  "stored_at": "2026-08-18T11:05:52.741Z"
+}

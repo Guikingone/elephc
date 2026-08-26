@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_readgran.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_readgran.txt: fix(streams): fgets() called a wrapper once per BYTE, and stream_get_contents() skipped php's last read\n\nReading 100 bytes out of a ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_readgran.txt: fix(streams): fgets() called a wrapper once per BYTE, and stream_get_contents() skipped php's last read\n\nReading 100 bytes out of a userspace wrapper through `fgets()` made a HUNDRED\n`stream_read()` calls. php makes six: it reads a chunk and keeps what the line\ndoes not need, and that buffer survives the call — so the whole file is consumed\nin `ceil(100/17)` reads however many `fgets()` calls walk it. The leftovers go\ninto the same per-stream holding area a refused `stream_get_line()` uses, which\nis php's stream read buffer, so `fread()` sees them too.\n\n`stream_get_contents()` had the opposite",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "10989259b198c5b3b8065d16",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T17:53:46.670Z",
+  "stored_at": "2026-08-17T17:53:46.671Z"
+}

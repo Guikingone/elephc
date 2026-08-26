@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 2500 python3 run.py reassign-across-classes 2>&1 | tail -8",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 2500 python3 run.py reassign-across-classes 2>&1 | tail -8: REFUSED 1 php parse 0 --- REFUSED --- ### reassign-across-classes error[13:8",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 2500 python3 run.py reassign-across-classes 2>&1 | tail -8: REFUSED 1 php parse 0 --- REFUSED --- ### reassign-across-classes error[13:8]: Undefined method: Throwable::name --- DIFFERS ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "039a273af5973fdb0c139b8c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T19:54:24.742Z",
+  "stored_at": "2026-08-26T19:54:24.743Z"
+}

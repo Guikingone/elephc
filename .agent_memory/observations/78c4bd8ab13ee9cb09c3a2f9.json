@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== php:\"; cat datauri_p.txt; echo \"=== elephc:\"; cat datauri_e.txt",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== php:\"; cat datauri_p.txt; echo \"=== elephc:\"; cat datauri_e.txt: === php: fgc data:,abc len=3 fgc data://,abc len=3 fgc data:text/pla",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== php:\"; cat datauri_p.txt; echo \"=== elephc:\"; cat datauri_e.txt: === php: fgc data:,abc len=3 fgc data://,abc len=3 fgc data:text/plain,abc len=3 fopen data:,abc len=3 fgc data: len 100 len=100 fgc data: len 1000 len=1000 fgc data: len 4000 len=4000 fgc data: len 8000 len=8000 fgc data: len 8192 len=8192 fgc data: len 16000 len=16000 survived === elephc: fgc data:,abc FALSE fgc data://,abc len=3 fgc data:text/plain,abc FALSE fopen data:,abc len=3 fgc data: len 100 FALSE fgc data: len 1000 FALSE fgc data: len 4000 FALSE fgc data: len 8000 FALSE fgc data: len 8192 FALSE fgc data: len 16000 FALSE survived",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "78c4bd8ab13ee9cb09c3a2f9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T10:02:02.279Z",
+  "stored_at": "2026-08-17T10:02:02.280Z"
+}

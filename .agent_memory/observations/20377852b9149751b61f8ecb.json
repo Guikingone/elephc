@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/undef_matrix.sh",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/undef_matrix.sh: top-read-only php=0 | ELEPHC REFUSES: error[2:6]: Undefined variable: $nope top-read-dump php=0 | ELEPHC REFUSES: error[2:6]: Undefined",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/undef_matrix.sh: top-read-only php=0 | ELEPHC REFUSES: error[2:6]: Undefined variable: $nope top-read-dump php=0 | ELEPHC REFUSES: error[2:6]: Undefined variable: $nope fn-read-only DIFF undef-warn php=1 elephc=0 fn-read-dump php=0 | ELEPHC SIGNAL exit=139 fn-dump-direct DIFF undef-warn php=1 elephc=0 fn-echo-undef DIFF undef-warn php=1 elephc=0 fn-uncalled php=0 | ELEPHC REFUSES: error[2:21]: Undefined variable: $nope fn-concat-undef php=0 | ELEPHC SIGNAL exit=139",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "20377852b9149751b61f8ecb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:51:03.949Z",
+  "stored_at": "2026-08-18T15:51:03.950Z"
+}

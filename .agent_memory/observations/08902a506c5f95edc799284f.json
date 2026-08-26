@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"pub fn add_string\" -A20 src/codegen/data.rs 2>/dev/null | head -30; grep -rln \"fn add_string\" src/codegen | head",
+  "summary": "grep -rn \"pub fn add_string\" -A20 src/codegen/data.rs 2>/dev/null | head -30; grep -rln \"fn add_string\" src/codegen | head completed",
+  "text": "grep -rn \"pub fn add_string\" -A20 src/codegen/data.rs 2>/dev/null | head -30; grep -rln \"fn add_string\" src/codegen | head completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "08902a506c5f95edc799284f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:46:51.865Z",
+  "stored_at": "2026-08-18T09:46:51.866Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace/e && sed -n '1,40p' pr.s",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace/e && sed -n '1,40p' pr.s: ; @fn name=f symbol=_fn_f .align 2 .globl _fn_f _fn_f: ; prologue sub sp, sp, #176 stp x29, x30, [sp, #160] add x29, sp, ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace/e && sed -n '1,40p' pr.s: ; @fn name=f symbol=_fn_f .align 2 .globl _fn_f _fn_f: ; prologue sub sp, sp, #176 stp x29, x30, [sp, #160] add x29, sp, #160 ; call-stack overflow guard adrp x9, _stack_limit@PAGE ldr x9, [x9, _stack_limit@PAGEOFF] cmp sp, x9 b.hs _eir_f_stack_ok_1 b __rt_stack_overflow _eir_f_stack_ok_1: adrp x9, _concat_off@PAGE add x9, x9, _concat_off@PAGEOFF ldr x10, [x9] stur x10, [x29, #-160] ; save callee-saved registers used by the register allocator stur x21, [x29, #-144] stur x22, [x29, #-152] ; param $n from x0 stur x0, [x29, #-104] ; param $s from x1,x2 stur x1, [x29, #-120] stur x2, [x29, #-112] ; param $a from x3 stur x3, [x29, #-128] stur xzr, [x29, #-136] ; @block name=entry _eir_f_entry_0: ldur x0, [x29, #-128] stur x0, [x29, #-8] ldur x0, [x29, #-8] str x0, [sp, #-16]! bl __rt_incref ldr x0, [sp], #16 stur x0, [x29, #-16]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "366d57f65412bae08d7dc805",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:21:08.765Z",
+  "stored_at": "2026-08-26T09:21:08.766Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '70,100p' src/codegen_support/runtime/io/stream_get_line.rs",
+  "summary": "sed -n '70,100p' src/codegen_support/runtime/io/stream_get_line.rs:  emitter.instruction(\"bl __rt_stream_pending_take\"); // x0 = how many came back emitter.instruction(\"cbz x0, __rt_sgl_no_pending\"); emitter.instruction(\"str x0, [sp, #56]\"); // they count toward the line emitter.instruction(\"mov x9, #1\"); emitter.instr",
+  "text": "sed -n '70,100p' src/codegen_support/runtime/io/stream_get_line.rs:  emitter.instruction(\"bl __rt_stream_pending_take\"); // x0 = how many came back emitter.instruction(\"cbz x0, __rt_sgl_no_pending\"); emitter.instruction(\"str x0, [sp, #56]\"); // they count toward the line emitter.instruction(\"mov x9, #1\"); emitter.instruction(\"str x9, [sp, #72]\"); // and make the result a string emitter.label(\"__rt_sgl_no_pending\"); // -- a read-filter chain outranks the backend: __rt_fread pulls through it either way -- // The reservation above is NOT claimed on the raw path, because nothing nested allocates // from the scratch there. `__rt_fread` does, so the filtered path has to claim the whole // window first or the byte it hands back would land on top of the line being built. // `__rt_concat_publish` writes an absolute offset, so the shrink at `_done` still lands // on the bytes actually read. emitter.instruction(\"ldr x9, [sp, #80]\"); // the read-direction chain head",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0a6fde01bec173f2096a8d1b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:19:43.697Z",
+  "stored_at": "2026-08-21T13:19:43.697Z"
+}

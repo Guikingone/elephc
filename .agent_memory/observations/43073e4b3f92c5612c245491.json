@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -nE \"Input|Output|x0 =|x1 =|x2 =\" src/codegen_support/runtime/arrays/array_push_str.rs | head -8; echo \"=== array_new:\"; grep -rn 'label_global(\"__rt_array_new\")' src/codegen_support/runtime/arrays/*.rs | head -2",
+  "summary": "grep -nE \"Input|Output|x0 =|x1 =|x2 =\" src/codegen_support/runtime/arrays/array_push_str.rs | head -8; echo \"=== array_new:\"; grep -rn 'label_global(\"__rt_array_new\")' src/codegen_support/runtime/arrays/*.rs | head -2: 15:/// Input: x0 = array pointer, x1 = string ptr, x2 = string len (ARM64 convention). 16:/// Output:",
+  "text": "grep -nE \"Input|Output|x0 =|x1 =|x2 =\" src/codegen_support/runtime/arrays/array_push_str.rs | head -8; echo \"=== array_new:\"; grep -rn 'label_global(\"__rt_array_new\")' src/codegen_support/runtime/arrays/*.rs | head -2: 15:/// Input: x0 = array pointer, x1 = string ptr, x2 = string len (ARM64 convention). 16:/// Output: x0 = array pointer (may differ if the array was reallocated during growth). 95: emitter.instruction(\"ret\"); // return (x0 = array pointer, unchanged) 99: emitter.instruction(\"bl __rt_array_grow\"); // double array capacity → x0 = new array === array_new: src/codegen_support/runtime/arrays/array_new.rs:48: emitter.label_global(\"__rt_array_new\"); src/codegen_support/runtime/arrays/array_new.rs:127: emitter.label_global(\"__rt_array_new\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "43073e4b3f92c5612c245491",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T08:33:17.321Z",
+  "stored_at": "2026-08-18T08:33:17.322Z"
+}

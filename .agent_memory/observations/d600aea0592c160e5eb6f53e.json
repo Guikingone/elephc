@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"zlib.deflate\\|dynamic\\|literal\" docs/php/streams.md | head -20",
+  "summary": "grep -n \"zlib.deflate\\|dynamic\\|literal\" docs/php/streams.md | head -20:  those names ARE registrable. An empty `$filter_name` or `$class` raises PHP's `ValueError`. Up to 128 registrations are stored, and the name is copied rather than borrowed. The class may be named by a string literal or by `Foo::class`; a class na",
+  "text": "grep -n \"zlib.deflate\\|dynamic\\|literal\" docs/php/streams.md | head -20:  those names ARE registrable. An empty `$filter_name` or `$class` raises PHP's `ValueError`. Up to 128 registrations are stored, and the name is copied rather than borrowed. The class may be named by a string literal or by `Foo::class`; a class name only known at run time registers the name but leaves the class unusable. A literal class name is validated at compile time. | 407:`zlib.deflate` and `gzcompress()` use system `libz`. `bzip2.compress`, 411:Compression filter params can be a bare integer or a literal array. `zlib.deflate` 413:(`0..250`). Non-literal params keep defaults. 416:`=3D`, bytes outside 33..126 become `=XX`, and a SPACE or TAB stays literal, so 428:reach them. `$n = \"zlib.deflate\"; stream_filter_append($s, $n)` warns 429:`Unable to locate filter \"zlib.deflate\"` and returns `false` where the literal 510:back into — a literal, an expression — is rejected as it is in PHP.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d600aea0592c160e5eb6f53e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:01:42.971Z",
+  "stored_at": "2026-08-18T10:01:42.971Z"
+}

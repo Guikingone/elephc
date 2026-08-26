@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"emit_type_error_at(\" src/ --include \"*.rs\" | grep -v \"fn emit_type_error_at\" | head -4; grep -rn \"fn instruction_location\\|fn span_location\" src/codegen/ --include \"*.rs\" | head -4",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"emit_type_error_at(\" src/ --include \"*.rs\" | grep -v \"fn emit_type_error_at\" | head -4; grep -rn \"fn instruction_location\\|fn span_location\" src/codegen/ --include \"*.rs\" | head -4: src/codegen/lower_inst/objects/f",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"emit_type_error_at(\" src/ --include \"*.rs\" | grep -v \"fn emit_type_error_at\" | head -4; grep -rn \"fn instruction_location\\|fn span_location\" src/codegen/ --include \"*.rs\" | head -4: src/codegen/lower_inst/objects/fiber_dynamic_entry.rs:249: super::super::exceptions::emit_type_error_at(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1601c96aa2d4cc1d58184464",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T10:55:28.291Z",
+  "stored_at": "2026-08-23T10:55:28.291Z"
+}

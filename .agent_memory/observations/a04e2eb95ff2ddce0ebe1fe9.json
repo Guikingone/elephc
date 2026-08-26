@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,110p' src/ir_lower/expr/lazy_branches.rs",
+  "summary": "sed -n '1,110p' src/ir_lower/expr/lazy_branches.rs:  // A typed STATIC property starts uninitialized the same way, and its guard lives in the // backend rather than in an operation the lowering could branch on — so `??` needs its own // probe here too. `S::$s ?? \"d\"` raised where PHP answers `d`. if let ExprKind::Stati",
+  "text": "sed -n '1,110p' src/ir_lower/expr/lazy_branches.rs:  // A typed STATIC property starts uninitialized the same way, and its guard lives in the // backend rather than in an operation the lowering could branch on — so `??` needs its own // probe here too. `S::$s ?? \"d\"` raised where PHP answers `d`. if let ExprKind::StaticPropertyAccess { receiver, property } = &value.kind { if static_property_can_be_uninitialized(ctx, receiver, property) { return lower_initialized_static_property_value(ctx, receiver, property, value); } } lower_expr(ctx, value) } /// Returns the materialized result type for a null-coalesce merge. pub(super) fn null_coalesce_result_type( ctx: &LoweringContext<'_, '_>, value: ValueId, default: &Expr, ) -> PhpType { let value_ty = strip_void_from_union(ctx.builder.value_php_type(value)).codegen_repr(); let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr(); wider_type_for_merge(&value_ty, &default_ty) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a04e2eb95ff2ddce0ebe1fe9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:16:43.035Z",
+  "stored_at": "2026-08-20T19:16:43.036Z"
+}

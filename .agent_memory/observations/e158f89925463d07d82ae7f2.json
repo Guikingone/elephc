@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '95,140p' src/builtins/string/sscanf.rs",
+  "summary": "sed -n '95,140p' src/builtins/string/sscanf.rs: ne per arity: each is a plain // PHP function with that many by-reference parameters. A by-reference variadic would be the // obvious shape and is not usable here — it collects addresses into an array, and a write to // an element of that array replaces the address instea",
+  "text": "sed -n '95,140p' src/builtins/string/sscanf.rs: ne per arity: each is a plain // PHP function with that many by-reference parameters. A by-reference variadic would be the // obvious shape and is not usable here — it collects addresses into an array, and a write to // an element of that array replaces the address instead of following it. let target = if vars == 0 { function.to_string() } else { format!(\"{function}_vars_{vars}\") }; for index in 0..vars { operands.push(call.operand(index + 2)?); } let name = ctx.intern_function_name(&target); Ok(ctx.emit_value( Op::Call, operands, Some(Immediate::Data(name)), call.result_type.clone(), Op::Call.default_effects(), Some(call.span), )) } /// Bounds the `$vars` count to the arities the prelude declares. /// /// Shared by both builtins so the two stay on one wording. `arg_count` is the full argument /// count including the two leading required parameters, so anything past 2 is a `$vars` entry.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e158f89925463d07d82ae7f2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:43:09.503Z",
+  "stored_at": "2026-08-18T10:43:09.503Z"
+}

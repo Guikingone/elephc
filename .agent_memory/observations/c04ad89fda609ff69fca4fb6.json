@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git merge --no-commit --no-ff origin/main 2>&1 | tail -25",
+  "summary": "git merge --no-commit --no-ff origin/main 2>&1 | tail -25: heck/assignments/locals.rs CONFLICT (content): Merge conflict in src/types/checker/stmt_check/assignments/locals.rs Auto-merging src/types/checker/stmt_check/assignments/properties.rs Auto-merging src/types/checker/type_compat/unions.rs Auto-merging src/types/m",
+  "text": "git merge --no-commit --no-ff origin/main 2>&1 | tail -25: heck/assignments/locals.rs CONFLICT (content): Merge conflict in src/types/checker/stmt_check/assignments/locals.rs Auto-merging src/types/checker/stmt_check/assignments/properties.rs Auto-merging src/types/checker/type_compat/unions.rs Auto-merging src/types/mod.rs Auto-merging src/types/result.rs CONFLICT (content): Merge conflict in src/types/result.rs Auto-merging tests/codegen/eval.rs Auto-merging tests/codegen/io/filesystem.rs CONFLICT (content): Merge conflict in tests/codegen/io/filesystem.rs Auto-merging tests/codegen/mod.rs Auto-merging tests/codegen/runtime_gc/regressions.rs Auto-merging tests/codegen/support/compiler.rs Auto-merging tests/error_tests.rs Auto-merging tests/error_tests/type_system.rs CONFLICT (content): Merge conflict in tests/error_tests/type_system.rs Auto-merging tests/ir_backend_smoke_test.rs Automatic merge failed; fix conflicts and then commit the result.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c04ad89fda609ff69fca4fb6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:07:14.041Z",
+  "stored_at": "2026-08-26T17:07:14.041Z"
+}

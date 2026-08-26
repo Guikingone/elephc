@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"\\\"fputs\\\"\" -A22 crates/elephc-builtin-contract/src/catalog_data.rs | head -26",
+  "summary": "grep -n \"\\\"fputs\\\"\" -A22 crates/elephc-builtin-contract/src/catalog_data.rs | head -26: 6874: id: BuiltinId::from_canonical_name(\"fputs\"), 6875: name: \"fputs\", 6876- area: Area::Io, 6877- kind: BuiltinKind::Function, 6878- params: &[ 6879- ParamSpec { 6880- name: \"stream\", 6881- ty: TypeSpec::Mixed, 6882- default: None",
+  "text": "grep -n \"\\\"fputs\\\"\" -A22 crates/elephc-builtin-contract/src/catalog_data.rs | head -26: 6874: id: BuiltinId::from_canonical_name(\"fputs\"), 6875: name: \"fputs\", 6876- area: Area::Io, 6877- kind: BuiltinKind::Function, 6878- params: &[ 6879- ParamSpec { 6880- name: \"stream\", 6881- ty: TypeSpec::Mixed, 6882- default: None, 6883- by_ref: false, 6884- writes: None, 6885- }, 6886- ParamSpec { 6887- name: \"data\", 6888- ty: TypeSpec::Str, 6889- default: None, 6890- by_ref: false, 6891- writes: None, 6892- }, 6893- ], 6894- variadic: None, 6895- min_args: None, 6896- max_args: None, 6897- arity_error: None,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "97a4db7f967d0161769af0eb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:52:43.789Z",
+  "stored_at": "2026-08-17T06:52:43.790Z"
+}

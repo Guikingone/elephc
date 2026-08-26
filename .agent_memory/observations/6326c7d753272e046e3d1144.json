@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git rev-parse cfb871fd6f; git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:$(git rev-parse cfb871fd6f) 2>&1 | tail -1",
+  "summary": "git rev-parse cfb871fd6f; git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:$(git rev-parse cfb871fd6f) 2>&1 | tail -1 failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-sign",
+  "text": "git rev-parse cfb871fd6f; git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:$(git rev-parse cfb871fd6f) 2>&1 | tail -1 failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree; break it into plain, separate commands. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Run the equivalent from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature without the redirect.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6326c7d753272e046e3d1144",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T10:46:06.567Z",
+  "stored_at": "2026-08-16T10:46:06.568Z"
+}

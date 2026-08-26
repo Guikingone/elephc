@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"fscanf|fgetcsv\" src/types/checker/builtin_spl_classes/filesystem.rs | head -10",
+  "summary": "rtk proxy rg -n \"fscanf|fgetcsv\" src/types/checker/builtin_spl_classes/filesystem.rs | head -10: 468: // against a literal: `$f->setCsvControl(\";\"); $f->fgetcsv()` splits on `;`. 470: \"fgetcsv\", 477: spl_file_object_fgetcsv_body(), 1336:/// Builds the READ_CSV record cache, one record per `fgetcsv()` php would perform.",
+  "text": "rtk proxy rg -n \"fscanf|fgetcsv\" src/types/checker/builtin_spl_classes/filesystem.rs | head -10: 468: // against a literal: `$f->setCsvControl(\";\"); $f->fgetcsv()` splits on `;`. 470: \"fgetcsv\", 477: spl_file_object_fgetcsv_body(), 1336:/// Builds the READ_CSV record cache, one record per `fgetcsv()` php would perform. 1340:/// `fgetcsv()` applies, including php's `[null]` for a line that was nothing but its 1525:/// That is php's BLANK line — the one `fgetcsv()` answers `[null]` for — and the only thing 1728:/// instead made `$f->setCsvControl(\";\"); $f->fgetcsv()` split on a comma. 1736:/// Builds SplFileObject fgetcsv(). 1737:fn spl_file_object_fgetcsv_body() -> Vec<Stmt> { 1742: \"fgetcsv\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5ffda0c00d5752e9fb51f053",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:03:26.789Z",
+  "stored_at": "2026-08-16T17:03:26.789Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes7; head -20 kimi-k2.7-code-01.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes7; head -20 kimi-k2.7-code-01.php: <?php class W { public $context; public function stream_open($path,$mode,$options,&$opened_path) { ret",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes7; head -20 kimi-k2.7-code-01.php: <?php class W { public $context; public function stream_open($path,$mode,$options,&$opened_path) { retur return true; } public function stream_read($count) { return ''; } public function stream_eof() { return true; } public function stream_stat() { return []; } public function dir_opendir($path,$options) { return true; } public function dir_readdir() { return false; } public function dir_closedir() { return true; } public function url_stat($path,$flags) { return ['mode'=>0]; } } stream_wrapper_register('wdir', 'W'); $meta = stream_get_meta_data(fopen('wdir://x','r')); var_dump($meta['wrapper_type'], $meta['stream_type']); $d = opendir('wdir://x/'); var_dump(readdir($d)); closedir($d); var_dump(stat('wdir://x'));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d3c10c742c721b2dee18c78e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:30:03.842Z",
+  "stored_at": "2026-08-22T19:30:03.842Z"
+}

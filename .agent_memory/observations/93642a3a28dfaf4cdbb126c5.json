@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rln \"__rt_mixed_cast_string\\b\" src/codegen_support | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rln \"__rt_mixed_cast_string\\b\" src/codegen_support | head: src/codegen_support/wrappers/callback/descriptor.rs src/codegen_support/wrappers/callback.rs src/codegen_support/runtime/eval_bridge.rs src/codegen_support/run",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rln \"__rt_mixed_cast_string\\b\" src/codegen_support | head: src/codegen_support/wrappers/callback/descriptor.rs src/codegen_support/wrappers/callback.rs src/codegen_support/runtime/eval_bridge.rs src/codegen_support/runtime/strings/implode.rs src/codegen_support/runtime/io/fputcsv.rs src/codegen_support/runtime/io/ob_handler.rs src/codegen_support/runtime/io/user_wrapper_dir.rs src/codegen_support/runtime/io/user_wrapper.rs src/codegen_support/runtime/io/scandir.rs src/codegen_support/runtime/eval_bridge/x86_64_output.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "93642a3a28dfaf4cdbb126c5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:30:51.491Z",
+  "stored_at": "2026-08-23T13:30:51.491Z"
+}

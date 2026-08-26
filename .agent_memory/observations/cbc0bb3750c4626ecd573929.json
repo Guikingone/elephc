@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"directory_construct_body(\" src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"directory_construct_body(\" src/types/checker/builtin_spl_classes/filesystem.rs: 569: directory_construct_body(var_expr(\"directory\"), int_expr(0), false, false), 598: directory_construct_body(var_expr(\"directory\"), v",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"directory_construct_body(\" src/types/checker/builtin_spl_classes/filesystem.rs: 569: directory_construct_body(var_expr(\"directory\"), int_expr(0), false, false), 598: directory_construct_body(var_expr(\"directory\"), var_expr(\"flags\"), true, false), 634: directory_construct_body(var_expr(\"directory\"), var_expr(\"flags\"), true, false), 1895:fn directory_construct_body(directory: Expr, flags: Expr, filter_dots: bool, entries_are_paths: bool) -> Vec<Stmt> {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cbc0bb3750c4626ecd573929",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:34:02.660Z",
+  "stored_at": "2026-08-23T09:34:02.660Z"
+}

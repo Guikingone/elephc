@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '110,135p' tools/gen_builtins.rs",
+  "summary": "sed -n '110,135p' tools/gen_builtins.rs: continue; } records.push(contract_record_json(contract)); } } /// Builds one top-level documentation record directly from a neutral contract. fn contract_record_json(contract: &BuiltinContract) -> Value { let signature = contract.signature(); json!({ \"name\": contract.name, \"area",
+  "text": "sed -n '110,135p' tools/gen_builtins.rs: continue; } records.push(contract_record_json(contract)); } } /// Builds one top-level documentation record directly from a neutral contract. fn contract_record_json(contract: &BuiltinContract) -> Value { let signature = contract.signature(); json!({ \"name\": contract.name, \"area\": area_name(contract.area), \"surface_kind\": kind_name(contract.kind), \"internal\": contract.internal, \"extension\": contract.extension, \"params\": signature_params_json(signature), \"variadic\": signature.variadic, \"returns\": type_name(contract.returns), \"by_ref_return\": contract.by_ref_return, \"min_args\": contract.min_args, \"max_args\": contract.max_args, \"arity_error\": contract.arity_error, \"semantics\": Value::Null, \"summary\": contract.summary, \"examples\": contract.examples, \"php_manual\": contract.php_manual,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8ceda29bfc6dc5c1f7bb0b7d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:05:35.544Z",
+  "stored_at": "2026-08-18T11:05:35.544Z",
+  "low_signal": true
+}

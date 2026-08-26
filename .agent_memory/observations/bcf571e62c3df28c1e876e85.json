@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh pufs pufs2 pufs3 fdeclprop 2>&1 | head -14",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh pufs pufs2 pufs3 fdeclprop 2>&1 | head -14: pufs IDENTICAL pufs2 DIFF: 1c1 < string(11) \"ABC[MEMORY]\" --- > string(19) \"ABC[ME",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh pufs pufs2 pufs3 fdeclprop 2>&1 | head -14: pufs IDENTICAL pufs2 DIFF: 1c1 < string(11) \"ABC[MEMORY]\" --- > string(19) \"ABC[MEMORY][MEMORY]\" pufs3 DIFF: 1c1 < string(4) \"abc|\" --- > string(5) \"abc||\" fdeclprop IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bcf571e62c3df28c1e876e85",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:36:34.169Z",
+  "stored_at": "2026-08-17T18:36:34.170Z"
+}

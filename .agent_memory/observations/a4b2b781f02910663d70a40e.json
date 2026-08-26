@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '115,200p' crates/elephc-phar/src/zip_read.rs",
+  "summary": "sed -n '115,200p' crates/elephc-phar/src/zip_read.rs: { name, method, compressed_size, uncompressed_size, local_offset, crc, dos_time, dos_date, encrypted, check_byte, comment, }); p = comment_start.checked_add(entry_comment_len)?; } Some(records) } /// Returns the bytes of `entry` from a plain ZIP archive, by EXACT st",
+  "text": "sed -n '115,200p' crates/elephc-phar/src/zip_read.rs: { name, method, compressed_size, uncompressed_size, local_offset, crc, dos_time, dos_date, encrypted, check_byte, comment, }); p = comment_start.checked_add(entry_comment_len)?; } Some(records) } /// Returns the bytes of `entry` from a plain ZIP archive, by EXACT stored name. /// /// This is the `zip://` stream wrapper's view of an archive, which php's /// `ext/zip` gives no phar meaning: a `.phar/*` control entry is a readable file /// like any other, no leading slash is stripped, and no directory name resolves. pub(super) fn zip_entry_payload(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> { let records = zip_central_records(data)?; let record = records.iter().find(|record| record.name == entry)?; record.decode(data) } /// `ZipArchive::EM_NONE` — the entry is stored in the clear. const ZIP_EM_NONE: u32 = 0; /// `ZipArchive::EM_TRAD_PKWARE` — traditional PKWARE (ZipCrypto) encryption. ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a4b2b781f02910663d70a40e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:01:11.889Z",
+  "stored_at": "2026-08-20T17:01:11.890Z"
+}

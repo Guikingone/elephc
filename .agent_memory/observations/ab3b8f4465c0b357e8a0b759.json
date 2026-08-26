@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_lowering.py 2>&1 | tail -12",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_lowering.py 2>&1 | tail -12: type_validation.rs: an associative source has an element type too type_validation.rs: a keyed result is",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_lowering.py 2>&1 | tail -12: type_validation.rs: an associative source has an element type too type_validation.rs: a keyed result is the expected shape filter.rs: the callback path filter.rs: the no-callback path array_filter.rs: an associative source is accepted array_filter.rs: the no-callback result is keyed array_filter.rs: the keyed result type checker and lowering follow the runtime",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ab3b8f4465c0b357e8a0b759",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:42:30.567Z",
+  "stored_at": "2026-08-22T11:42:30.568Z"
+}

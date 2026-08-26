@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/widened_slot_storage.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/widened_slot_storage.py: \"\"\"A local widened across scalar types gets boxed storage from its FIRST store.\n\nThe checker widens the variable, but the ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/widened_slot_storage.py: \"\"\"A local widened across scalar types gets boxed storage from its FIRST store.\n\nThe checker widens the variable, but the IR slot keeps the type its first assignment gave it, so\n`$would = \"untouched\"; flock($h, LOCK_SH, $would);` passed the checker and the backend then refused\nthe int written into a string slot. The slot type is a whole-frame property.\n\n`string_incdec_locals` already solves exactly this shape for `\"9\"++`, and says why widening lazily\nat the write is not enough: every OTHER read of the slot would have to detach an owned copy out of\nthe boxed cell, leaking a heap block per read.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f185f639dfcbec5437eb7e6a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:45:58.734Z",
+  "stored_at": "2026-08-22T13:45:58.735Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"string coercion\" -B 25 src/codegen/lower_inst/builtins/strings/common.rs | head -30",
+  "summary": "grep -n \"string coercion\" -B 25 src/codegen/lower_inst/builtins/strings/common.rs | head -30: ion, register placement, truthiness, and result helpers. -- 167- Ok(()) 168- } 169- PhpType::Bool => { 170- ctx.load_value_to_result(value)?; 171- emit_loaded_bool_string_result(ctx)?; 172- move_string_result_to_regs(ctx, ptr_",
+  "text": "grep -n \"string coercion\" -B 25 src/codegen/lower_inst/builtins/strings/common.rs | head -30: ion, register placement, truthiness, and result helpers. -- 167- Ok(()) 168- } 169- PhpType::Bool => { 170- ctx.load_value_to_result(value)?; 171- emit_loaded_bool_string_result(ctx)?; 172- move_string_result_to_regs(ctx, ptr_reg, len_reg); 173- Ok(()) 174- } 175- PhpType::Void | PhpType::Never => { 176- emit_empty_string_result(ctx); 177- move_string_result_to_regs(ctx, ptr_reg, len_reg); 178- Ok(()) 179- } 180- PhpType::TaggedScalar => { 181- ctx.load_value_to_result(value)?; 182- emit_loaded_tagged_scalar_string_result(ctx)?; 183- move_string_result_to_regs(ctx, ptr_reg, len_reg); 184- Ok(()) 185- } 186- PhpType::Mixed | PhpType::Union(_) => { 187- emit_mixed_borrowed_string_to_regs(ctx, value)?; 188- move_string_result_to_regs(ctx, ptr_reg, len_reg); 189- Ok(()) 190- } 191- other => Err(CodegenIrError::unsupported(format!( 192: \"{} string coercion for PHP type {:?}\", 193- name, other",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "af3edba414cb2cc0d93213b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:30:11.475Z",
+  "stored_at": "2026-08-17T21:30:11.476Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"label_global\\(\\\"__rt_hash_get|label_global\\(\\\"__rt_hash_find|label_global\\(\\\"__rt_hash_lookup\" src/codegen_support/runtime/ | head -8",
+  "summary": "About to run: rg -rn \"label_global\\(\\\"__rt_hash_get|label_global\\(\\\"__rt_hash_find|label_global\\(\\\"__rt_hash_lookup\" src/codegen_support/runtime/ | head -8",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "59d58edcc3bcef7f59cf921c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:55:15.680Z",
+  "stored_at": "2026-08-17T13:55:15.681Z"
+}

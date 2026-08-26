@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"test_eval_barrier_does_not_hide_prior_undefined_variable\" -B25 -A20 tests/error_tests/misc/system_builtins.rs",
+  "summary": "grep -n \"test_eval_barrier_does_not_hide_prior_undefined_variable\" -B25 -A20 tests/error_tests/misc/system_builtins.rs: \"); 42-} 43- 44-/// Verifies eval does not hide undefined-variable reads that happen before the barrier. 45-#[test] 46:fn test_eval_barrier_does_not_hide_prior_undefined_variable() { 47- expect_error(",
+  "text": "grep -n \"test_eval_barrier_does_not_hide_prior_undefined_variable\" -B25 -A20 tests/error_tests/misc/system_builtins.rs: \"); 42-} 43- 44-/// Verifies eval does not hide undefined-variable reads that happen before the barrier. 45-#[test] 46:fn test_eval_barrier_does_not_hide_prior_undefined_variable() { 47- expect_error( 48- \"<?php echo $created; eval('$created = 1;');\", 49- \"Undefined variable: $created\", 50- ); 51-} 52- 53-/// Verifies that referencing an undefined constant produces the expected \"Undefined constant\" error. 54-#[test] 55-fn test_error_undefined_constant() { 56- expect_error(\"<?php echo UNDEFINED_CONST;\", \"Undefined constant\"); 57-} 58- 59-/// Verifies that `define()` with a single argument (missing value) yields a wrong-args diagnostic. 60-#[test] 61-fn test_error_define_wrong_args() { 62- expect_error(\"<?php define(\\\"X\\\");\", \"define() takes exactly 2 arguments\"); 63-} 64- 65-/// Verifies that `define()` with a non-string first argument (int name) yields a non-string-name error. 66-#[test]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5e6fe924bb568f0d32bd41da",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:11:06.060Z",
+  "stored_at": "2026-08-20T19:11:06.060Z"
+}

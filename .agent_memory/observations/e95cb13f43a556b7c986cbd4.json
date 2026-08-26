@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Monitor",
+  "path": "",
+  "command": "zsh \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/watch_ci.sh\" 75eb6d965f",
+  "summary": "About to run: zsh \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/watch_ci.sh\" 75eb6d965f",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e95cb13f43a556b7c986cbd4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:30:00.438Z",
+  "stored_at": "2026-08-16T15:30:00.439Z"
+}

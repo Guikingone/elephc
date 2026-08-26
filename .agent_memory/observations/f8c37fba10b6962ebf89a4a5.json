@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"^use \\|^pub(super) use \\|^use super\" src/ir_lower/expr/mod.rs | head -40",
+  "summary": "grep -n \"^use \\|^pub(super) use \\|^use super\" src/ir_lower/expr/mod.rs | head -40: 29:use crate::types::{ 33:use std::collections::HashSet; 47:use function_calls::resolve_registry_builtin_result_type; 94:use scalar_literals::*; 95:use numeric_binary::*; 96:use string_concat::*; 97:use comparisons::*; 98:use unary_logic",
+  "text": "grep -n \"^use \\|^pub(super) use \\|^use super\" src/ir_lower/expr/mod.rs | head -40: 29:use crate::types::{ 33:use std::collections::HashSet; 47:use function_calls::resolve_registry_builtin_result_type; 94:use scalar_literals::*; 95:use numeric_binary::*; 96:use string_concat::*; 97:use comparisons::*; 98:use unary_logic::*; 99:use lazy_branches::*; 100:use pipe::*; 101:use assignments::*; 102:use function_calls::*; 103:use eval_barriers::*; 104:use lazy_isset::*; 105:use native_isset::*; 106:use callable_probes::*; 107:use descriptor_invoke::*; 108:use descriptor_args::*; 109:use static_array_callbacks::*; 110:use callable_tracking::*; 111:use callable_resolution::*; 112:use unset::*; 113:use array_builtin_args::*; 114:use builtin_special_args::*; 115:use call_arg_coercion::*; 116:use positional_spreads::*; 117:use named_args::*; 118:use named_spreads::*; 119:use variadic_args::*; 120:use indexed_array_literals::*; 121:use assoc_array_literals::*; 122:use match_expr::*;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f8c37fba10b6962ebf89a4a5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:18:24.188Z",
+  "stored_at": "2026-08-20T19:18:24.188Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"_prelude::inject\" src/pipeline.rs | head -20",
+  "summary": "grep -n \"_prelude::inject\" src/pipeline.rs | head -20: 160: pdo_prelude::inject_if_used( 166: pdo_prelude::inject_if_used_for_version( 182: let ast = tz_prelude::inject_if_used( 196: let ast = list_id_prelude::inject_if_used(ast, &mut prelude_inventory); 205: let ast = var_export_prelude::inject_if_used(ast, &mut prelu",
+  "text": "grep -n \"_prelude::inject\" src/pipeline.rs | head -20: 160: pdo_prelude::inject_if_used( 166: pdo_prelude::inject_if_used_for_version( 182: let ast = tz_prelude::inject_if_used( 196: let ast = list_id_prelude::inject_if_used(ast, &mut prelude_inventory); 205: let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory); 263: let (ast, opcache_bake_sites) = opcache_prelude::inject_if_used( 283: let ast = crate::image_prelude::inject_if_used( 298: let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory); 307: let ast = crate::dir_prelude::inject_if_used(ast); 316: let ast = crate::gz_prelude::inject_if_used(ast); 324: let ast = crate::scanf_prelude::inject_if_used(ast); 329: let ast = web_prelude::inject_if_web( 344: let ast = crate::version_prelude::inject_if_used(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "93e104ed40cbf3302b7f709a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:42:17.772Z",
+  "stored_at": "2026-08-21T12:42:17.773Z"
+}

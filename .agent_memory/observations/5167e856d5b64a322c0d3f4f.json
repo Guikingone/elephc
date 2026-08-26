@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"MEMORY\" src --type rust | head -10",
+  "summary": "rg -n \"MEMORY\" src --type rust | head -10: Y: i64 = 6_291_456; src/opcache_prelude/restricted_status.rs:105:pub(super) const STATUS_INTERNED_USED_MEMORY: i64 = 1_048_576; src/opcache_prelude/restricted_status.rs:133: STATUS_INTERNED_USED_MEMORY.min(buffer_size / 2) src/opcache_prelude/status_render.rs:50: let memory_us",
+  "text": "rg -n \"MEMORY\" src --type rust | head -10: Y: i64 = 6_291_456; src/opcache_prelude/restricted_status.rs:105:pub(super) const STATUS_INTERNED_USED_MEMORY: i64 = 1_048_576; src/opcache_prelude/restricted_status.rs:133: STATUS_INTERNED_USED_MEMORY.min(buffer_size / 2) src/opcache_prelude/status_render.rs:50: let memory_used = STATUS_USED_MEMORY + scripts_memory_total; src/codegen_support/runtime/data/fixed.rs:1668: // backend identities, not descriptor properties: `php://memory` reports MEMORY whether or src/codegen_support/runtime/data/fixed.rs:1670: out.push_str(\".globl _meta_stype_memory\\n_meta_stype_memory:\\n .ascii \\\"MEMORY\\\"\\n\"); src/codegen/lower_inst/builtins/io/fopen_core.rs:1078: // reports `MEMORY`. Those resources already record wrapper id 6 themselves, so re-stamping src/opcache/directives.rs:367:const MEMORY_CONSUMPTION: &str = \"opcache.memory_consumption\"; src/opcache/directives.rs:803: if name == MEMORY_CONSUMPTION {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5167e856d5b64a322c0d3f4f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:26:57.985Z",
+  "stored_at": "2026-08-17T06:26:57.986Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_ftoa\" src/codegen/ | head -8",
+  "summary": "About to run: grep -rn \"__rt_ftoa\" src/codegen/ | head -8",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca7f7ed28fa57f5a25515d49",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:49:42.858Z",
+  "stored_at": "2026-08-18T20:49:42.859Z"
+}

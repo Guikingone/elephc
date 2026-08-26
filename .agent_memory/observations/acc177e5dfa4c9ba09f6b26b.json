@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r '$r=fopen(\"php://filter/read=no.such/resource=data://text/plain,hi\",\"r\"); var_dump($r); if($r) var_dump(stream_get_contents($r));' 2>&1; echo \"=== string.strip_tags 8.5 ===\"; php -n -r '$s=fopen(\"php://memory\",\"w+\"); var_dump(stream_filter_append($s,\"string.strip_tags\"));' 2>&1; echo \"=== consumed ===\"; php -n -r '$s=fopen(\"php://memory\",\"w+\"); var_dump(stream_filter_append($s,\"consumed\"));' 2>&1",
+  "summary": "About to run: php -n -r '$r=fopen(\"php://filter/read=no.such/resource=data://text/plain,hi\",\"r\"); var_dump($r); if($r) var_dump(stream_get_contents($r));' 2>&1; echo \"=== string.strip_tags 8.5 ===\"; php -n -r '$s=f",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "acc177e5dfa4c9ba09f6b26b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:13:47.088Z",
+  "stored_at": "2026-08-14T14:13:47.089Z"
+}

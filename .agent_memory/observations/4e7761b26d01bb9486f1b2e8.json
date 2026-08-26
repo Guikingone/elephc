@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_file_get_contents_maybe_url\" src/codegen_support/runtime/ | head -3",
+  "summary": "grep -rn \"__rt_file_get_contents_maybe_url\" src/codegen_support/runtime/ | head -3: src/codegen_support/runtime/io/file_get_contents_url.rs:21:/// Emits `__rt_file_get_contents_maybe_url`. src/codegen_support/runtime/io/file_get_contents_url.rs:34: emitter.label_global(\"__rt_file_get_contents_maybe_url\"); src/codegen_s",
+  "text": "grep -rn \"__rt_file_get_contents_maybe_url\" src/codegen_support/runtime/ | head -3: src/codegen_support/runtime/io/file_get_contents_url.rs:21:/// Emits `__rt_file_get_contents_maybe_url`. src/codegen_support/runtime/io/file_get_contents_url.rs:34: emitter.label_global(\"__rt_file_get_contents_maybe_url\"); src/codegen_support/runtime/io/file_get_contents_url.rs:553:/// Emits the x86_64 variant of `__rt_file_get_contents_maybe_url`.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4e7761b26d01bb9486f1b2e8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:52:00.978Z",
+  "stored_at": "2026-08-21T17:52:00.979Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-aece3ab327311a17d 2>&1 | head -1; df -h / | tail -1; git log --format=\"%h %s\" 1978ff8bb9..worktree-agent-a36e969ace98e7e68",
+  "summary": "git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-aece3ab327311a17d 2>&1 | head -1; df -h / | tail -1; git log --format=\"%h %s\" 1978ff8bb9..worktree-agent-a36e969ace98e7e68: /dev/disk3s1s1 460Gi 12Gi 23Gi 35% 459k 237M 0% / 28ac32bc47 fix(streams): stream_get_meta_d",
+  "text": "git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-aece3ab327311a17d 2>&1 | head -1; df -h / | tail -1; git log --format=\"%h %s\" 1978ff8bb9..worktree-agent-a36e969ace98e7e68: /dev/disk3s1s1 460Gi 12Gi 23Gi 35% 459k 237M 0% / 28ac32bc47 fix(streams): stream_get_meta_data() invented three keys, dropped a data: URI's own, and asked the wrong question about seekability ddd1552faa fix(lexer): both lexers refused `1and 2`, agreeing with each other and diverging from php",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bb7cd590d41485dca94aa225",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T06:55:55.297Z",
+  "stored_at": "2026-08-16T06:55:55.298Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_state2.py 2>&1",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_state2.py 2>&1: DIFFERS read_default_fread php : '|read(8192) abcde|' elephc: '|read(5) abcde|' SAME read_default_fgets DIFFERS read_defa",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_state2.py 2>&1: DIFFERS read_default_fread php : '|read(8192) abcde|' elephc: '|read(5) abcde|' SAME read_default_fgets DIFFERS read_default_getc php : '|read(8192) a|' elephc: '|read(1) a|' SAME read_default_contents DIFFERS read_set_chunk_fread php : '|read(7) abc|' elephc: '|read(3) abc|' DIFFERS bounded_17_30 php : '|read(17) read(17) 30|' elephc: '|read(17) read(13) 30|' DIFFERS bounded_10_25 php : '|read(10) read(10) read(10) 25|' elephc: '|read(10) read(10) read(5) 25|' DIFFERS bounded_then_tell php : 'read(17) read(17) |20|' elephc: 'read(17) read(3) |20|' DIFFERS bounded_then_read php : 'read(17) read(17) |uvwxy|' elephc: 'read(17) read(3) |read(5) uvwxy|' SAME write_default SAME pending_seek_socket",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18ebe7bd7a0f3f1a12fb3692",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:57:38.712Z",
+  "stored_at": "2026-08-21T09:57:38.713Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --lib file_scheme 2>&1 | tail -6",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --lib file_scheme 2>&1 | tail -6: 244 - Target::new(Platform::MacOs, Arch::AArch64), 244 + Target::new(Platform::MacOS, Arch::AArch64), | For more information about this error, try `rustc --explain E0599`. error: could not compile `elephc` (lib ",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --lib file_scheme 2>&1 | tail -6: 244 - Target::new(Platform::MacOs, Arch::AArch64), 244 + Target::new(Platform::MacOS, Arch::AArch64), | For more information about this error, try `rustc --explain E0599`. error: could not compile `elephc` (lib test) due to 3 previous errors",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eae2cafce58f9655279448a3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:22:04.958Z",
+  "stored_at": "2026-08-24T18:22:04.958Z"
+}

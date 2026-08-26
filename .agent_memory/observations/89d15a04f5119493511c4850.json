@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git show origin/main:src/types/checker/type_compat/unions.rs | grep -n 'EXPERIMENT' -A 14 | head -18",
+  "summary": "git show origin/main:src/types/checker/type_compat/unions.rs | grep -n 'EXPERIMENT' -A 14 | head -18 completed",
+  "text": "git show origin/main:src/types/checker/type_compat/unions.rs | grep -n 'EXPERIMENT' -A 14 | head -18 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "89d15a04f5119493511c4850",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:11:39.342Z",
+  "stored_at": "2026-08-26T17:11:39.342Z"
+}

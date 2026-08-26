@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 89,150p src/codegen/lower_inst/builtins/io/phar_write.rs",
+  "summary": "sed -n 89,150p src/codegen/lower_inst/builtins/io/phar_write.rs:  { ctx.emitter.instruction(\"mov r9, QWORD PTR [rax]\"); // the boxed open result tag ctx.emitter.instruction(\"cmp r9, 9\"); // runtime tag 9 identifies a stream resource ctx.emitter.instruction(&format!(\"jne {}\", failed)); // a failed open answers php false",
+  "text": "sed -n 89,150p src/codegen/lower_inst/builtins/io/phar_write.rs:  { ctx.emitter.instruction(\"mov r9, QWORD PTR [rax]\"); // the boxed open result tag ctx.emitter.instruction(\"cmp r9, 9\"); // runtime tag 9 identifies a stream resource ctx.emitter.instruction(&format!(\"jne {}\", failed)); // a failed open answers php false ctx.emitter.instruction(\"mov r9, QWORD PTR [rax + 8]\"); // the opaque stream handle ctx.emitter.instruction(\"sub rsp, 32\"); ctx.emitter.instruction(\"mov QWORD PTR [rsp + 0], r9\"); load_string_to_result(ctx, data, \"file_put_contents data\")?; ctx.emitter.instruction(\"mov rdi, QWORD PTR [rsp + 0]\"); // the handle ctx.emitter.instruction(\"mov rsi, rax\"); // the data pointer; the length is already in rdx abi::emit_call_label(ctx.emitter, \"__rt_fwrite\"); // deflates through _stream_write_filters ctx.emitter.instruction(\"mov QWORD PTR [rsp + 8], rax\"); // php reports the INPUT byte count ctx.emitter.instruction(\"mov rdi, QWORD PTR [rsp + 0]\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3b09f9533861258be68cd993",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:55:10.173Z",
+  "stored_at": "2026-08-21T17:55:10.174Z"
+}

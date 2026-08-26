@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"Op::ConstI64\\|ConstInt\" src/ir_lower/expr/scalar_literals.rs | head -10; echo \"=== null literal ===\"; grep -n \"Null\" src/ir_lower/expr/scalar_literals.rs | head -20",
+  "summary": "grep -rn \"Op::ConstI64\\|ConstInt\" src/ir_lower/expr/scalar_literals.rs | head -10; echo \"=== null literal ===\"; grep -n \"Null\" src/ir_lower/expr/scalar_literals.rs | head -20: src/ir_lower/expr/scalar_literals.rs:36: Op::ConstI64, src/ir_lower/expr/scalar_literals.rs:42: Op::ConstI64.default_effects(), === null literal",
+  "text": "grep -rn \"Op::ConstI64\\|ConstInt\" src/ir_lower/expr/scalar_literals.rs | head -10; echo \"=== null literal ===\"; grep -n \"Null\" src/ir_lower/expr/scalar_literals.rs | head -20: src/ir_lower/expr/scalar_literals.rs:36: Op::ConstI64, src/ir_lower/expr/scalar_literals.rs:42: Op::ConstI64.default_effects(), === null literal === 90: Op::ConstNull, 96: Op::ConstNull.default_effects(),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7433e9d863a466edd0a1bebd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:59:52.667Z",
+  "stored_at": "2026-08-21T10:59:52.667Z"
+}

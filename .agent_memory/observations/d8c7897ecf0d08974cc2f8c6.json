@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build 2>&1 | rg \"^error|^warning\" -A6 | head -20; echo BUILD_OK; cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n evalsc.php > evsc_php.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run evalsc.php >/dev/null 2>&1 && ./evalsc > evsc_el.txt 2>&1; diff evsc_php.txt evsc_el.txt && echo \"EVAL IDENTICAL\" || echo \"^^DIFF\"",
+  "summary": "cargo build 2>&1 | rg \"^error|^warning\" -A6 | head -20; echo BUILD_OK; cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n evalsc.php > evsc_php.txt 2>&1; /Users/guillaumeloulier/PhpstormP",
+  "text": "cargo build 2>&1 | rg \"^error|^warning\" -A6 | head -20; echo BUILD_OK; cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n evalsc.php > evsc_php.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run evalsc.php >/dev/null 2>&1 && ./evalsc > evsc_el.txt 2>&1; diff evsc_php.txt evsc_el.txt && echo \"EVAL IDENTICAL\" || echo \"^^DIFF\": BUILD_OK EVAL IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d8c7897ecf0d08974cc2f8c6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:48:10.260Z",
+  "stored_at": "2026-08-16T16:48:10.261Z"
+}

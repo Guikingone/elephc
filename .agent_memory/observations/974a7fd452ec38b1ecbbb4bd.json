@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nfor x in d['drifts']:\n    if x['category'] in ('configured-capability','missing-constant','extra-constant','constant-value','missing-class'):\n        print(json.dumps(x)[:900]); print()\n\"",
+  "summary": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nfor x in d['drifts']:\n    if x['category'] in ('configured-capability','missing-constant','extra-constant','constant-value','missing-class'):\n        print(json.dumps(x)[:900]); print()\n\":  {\"category\"",
+  "text": "python3 -c \"\nimport json\nd=json.load(open('tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json'))\nfor x in d['drifts']:\n    if x['category'] in ('configured-capability','missing-constant','extra-constant','constant-value','missing-class'):\n        print(json.dumps(x)[:900]); print()\n\":  {\"category\": \"configured-capability\", \"classification\": \"known-incompatibility\", \"closing_gate\": 2, \"elephc\": [\"tcp\", \"udp\", \"unix\", \"udg\", \"tls\", \"ssl\", \"sslv2\", \"sslv3\", \"tlsv1.0\", \"tlsv1.1\", \"tlsv1.2\", \"tlsv1.3\"], \"php\": [\"tcp\", \"udp\", \"unix\", \"udg\", \"ssl\", \"tls\", \"tlsv1.0\", \"tlsv1.1\", \"tlsv1.2\", \"tlsv1.3\"], \"symbol\": \"transports\"} {\"category\": \"configured-capability\", \"classification\": \"known-incompatibility\", \"closing_gate\": 2, \"elephc\": [\"string.toupper\", \"string.tolower\", \"string.rot13\", \"string.strip_tags\", \"convert.base64-encode\", \"convert.base64-decode\", \"convert.quoted-printable-encode\", \"convert.quoted-printable-decode\", \"convert.iconv.*\", \"dechunk\", \"zlib.deflate\", \"zlib.inflate\", \"bzip2.compress\", \"bzip2.decompress\"], \"php\": [\"zlib.*\", \"bzip2.*\", \"convert.iconv.*\", \"string.rot13\", \"string.toupper\", \"string.tolower\", \"convert.*\", \"consumed\", \"dechunk\"], \"symbol\": \"filters\"}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "974a7fd452ec38b1ecbbb4bd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:19:47.938Z",
+  "stored_at": "2026-08-14T14:19:47.939Z",
+  "low_signal": true
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_side.py ours src/codegen/lower_inst/builtins/strings/split.rs\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 4 2>&1 | head -80",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_side.py ours src/codegen/lower_inst/builtins/strings/split.rs\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-e",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_side.py ours src/codegen/lower_inst/builtins/strings/split.rs\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 4 2>&1 | head -80: ow PHP 8's own comparison table through //! `__rt_php_compare` (`10 < 'Banana'`, `'0.5' < 2`, …) while `natsort`/`natcasesort` //! follow php's `strnatcmp_ex`. Nothing else differs between them, which is what makes //! `natsort` key-preserving here: php's //! `zend_array_sort(..., php_array_natural_compare, 0)` passes `renumber = 0`, exactly //! like `asort`, so only the iteration order moves. Selecting per entry point also keeps //! the linker able to drop the natural comparators from a program that never natsorts. //! - Callers must split shared tables with `__rt_hash_ensure_unique` first: these helpers //! mutate the table they are handed. ======= //! - Sorting relinks the insertion-order chain without moving hash buckets or payloads. //! - Both targets use the same stable bottom-up merge-sort contract and `O(n log n)` //! comparison bound. mod aarch64; mod x86_64; >>>>>>> origin/main",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4f5e52351efcb9d699079547",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:17:03.201Z",
+  "stored_at": "2026-08-20T17:17:03.201Z"
+}

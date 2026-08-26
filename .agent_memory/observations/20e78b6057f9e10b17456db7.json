@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport json, pathlib\nbase = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/php_oracle/drift/streams/php-8.5.6')\nnames = [\"GLOB_ERR\",\"GLOB_MARK\",\"GLOB_NOCHECK\",\"GLOB_NOSORT\",\"GLOB_BRACE\",\"GLOB_NOESCAPE\",\"GLOB_ONLYDIR\",\"GLOB_AVAILABLE_FLAGS\"]\nfor target in sorted(p.name for p in base.iterdir() if p.is_dir()):\n    f = base / target / 'streams-full.json'\n    if not f.exists():\n        continue\n    data = json.loads(f.read_text())\n    found = {}\n    def walk(node):\n        if isinstance(node, dict):\n            sym =… [+386 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import json, pathlib base = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/php_oracle/drift/streams/php-8.5.6') names ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "20e78b6057f9e10b17456db7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:09:17.912Z",
+  "stored_at": "2026-08-21T20:09:17.913Z"
+}

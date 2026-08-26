@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_stream_record_meta\" src/codegen_support --include='*.rs' | head; echo \"=== callers with ids ===\"; grep -rn \"emit_record_stream_meta_after_boxed_literal(ctx, \\|emit_record_stream_meta\" src/codegen/lower_inst/builtins/io/*.rs | grep -o \"meta[a-z_]*(ctx, [0-9]*\" | sort | uniq -c",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_stream_record_meta\" src/codegen_support --include='*.rs' | head; echo \"=== callers with ids ===\"; grep -rn \"emit_record_stream_meta_after_boxed_literal(ctx, \\|emit_record_stream_meta\" src/codegen/lower_inst/bu",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_stream_record_meta\" src/codegen_support --include='*.rs' | head; echo \"=== callers with ids ===\"; grep -rn \"emit_record_stream_meta_after_boxed_literal(ctx, \\|emit_record_stream_meta\" src/codegen/lower_inst/builtins/io/*.rs | grep -o \"meta[a-z_]*(ctx, [0-9]*\" | sort | uniq -c: tream_record_meta.rs:92: emitter.label(\"__rt_stream_record_meta_builtin_url_done\"); src/codegen_support/runtime/io/stream_record_meta.rs:102: emitter.instruction(\"b.eq __rt_stream_record_meta_user\"); // userspace wrappers report a stable user-space identity src/codegen_support/runtime/io/stream_record_meta.rs:106: emitter.instruction(\"b.eq __rt_stream_record_meta_user\"); // directory wrappers share the user-space metadata identity === callers with ids === 1 meta_after_boxed_literal(ctx, 0 1 meta_after_boxed_literal(ctx, 1 1 meta_after_boxed_literal(ctx, 3 2 meta_after_boxed_literal(ctx, 5 4 meta_after_boxed_literal(ctx, 6 1 meta_after_boxed_literal(ctx, 7 1 meta_after_boxed_literal(ctx, 8 1 meta_after_boxed_literal(ctx, 9 2 meta_after_boxed_stashed(ctx, 0 1 meta_after_boxed_stashed(ctx, 1 1 meta_after_boxed_stashed(ctx, 6 1 meta_after_boxed_stashed(ctx, 7 1 meta_after_boxed_symbol(ctx, 0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f686d0502ca5d2676f74ac73",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:38:39.476Z",
+  "stored_at": "2026-08-22T16:38:39.477Z"
+}

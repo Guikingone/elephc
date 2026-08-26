@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "for t in ir_backend_handles_define_builtin ir_backend_handles_iterable_echo ir_backend_handles_unset_locals; do echo \"=== $t ===\"; CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test $t 2>&1 | grep -A 4 'panicked' | head -5; done",
+  "summary": "for t in ir_backend_handles_define_builtin ir_backend_handles_iterable_echo ir_backend_handles_unset_locals; do echo \"=== $t ===\"; CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test $t 2>&1 | grep -A 4 'panicked' | head -5; done failed: This session is isolated in th",
+  "text": "for t in ir_backend_handles_define_builtin ir_backend_handles_iterable_echo ir_backend_handles_unset_locals; do echo \"=== $t ===\"; CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test $t 2>&1 | grep -A 4 'panicked' | head -5; done failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Split it into plain, separate commands and run them from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9f3ccb636c2d8f93cbbcd8a7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:44:21.656Z",
+  "stored_at": "2026-08-25T08:44:21.656Z"
+}

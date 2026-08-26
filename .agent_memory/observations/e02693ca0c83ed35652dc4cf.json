@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build 2>&1 | rg -E \"^(error|warning)\" -A6 | head -60",
+  "summary": "cargo build 2>&1 | rg -E \"^(error|warning)\" -A6 | head -60: rg: error parsing flag -E: grep config error: unknown encoding: ^(error|warning)",
+  "text": "cargo build 2>&1 | rg -E \"^(error|warning)\" -A6 | head -60: rg: error parsing flag -E: grep config error: unknown encoding: ^(error|warning)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e02693ca0c83ed35652dc4cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:13:30.079Z",
+  "stored_at": "2026-08-16T16:13:30.080Z",
+  "low_signal": true
+}

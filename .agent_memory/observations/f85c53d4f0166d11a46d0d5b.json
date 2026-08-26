@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/io/fwrite.rs')\nt = p.read_text()\nOLD_A = '''    emitter.label_global(\"__rt_fwrite\");\n\n    // Frame (80 bytes)'''\nNEW_A = '''    emitter.label_global(\"__rt_fwrite\");\n    // php's `_php_stream_write` answers 0 for an empty payload before it consults the stream at\n    // all, so `fwrite($readonly, \"\")` is `int(0)` and not `false` — MEASURED on a `php://temp`\n    // opened \"r\" and on a plain file opened \"r\". Nothing below can… [+1132 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/io/fwrite.rs')\nt = p.read_text()\nOLD_A = '''    emitter.label_global(\"__rt_fwrite\");\n\n    // Frame (80 bytes)'''\nNEW_A = '''    emitter.label_glob",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/io/fwrite.rs')\nt = p.read_text()\nOLD_A = '''    emitter.label_global(\"__rt_fwrite\");\n\n    // Frame (80 bytes)'''\nNEW_A = '''    emitter.label_global(\"__rt_fwrite\");\n    // php's `_php_stream_write` answers 0 for an empty payload before it consults the stream at\n    // all, so `fwrite($readonly, \"\")` is `int(0)` and not `false` — MEASURED on a `php://temp`\n    // opened \"r\" and on a plain file opened \"r\". Nothing below can produce that: every path here\n    // asks the descriptor first, and a descriptor that refuses answers a failure.\n    emitter.instruction(\"cbnz x2, __rt_fwrite_has_bytes\");\n    emitter.instruction(\"mov x0, #0\");                                          // nothing written, and nothing refused\n    emitter.instruction(\"ret\");\n    emitter.label(\"__rt_fwrite_has_bytes\");\n\n    // Frame (80 bytes)'''\nassert t.count(OLD_A) == 1\nt = t.replace(OLD_A, NEW_A, 1)\n\nOLD_X = '''    emitter.label_global(\"__rt_fwrite\");\n\n    // Frame (rbp-relative)'''\nNEW_X = '''    emitter.label_global(\"__rt_fwrite\");\n    // See the AArch64 counterpart: an empty payload is `int(0)`, decided before the stream is.\n    emitter.instruction(\"test rdx, rdx\");\n    emitter.instruction(\"jnz __rt_fwrite_has_bytes_x86\");\n    emitter.instruction(\"xor eax, eax\");                                        // nothing written, and nothing refused\n    emitter.instruction(\"ret\");\n    emitter.label(\"__rt_fwrite_has_bytes_x86\");\n\n    // Frame (rbp-relative)'''\nassert t.count(OLD_X) == 1\nt = t.replace(OLD_X, NEW_X, 1)\np.write_text(t)\nprint('an empty write answers zero')\nPY: an empty write answers zero",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f85c53d4f0166d11a46d0d5b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:49:57.483Z",
+  "stored_at": "2026-08-23T07:49:57.484Z"
+}

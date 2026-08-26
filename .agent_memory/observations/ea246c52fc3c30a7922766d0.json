@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '215,245p' src/types/checker/inference/expr/basic.rs; echo \"--- 315-335 ---\"; sed -n '315,335p' src/types/checker/inference/expr/basic.rs",
+  "summary": "sed -n '215,245p' src/types/checker/inference/expr/basic.rs; echo \"--- 315-335 ---\"; sed -n '315,335p' src/types/checker/inference/expr/basic.rs: Type::Void), PhpType::Str => { saw_indexable_member = true; if !is_valid_string_offset_index(index, &idx_ty) { --- 315-335 --- _ => Ok(*elem_ty.clone()), } } // Mixed receive",
+  "text": "sed -n '215,245p' src/types/checker/inference/expr/basic.rs; echo \"--- 315-335 ---\"; sed -n '315,335p' src/types/checker/inference/expr/basic.rs: Type::Void), PhpType::Str => { saw_indexable_member = true; if !is_valid_string_offset_index(index, &idx_ty) { --- 315-335 --- _ => Ok(*elem_ty.clone()), } } // Mixed receivers fall through to runtime dispatch. The // boxed payload may carry an indexed array, an assoc // hash, or a stdClass; codegen unboxes and routes to // the right runtime helper. Missing keys decode to // `Mixed(null)` at runtime, mirroring PHP's silent // \"undefined index\" warning behavior for this very // common idiom (e.g. `json_decode($json, true)[\"k\"]`). PhpType::Mixed => Ok(PhpType::Mixed), // `isset($n['k'])` / `$n['k'] ?? $d` reach through a null base in PHP and // answer `false` / the default; only a probe context may do so. PhpType::Void if self.null_probe_depth > 0 => Ok(PhpType::Void), _ => Err(CompileError::new(expr.span, \"Cannot index non-array\")), } } ExprKind::Ternary { condition, then_expr, else_expr,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ea246c52fc3c30a7922766d0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T21:12:04.061Z",
+  "stored_at": "2026-08-20T21:12:04.061Z"
+}

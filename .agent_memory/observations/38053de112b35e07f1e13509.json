@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy grep -n \"Options should have the form\\|Invalid stream/context parameter\" -B14 $SRC/ext/standard/streamsfuncs.c | head -50",
+  "summary": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy grep -n \"Options should have the form\\|Invalid stream/context parameter\" -B14 $SRC/ext/standard/streamsfuncs.c | head -50: val))) { 8",
+  "text": "SRC=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src; rtk proxy grep -n \"Options should have the form\\|Invalid stream/context parameter\" -B14 $SRC/ext/standard/streamsfuncs.c | head -50: val))) { 881- ZEND_HASH_MAP_FOREACH_STR_KEY_VAL(Z_ARRVAL_P(wval), okey, oval) { 882- if (okey) { 883- php_stream_context_set_option(context, ZSTR_VAL(wkey), ZSTR_VAL(okey), oval); 884- } 885- } ZEND_HASH_FOREACH_END(); 886- } 887- } else { 888: zend_value_error(\"Options should have the form [\\\"wrappername\\\"][\\\"optionname\\\"] = $value\"); -- 912- efree(error); 913- return FAILURE; 914- } 915- zend_fcc_addref(fcc); 916- 917- context->notifier = php_stream_notification_alloc(); 918- context->notifier->func = user_space_stream_notifier; 919- context->notifier->ptr = fcc; 920- context->notifier->dtor = user_space_stream_notifier_dtor; 921- } 922- if (NULL != (tmp = zend_hash_str_find(params, \"options\", sizeof(\"options\")-1))) { 923- if (Z_TYPE_P(tmp) == IS_ARRAY) { 924- return parse_context_options(context, Z_ARRVAL_P(tmp)); 925- } else { 926: zend_type_error(\"Invalid stream/context parameter\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "38053de112b35e07f1e13509",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:49:43.606Z",
+  "stored_at": "2026-08-17T07:49:43.607Z"
+}

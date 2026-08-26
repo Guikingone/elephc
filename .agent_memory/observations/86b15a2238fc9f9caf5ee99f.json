@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_round8a.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_round8a.txt: fix(streams): copy() appended when it should truncate, copied a file onto itself, and php:// was unreachable from the one-shot bu",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_round8a.txt: fix(streams): copy() appended when it should truncate, copied a file onto itself, and php:// was unreachable from the one-shot builtins\n\n`__rt_file_put_contents` reads `$flags` from a register and tests FILE_APPEND. Three callers with\nno flags of their own — `copy()`, the phar finalizer, and the lowered-source copy — never wrote\nthat register, so the last lowering to leave something there decided whether the destination was\nTRUNCATED or EXTENDED. MEASURED: `file_put_contents($f, 'B', FILE_APPEND)` then `copy($f, $f)`\ngives \"ABAB\" where php leaves \"AB\", and the same copy without the earlier app",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "86b15a2238fc9f9caf5ee99f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:12:32.119Z",
+  "stored_at": "2026-08-23T07:12:32.119Z"
+}

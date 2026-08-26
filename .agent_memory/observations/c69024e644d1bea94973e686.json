@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn lookup' -A 20 src/builtins/registry.rs | head -40",
+  "summary": "grep -rn 'fn lookup' -A 20 src/builtins/registry.rs | head -40: c/builtins/registry.rs-174- }; src/builtins/registry.rs-175- assert!( src/builtins/registry.rs-176- by_runtime_id.insert(runtime_id, def.name).is_none(), src/builtins/registry.rs-177- \"duplicate AOT binding for runtime builtin ID {}\", src/builtins/registry",
+  "text": "grep -rn 'fn lookup' -A 20 src/builtins/registry.rs | head -40: c/builtins/registry.rs-174- }; src/builtins/registry.rs-175- assert!( src/builtins/registry.rs-176- by_runtime_id.insert(runtime_id, def.name).is_none(), src/builtins/registry.rs-177- \"duplicate AOT binding for runtime builtin ID {}\", src/builtins/registry.rs-178- runtime_id.as_u32() src/builtins/registry.rs-179- ); -- src/builtins/registry.rs:563: fn lookup_finds_registered_builtin() { src/builtins/registry.rs-564- let def = lookup(\"__macro_probe\").expect(\"probe must be in registry\"); src/builtins/registry.rs-565- assert_eq!(def.name, \"__macro_probe\"); src/builtins/registry.rs-566- } src/builtins/registry.rs-567- src/builtins/registry.rs-568- /// Verifies case-insensitive lookup works (PHP builtin name semantics). src/builtins/registry.rs-569- #[test] src/builtins/registry.rs:570: fn lookup_is_case_insensitive() { src/builtins/registry.rs-571- assert!(lookup(\"__MACRO_PROBE\").is_some());",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c69024e644d1bea94973e686",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:05:52.542Z",
+  "stored_at": "2026-08-25T13:05:52.542Z"
+}

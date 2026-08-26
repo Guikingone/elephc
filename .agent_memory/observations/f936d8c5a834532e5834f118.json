@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"stderr\" docs/php/functions.md docs/internals/the-runtime.md docs/php/streams.md",
+  "summary": "About to run: grep -n \"stderr\" docs/php/functions.md docs/internals/the-runtime.md docs/php/streams.md",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f936d8c5a834532e5834f118",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:39:24.195Z",
+  "stored_at": "2026-08-18T15:39:24.196Z"
+}

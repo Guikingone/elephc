@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ksort.py 2>&1",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ksort.py 2>&1: === krsort_packed SAME === krsort_assoc SAME === krsort_empty SAME === ksort_packed SAME === krsort_lookup SAME === ksort_bigstr D",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ksort.py 2>&1: === krsort_packed SAME === krsort_assoc SAME === krsort_empty SAME === ksort_packed SAME === krsort_lookup SAME === ksort_bigstr DIFFERS --- php --- 9007199254740992:integer,+9007199254740993 :string, --- elephc --- +9007199254740993 :string,9007199254740992:integer, === ksort_exact DIFFERS --- php --- +9007199254740992:low,+9007199254740993:high, --- elephc --- +9007199254740993:high,+9007199254740992:low, === ksort_mixed DIFFERS --- php --- 9007199254740992:integer,+9007199254740993:string, --- elephc --- +9007199254740993:string,9007199254740992:integer, === ksort_pad SAME === ksort_overflow SAME",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a9819e37bc68a93d5d0c4efa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:27:47.282Z",
+  "stored_at": "2026-08-21T07:27:47.283Z"
+}

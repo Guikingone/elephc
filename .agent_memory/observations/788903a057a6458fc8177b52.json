@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '570,640p' src/codegen_support/runtime/exceptions/trace_buffer.rs",
+  "summary": "sed -n '570,640p' src/codegen_support/runtime/exceptions/trace_buffer.rs: at!(\"mov x2, #{}\", trace_literal_len(\"_rt_trace_hash\"))); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); abi::emit_load_symbol_to_reg(emitter, \"x0\", \"_rt_trace_count\", 0); // php numbers {main} after the real frames emitter.instruction(\"b",
+  "text": "sed -n '570,640p' src/codegen_support/runtime/exceptions/trace_buffer.rs: at!(\"mov x2, #{}\", trace_literal_len(\"_rt_trace_hash\"))); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); abi::emit_load_symbol_to_reg(emitter, \"x0\", \"_rt_trace_count\", 0); // php numbers {main} after the real frames emitter.instruction(\"bl __rt_itoa\"); // pointer in x1, length in x2 emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); abi::emit_symbol_address(emitter, \"x1\", \"_rt_trace_main\"); emitter.instruction(&format!(\"mov x2, #{}\", trace_literal_len(\"_rt_trace_main\"))); emitter.instruction(\"mov x0, #1\"); emitter.syscall(4); // -- ` thrown in FILE on line N`, using the construction line php reports twice -- emitter.instruction(\"ldr x10, [sp, #16]\"); emitter.instruction(\"cbz x10, __rt_uncaught_trace_done\"); // no origin: omit rather than invent abi::emit_load_symbol_to_reg(emitter, \"x11\", \"_script_source_file_len\", 0); emitter.instruction(\"cbz x11, __rt_uncaught_trace_done\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "788903a057a6458fc8177b52",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:20:20.601Z",
+  "stored_at": "2026-08-26T09:20:20.601Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub fn inject_if_used\" -A 20 src/hash_prelude.rs | head -25",
+  "summary": "grep -n \"pub fn inject_if_used\" -A 20 src/hash_prelude.rs | head -25: 185:pub fn inject_if_used( 186- program: crate::parser::ast::Program, 187- force: bool, 188- inventory: &mut crate::optimize::reachability::PreludeInventory, 189-) -> crate::parser::ast::Program { 190- if !force && !detect::program_uses_hash_context(",
+  "text": "grep -n \"pub fn inject_if_used\" -A 20 src/hash_prelude.rs | head -25: 185:pub fn inject_if_used( 186- program: crate::parser::ast::Program, 187- force: bool, 188- inventory: &mut crate::optimize::reachability::PreludeInventory, 189-) -> crate::parser::ast::Program { 190- if !force && !detect::program_uses_hash_context(&program) { 191- return program; 192- } 193- let mut combined = hash_declarations(); 194- inventory.record_program(\"hash\", &combined); 195- combined.extend(program); 196- combined 197-} 198- 199-#[cfg(test)] 200-mod tests { 201- use super::*; 202- use crate::parser::ast::StmtKind; 203- 204- /// The surface is fixed: the class first, then the four streaming functions. A member 205- /// disappearing silently is exactly the failure the PHP-text form could not catch, since",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "77853bbb0a9d0a4878d73ca0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:32:25.886Z",
+  "stored_at": "2026-08-21T16:32:25.887Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/codegen_support/runtime/data/user.rs src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/io/user_filter_brigade.rs src/codegen_support/runtime/resources/filter.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_pufs.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2",
+  "summary": "git add src/codegen_support/runtime/data/user.rs src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/io/user_filter_brigade.rs src/codegen_support/runtime/resources/filter.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claud",
+  "text": "git add src/codegen_support/runtime/data/user.rs src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/io/user_filter_brigade.rs src/codegen_support/runtime/resources/filter.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_pufs.txt 2>&1 | tail -3 && git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2: [worktree-streams-csv-signature bc80f3504] fix(streams): php_user_filter::$stream stayed null, so a filter could not reach its own stream 5 files changed, 197 insertions(+), 3 deletions(-) To github.com:Guikingone/elephc.git d63b3f446..bc80f3504 worktree-streams-csv-signature -> feat/streams-csv-signatures",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4420c2ec6367bc1d6bce78f4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:53:05.889Z",
+  "stored_at": "2026-08-17T18:53:05.890Z"
+}

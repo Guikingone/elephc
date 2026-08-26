@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests prelude_injection_parity 2>&1 | grep -E \"^test |^test result:|panicked\" -A 5 | head -20",
+  "summary": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests prelude_injection_parity 2>&1 | grep -E \"^test |^test result:|panicked\" -A 5 | head -20: test codegen::prelude_injection_parity::test_the_test_harness_injects_every_prelude_the_pipeline_does ... FAILED failures: ---- codegen::prelude_injection_parity::test_t",
+  "text": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests prelude_injection_parity 2>&1 | grep -E \"^test |^test result:|panicked\" -A 5 | head -20: test codegen::prelude_injection_parity::test_the_test_harness_injects_every_prelude_the_pipeline_does ... FAILED failures: ---- codegen::prelude_injection_parity::test_the_test_harness_injects_every_prelude_the_pipeline_does stdout ---- thread 'codegen::prelude_injection_parity::test_the_test_harness_injects_every_prelude_the_pipeline_does' (33619998) panicked at tests/codegen/prelude_injection_parity.rs:60:5: the codegen test harness does not inject [\"opcache\", \"version\"], which `pipeline::compile` does — programs using them fail with \"Undefined function\" only inside the suite note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace failures: -- test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8749 filtered out; finished in 0.01s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2cbe4d7d6bb046f22e550018",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:43:18.516Z",
+  "stored_at": "2026-08-21T12:43:18.517Z"
+}

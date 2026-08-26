@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn without_diagnostics\\|fn strip_diagnostics' tests/ir_backend_smoke_test.rs | head -3; grep -n '^fn compile_and_run_ir_backend' tests/ir_backend_smoke_test.rs | head -2",
+  "summary": "About to run: grep -n 'fn without_diagnostics\\|fn strip_diagnostics' tests/ir_backend_smoke_test.rs | head -3; grep -n '^fn compile_and_run_ir_backend' tests/ir_backend_smoke_test.rs | head -2",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6a891badf927a2dbd7f3f41a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:38:46.048Z",
+  "stored_at": "2026-08-25T08:38:46.048Z"
+}

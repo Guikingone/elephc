@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"^\\s*\\.stderr\\s*$\" tests/codegen/ | sed 's/^tests\\/codegen\\///'",
+  "summary": "grep -rn \"^\\s*\\.stderr\\s*$\" tests/codegen/ | sed 's/^tests\\/codegen\\///': eval.rs:9379: .stderr eval.rs:9386: .stderr eval.rs:9464: .stderr exceptions.rs:581: .stderr exceptions.rs:598: .stderr io/streams.rs:16277: .stderr io/streams.rs:16482: .stderr runtime_gc/regressions.rs:2016: .stderr regressions/arrays.rs:1454: ",
+  "text": "grep -rn \"^\\s*\\.stderr\\s*$\" tests/codegen/ | sed 's/^tests\\/codegen\\///': eval.rs:9379: .stderr eval.rs:9386: .stderr eval.rs:9464: .stderr exceptions.rs:581: .stderr exceptions.rs:598: .stderr io/streams.rs:16277: .stderr io/streams.rs:16482: .stderr runtime_gc/regressions.rs:2016: .stderr regressions/arrays.rs:1454: .stderr",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c46f3880aa5f42a7c7aafeca",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:17:35.473Z",
+  "stored_at": "2026-08-18T15:17:35.473Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r '\necho \"== wrappers ==\\n\"; print_r(stream_get_wrappers());\necho \"== memory ==\\n\";\n$m = fopen(\"php://memory\",\"r+\"); var_dump(ftell($m)); var_dump(fwrite($m,\"hello\")); var_dump(ftell($m)); rewind($m); var_dump(stream_get_contents($m));\nprint_r(stream_get_meta_data($m)); fclose($m);\necho \"== temp ==\\n\";\n$t = fopen(\"php://temp\",\"r+\"); fwrite($t,\"abc\"); rewind($t); var_dump(stream_get_contents($t)); print_r(stream_get_meta_data($t)); fclose($t);\necho \"== temp maxmemory:4 ==\\n\";\n$t = fopen(\"php://temp/maxmemory:4\",\"r+\"); fwrite($t,\"0123456789\"); rewind($t); var_dump(stream_get_contents($t)… [+241 chars truncated]",
+  "summary": "About to run: php -n -r ' echo \"== wrappers ==\\n\"; print_r(stream_get_wrappers()); echo \"== memory ==\\n\"; $m = fopen(\"php://memory\",\"r+\"); var_dump(ftell($m)); var_dump(fwrite($m,\"hello\")); var_dump(ftell($m)); rew",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "514af72e856c1f299d87664f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:17:03.344Z",
+  "stored_at": "2026-08-14T14:17:03.344Z"
+}

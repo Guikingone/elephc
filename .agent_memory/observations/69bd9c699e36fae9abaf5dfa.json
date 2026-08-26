@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams::test_stream_select_treats 2>&1 | grep -A 12 \"panicked\\|assertion\"| head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams::test_stream_select_treats 2>&1 | grep -A 12 \"panicked\\|assertion\"| head -20: igned_set_as_null' (44907927) panicked at tests/codegen/su",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams::test_stream_select_treats 2>&1 | grep -A 12 \"panicked\\|assertion\"| head -20: igned_set_as_null' (44907927) panicked at tests/codegen/support/runner.rs:968:5: binary exited with status exit status: 255 stdout: Warning: fopen(/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_31726_ThreadId(2)_0/test.php): Failed to open stream: No such file or directory in /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_31726_ThreadId(2)_0/test.php on line 2 Fatal error: Uncaught ValueError: No stream arrays were passed in /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_31726_ThreadId(2)_0/test.php:3 Stack trace: #0 /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_31726_ThreadId(2)_0/test.php(3): stream_select(Array, NULL, NULL, 0) #1 {main} thrown in /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_31726_ThreadId(2)_0/test.php on line 3 stderr: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "69bd9c699e36fae9abaf5dfa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:42:44.914Z",
+  "stored_at": "2026-08-23T07:42:44.915Z"
+}

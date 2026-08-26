@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn eval_predefined_constant_value\" -A 30 crates/elephc-magician/src/interpreter/constant_eval.rs | tail -18",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn eval_predefined_constant_value\" -A 30 crates/elephc-magician/src/interpreter/constant_eval.rs | tail -18: t(EVAL_FNM_NOESCAPE)), 92- \"FNM_PATHNAME\" => Some(EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME)), 93- \"FN",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn eval_predefined_constant_value\" -A 30 crates/elephc-magician/src/interpreter/constant_eval.rs | tail -18: t(EVAL_FNM_NOESCAPE)), 92- \"FNM_PATHNAME\" => Some(EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME)), 93- \"FNM_PERIOD\" => Some(EvalPredefinedConstant::Int(EVAL_FNM_PERIOD)), 94- \"FNM_CASEFOLD\" => Some(EvalPredefinedConstant::Int(EVAL_FNM_CASEFOLD)), 95- \"LOCK_SH\" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_SH)), 96- \"LOCK_EX\" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_EX)), 97- \"LOCK_UN\" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_UN)), 98- \"LOCK_NB\" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_NB)), 99- \"OPENSSL_RAW_DATA\" => Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_RAW_DATA)), 100- \"OPENSSL_ZERO_PADDING\" => Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_ZERO_PADDING)), 101- \"OPENSSL_DONT_ZERO_PAD_KEY\" => { 102- Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_DONT_ZERO_PAD_KEY)) 103- } 104- \"ARRAY_FILTER_USE_VALUE\" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_VALUE)),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "865cdc3dc1a7743a16e061f4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:42:13.811Z",
+  "stored_at": "2026-08-23T09:42:13.811Z"
+}

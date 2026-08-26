@@ -22145,13 +22145,13 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "disk_free_space"
       ],
@@ -22162,7 +22162,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -22281,13 +22282,13 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "disk_total_space"
       ],
@@ -22298,7 +22299,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {

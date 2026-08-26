@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py nonobj_types.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py nonobj_types.php: === php === 0: Call to a member function d() on null 1: Call to a member function d() on false 2: Call to a membe",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 diff1.py nonobj_types.php: === php === 0: Call to a member function d() on null 1: Call to a member function d() on false 2: Call to a member function d() on true 3: Call to a member function d() on int 4: Call to a member function d() on float 5: Call to a member function d() on string 6: Call to a member function d() on array === elephc === 0: Call to a member function d() on null 1: Call to a member function d() on false 2: Call to a member function d() on true 3: Call to a member function d() on int 4: Call to a member function d() on float 5: Call to a member function d() on string 6: Call to a member function d() on array --- exit 0 (php 0) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bff2d72e012dc36391311881",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T11:25:02.486Z",
+  "stored_at": "2026-08-23T11:25:02.487Z"
+}

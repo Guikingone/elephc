@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"require_boxed_by_ref_storage\" -B25 -A12 src/types/checker/functions/call_validation.rs | head -50",
+  "summary": "rtk proxy rg -n \"require_boxed_by_ref_storage\" -B25 -A12 src/types/checker/functions/call_validation.rs | head -50: e passed a variable\", 500- callee_desc, param_name 501- ), 502- )); 503- } 504- if let Some((param_name, expected_ty)) = sig.params.get(param_idx) { 505- if sig.declared_params.get(param_idx).copied().unw",
+  "text": "rtk proxy rg -n \"require_boxed_by_ref_storage\" -B25 -A12 src/types/checker/functions/call_validation.rs | head -50: e passed a variable\", 500- callee_desc, param_name 501- ), 502- )); 503- } 504- if let Some((param_name, expected_ty)) = sig.params.get(param_idx) { 505- if sig.declared_params.get(param_idx).copied().unwrap_or(false) 506- && sig.ref_params.get(param_idx).copied().unwrap_or(false) 507- { 508: self.require_boxed_by_ref_storage( 509- expected_ty, 510- &actual_ty, 511- arg.span, 512- &format!(\"{} parameter ${}\", callee_desc, param_name), 513- )?; 514- } 515- // `strict_types` applies to every declared parameter type, including the 516- // closure and first-class-callable surfaces that stay off the coercive 517- // path. Builtin signatures carry `declared_params: false` throughout 518- // (`crate::builtins::registry`), so this never fires for an internal 519- // function whose parameter types the checker does not consume. 520- if sig.declared_params.get(param_idx).copied().unwrap_or(false) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9b60371ac28cf3f11807d658",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:30:37.948Z",
+  "stored_at": "2026-08-16T17:30:37.949Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/blwidpz4k.output\" | rg \"test result|FAILED|panicked\" | head",
+  "summary": "cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/blwidpz4k.output\" | rg \"test result|FAILED|panicked\" | head: test result: ok. 255 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 168.2",
+  "text": "cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/blwidpz4k.output\" | rg \"test result|FAILED|panicked\" | head: test result: ok. 255 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 168.20s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e11472b2294571a0d455a993",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:23:41.139Z",
+  "stored_at": "2026-08-16T16:23:41.140Z"
+}

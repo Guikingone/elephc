@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ksort_exact.py 2>&1",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ksort_exact.py 2>&1: SAME small_plain php='1000000000000000=second 1000000000000001=first' SAME small_plus php='+1000000000000000=second +1000000",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ksort_exact.py 2>&1: SAME small_plain php='1000000000000000=second 1000000000000001=first' SAME small_plus php='+1000000000000000=second +1000000000000001=first' SAME small_mixed php='1000000000000000=second +1000000000000001=first' SAME big_plain php='9007199254740992=second 9007199254740993=first' DIFFERS big_plus php='+9007199254740992=second +9007199254740993=first' elephc='+9007199254740993=first +9007199254740992=second' DIFFERS big_mixed php='9007199254740992=second +9007199254740993=first' elephc='+9007199254740993=first 9007199254740992=second' SAME big_mixed_np php='9007199254740992=second 9007199254740993=first' SAME huge_plain php='4000000000000000000=second 4000000000000000001=first' DIFFERS huge_plus php='+4000000000000000000=second +4000000000000000001=first' elephc='+4000000000000000001=first +4000000000000000000=second' SAME neg_plain php='-9007199254740993=first -9007199254740992=second'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e492195b53b8e1267403fa1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:28:30.772Z",
+  "stored_at": "2026-08-21T07:28:30.773Z"
+}

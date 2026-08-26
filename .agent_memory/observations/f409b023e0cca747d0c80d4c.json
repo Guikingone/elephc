@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nonobject_test.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nonobject_test.py: \"\"\"Pin the seven words, and correct the assertion that read the wrong channel.\n\n`test_mixed_receiver_non_object_fatals` asserte",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nonobject_test.py: \"\"\"Pin the seven words, and correct the assertion that read the wrong channel.\n\n`test_mixed_receiver_non_object_fatals` asserted `out.stdout` contains the message. The harness\nsplits by KIND PREFIX: a `Fatal error:` line is a diagnostic, and the trace lines that follow —\nwhich carry no prefix — are stdout. So the assertion looked at the half the message is not in and\nfailed whatever elephc printed.\n\"\"\"\nimport pathlib\n\np = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'streams-csv-signature/tests/codegen/regressions/mixed_method_dispatch.rs'\n)\nt ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f409b023e0cca747d0c80d4c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T11:25:20.523Z",
+  "stored_at": "2026-08-23T11:25:20.523Z"
+}

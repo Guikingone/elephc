@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 118,145p src/codegen_support/runtime/io/phar_read.rs | grep -nE \"bl __rt_|b __rt_|label\\(\" | head -8",
+  "summary": "sed -n 118,145p src/codegen_support/runtime/io/phar_read.rs | grep -nE \"bl __rt_|b __rt_|label\\(\" | head -8 completed",
+  "text": "sed -n 118,145p src/codegen_support/runtime/io/phar_read.rs | grep -nE \"bl __rt_|b __rt_|label\\(\" | head -8 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "71b358e0d87cfddaf1b4848a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:09:52.102Z",
+  "stored_at": "2026-08-22T08:09:52.103Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/PhpstormProjects/oss/ | head -20; ls ~/php-src 2>/dev/null | head -5; find / -maxdepth 4 -name \"php-src\" -type d 2>/dev/null | head -3",
+  "summary": "ls /Users/guillaumeloulier/PhpstormProjects/oss/ | head -20; ls ~/php-src 2>/dev/null | head -5; find / -maxdepth 4 -name \"php-src\" -type d 2>/dev/null | head -3: elephc elephc-fastcgi elephc-main elephc-output-buffering-control elephc-runtime-context-zts gemma4-symfony-benchmark php-agent-skills",
+  "text": "ls /Users/guillaumeloulier/PhpstormProjects/oss/ | head -20; ls ~/php-src 2>/dev/null | head -5; find / -maxdepth 4 -name \"php-src\" -type d 2>/dev/null | head -3: elephc elephc-fastcgi elephc-main elephc-output-buffering-control elephc-runtime-context-zts gemma4-symfony-benchmark php-agent-skills",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a516ee5c237d54a07b6ee4ce",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:01:11.456Z",
+  "stored_at": "2026-08-21T10:01:11.456Z"
+}

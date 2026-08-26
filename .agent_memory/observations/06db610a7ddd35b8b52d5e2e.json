@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests codegen::functions 2>&1 | rg \"^test result|FAILED\" | head -3; cargo test --test codegen_tests codegen::classes 2>&1 | rg \"^test result|FAILED|panicked\" | head -6",
+  "summary": "cargo test --test codegen_tests codegen::functions 2>&1 | rg \"^test result|FAILED\" | head -3; cargo test --test codegen_tests codegen::classes 2>&1 | rg \"^test result|FAILED|panicked\" | head -6: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8399 filtered out; finished in 0.00s test result: ok. 0 passed; 0",
+  "text": "cargo test --test codegen_tests codegen::functions 2>&1 | rg \"^test result|FAILED\" | head -3; cargo test --test codegen_tests codegen::classes 2>&1 | rg \"^test result|FAILED|panicked\" | head -6: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8399 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8399 filtered out; finished in 0.00s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "06db610a7ddd35b8b52d5e2e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:23:42.355Z",
+  "stored_at": "2026-08-16T20:23:42.356Z"
+}

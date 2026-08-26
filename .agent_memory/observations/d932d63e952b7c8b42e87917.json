@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace/e; cat > \"$D/pr.php\" <<'PHP'\n<?php\nfunction f(int $n, string $s, array $a): int { return $n + strlen($s) + count($a); }\necho f(1, \"ab\", [1,2]), \"\\n\";\nPHP\ncd \"$D\" && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-asm pr.php >/dev/null 2>&1 && grep -n '_eir_f:' -A 24 pr.s | head -28",
+  "summary": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace/e; cat > \"$D/pr.php\" <<'PHP'\n<?php\nfunction f(int $n, string $s, array $a): int { return $n + strlen($s) + count($a); }\necho f(1, \"ab\", [1,2]), \"\\n\"",
+  "text": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/trace/e; cat > \"$D/pr.php\" <<'PHP'\n<?php\nfunction f(int $n, string $s, array $a): int { return $n + strlen($s) + count($a); }\necho f(1, \"ab\", [1,2]), \"\\n\";\nPHP\ncd \"$D\" && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-asm pr.php >/dev/null 2>&1 && grep -n '_eir_f:' -A 24 pr.s | head -28: Shell cwd was reset to /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d932d63e952b7c8b42e87917",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:20:57.620Z",
+  "stored_at": "2026-08-26T09:20:57.620Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs: /// An existing file is overwritten, the extracted file carries the ENTRY's mtime\n/// rather than the extraction time, and a directory member (`dd/`) becomes a\n -> /// An existing file is ove",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs: /// An existing file is overwritten, the extracted file carries the ENTRY's mtime\n/// rather than the extraction time, and a directory member (`dd/`) becomes a\n -> /// An existing file is overwritten, the extracted file carries the ENTRY's mtime\n/// rather than the extraction time, and a directory member (`dd/`) becomes a\n/// directory instead of an empty file.\n///\n/// THE UNCREATABLE DESTINATION IS A PATH THROUGH A FILE, not an unwritable root.\n/// `/no/such/root/x` is only uncreatable for an unprivileged user: CI's linux shards run\n/// inside a container as root, where `mkdir -p /no/such/root/x` SUCCEEDS and the case flips\n/// to `tru",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c9eee9e256d1163da237bc7f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:45:32.654Z",
+  "stored_at": "2026-08-16T16:45:32.654Z"
+}

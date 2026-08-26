@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '<?php\\nclass S { public function d(): int { return 1; } }\\nfunction make(int $x): mixed { if ($x < 0) { return false; } return new S(); }\\n$v = make(-1);\\necho $v->d();\\n' > nonobj.php; python3 diff1.py nonobj.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '<?php\\nclass S { public function d(): int { return 1; } }\\nfunction make(int $x): mixed { if ($x < 0) { return false; } return new S(); }\\n$",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; printf '<?php\\nclass S { public function d(): int { return 1; } }\\nfunction make(int $x): mixed { if ($x < 0) { return false; } return new S(); }\\n$v = make(-1);\\necho $v->d();\\n' > nonobj.php; python3 diff1.py nonobj.php: === php === Fatal error: Uncaught Error: Call to a member function d() on false in <dir>/p.php:5 Stack trace: #0 {main} thrown in <dir>/p.php on line 5 === elephc === Fatal error: Uncaught Error: Call to a member function d() on null in <dir>/p.php:5 Stack trace: #0 {main} thrown in <dir>/p.php on line 5 --- exit 255 (php 255) ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "75b2d435d8c37582fefe54a0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T11:12:39.390Z",
+  "stored_at": "2026-08-23T11:12:39.391Z"
+}

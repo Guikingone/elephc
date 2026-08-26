@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn '__rt_diag_warning' src/codegen_support/runtime/diag*.rs src/codegen_support/runtime/*/diag*.rs 2>/dev/null | head -3; grep -rln '__rt_diag_warning' src/codegen_support/runtime/ | head -5",
+  "summary": "About to run: grep -rn '__rt_diag_warning' src/codegen_support/runtime/diag*.rs src/codegen_support/runtime/*/diag*.rs 2>/dev/null | head -3; grep -rln '__rt_diag_warning' src/codegen_support/runtime/ | head -5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "352dc0bfe85772e544774cf3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:34:53.080Z",
+  "stored_at": "2026-08-25T13:34:53.081Z"
+}

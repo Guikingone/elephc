@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/assign_leak.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/assign_leak.php: <?php\n// Is the leak about fgetc, or about assigning inside a condition at all?\nfunction make(int $i): string\n{\n    return \"x\";\n}",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/assign_leak.php: <?php\n// Is the leak about fgetc, or about assigning inside a condition at all?\nfunction make(int $i): string\n{\n    return \"x\";\n}\n$n = 0;\nwhile (($s = make($n)) !== \"\") {\n    $n++;\n    if ($n >= 900000) {\n        break;\n    }\n}\necho \"user function: \", $n, \"\\n\";\n\n$m = 0;\nwhile (($t = strrev(\"ab\")) !== \"\") {\n    $m++;\n    if ($m >= 900000) {\n        break;\n    }\n}\necho \"builtin string: \", $m, \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a6904c7b70cef5b30d5a06cc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:48:42.226Z",
+  "stored_at": "2026-08-23T12:48:42.227Z"
+}

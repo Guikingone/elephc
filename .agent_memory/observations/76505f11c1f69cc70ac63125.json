@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -E \"^(1\\||mixed)\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t21_e.txt; echo \"=== php values ===\"; grep -E \"^(file|memory|temp|data|mixed|1\\|)\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t21_p.txt",
+  "summary": "grep -E \"^(1\\||mixed)\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t21_e.txt; echo \"=== php values ===\"; grep -E \"^(file|memory|temp|data|mixed|1\\|)\" /private/tmp/claude-501/-Users-guillaumelou",
+  "text": "grep -E \"^(1\\||mixed)\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t21_e.txt; echo \"=== php values ===\"; grep -E \"^(file|memory|temp|data|mixed|1\\|)\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/t21_p.txt: mixed=Warning: stream_select(): Cannot represent a stream of type MEMORY as a select()able descriptor 1|1 === php values === file=1 memory= memory=VE:No stream arrays were passed temp=1 data=1 mixed= 1|1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "76505f11c1f69cc70ac63125",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:17:49.327Z",
+  "stored_at": "2026-08-18T12:17:49.327Z"
+}

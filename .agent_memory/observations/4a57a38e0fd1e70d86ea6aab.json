@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('MEMORY.md')\nt = p.read_text()\nOLD = \"- 🎯🔴 **BUT: streams à 100 %**\"\nNEW = \"\"\"- ✅✅✅🔑★★★ [Round 8: 139 → 151 des 183 programmes des auditeurs](streams-round8-audit-fixes.md) — `copy()` APPENDait (3 appelants sans `$flags`), `copy($f,$f)` par (dev,ino), `php://` inatteignable des one-shot, `tmpfile()` publiait un fichier supprimé. RESTE listé dedans.\n- 🔴🔴🔑★★★ [Un saut vers `X+N` MEURT avec X](a-branch-into-another-symbol-dies-with-it.md) —… [+563 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('MEMORY.md')\nt = p.read_text()\nOLD = \"- 🎯🔴 **BUT: streams à 100 %**\"\nNEW = \"\"\"- ✅✅✅🔑★★★ [Round 8: 139 → 151 des 183 programmes des auditeurs](streams-round8-audit-fixe",
+  "text": "cd /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('MEMORY.md')\nt = p.read_text()\nOLD = \"- 🎯🔴 **BUT: streams à 100 %**\"\nNEW = \"\"\"- ✅✅✅🔑★★★ [Round 8: 139 → 151 des 183 programmes des auditeurs](streams-round8-audit-fixes.md) — `copy()` APPENDait (3 appelants sans `$flags`), `copy($f,$f)` par (dev,ino), `php://` inatteignable des one-shot, `tmpfile()` publiait un fichier supprimé. RESTE listé dedans.\n- 🔴🔴🔑★★★ [Un saut vers `X+N` MEURT avec X](a-branch-into-another-symbol-dies-with-it.md) — correct dans le .o, pendant après élagage; SIGSEGV avec x29/x30 = octets du chemin. 🛠 balayage: **18 instances** préexistantes en 3 grappes.\n- 🔑★★★ [`stream_select`: compter D'ABORD, refuser l'entrée ensuite](stream-select-rule-is-count-then-entry.md) — la « contradiction » était deux programmes DIFFÉRENTS; 6/12 formes rendaient un COMPTE plausible. 🔴 x86: le compteur mangeait `$microseconds` (défait 8 j après son propre correctif).\n- 🎯🔴 **BUT: streams à 100 %**\"\"\"\nassert t.count(OLD) == 1\np.write_text(t.replace(OLD, NEW, 1))\nprint('index updated')\nPY: index updated",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4a57a38e0fd1e70d86ea6aab",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:34:37.000Z",
+  "stored_at": "2026-08-23T08:34:37.000Z"
+}

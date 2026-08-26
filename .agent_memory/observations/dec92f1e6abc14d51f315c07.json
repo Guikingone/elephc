@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport json, pathlib\np='tests/php_oracle/manifests/streams/php-8.5.6/macos-aarch64/streams-full.json'\nc=json.load(open(p))['surface']['constants']\nif isinstance(c,list): c={e['name']:e.get('value') for e in c}\nfor n in ['E_ALL','E_STRICT','ARRAY_FILTER_USE_KEY','ARRAY_FILTER_USE_VALUE','SUNFUNCS_RET_STRING','JSON_OBJECT_AS_ARRAY','ENT_QUOTES']:\n    print(f'{n:<26}', c.get(n, '<absent from the manifest>'))\nprint()\nprint('manifest holds', len(c), 'constants')\n\"",
+  "summary": "About to run: python3 -c \" import json, pathlib p='tests/php_oracle/manifests/streams/php-8.5.6/macos-aarch64/streams-full.json' c=json.load(open(p))['surface']['constants'] if isinstance(c,list): c={e['name']:e.ge",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dec92f1e6abc14d51f315c07",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:54:11.484Z",
+  "stored_at": "2026-08-22T09:54:11.484Z"
+}

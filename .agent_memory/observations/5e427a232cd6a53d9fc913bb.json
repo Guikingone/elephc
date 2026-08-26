@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"__rt_fgc_url_check_\\|__rt_fgc_url_plain\\|b __rt_fgc\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/file_get_contents_url.rs | rtk proxy grep \"label(\" | head -10",
+  "summary": "rtk proxy grep -n \"__rt_fgc_url_check_\\|__rt_fgc_url_plain\\|b __rt_fgc\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/file_get_contents_url.rs | rtk proxy grep \"label(\" | head -10: 188: emitter.label(\"__rt_fgc_url_check_https\"); 341: emitter.l",
+  "text": "rtk proxy grep -n \"__rt_fgc_url_check_\\|__rt_fgc_url_plain\\|b __rt_fgc\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/file_get_contents_url.rs | rtk proxy grep \"label(\" | head -10: 188: emitter.label(\"__rt_fgc_url_check_https\"); 341: emitter.label(\"__rt_fgc_url_check_ftps\"); 371: emitter.label(\"__rt_fgc_url_check_ftp\"); 549: emitter.label(\"__rt_fgc_url_plain\"); 701: emitter.label(\"__rt_fgc_url_check_https_x86\"); 846: emitter.label(\"__rt_fgc_url_check_ftps_x86\"); 867: emitter.label(\"__rt_fgc_url_check_ftp_x86\"); 1030: emitter.label(\"__rt_fgc_url_plain_x86\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5e427a232cd6a53d9fc913bb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:00:10.771Z",
+  "stored_at": "2026-08-17T12:00:10.772Z"
+}

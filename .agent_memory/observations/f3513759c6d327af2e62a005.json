@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'WRAPPER_ID_PHP' src/codegen_support/runtime/ | grep 'const\\|use ' | head -5; sed -n '1,30p' src/codegen_support/runtime/io/stream_pending.rs",
+  "summary": "grep -rn 'WRAPPER_ID_PHP' src/codegen_support/runtime/ | grep 'const\\|use ' | head -5; sed -n '1,30p' src/codegen_support/runtime/io/stream_pending.rs: ead buffer, which every read function shares — a //! refused `stream_get_line()` is followed by an `fread()` that sees the same \"abc\". This is that //! buffer, narrowed",
+  "text": "grep -rn 'WRAPPER_ID_PHP' src/codegen_support/runtime/ | grep 'const\\|use ' | head -5; sed -n '1,30p' src/codegen_support/runtime/io/stream_pending.rs: ead buffer, which every read function shares — a //! refused `stream_get_line()` is followed by an `fread()` that sees the same \"abc\". This is that //! buffer, narrowed to what makes the difference observable: only `stream_get_line()` fills it, //! and the three readers drain it before touching the descriptor. A program that never reaches //! the refusal pays one load and a branch per read. //! - EOF is NOT this case. A blocking file whose last line has no delimiter still answers that //! line, because there the loop stopped at a genuine end of input; only the would-block exit //! pushes back. use crate::codegen_support::runtime::resources::layout::{ STREAM_PENDING_LEN_OFFSET, STREAM_PENDING_POS_OFFSET, STREAM_PENDING_PTR_OFFSET, }; use crate::codegen_support::{abi, emit::Emitter, platform::Arch}; /// Emits `__rt_stream_pending_put(handle, ptr, len)`, which retains a copy of `len` bytes.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f3513759c6d327af2e62a005",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:46:27.406Z",
+  "stored_at": "2026-08-25T13:46:27.407Z"
+}

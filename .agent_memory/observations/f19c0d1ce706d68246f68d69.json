@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/copy_diag_readers.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/copy_diag_readers.py: \"\"\"Teaches the four warning sites to prefer the delegating caller's published name.\n\nEach site loads a fixed literal pair. T",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/copy_diag_readers.py: \"\"\"Teaches the four warning sites to prefer the delegating caller's published name.\n\nEach site loads a fixed literal pair. The override is checked by LENGTH — zero means unset — and\nonly the pair changes; the call that follows is untouched.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\n\n\ndef override_aarch64(ptr_reg, len_reg, ptr_sym, len_sym, label):\n    \"\"\"Emits: prefer the published pair when its length is non-zero.\"\"\"\n    return (\n        f'    abi::emit_load_symbol_to_reg(emitter, \"x9\", \"{len_sy",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f19c0d1ce706d68246f68d69",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:00:13.807Z",
+  "stored_at": "2026-08-22T20:00:13.808Z"
+}

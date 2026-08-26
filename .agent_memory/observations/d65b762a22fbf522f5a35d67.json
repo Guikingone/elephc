@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(spl): a throwable the RUNTIME built still reported line 0\n\n`new SplFixedArray(-1)` answered `getLine() === 0` where php answers the line of the `new`.\nZero is not a line php ever prints, and it takes the uncaught report's whole location tail\nwith it.\n\nTwo halves, and each was wrong on its own.\n\nThe throw sequences in the SplFixedArray and doubly-linked-list runtimes write every field\nof the Throwable payload — class id, message, length, code, previous — except the creation\nline, which they left as whatever the allocator had put there. `emi… [+880 chars truncated]",
+  "summary": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(spl): a throwable the RUNTIME built still reported line 0\n\n`new SplFixedArray(-1)` answered `getLine() === 0` where php answers the line of the `new`.\nZero is not a line php ever prints, and it takes the uncaught report's whole location tail\nwith it.\n\nTwo halves, a",
+  "text": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(spl): a throwable the RUNTIME built still reported line 0\n\n`new SplFixedArray(-1)` answered `getLine() === 0` where php answers the line of the `new`.\nZero is not a line php ever prints, and it takes the uncaught report's whole location tail\nwith it.\n\nTwo halves, and each was wrong on its own.\n\nThe throw sequences in the SplFixedArray and doubly-linked-list runtimes write every field\nof the Throwable payload — class id, message, length, code, previous — except the creation\nline, which they left as whatever the allocator had put there. `emit_throwable_creation_line_unknown`,\nthe shared helper for the same situation, stored an explicit zero. Both now read the line\npublished at the call into the builtin, which is php's own rule: the `new` lives in the\nruntime and has no php line, so php names the CALL.\n\nThe gate deciding which calls publish was the other half. It asked whether the class's\nemitted BODIES were synthetic — the right question for a class built from a synthesized\nPHP AST and the wrong one for `SplFixedArray`, which has no PHP body at all. It now reads\nthe class's own DECLARATION span: a compiler-injected class carries `Span::dummy()`, and\nthat is one hash lookup instead of a scan of every emitted method.\n\nMEASURED on `php -n` 8.5.6 — a negative size, a negative `setSize()`, an out-of-range\noffset write, `intdiv(1, 0)`, and a plain user `new` — all five lines now agree.\nMSG\ngit log --oneline -1: 5447b70f1 fix(spl): a throwable the RUNTIME built still reported line 0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d65b762a22fbf522f5a35d67",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:45:57.625Z",
+  "stored_at": "2026-08-26T07:45:57.625Z"
+}

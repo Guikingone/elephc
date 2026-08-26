@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/codegen/spl/filesystem.rs\")\ns = p.read_text()\nold = '''    assert_eq!(out, \"php://memory|first|second|eof\");'''\nnew = '''    // MEASURED on `php -n` 8.5.6: reading the LAST line of a `php://memory` stream does not put\n    // it at end of file — the read stopped exactly at the end, and php reports EOF only once a\n    // read has ASKED for more. The old expectation came from elephc's hand-rolled temp buffer,\n    // which this class no longer uses.\n    assert_eq!(out, \"php://memory|first|second|more\");'''\nassert s.count(old) == 1, s.count(ol… [+188 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/codegen/spl/filesystem.rs\")\ns = p.read_text()\nold = '''    assert_eq!(out, \"php://memory|first|second|eof\");'''\nnew = '''    // MEASURED on `php -n` 8.5.6: reading the LAST line of a `php://memory` stream does not put\n    // it at end of file — the read stopped ex",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/codegen/spl/filesystem.rs\")\ns = p.read_text()\nold = '''    assert_eq!(out, \"php://memory|first|second|eof\");'''\nnew = '''    // MEASURED on `php -n` 8.5.6: reading the LAST line of a `php://memory` stream does not put\n    // it at end of file — the read stopped exactly at the end, and php reports EOF only once a\n    // read has ASKED for more. The old expectation came from elephc's hand-rolled temp buffer,\n    // which this class no longer uses.\n    assert_eq!(out, \"php://memory|first|second|more\");'''\nassert s.count(old) == 1, s.count(old)\np.write_text(s.replace(old, new))\nprint(\"expectation remeasured\")\nPY\nCARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests spl:: 2>&1 | tail -3: expectation remeasured test result: ok. 275 passed; 0 failed; 0 ignored; 0 measured; 8683 filtered out; finished in 83.88s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e3b591014a4fe3c6fd600979",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T21:18:20.200Z",
+  "stored_at": "2026-08-24T21:18:20.200Z"
+}

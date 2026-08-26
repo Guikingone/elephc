@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n oracle4.php 2>&1",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n oracle4.php 2>&1: 'a b' | '%3c' => [str('a')] 'abcd' | '%3c' => [str('abc')] 'ab' | '%3c' => [str('ab')] 'a b' | '%3c' => [str('a')] 'he",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n oracle4.php 2>&1: 'a b' | '%3c' => [str('a')] 'abcd' | '%3c' => [str('abc')] 'ab' | '%3c' => [str('ab')] 'a b' | '%3c' => [str('a')] 'hello' | '%n%s%n' => [int(0), str('hello'), int(5)] ' hi' | '%n%s' => [int(0), str('hi')] '5' | '%D' => [int(5)] '5' | '%S' => ValueError: Bad scan conversion character \"S\" '5' | '%E' => [float(5.0)] '5' | '%G' => ValueError: Bad scan conversion character \"G\" '5' | '%X' => [int(5)] '5' | '%lld' => ValueError: Bad scan conversion character \"l\" '5' | '%Lf' => [float(5.0)] 'a ' | '%[^b]' => [str('a ')] '1 -' | '%d %d' => [int(1), NULL] '1 .' | '%d %f' => [int(1), NULL] 'x' | '%[a-z]' => [str('x')] '' | '%[a-z]' => NULL 'abc' | '%[' => ValueError: Unmatched [ in format string 'abc' | '%[a' => ValueError: Unmatched [ in format string '--' | '%[-]' => [str('--')] 'a^b' | '%[a^]' => [str('a^')] array(1) { [0]=> string(2) \"a \" } NULL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3b1eb1c57f5d1352157eb532",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:48:41.650Z",
+  "stored_at": "2026-08-16T15:48:41.651Z"
+}

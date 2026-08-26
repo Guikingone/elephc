@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target/debug/elephc 2>/dev/null; echo \"---worktree target---\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/ 2>/dev/null; echo \"---find elephc binaries---\"; find /Users/guillaumeloulier/PhpstormProjects/oss/elephc -maxdepth 4 -type f -name elephc -perm +111 2>/dev/null | head",
+  "summary": "ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target/debug/elephc 2>/dev/null; echo \"---worktree target---\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/ 2>/dev/null; echo \"---find elephc binaries---\"; find /Users/guillaumeloulier/PhpstormProjects/o",
+  "text": "ls -la /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target/debug/elephc 2>/dev/null; echo \"---worktree target---\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/ 2>/dev/null; echo \"---find elephc binaries---\"; find /Users/guillaumeloulier/PhpstormProjects/oss/elephc -maxdepth 4 -type f -name elephc -perm +111 2>/dev/null | head: ---worktree target--- ---find elephc binaries---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "63fb025680e8641fb014de5a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:40.196Z",
+  "stored_at": "2026-08-14T14:11:40.196Z"
+}

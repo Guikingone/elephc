@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build 2>&1 | rg \"^error|^warning\" -A6 | head -70",
+  "summary": "cargo build 2>&1 | rg \"^error|^warning\" -A6 | head -70: 1 | 205 | / impl crate::builtins::semantics::BuiltinLoweringContext 206 | | for WrapperBuiltinLoweringContext<'_, '_> | |_____________________________________________^ missing `intern_function_name` in implementation | -- error[E0015]: cannot call non-const method",
+  "text": "cargo build 2>&1 | rg \"^error|^warning\" -A6 | head -70: 1 | 205 | / impl crate::builtins::semantics::BuiltinLoweringContext 206 | | for WrapperBuiltinLoweringContext<'_, '_> | |_____________________________________________^ missing `intern_function_name` in implementation | -- error[E0015]: cannot call non-const method `instr::Op::default_effects` in statics --> src/builtins/io/fscanf.rs:41:50 | 41 | effects: BuiltinEffects::Static(Op::Call.default_effects()), | ^^^^^^^^^^^^^^^^^ | = note: calls in statics are limited to constant functions, tuple structs and tuple variants -- error[E0015]: cannot call non-const method `instr::Op::default_effects` in statics --> src/builtins/string/sscanf.rs:48:50 | 48 | effects: BuiltinEffects::Static(Op::Call.default_effects()), | ^^^^^^^^^^^^^^^^^ | = note: calls in statics are limited to constant functions, tuple structs and tuple variants -- error: could not compile `elephc` (lib) due to 3 previous errors",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cc984423d9139a66714423ac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:13:41.237Z",
+  "stored_at": "2026-08-16T16:13:41.237Z"
+}

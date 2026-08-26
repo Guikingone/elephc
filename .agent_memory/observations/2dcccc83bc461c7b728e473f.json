@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh run view 31805290178 -R Guikingone/elephc --json jobs --jq '.jobs[] | select(.name == \"Non-Codegen Tests (macos-aarch64)\") | .databaseId'",
+  "summary": "gh run view 31805290178 -R Guikingone/elephc --json jobs --jq '.jobs[] | select(.name == \"Non-Codegen Tests (macos-aarch64)\") | .databaseId': 94783822471",
+  "text": "gh run view 31805290178 -R Guikingone/elephc --json jobs --jq '.jobs[] | select(.name == \"Non-Codegen Tests (macos-aarch64)\") | .databaseId': 94783822471",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2dcccc83bc461c7b728e473f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:57:57.288Z",
+  "stored_at": "2026-08-14T14:57:57.289Z"
+}

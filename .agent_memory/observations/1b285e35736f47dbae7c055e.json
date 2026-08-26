@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/uncaught-report-dropped-the-previous-chain.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/uncaught-report-dropped-the-previous-chain.md: ---\nname: uncaught-report-dropped-the-previous-chain\ndescription: \"le rapport « Uncaught » n'imprimait QUE le wrapper et jetait l'échec qu'il enveloppait — php imprime",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/uncaught-report-dropped-the-previous-chain.md: ---\nname: uncaught-report-dropped-the-previous-chain\ndescription: \"le rapport « Uncaught » n'imprimait QUE le wrapper et jetait l'échec qu'il enveloppait — php imprime chaque maillon sous « Next »\"\nmetadata:\n  type: project\n---\n\n`throw new X($msg, 0, $previous)` est la façon dont une bibliothèque dit **ce qu'elle faisait**\nquand quelque chose en dessous a échoué. php imprime **tout** le chaînage : le plus PROFOND sous\n`Fatal error: Uncaught`, chaque suivant sous `Next`, et la ligne de queue `  thrown in …` **une\nseule fois**, pour l'exception réellement lancée.\n\nelephc imprimait le maillon **E",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1b285e35736f47dbae7c055e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:52:59.834Z",
+  "stored_at": "2026-08-24T19:52:59.835Z"
+}

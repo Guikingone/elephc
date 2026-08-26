@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"php://memory\\|PHP_MEMORY\\|php_memory\" src --include='*.rs' -l | head -10",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"php://memory\\|PHP_MEMORY\\|php_memory\" src --include='*.rs' -l | head -10: src/pdo_prelude.rs src/types/checker/builtin_class_gate.rs src/types/checker/builtin_spl_classes/filesystem.rs src/pdo_prelude/build.rs src/",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"php://memory\\|PHP_MEMORY\\|php_memory\" src --include='*.rs' -l | head -10: src/pdo_prelude.rs src/types/checker/builtin_class_gate.rs src/types/checker/builtin_spl_classes/filesystem.rs src/pdo_prelude/build.rs src/codegen/lower_inst/builtins/io/context_result_helpers.rs src/codegen/lower_inst/builtins/io/fopen_core.rs src/codegen/lower_inst/builtins/io/stream_buckets.rs src/codegen/lower_inst/builtins/io/close_crypto_arch.rs src/codegen/lower_inst/builtins/io/stream_options.rs src/codegen_support/platform/target.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a1774fa32780386619530712",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:38:05.428Z",
+  "stored_at": "2026-08-22T16:38:05.429Z"
+}

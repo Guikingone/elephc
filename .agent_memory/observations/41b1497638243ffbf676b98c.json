@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests -- codegen::strings::scanf codegen::callables::language_features 2>&1 | tail -12",
+  "summary": "cargo test --test codegen_tests -- codegen::strings::scanf codegen::callables::language_features 2>&1 | tail -12: test codegen::strings::scanf::test_fscanf_conversionless_format_consumes_the_line ... ok test codegen::strings::scanf::test_fscanf_line_keeps_its_newline ... ok test codegen::strings::scanf::test_fscanf_rea",
+  "text": "cargo test --test codegen_tests -- codegen::strings::scanf codegen::callables::language_features 2>&1 | tail -12: test codegen::strings::scanf::test_fscanf_conversionless_format_consumes_the_line ... ok test codegen::strings::scanf::test_fscanf_line_keeps_its_newline ... ok test codegen::strings::scanf::test_fscanf_reads_one_line_per_call ... ok test codegen::strings::scanf::test_scanf_assigns_through_its_by_reference_vars ... ok test codegen::strings::scanf::test_scanf_vars_count_must_match_the_conversions ... ok test codegen::strings::scanf::test_sscanf_bad_conversion_character_throws_php_value_error ... ok test codegen::strings::scanf::test_sscanf_numeric_conversions_carry_their_php_type ... ok test codegen::strings::scanf::test_sscanf_matches_php_across_the_captured_corpus ... ok test codegen::strings::scanf::test_sscanf_unterminated_character_class_throws_php_value_error ... ok test result: ok. 60 passed; 0 failed; 0 ignored; 0 measured; 8387 filtered out; finished in 16.75s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "41b1497638243ffbf676b98c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:03:46.648Z",
+  "stored_at": "2026-08-18T11:03:46.648Z"
+}

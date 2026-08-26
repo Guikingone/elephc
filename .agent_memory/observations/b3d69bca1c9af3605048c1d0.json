@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"label_global(\\\"__rt_stream_wrapper_register\\\")\" -A30 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/ | rtk proxy grep -n \"instruction\\|label\" | head -24",
+  "summary": "About to run: rtk proxy grep -rn \"label_global(\\\"__rt_stream_wrapper_register\\\")\" -A30 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/ | rtk proxy gr",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b3d69bca1c9af3605048c1d0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:42:09.207Z",
+  "stored_at": "2026-08-17T09:42:09.208Z"
+}

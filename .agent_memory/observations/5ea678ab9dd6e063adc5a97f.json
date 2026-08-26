@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"sp, #64\\|rsp, 64\\|rsp + 56\\|rsp + 48\\|sp, #56\\|sp, #48\" src/codegen_support/runtime/io/fopen.rs | head -20",
+  "summary": "grep -n \"sp, #64\\|rsp, 64\\|rsp + 56\\|rsp + 48\\|sp, #56\\|sp, #48\" src/codegen_support/runtime/io/fopen.rs | head -20: \"str x11, [sp, #48]\"); // save stream_open ptr across the upcoming blr 338: emitter.instruction(\"str x10, [sp, #56]\"); // park it in the dispatch scratch's spare slot 352: emitter.instruction(\"ldr x11, [",
+  "text": "grep -n \"sp, #64\\|rsp, 64\\|rsp + 56\\|rsp + 48\\|sp, #56\\|sp, #48\" src/codegen_support/runtime/io/fopen.rs | head -20: \"str x11, [sp, #48]\"); // save stream_open ptr across the upcoming blr 338: emitter.instruction(\"str x10, [sp, #56]\"); // park it in the dispatch scratch's spare slot 352: emitter.instruction(\"ldr x11, [sp, #48]\"); // reload stream_open method pointer 353: emitter.instruction(\"ldr x13, [sp, #56]\"); // reload the boxed-result flag 365: emitter.instruction(\"ldr x10, [sp, #56]\"); // the parked filter scope 377: emitter.instruction(\"add sp, sp, #64\"); // release the wrapper-dispatch scratch 385: emitter.instruction(\"add sp, sp, #64\"); // release the wrapper-dispatch scratch before falling into the shared silent-fail path 391: emitter.instruction(\"ldp x29, x30, [sp, #48]\"); // restore frame pointer and return address 392: emitter.instruction(\"add sp, sp, #64\"); // deallocate stack frame 604: // [rsp + 48] stream_open ptr (saved across call rax) 605: // [rsp + 56] stream_open boxed-result flag",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5ea678ab9dd6e063adc5a97f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:48:40.741Z",
+  "stored_at": "2026-08-21T09:48:40.741Z"
+}

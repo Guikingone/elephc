@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 155,200p src/codegen/lower_inst/objects/throwable_new.rs",
+  "summary": "sed -n 155,200p src/codegen/lower_inst/objects/throwable_new.rs: ET )); // store the one-based source line of the `new` expression } /// Writes an x86_64 Throwable creation line into the payload. /// /// Mirrors [`emit_throwable_creation_line_aarch64`]; the two architectures emit independently, and /// an upstream fix ",
+  "text": "sed -n 155,200p src/codegen/lower_inst/objects/throwable_new.rs: ET )); // store the one-based source line of the `new` expression } /// Writes an x86_64 Throwable creation line into the payload. /// /// Mirrors [`emit_throwable_creation_line_aarch64`]; the two architectures emit independently, and /// an upstream fix has already been lost once by living on only one of them. pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_x86_64( ctx: &mut FunctionContext<'_>, payload_reg: &str, creation_line: u32, ) { ctx.emitter.instruction(&format!( \"mov QWORD PTR [{} + {}], {}\", payload_reg, THROWABLE_CREATION_LINE_OFFSET, creation_line )); // store the one-based source line of the `new` expression (zero when unknown) } /// Saves the newly allocated Throwable object while constructor operands are loaded. pub(super) fn preserve_throwable_for_init(ctx: &mut FunctionContext<'_>) { abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0a096ebdc8b14dee41ed42f8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:22:25.612Z",
+  "stored_at": "2026-08-22T12:22:25.612Z"
+}

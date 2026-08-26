@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_restore_test.py\ncargo test --test codegen_tests -- codegen::io::output_buffering codegen::io::streams::test_stream_wrapper_restore_reports_phps_three_cases 2>&1 | tail -18",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_restore_test.py\ncargo test --test codegen_tests -- codegen::io::output_buffering codegen::io::streams::test_stream_wrapper_restore_reports_p",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_restore_test.py\ncargo test --test codegen_tests -- codegen::io::output_buffering codegen::io::streams::test_stream_wrapper_restore_reports_phps_three_cases 2>&1 | tail -18: st codegen::io::output_buffering::test_partial_flags_admit_matching_operations ... ok test codegen::io::output_buffering::test_print_r_array_is_captured ... ok test codegen::io::output_buffering::test_printf_is_captured_and_returns_count ... ok test codegen::io::output_buffering::test_readfile_is_captured ... ok test codegen::io::output_buffering::test_var_dump_is_captured ... ok test codegen::io::streams::test_stream_wrapper_restore_reports_phps_three_cases ... ok test codegen::io::output_buffering::test_eval_ob_queries_through_bridge ... ok test codegen::io::output_buffering::test_eval_ob_get_length_and_false_case ... ok test codegen::io::output_buffering::test_eval_handlers_across_boundaries ... ok test codegen::io::output_buffering::test_ob_state_is_shared_between_static_and_eval ... ok test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 8407 filtered out; finished in 33.23s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "99898dd53c7dceeb3e754086",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T17:10:33.744Z",
+  "stored_at": "2026-08-19T17:10:33.745Z"
+}

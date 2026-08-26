@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md'\ns = open(p).read()\nold = \"| `compress.bzip2://` | Read-only wrapper that opens the underlying file and applies `bzip2.decompress`. |\"\nif old not in s:\n    import re\n    m = [l for l in s.split('\\n') if 'compress.bzip2://' in l and l.startswith('|')]\n    print(\"current row:\", m[:1])\nelse:\n    new = (\"| `compress.bzip2://` | Opens the underlying file and applies `bzip2.decompress` when reading or \"\n           \"`bzip2.compress` when writing, so `fopen(\\\"compres… [+337 chars truncated]",
+  "summary": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md'\ns = open(p).read()\nold = \"| `compress.bzip2://` | Read-only wrapper that opens the underlying file and applies `bzip2.decompress`. |\"\nif old not in s:\n    import re\n    m = [l for l ",
+  "text": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md'\ns = open(p).read()\nold = \"| `compress.bzip2://` | Read-only wrapper that opens the underlying file and applies `bzip2.decompress`. |\"\nif old not in s:\n    import re\n    m = [l for l in s.split('\\n') if 'compress.bzip2://' in l and l.startswith('|')]\n    print(\"current row:\", m[:1])\nelse:\n    new = (\"| `compress.bzip2://` | Opens the underlying file and applies `bzip2.decompress` when reading or \"\n           \"`bzip2.compress` when writing, so `fopen(\\\"compress.bzip2://out.bz2\\\", \\\"w\\\")` writes a real bzip2 \"\n           \"stream. php exposes no context option for the block size, so the wrapper uses its defaults — block \"\n           \"size 9, work factor 0. The URL may be a literal or built at run time. |\")\n    s = s.replace(old, new, 1)\n    open(p, 'w').write(s)\n    print(\"doc updated\")\nPYEOF: current row: ['| `compress.bzip2://` | Read-only wrapper that opens the underlying file and decompresses it through libbz2. |']",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "00b17d1f239f6e3b77306b78",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:35:26.984Z",
+  "stored_at": "2026-08-18T13:35:26.985Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "/opt/homebrew/bin/elephc --help 2>&1 | head -40; echo \"=== VERSION ===\"; /opt/homebrew/bin/elephc --version 2>&1",
+  "summary": "About to run: /opt/homebrew/bin/elephc --help 2>&1 | head -40; echo \"=== VERSION ===\"; /opt/homebrew/bin/elephc --version 2>&1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b72599a795bcda82ce0823a6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:10:29.742Z",
+  "stored_at": "2026-08-14T14:10:29.742Z"
+}

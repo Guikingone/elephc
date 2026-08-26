@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn stat_size_offset\\|fn stat_buf_size\\|fn stat_mode_offset\\|fn stat_ino_offset\\|fn stat_dev_offset\" src/codegen_support/ | head",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn stat_size_offset\\|fn stat_buf_size\\|fn stat_mode_offset\\|fn stat_ino_offset\\|fn stat_dev_of",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "72ce63cbf20be1f81f3d758b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:10:40.343Z",
+  "stored_at": "2026-08-22T21:10:40.343Z"
+}

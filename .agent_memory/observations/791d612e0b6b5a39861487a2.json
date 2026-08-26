@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>bj3234d7f</task-id>\n<summary>Monitor event: \"CI Guikingone/elephc head 7cd4ee8bba (tree 9ea6f1d01e: meta keys + 1and lexer)\"</summary>\n<event>CI: queued</event>\n</task-notification>",
+  "summary": "<task-notification> <task-id>bj3234d7f</task-id> <summary>Monitor event: \"CI Guikingone/elephc head 7cd4ee8bba (tree 9ea6f1d01e: meta keys + 1and lexer)\"</summary> <event>CI: queued</event> </task-notification>",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "791d612e0b6b5a39861487a2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T07:08:05.916Z",
+  "stored_at": "2026-08-16T07:08:05.917Z",
+  "low_signal": true
+}

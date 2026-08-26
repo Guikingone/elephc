@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log --merges --oneline HEAD --not origin/main 2>/dev/null | head -5; echo \"--- base de fusion:\"; git merge-base origin/main HEAD | head -1; git log -1 --format=\"%h %ci %s\" $(git merge-base origin/main HEAD)",
+  "summary": "git log --merges --oneline HEAD --not origin/main 2>/dev/null | head -5; echo \"--- base de fusion:\"; git merge-base origin/main HEAD | head -1; git log -1 --format=\"%h %ci %s\" $(git merge-base origin/main HEAD) failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/",
+  "text": "git log --merges --oneline HEAD --not origin/main 2>/dev/null | head -5; echo \"--- base de fusion:\"; git merge-base origin/main HEAD | head -1; git log -1 --format=\"%h %ci %s\" $(git merge-base origin/main HEAD) failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree; break it into plain, separate commands. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Run the equivalent from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature without the redirect.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2d92426720d6291b4835ef07",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T16:54:31.227Z",
+  "stored_at": "2026-08-20T16:54:31.227Z"
+}

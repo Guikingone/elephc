@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1975,2012p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/nulllen/sgc_null.s",
+  "summary": "sed -n '1975,2012p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/nulllen/sgc_null.s: mov x0, #255 mov x16, #1 svc #0x80 _eir_main_static_exception_throw_81: mov x0, #56 bl __rt_heap_alloc mov x9, #6",
+  "text": "sed -n '1975,2012p' /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/nulllen/sgc_null.s: mov x0, #255 mov x16, #1 svc #0x80 _eir_main_static_exception_throw_81: mov x0, #56 bl __rt_heap_alloc mov x9, #6 str x9, [x0, #-8] bl __rt_object_handle_acquire adrp x9, _spl_value_error_class_id@PAGE add x9, x9, _spl_value_error_class_id@PAGEOFF ldr x9, [x9] str x9, [x0] adrp x9, _str_31@PAGE add x9, x9, _str_31@PAGEOFF str x9, [x0, #8] mov x9, #80 str x9, [x0, #16] str xzr, [x0, #24] str xzr, [x0, #32] str xzr, [x0, #40] adrp x9, _exc_value@PAGE add x9, x9, _exc_value@PAGEOFF str x0, [x9] b __rt_throw_current _eir_main_value_guard_ok_80: str x0, [sp, #8] ldr x9, [sp, #8] movz x10, #0xfffe movk x10, #0xffff, lsl #16 movk x10, #0xffff, lsl #32 movk x10, #0x7fff, lsl #48 cmp x9, x10 b.eq _eir_main_sgc_read_all_75 cmp x9, #0 b.lt _eir_main_sgc_read_all_75 ldr x0, [sp, #0] mov x1, x9",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8efb1e647ad00c4ba4f623fd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:53:07.588Z",
+  "stored_at": "2026-08-21T10:53:07.588Z"
+}

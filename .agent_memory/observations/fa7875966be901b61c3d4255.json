@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"source_path\" src/codegen_support/runtime/data/*.rs src/codegen_support/runtime/*.rs 2>/dev/null | head -6",
+  "summary": "grep -rn \"source_path\" src/codegen_support/runtime/data/*.rs src/codegen_support/runtime/*.rs 2>/dev/null | head -6: src/codegen_support/runtime/data/user.rs:67: source_path: Option<&str>, src/codegen_support/runtime/data/user.rs:600: emit_script_source_file_data(&mut out, source_path); src/codegen_support/runtime/data",
+  "text": "grep -rn \"source_path\" src/codegen_support/runtime/data/*.rs src/codegen_support/runtime/*.rs 2>/dev/null | head -6: src/codegen_support/runtime/data/user.rs:67: source_path: Option<&str>, src/codegen_support/runtime/data/user.rs:600: emit_script_source_file_data(&mut out, source_path); src/codegen_support/runtime/data/user.rs:603: emit_eval_reflection_source_file_data(&mut out, source_path); src/codegen_support/runtime/data/user.rs:1211:fn emit_script_source_file_data(out: &mut String, source_path: Option<&str>) { src/codegen_support/runtime/data/user.rs:1212: let source_path = source_path.unwrap_or(\"\"); src/codegen_support/runtime/data/user.rs:1214: out.push_str(&format!(\" .ascii \\\"{}\\\"\\n\", escaped_ascii(source_path)));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fa7875966be901b61c3d4255",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:43:17.903Z",
+  "stored_at": "2026-08-18T13:43:17.903Z"
+}

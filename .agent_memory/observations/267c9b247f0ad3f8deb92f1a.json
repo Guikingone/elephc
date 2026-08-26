@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"sp, #64\\|sp, #48\\]\" src/codegen_support/runtime/io/fread.rs | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"sp, #64\\|sp, #48\\]\" src/codegen_support/runtime/io/fread.rs | head -20: \"add sp, sp, #64\"); // release native-read scratch storage 145: emitter.instruction(\"ldp x29, x30, [sp, #48]\"); // restore the caller frame bef",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"sp, #64\\|sp, #48\\]\" src/codegen_support/runtime/io/fread.rs | head -20: \"add sp, sp, #64\"); // release native-read scratch storage 145: emitter.instruction(\"ldp x29, x30, [sp, #48]\"); // restore the caller frame before wrapper tail dispatch 146: emitter.instruction(\"add sp, sp, #64\"); // release native-read scratch storage 236: emitter.instruction(\"ldp x29, x30, [sp, #48]\"); // restore the caller frame before tail dispatch 237: emitter.instruction(\"add sp, sp, #64\"); // release native-read scratch storage 336: emitter.instruction(\"ldp x29, x30, [sp, #48]\"); // restore frame pointer and return address 337: emitter.instruction(\"add sp, sp, #64\"); // deallocate stack frame 363: emitter.instruction(\"sub sp, sp, #64\"); 364: emitter.instruction(\"stp x29, x30, [sp, #48]\"); 417: emitter.instruction(\"ldp x29, x30, [sp, #48]\"); 418: emitter.instruction(\"add sp, sp, #64\"); 428: emitter.instruction(\"ldp x29, x30, [sp, #48]\"); 429: emitter.instruction(\"add sp, sp, #64\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "267c9b247f0ad3f8deb92f1a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:20:07.181Z",
+  "stored_at": "2026-08-23T20:20:07.182Z"
+}

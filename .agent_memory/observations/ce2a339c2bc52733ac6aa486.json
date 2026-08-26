@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps -p 94869 -o command= | head -c 300",
+  "summary": "ps -p 94869 -o command= | head -c 300: /Users/guillaumeloulier/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo check --message-format=short",
+  "text": "ps -p 94869 -o command= | head -c 300: /Users/guillaumeloulier/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo check --message-format=short",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ce2a339c2bc52733ac6aa486",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:45:23.377Z",
+  "stored_at": "2026-08-18T12:45:23.378Z"
+}

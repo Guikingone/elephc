@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '40,60p' tests/builtin_parity_tests.rs",
+  "summary": "sed -n '40,60p' tests/builtin_parity_tests.rs: language_constructs += 1; } BackendSupport::Implemented(BackendImplementation::DedicatedSyntax) => { dedicated_syntax += 1; } BackendSupport::Implemented(BackendImplementation::Prelude) => { preludes.insert(contract.name); } BackendSupport::Unsupported(_) => unsupported +=",
+  "text": "sed -n '40,60p' tests/builtin_parity_tests.rs: language_constructs += 1; } BackendSupport::Implemented(BackendImplementation::DedicatedSyntax) => { dedicated_syntax += 1; } BackendSupport::Implemented(BackendImplementation::Prelude) => { preludes.insert(contract.name); } BackendSupport::Unsupported(_) => unsupported += 1, BackendSupport::Implemented(BackendImplementation::Registry) => unreachable!(), } } assert_eq!(language_constructs, 5); assert_eq!(dedicated_syntax, 1); assert_eq!(unsupported, 4); assert_eq!( preludes, BTreeSet::from([\"hash_copy\", \"hash_final\", \"hash_init\", \"hash_update\"]) ); let hash_init = contracts()",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6045c040158dd4e7376abcd4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T13:35:09.619Z",
+  "stored_at": "2026-08-15T13:35:09.620Z"
+}

@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm30 2>&1; echo \"=== elephc literal ===\"; cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm30_e.txt",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm30 2>&1; echo \"=== elephc literal ===\"; cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-wo",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm30 2>&1; echo \"=== elephc literal ===\"; cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm30_e.txt: /probe2/rm30.php on line 12 < zlib.inflate attached=true bytes=0 same=false < bzip2.compress attached=true bytes=33 same=false < < Notice: fwrite(): bzip2 decompression failed in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm30.php on line 26 < bzip2.decompress attached=true bytes=0 same=false --- > zlib.deflate attached=true bytes=0 same=false > zlib.inflate attached=true bytes=17 same=true > bzip2.compress attached=true bytes=0 same=false > bzip2.decompress attached=true bytes=17 same=true === elephc literal === zlib.deflate attached=true bytes=0 same=false zlib.inflate attached=true bytes=17 same=true bzip2.compress attached=true bytes=0 same=false bzip2.decompress attached=true bytes=17 same=true convert.iconv.UTF-8/ISO-8859-1 attached=true bytes=17 same=true",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b709d585b3c2406af976e86f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:50:08.585Z",
+  "stored_at": "2026-08-18T09:50:08.586Z",
+  "low_signal": true
+}

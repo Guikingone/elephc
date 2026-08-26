@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd ~/.cache/elephc; otool -r runtime-v0.26.5-macos-aarch64-rta9a52f5f50e36c45-heap8388608.o 2>/dev/null | awk '$1 ~ /^000/ {print}' | grep -E \"00036b|00036c\" | head -20",
+  "summary": "cd ~/.cache/elephc; otool -r runtime-v0.26.5-macos-aarch64-rta9a52f5f50e36c45-heap8388608.o 2>/dev/null | awk '$1 ~ /^000/ {print}' | grep -E \"00036b|00036c\" | head -20: 00036cec 1 2 1 2 0 417 00036cc8 1 2 1 2 0 2477 00036cac 1 2 1 2 0 412 00036ca0 1 2 1 2 0 221 00036c7c 1 2 1 2 0 2404 00036c70 1 2 1 2 0 222 00036c64 1",
+  "text": "cd ~/.cache/elephc; otool -r runtime-v0.26.5-macos-aarch64-rta9a52f5f50e36c45-heap8388608.o 2>/dev/null | awk '$1 ~ /^000/ {print}' | grep -E \"00036b|00036c\" | head -20: 00036cec 1 2 1 2 0 417 00036cc8 1 2 1 2 0 2477 00036cac 1 2 1 2 0 412 00036ca0 1 2 1 2 0 221 00036c7c 1 2 1 2 0 2404 00036c70 1 2 1 2 0 222 00036c64 1 2 1 2 0 221 00036c3c 1 2 1 2 0 2550 00036c30 1 2 1 2 0 222 00036c24 1 2 1 2 0 221 00036bec 0 2 1 4 0 2553 00036be8 1 2 1 3 0 2553 00036bd4 1 2 1 2 0 2408 00036bbc 0 2 1 4 0 2093 00036bb8 1 2 1 3 0 2093 00036b98 1 2 1 2 0 2558 00036b80 0 2 1 4 0 2553 00036b7c 1 2 1 3 0 2553 00036b68 1 2 1 2 0 2408 00036b50 0 2 1 4 0 2093",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "56a385cb6fceef8bfdf4bc8b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:16:17.850Z",
+  "stored_at": "2026-08-23T08:16:17.851Z"
+}

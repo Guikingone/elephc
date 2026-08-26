@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat > /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/uncaught-report-belongs-in-the-output-buffer.md <<'EOF'\n---\nname: uncaught-report-belongs-in-the-output-buffer\ndescription: MESURÉ — php écrit le rapport d'exception non capturée sur STDOUT et DANS le tampon de sortie; elephc l'écrit sur stderr par write(2) brut.\nmetadata:\n  type: project\n---\n\nMesuré sur `php -n` 8.5.6 le 2026-08-18, trois sondes :\n\n1. `php -n u.php 2>/dev/null` → le rapport COMPLET sort. `2>&1 1>/dev/null` → **stderr est VIDE**.\n   Donc php n'écrit *rien* sur stderr : `Fa… [+1823 chars truncated]",
+  "summary": "About to run: cat > /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/uncaught-report-belongs-in-the-output-buffer.md <<'EOF' --- name: uncaught-report-belongs-in-t",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e50fd2f469d1a8413598f6d7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:17:14.368Z",
+  "stored_at": "2026-08-18T15:17:14.369Z"
+}

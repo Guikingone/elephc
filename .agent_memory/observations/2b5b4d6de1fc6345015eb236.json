@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/dynamic-method-builtin.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/dynamic-method-builtin.php: <?php\nfile_put_contents(\"f.txt\", \"1234\");\n$i = new SplFileInfo(\"f.txt\");\nforeach ([\"getFilename\", \"getSize\", ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/dynamic-method-builtin.php: <?php\nfile_put_contents(\"f.txt\", \"1234\");\n$i = new SplFileInfo(\"f.txt\");\nforeach ([\"getFilename\", \"getSize\", \"getExtension\"] as $call) {\n    echo $call, \"=\", var_export($i->$call(), true), \";\";\n}\necho \"\\n\";\n$a = new ArrayObject([1, 2, 3]);\nforeach ([\"count\", \"getArrayCopy\"] as $call) {\n    echo $call, \"=\", json_encode($a->$call()), \";\";\n}\necho \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2b5b4d6de1fc6345015eb236",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:08:36.421Z",
+  "stored_at": "2026-08-25T12:08:36.422Z"
+}

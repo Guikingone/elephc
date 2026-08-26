@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/selbad.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/selbad.php: <?php\n\n$good = fopen(\"php://memory\", \"w+\");\n\nforeach ([\"false\", \"int\", \"string\", \"null\", \"closed\"] as $shape) {\n    $entry = match ($s",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/selbad.php: <?php\n\n$good = fopen(\"php://memory\", \"w+\");\n\nforeach ([\"false\", \"int\", \"string\", \"null\", \"closed\"] as $shape) {\n    $entry = match ($shape) {\n        \"false\"  => @fopen(\"nowrap_at_all://x\", \"r\"),\n        \"int\"    => 7,\n        \"string\" => \"x\",\n        \"null\"   => null,\n        \"closed\" => null,\n    };\n    if ($shape === \"closed\") {\n        $c = fopen(\"php://memory\", \"w+\");\n        fclose($c);\n        $entry = $c;\n    }\n    $read = [$entry];\n    $w = null;\n    $e = null;\n    try {\n        $n = stream_select($read, $w, $e, 0);\n        echo $shape, \" => \", var_export($n, true), \",\", count($read),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7bc01908e48cb7ee8caa3127",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:40:43.439Z",
+  "stored_at": "2026-08-22T20:40:43.439Z"
+}

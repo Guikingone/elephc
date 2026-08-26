@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport json, pathlib\nf = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/php_oracle/drift/streams/php-8.5.6/linux-x86_64/streams-full.json')\ndata = json.loads(f.read_text())\n\nhits = []\ndef walk(node, path):\n    if isinstance(node, dict):\n        if node.get('symbol', '').startswith('GLOB_'):\n            hits.append((node.get('symbol'), node))\n        for k, v in node.items():\n            walk(v, path + [k])\n    elif isinstance(node, list):\n        for i, v in enumerate(node):\n            walk(v, path + [str(i)])\nw… [+82 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport json, pathlib\nf = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/php_oracle/drift/streams/php-8.5.6/linux-x86_64/streams-full.json')\ndata = json.loads(f.read_text())\n\nhits = []\ndef walk(node, path):\n    if isinstance(node, dict):\n ",
+  "text": "python3 - <<'PY'\nimport json, pathlib\nf = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/php_oracle/drift/streams/php-8.5.6/linux-x86_64/streams-full.json')\ndata = json.loads(f.read_text())\n\nhits = []\ndef walk(node, path):\n    if isinstance(node, dict):\n        if node.get('symbol', '').startswith('GLOB_'):\n            hits.append((node.get('symbol'), node))\n        for k, v in node.items():\n            walk(v, path + [k])\n    elif isinstance(node, list):\n        for i, v in enumerate(node):\n            walk(v, path + [str(i)])\nwalk(data, [])\nfor sym, node in hits[:3]:\n    print(sym, json.dumps(node)[:400])\nPY: GLOB_AVAILABLE_FLAGS {\"category\": \"missing-constant\", \"classification\": \"known-incompatibility\", \"closing_gate\": 2, \"elephc\": null, \"php\": {\"type\": \"int\", \"value\": 1073746108}, \"symbol\": \"GLOB_AVAILABLE_FLAGS\"}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c481819d21e0d37ee8360939",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:09:30.446Z",
+  "stored_at": "2026-08-21T20:09:30.446Z",
+  "low_signal": true
+}

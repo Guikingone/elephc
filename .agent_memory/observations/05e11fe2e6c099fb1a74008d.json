@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 30,50p crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_filesystem.rs; echo \"=== eval's glob ===\"; grep -rn \"\\\"glob\\\"\" crates/elephc-magician/src/interpreter/builtins/ | head -5",
+  "summary": "sed -n 30,50p crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_filesystem.rs; echo \"=== eval's glob ===\"; grep -rn \"\\\"glob\\\"\" crates/elephc-magician/src/interpreter/builtins/ | head -5: iltin_param_names(\"getcwd\"), Some([].as_slice()) ); assert_eq!( eval_declared_builtin_param_names(\"glob\"), Some",
+  "text": "sed -n 30,50p crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_filesystem.rs; echo \"=== eval's glob ===\"; grep -rn \"\\\"glob\\\"\" crates/elephc-magician/src/interpreter/builtins/ | head -5: iltin_param_names(\"getcwd\"), Some([].as_slice()) ); assert_eq!( eval_declared_builtin_param_names(\"glob\"), Some([\"pattern\"].as_slice()) ); assert_eq!( eval_declared_builtin_param_names(\"linkinfo\"), Some([\"path\"].as_slice()) ); assert_eq!( === eval's glob === crates/elephc-magician/src/interpreter/builtins/filesystem/values_dispatch.rs:70: \"glob\" => super::glob::eval_glob_declared_values_result(evaluated_args, context, values), crates/elephc-magician/src/interpreter/builtins/filesystem/direct_dispatch.rs:70: \"glob\" => super::glob::eval_glob_declared_call(args, context, scope, values), crates/elephc-magician/src/interpreter/builtins/filesystem/glob.rs:11: contract: \"glob\", crates/elephc-magician/src/interpreter/builtins/registry/tests/exposure.rs:121: \"glob\", crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_filesystem.rs:43: eval_declared_builtin_param_names(\"glob\"),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "05e11fe2e6c099fb1a74008d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:12:08.698Z",
+  "stored_at": "2026-08-22T09:12:08.698Z"
+}

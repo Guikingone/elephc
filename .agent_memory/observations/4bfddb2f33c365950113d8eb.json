@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2",
+  "summary": "git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2: To github.com:Guikingone/elephc.git d7cde2c2e..963a9425d worktree-streams-csv-signature -> feat/streams-csv-signatures",
+  "text": "git push fork worktree-streams-csv-signature:feat/streams-csv-signatures 2>&1 | tail -2: To github.com:Guikingone/elephc.git d7cde2c2e..963a9425d worktree-streams-csv-signature -> feat/streams-csv-signatures",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4bfddb2f33c365950113d8eb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:23:20.000Z",
+  "stored_at": "2026-08-17T15:23:20.000Z"
+}

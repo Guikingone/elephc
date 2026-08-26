@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm29.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm29.php: <?php\nfunction untyped(&$a): void\n{\n    $a = 5;\n}\nfunction typedMixed(mixed &$a): void\n{\n    $a = 5;\n}\nfunction typedInt(int &$a): vo",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm29.php: <?php\nfunction untyped(&$a): void\n{\n    $a = 5;\n}\nfunction typedMixed(mixed &$a): void\n{\n    $a = 5;\n}\nfunction typedInt(int &$a): void\n{\n    $a = 5;\n}\n\necho \"A untyped param, null caller\\n\";\n$a = null;\nuntyped($a);\nvar_dump($a);\n\necho \"B untyped param, int caller\\n\";\n$b = 1;\nuntyped($b);\nvar_dump($b);\n\necho \"C mixed param, null caller\\n\";\n$c = null;\ntypedMixed($c);\nvar_dump($c);\n\necho \"D int param, int caller\\n\";\n$d = 1;\ntypedInt($d);\nvar_dump($d);\n\necho \"E untyped param, string caller\\n\";\n$e = \"x\";\nuntyped($e);\nvar_dump($e);\n\necho \"F untyped param, mixed caller\\n\";\n$f = 1;\n$f = \"s\";\nuntyped(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "86d692bbc42a1b7ed5411c10",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:37:26.081Z",
+  "stored_at": "2026-08-18T09:37:26.081Z"
+}

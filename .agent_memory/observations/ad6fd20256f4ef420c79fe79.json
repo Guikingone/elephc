@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"'stream_filter_remove'\" -A 12 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py | head -16",
+  "summary": "grep -n \"'stream_filter_remove'\" -A 12 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py | head -16: 210: 'stream_filter_remove': '''<?php 211-file_put_contents(\"f.txt\", \"abcde",
+  "text": "grep -n \"'stream_filter_remove'\" -A 12 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py | head -16: 210: 'stream_filter_remove': '''<?php 211-file_put_contents(\"f.txt\", \"abcdef\"); 212-$h = fopen(\"f.txt\", \"r\"); 213-$f = stream_filter_append($h, \"string.toupper\", STREAM_FILTER_READ); 214-var_dump(fread($h, 3)); 215-var_dump(stream_filter_remove($f)); 216-var_dump(fread($h, 3)); 217-var_dump(stream_filter_remove($f)); 218-fclose($h); 219-''', 220- # ------------------------------------------------------------- wrappers --- 221- 'user wrapper: every reader': f'''<?php 222-{WRAPPER}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ad6fd20256f4ef420c79fe79",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:11:01.416Z",
+  "stored_at": "2026-08-22T12:11:01.417Z"
+}

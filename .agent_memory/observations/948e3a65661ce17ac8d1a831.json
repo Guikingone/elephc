@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/jsonlist && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/jsonlist && printf '%s\\n' '<?php' '$a = [];' '$a[0] = \"x\"; $a[1] = \"y\";' 'echo json_encode($a), \"\\n\";' '$b = [];' '$b[1] = \"x\"; $b[2] = \"y\";' 'echo json_encode($b), \"\\n\";' '$c = [];' '$c[2] = \"x\"; $c[0] = \"y\";' 'echo json_encode($c), \"\\n\";' >… [+247 chars truncated]",
+  "summary": "About to run: mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/jsonlist && cd /private/",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "948e3a65661ce17ac8d1a831",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:33:40.584Z",
+  "stored_at": "2026-08-22T11:33:40.585Z"
+}

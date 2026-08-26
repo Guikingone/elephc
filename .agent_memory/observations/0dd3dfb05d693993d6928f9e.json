@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'flags\\|IS_URL\\|#32\\|24\\]' src/codegen_support/runtime/io/stream_wrapper_register.rs | head -20",
+  "summary": "grep -n 'flags\\|IS_URL\\|#32\\|24\\]' src/codegen_support/runtime/io/stream_wrapper_register.rs | head -20: uction(\"ldr x9, [sp, #24]\"); 79: emitter.instruction(\"ldr x9, [sp, #32]\"); 82: emitter.instruction(\"str x9, [x7, #24]\"); // class-name length 83: super::emit_load_flags_base(emitter, \"x10\"); 84: emitter.instruction(",
+  "text": "grep -n 'flags\\|IS_URL\\|#32\\|24\\]' src/codegen_support/runtime/io/stream_wrapper_register.rs | head -20: uction(\"ldr x9, [sp, #24]\"); 79: emitter.instruction(\"ldr x9, [sp, #32]\"); 82: emitter.instruction(\"str x9, [x7, #24]\"); // class-name length 83: super::emit_load_flags_base(emitter, \"x10\"); 84: emitter.instruction(\"ldr x9, [sp, #48]\"); // reload the registration flags 85: emitter.instruction(\"str x9, [x10, x5, lsl #3]\"); // store definition flags beside the registration slot 108: emitter.instruction(\"mov QWORD PTR [rbp - 24], rdx\"); // spill the borrowed class-name pointer 110: emitter.instruction(\"mov QWORD PTR [rbp - 40], r8\"); // spill the registration flags 131: emitter.instruction(\"mov rax, QWORD PTR [rbp - 24]\"); // borrowed class-name pointer 134: emitter.instruction(\"mov QWORD PTR [rbp - 24], rax\"); // replace the spill with the owned pointer 147: emitter.instruction(\"mov rax, QWORD PTR [rbp - 24]\"); 150: emitter.instruction(\"mov QWORD PTR [r10 + 24], rax\"); // class-name length",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0dd3dfb05d693993d6928f9e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:18:11.547Z",
+  "stored_at": "2026-08-14T14:18:11.547Z"
+}

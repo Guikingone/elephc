@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/multiprop_parse.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/multiprop_parse.py: \"\"\"`public $a, $b = 'x', $c = 0;` did not parse.\n\nOne property per declaration is not php's grammar, and the failure is not lo",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/multiprop_parse.py: \"\"\"`public $a, $b = 'x', $c = 0;` did not parse.\n\nOne property per declaration is not php's grammar, and the failure is not local: the parser gave up\nat the comma and then met the class's closing brace at statement position, so ONE ordinary property\nline turned into four errors and a refused program. Three of the auditors' programs are exactly\nthis — a stream wrapper declaring `public $context, $d = '…', $p = 0;`.\n\nMEASURED on `php -n` 8.5.6, one program per case because a parse error inside `eval()` is a fatal\nphp does not let a caller catch:\n\n    public $a, $b;                     accepted  ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fdecd46f3f47100072c9af88",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:42:04.017Z",
+  "stored_at": "2026-08-23T08:42:04.018Z"
+}

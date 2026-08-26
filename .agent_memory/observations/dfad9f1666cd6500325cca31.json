@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"by_ref\" src/parser/*.rs src/parser/**/*.rs 2>/dev/null | grep -i \"variadic\\|spread\\|ellipsis\" | head -10",
+  "summary": "grep -rn \"by_ref\" src/parser/*.rs src/parser/**/*.rs 2>/dev/null | grep -i \"variadic\\|spread\\|ellipsis\" | head -10: src/parser/ast/oop.rs:223: pub variadic_by_ref: bool, src/parser/ast/stmt.rs:213: variadic_by_ref: bool, src/parser/ast/expr.rs:103: variadic_by_ref: bool, src/parser/expr/prefix_complex.rs:169: let (para",
+  "text": "grep -rn \"by_ref\" src/parser/*.rs src/parser/**/*.rs 2>/dev/null | grep -i \"variadic\\|spread\\|ellipsis\" | head -10: src/parser/ast/oop.rs:223: pub variadic_by_ref: bool, src/parser/ast/stmt.rs:213: variadic_by_ref: bool, src/parser/ast/expr.rs:103: variadic_by_ref: bool, src/parser/expr/prefix_complex.rs:169: let (params, variadic, variadic_by_ref, variadic_type) = src/parser/expr/prefix_complex.rs:225: variadic_by_ref, src/parser/expr/prefix_complex.rs:255: let (params, variadic, variadic_by_ref, variadic_type) = src/parser/expr/prefix_complex.rs:272: variadic_by_ref, src/parser/expr/prefix_complex.rs:544: let mut variadic_by_ref = false; src/parser/expr/prefix_complex.rs:586: variadic_by_ref = is_ref; src/parser/expr/prefix_complex.rs:613: Ok((params, variadic, variadic_by_ref, variadic_type))",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dfad9f1666cd6500325cca31",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:25:10.244Z",
+  "stored_at": "2026-08-18T09:25:10.245Z"
+}

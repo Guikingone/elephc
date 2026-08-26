@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"contract: \\\"fwrite\\\"\" -B5 -A25 src/builtins/io/*.rs | head -45",
+  "summary": "rg -n \"contract: \\\"fwrite\\\"\" -B5 -A25 src/builtins/io/*.rs | head -45: crate::builtins::semantics::runtime_fn_semantics( src/builtins/io/fwrite.rs-19- crate::ir::RuntimeFnId::Fwrite, src/builtins/io/fwrite.rs-20- ), src/builtins/io/fwrite.rs-21-} src/builtins/io/fwrite.rs-22- src/builtins/io/fwrite.rs-23-/// Validates ",
+  "text": "rg -n \"contract: \\\"fwrite\\\"\" -B5 -A25 src/builtins/io/*.rs | head -45: crate::builtins::semantics::runtime_fn_semantics( src/builtins/io/fwrite.rs-19- crate::ir::RuntimeFnId::Fwrite, src/builtins/io/fwrite.rs-20- ), src/builtins/io/fwrite.rs-21-} src/builtins/io/fwrite.rs-22- src/builtins/io/fwrite.rs-23-/// Validates the stream argument and returns PHP's `int|false` result union. src/builtins/io/fwrite.rs-24-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> { src/builtins/io/fwrite.rs-25- crate::types::checker::builtins::io::common::ensure_stream_resource( src/builtins/io/fwrite.rs-26- cx.checker, src/builtins/io/fwrite.rs-27- cx.name, src/builtins/io/fwrite.rs-28- &cx.args[0], src/builtins/io/fwrite.rs-29- cx.env, src/builtins/io/fwrite.rs-30- )?; src/builtins/io/fwrite.rs-31- Ok(cx src/builtins/io/fwrite.rs-32- .checker src/builtins/io/fwrite.rs-33- .normalize_union_type(vec![PhpType::Int, PhpType::Bool])) src/builtins/io/fwrite.rs-34-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "816360c47f1abd08e53dc5ab",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:51:53.008Z",
+  "stored_at": "2026-08-17T06:51:53.009Z"
+}

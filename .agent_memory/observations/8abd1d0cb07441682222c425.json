@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests io::wrapper_chunk_reads 2>&1 | grep -E \"^test |^test result:|panicked\" -A 4 | head -18",
+  "summary": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests io::wrapper_chunk_reads 2>&1 | grep -E \"^test |^test result:|panicked\" -A 4 | head -18: test codegen::io::wrapper_chunk_reads::test_fgetc_asks_for_a_chunk_not_a_byte ... ok test codegen::io::wrapper_chunk_reads::test_a_short_fread_asks_the_wrapper_for_a_whol",
+  "text": "CARGO_INCREMENTAL=0 cargo test -p elephc --test codegen_tests io::wrapper_chunk_reads 2>&1 | grep -E \"^test |^test result:|panicked\" -A 4 | head -18: test codegen::io::wrapper_chunk_reads::test_fgetc_asks_for_a_chunk_not_a_byte ... ok test codegen::io::wrapper_chunk_reads::test_a_short_fread_asks_the_wrapper_for_a_whole_chunk ... ok test codegen::io::wrapper_chunk_reads::test_a_second_short_fread_makes_no_further_wrapper_call ... ok test codegen::io::wrapper_chunk_reads::test_a_bounded_stream_get_contents_asks_for_a_chunk ... ok test codegen::io::wrapper_chunk_reads::test_a_bounded_fgets_still_asks_for_a_chunk ... ok test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 8766 filtered out; finished in 2.01s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8abd1d0cb07441682222c425",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:04:10.771Z",
+  "stored_at": "2026-08-21T14:04:10.772Z"
+}

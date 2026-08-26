@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm60.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm60.php: <?php\n// P2 restants: SplFileObject::fputcsv $eol, fputcsv eol=\"\", compress.zlib + zlib.level.\n$p = sys_get_temp_dir() . \"/rm60.csv\";",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm60.php: <?php\n// P2 restants: SplFileObject::fputcsv $eol, fputcsv eol=\"\", compress.zlib + zlib.level.\n$p = sys_get_temp_dir() . \"/rm60.csv\";\n$f = new SplFileObject($p, \"w\");\nvar_dump($f->fputcsv([\"a\", \"b\"], \",\", '\"', \"\\\\\", \"\\r\\n\"));\n$f = null;\nvar_dump(bin2hex(file_get_contents($p)));\nunlink($p);\n\n$h = fopen(\"php://memory\", \"w+\");\nvar_dump(fputcsv($h, [\"a\", \"b\"], \",\", '\"', \"\\\\\", \"\"));\nrewind($h);\nvar_dump(bin2hex((string) stream_get_contents($h)));\nfclose($h);\n\n$z = sys_get_temp_dir() . \"/rm60.gz\";\n$g = fopen(\"compress.zlib://\" . $z, \"w\");\nvar_dump(fwrite($g, \"hello hello hello hello\"));\nfclose($g);\n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5ffd66edcc7b161543441edb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:13:39.475Z",
+  "stored_at": "2026-08-18T13:13:39.475Z"
+}

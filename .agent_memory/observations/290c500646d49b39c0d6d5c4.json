@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/qpbig.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/qpbig.php: <?php\n// A filtered read that crosses the runtime's chunk boundary.\n// php-src's ghsa-r977-prxv-hc43 regression: 8189 bytes then \"X=",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/qpbig.php: <?php\n// A filtered read that crosses the runtime's chunk boundary.\n// php-src's ghsa-r977-prxv-hc43 regression: 8189 bytes then \"X=\\r\".\nfunction through(string $filter, string $data): string|false {\n    $h = fopen('php://memory', 'r+');\n    fwrite($h, $data);\n    rewind($h);\n    stream_filter_append($h, $filter, STREAM_FILTER_READ);\n    $out = stream_get_contents($h);\n    fclose($h);\n    return $out;\n}\n\nforeach ([100, 4095, 8188, 8189, 8190, 8192, 16384] as $n) {\n    $in = str_repeat('A', $n);\n    $got = through('convert.quoted-printable-decode', $in);\n    printf(\"qp-decode %6d -> %s\\n\", $n, ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "290c500646d49b39c0d6d5c4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:16:51.397Z",
+  "stored_at": "2026-08-17T09:16:51.398Z"
+}

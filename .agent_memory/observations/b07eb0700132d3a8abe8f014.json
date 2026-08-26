@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r 'print_r(stream_get_wrappers()); print_r(stream_get_filters());'",
+  "summary": "php -n -r 'print_r(stream_get_wrappers()); print_r(stream_get_filters());': Array ( [0] => https [1] => ftps [2] => compress.zlib [3] => compress.bzip2 [4] => php [5] => file [6] => glob [7] => data [8] => http [9] => ftp [10] => phar [11] => zip ) Array ( [0] => zlib.* [1] => bzip2.* [2] => convert.iconv.* [3] => stri",
+  "text": "php -n -r 'print_r(stream_get_wrappers()); print_r(stream_get_filters());': Array ( [0] => https [1] => ftps [2] => compress.zlib [3] => compress.bzip2 [4] => php [5] => file [6] => glob [7] => data [8] => http [9] => ftp [10] => phar [11] => zip ) Array ( [0] => zlib.* [1] => bzip2.* [2] => convert.iconv.* [3] => string.rot13 [4] => string.toupper [5] => string.tolower [6] => convert.* [7] => consumed [8] => dechunk )",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b07eb0700132d3a8abe8f014",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:21:33.063Z",
+  "stored_at": "2026-08-14T14:21:33.064Z"
+}

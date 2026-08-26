@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -12 crates/elephc-builtin-contract/src/catalog_data.rs; echo \"=== sweep:\"; tail -3 \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b9byrrlyu.output\" 2>/dev/null; pgrep -f cargo-nextest >/dev/null && echo SUITE_RUNNING || echo SUITE_DONE",
+  "summary": "head -12 crates/elephc-builtin-contract/src/catalog_data.rs; echo \"=== sweep:\"; tail -3 \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b9byrrlyu.output\" 2>/dev/null; pgrep -f cargo-nextest >/dev/null && echo",
+  "text": "head -12 crates/elephc-builtin-contract/src/catalog_data.rs; echo \"=== sweep:\"; tail -3 \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b9byrrlyu.output\" 2>/dev/null; pgrep -f cargo-nextest >/dev/null && echo SUITE_RUNNING || echo SUITE_DONE: //! Purpose: //! Canonical static PHP builtin contracts shared by compiler and Magician bindings. //! This data was bootstrapped from the compiler registry and is now authoritative. //! //! Called from: //! - `crate::registry` for name/ID lookup and backend joins. //! //! Key details: //! - Entries are sorted by canonical lowercase PHP name. //! - Backend execution hooks do not belong in this catalog. use crate::{Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec}; === sweep: SUITE_RUNNING",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bff51a503156c7f651c84013",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:52:26.440Z",
+  "stored_at": "2026-08-17T06:52:26.441Z"
+}

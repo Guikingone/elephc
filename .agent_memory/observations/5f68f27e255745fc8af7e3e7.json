@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'label(\\|label_global(\\|__rt_concat_publish\\|ret\"' src/codegen_support/runtime/io/stream_get_line.rs | head -50",
+  "summary": "grep -n 'label(\\|label_global(\\|__rt_concat_publish\\|ret\"' src/codegen_support/runtime/io/stream_get_line.rs | head -50: ck before the next read 406: emitter.label(\"__rt_stream_get_line_read_ok_x86\"); 422: emitter.label(\"__rt_stream_get_line_cmp_x86\"); 432: emitter.label(\"__rt_stream_get_line_matched_x86\"); 438: emitte",
+  "text": "grep -n 'label(\\|label_global(\\|__rt_concat_publish\\|ret\"' src/codegen_support/runtime/io/stream_get_line.rs | head -50: ck before the next read 406: emitter.label(\"__rt_stream_get_line_read_ok_x86\"); 422: emitter.label(\"__rt_stream_get_line_cmp_x86\"); 432: emitter.label(\"__rt_stream_get_line_matched_x86\"); 438: emitter.label(\"__rt_stream_get_line_read_failed_x86\"); 454: emitter.label(\"__rt_sgl_not_would_block_x86\"); 459: emitter.label(\"__rt_sgl_wrapper_entry_x86\"); 462: emitter.label(\"__rt_sgl_wrapper_loop_x86\"); 483: emitter.instruction(\"call __rt_concat_publish\"); // hand this chunk's scratch window back before the next read 497: emitter.label(\"__rt_sgl_wrapper_cmp_x86\"); 506: emitter.label(\"__rt_sgl_wrapper_matched_x86\"); 512: emitter.label(\"__rt_stream_get_line_eof_x86\"); 517: emitter.label(\"__rt_stream_get_line_done_x86\"); 520: emitter.instruction(\"call __rt_concat_publish\"); // advance the concat scratch offset only for scratch-backed results 524: emitter.instruction(\"ret\"); // return the line slice",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f68f27e255745fc8af7e3e7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:49:16.295Z",
+  "stored_at": "2026-08-25T13:49:16.296Z"
+}

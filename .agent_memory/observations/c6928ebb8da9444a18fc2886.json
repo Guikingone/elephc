@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn emit_socket_open_failure_warning\" -A 45 src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs | head -50",
+  "summary": "grep -n \"fn emit_socket_open_failure_warning\" -A 45 src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs | head -50: // a live descriptor warns about nothing 313- abi::emit_push_reg(ctx.emitter, \"rax\"); // the result outlives the diagnostic 314- match port { 315- Some(port) => { 316- ctx.load_value_to_result(p",
+  "text": "grep -n \"fn emit_socket_open_failure_warning\" -A 45 src/codegen/lower_inst/builtins/io/stream_dispatch_helpers.rs | head -50: // a live descriptor warns about nothing 313- abi::emit_push_reg(ctx.emitter, \"rax\"); // the result outlives the diagnostic 314- match port { 315- Some(port) => { 316- ctx.load_value_to_result(port)?; // the port PHP appends to the host 317- } 318- None => ctx.emitter.instruction(\"mov rax, -1\"), // the address already carries its port 319- } 320- abi::emit_push_reg(ctx.emitter, \"rax\"); 321- load_string_to_result(ctx, address, \"socket address\")?; // re-materialize the endpoint the caller wrote 322- ctx.emitter.instruction(\"mov rsi, rax\"); // the address pointer 323- abi::emit_pop_reg(ctx.emitter, \"rcx\"); // the port argument 324- ctx.emitter.instruction(&format!(\"mov rdi, {}\", kind)); // which builtin is reporting 325- abi::emit_call_label(ctx.emitter, \"__rt_socket_connect_warning\"); 326- abi::emit_pop_reg(ctx.emitter, \"rax\"); 327- } 328- } 329- ctx.emitter.label(&done_label); 330- Ok(())",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c6928ebb8da9444a18fc2886",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:29:03.906Z",
+  "stored_at": "2026-08-17T13:29:03.907Z"
+}

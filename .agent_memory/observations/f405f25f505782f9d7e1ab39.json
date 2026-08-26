@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"label_global(\\\"__rt_stream_get_contents\\\")\" -B4 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/ | rtk proxy grep \"///\\|label_global\" | head -6",
+  "summary": "rtk proxy grep -rn \"label_global(\\\"__rt_stream_get_contents\\\")\" -B4 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/ | rtk proxy grep \"///\\|label_global\" | head -6: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "text": "rtk proxy grep -rn \"label_global(\\\"__rt_stream_get_contents\\\")\" -B4 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/ | rtk proxy grep \"///\\|label_global\" | head -6: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_contents.rs:40: emitter.label_global(\"__rt_stream_get_contents\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_contents.rs-327-/// Emits the Linux x86_64 read-all stream helper. /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_contents.rs:331: emitter.label_global(\"__rt_stream_get_contents\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f405f25f505782f9d7e1ab39",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:00:52.177Z",
+  "stored_at": "2026-08-17T12:00:52.178Z"
+}

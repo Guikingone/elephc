@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_foreach.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_foreach.txt: fix(functions): a by-reference variadic written through a foreach key reached no caller\n\n`function f(&...$out) { foreach ($out as $i ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_foreach.txt: fix(functions): a by-reference variadic written through a foreach key reached no caller\n\n`function f(&...$out) { foreach ($out as $i => $_) { $out[$i] = …; } }` is the\nnatural way to fill a variadic out-parameter, and it reached the caller for none\nof its variables. Silently, as the other shapes did.\n\nTwo remaining roads, both now closed.\n\nA `foreach` key is a boxed Mixed in EIR, so the element write lowers to\n`__rt_array_set_mixed_key` rather than the direct setter whose lowering carries\nthe marker check inline. That helper's integer-key path DELEGATES to\n`__rt_array_set_mixed`, which had no ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4042a426c9e2226c775a8f40",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:10:47.444Z",
+  "stored_at": "2026-08-18T13:10:47.444Z"
+}

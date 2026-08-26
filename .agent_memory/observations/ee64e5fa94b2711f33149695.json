@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'located_diagnostics' -B 8 tests/codegen/support/*.rs | grep -E 'pub |fn |struct ' | head -12",
+  "summary": "About to run: grep -rn 'located_diagnostics' -B 8 tests/codegen/support/*.rs | grep -E 'pub |fn |struct ' | head -12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee64e5fa94b2711f33149695",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T10:05:34.059Z",
+  "stored_at": "2026-08-26T10:05:34.059Z"
+}

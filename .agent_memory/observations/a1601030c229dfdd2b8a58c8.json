@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/dynprop.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/dynprop.php: <?php\n#[\\AllowDynamicProperties]\nclass pass_filter\n{\n    public $filtername;\n    public $params;\n\n    function onCreate(): bool\n  ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/dynprop.php: <?php\n#[\\AllowDynamicProperties]\nclass pass_filter\n{\n    public $filtername;\n    public $params;\n\n    function onCreate(): bool\n    {\n        $this->stream = null;\n        return true;\n    }\n\n    function filter($in, $out, &$consumed, $closing): int\n    {\n        while ($bucket = stream_bucket_make_writeable($in)) {\n            $consumed += $bucket->datalen;\n            stream_bucket_append($out, $bucket);\n        }\n        var_dump(property_exists($this, 'stream'));\n        return PSFS_PASS_ON;\n    }\n}\n\nstream_filter_register(\"pass\", \"pass_filter\");\n$fp = fopen(\"php://memory\", \"w\");\nstream_fi",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a1601030c229dfdd2b8a58c8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:04:13.506Z",
+  "stored_at": "2026-08-17T09:04:13.508Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn box_float_or_false_result' -A 4 src/codegen/ | head -8; grep -rn 'fn emit_disk_space_failure_warning' src/codegen/ | head -2",
+  "summary": "grep -rn 'fn box_float_or_false_result' -A 4 src/codegen/ | head -8; grep -rn 'fn emit_disk_space_failure_warning' src/codegen/ | head -2: rs.rs:474:pub(super) fn box_float_or_false_result(ctx: &mut FunctionContext<'_>) { src/codegen/lower_inst/builtins/io/boxing_helpers.rs-475- let false_label = ctx.next_label(\"float_",
+  "text": "grep -rn 'fn box_float_or_false_result' -A 4 src/codegen/ | head -8; grep -rn 'fn emit_disk_space_failure_warning' src/codegen/ | head -2: rs.rs:474:pub(super) fn box_float_or_false_result(ctx: &mut FunctionContext<'_>) { src/codegen/lower_inst/builtins/io/boxing_helpers.rs-475- let false_label = ctx.next_label(\"float_false\"); src/codegen/lower_inst/builtins/io/boxing_helpers.rs-476- let done_label = ctx.next_label(\"float_done\"); src/codegen/lower_inst/builtins/io/boxing_helpers.rs-477- match ctx.emitter.target.arch { src/codegen/lower_inst/builtins/io/boxing_helpers.rs-478- Arch::AArch64 => { -- src/codegen/lower_inst/builtins/io/boxing_helpers.rs:552:pub(super) fn box_float_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) { src/codegen/lower_inst/builtins/io/boxing_helpers.rs-553- let false_label = ctx.next_label(&format!(\"{}_false\", label_prefix)); src/codegen/lower_inst/builtins/io/host_directory_process.rs:68:fn emit_disk_space_failure_warning(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1bdd906718d38fb1a3280725",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:16:33.412Z",
+  "stored_at": "2026-08-26T17:16:33.412Z"
+}

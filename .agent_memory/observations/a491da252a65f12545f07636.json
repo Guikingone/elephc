@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '430,470p' src/codegen/lower_inst/builtins/io/stream_read_helpers.rs",
+  "summary": "sed -n '430,470p' src/codegen/lower_inst/builtins/io/stream_read_helpers.rs: .emitter.instruction(\"csel x1, x10, x1, lt\"); // clamp the read request to remaining bytes ctx.emitter.instruction(&format!(\"b {}\", after_request)); // finite request size is ready ctx.emitter.label(request_unlimited); ctx.emitter.label(after_",
+  "text": "sed -n '430,470p' src/codegen/lower_inst/builtins/io/stream_read_helpers.rs: .emitter.instruction(\"csel x1, x10, x1, lt\"); // clamp the read request to remaining bytes ctx.emitter.instruction(&format!(\"b {}\", after_request)); // finite request size is ready ctx.emitter.label(request_unlimited); ctx.emitter.label(after_request); abi::emit_call_label(ctx.emitter, \"__rt_fread\"); ctx.emitter.instruction(&format!(\"cbz x2, {}\", done_label)); // stop when the source returns an empty chunk ctx.emitter.instruction(\"ldr x10, [sp, #32]\"); // load requested max byte count emit_branch_if_unlimited_length(ctx, \"x10\", \"x11\", chunk_unlimited); ctx.emitter.instruction(\"ldr x9, [sp, #16]\"); // reload copied-byte total so far ctx.emitter.instruction(\"sub x10, x10, x9\"); // compute remaining finite bytes ctx.emitter.instruction(\"cmp x2, x10\"); // check whether the read returned too many bytes ctx.emitter.instruction(\"csel x2, x2, x10, ls\"); // clamp wrapper chunks to remaining bytes",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a491da252a65f12545f07636",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:07:07.427Z",
+  "stored_at": "2026-08-21T09:07:07.427Z"
+}

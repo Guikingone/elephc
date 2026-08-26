@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm20.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm20.php: <?php\n// P1: the ValueError family on stream_* arguments.\n$h = fopen(\"php://memory\", \"w+\");\nfwrite($h, \"hello world\");\nrewind($h);\ntr",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm20.php: <?php\n// P1: the ValueError family on stream_* arguments.\n$h = fopen(\"php://memory\", \"w+\");\nfwrite($h, \"hello world\");\nrewind($h);\ntry { stream_get_contents($h, -5); } catch (ValueError $e) { echo \"1:\", $e->getMessage(), \"\\n\"; }\ntry { stream_get_line($h, -1); } catch (ValueError $e) { echo \"2:\", $e->getMessage(), \"\\n\"; }\ntry { stream_set_chunk_size($h, 0); } catch (ValueError $e) { echo \"3:\", $e->getMessage(), \"\\n\"; }\ntry { stream_copy_to_stream($h, $h, null, -1); } catch (ValueError $e) { echo \"4:\", $e->getMessage(), \"\\n\"; }\ntry { fread($h, 0); } catch (ValueError $e) { echo \"5:\", $e->getMess",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5985468722f8bea129058697",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:31:28.361Z",
+  "stored_at": "2026-08-18T09:31:28.362Z"
+}

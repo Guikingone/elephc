@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"test_stream_select_wrapper_without_stream_cast_excluded\" -A40 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs | head -46",
+  "summary": "rtk proxy grep -n \"test_stream_select_wrapper_without_stream_cast_excluded\" -A40 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs | head -46: )` still sees a 13103-/// valid resource. Before the reservation fix the read ran past `_concat_buf` into t",
+  "text": "rtk proxy grep -n \"test_stream_select_wrapper_without_stream_cast_excluded\" -A40 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs | head -46: )` still sees a 13103-/// valid resource. Before the reservation fix the read ran past `_concat_buf` into the adjacent 13104-/// BSS globals and `fclose()` failed with a bogus TypeError. 13105-#[test] 13106-fn test_fread_larger_than_concat_scratch_keeps_stream_table_intact() { 13107- let (out, dir) = compile_and_run_in_dir( 13108- r#\"<?php 13109-$payload = str_repeat(\"0123456789\", 10000); 13110-file_put_contents(\"big_fread.bin\", $payload); 13111-$f = fopen(\"big_fread.bin\", \"r\"); 13112-$data = fread($f, 100000); 13113-echo strlen($data), \"|\", substr($data, 0, 5), \"|\", substr($data, -5), \"|\"; 13114-echo ($data === $payload ? \"same\" : \"DIFF\"), \"|\"; 13115-echo (is_resource($f) ? \"res\" : \"broken\"), \"|\"; 13116-fclose($f); 13117-unlink(\"big_fread.bin\"); 13118-echo \"closed\"; 13119-\"#, 13120- ); 13121- assert_eq!(out, \"100000|01234|56789|same|res|closed\"); 13122- let _ = fs::remove_dir_all(&dir);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7f3efb9e7cd45049ffe161e5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:22:50.465Z",
+  "stored_at": "2026-08-17T07:22:50.466Z"
+}

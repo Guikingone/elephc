@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_tentative.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_tentative.txt: feat(streams): php's tentative-return deprecation, which every ordinary user filter earns\n\n    class myfilter extends php_user_",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_tentative.txt: feat(streams): php's tentative-return deprecation, which every ordinary user filter earns\n\n    class myfilter extends php_user_filter {\n        function filter($in, $out, &$consumed, $closing) { ... }\n    }\n\n    php:    Deprecated: Return type of myfilter::filter($in, $out, &$consumed, $closing) should\n            either be compatible with php_user_filter::filter($in, $out, &$consumed, bool $closing): int,\n            or the #[\\ReturnTypeWillChange] attribute should be used to temporarily suppress the notice\n    elephc: nothing\n\nphp declares three of `php_user_filter`'s methods with TENTATIVE ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "775324be528358671b40adcc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:45:56.595Z",
+  "stored_at": "2026-08-22T18:45:56.596Z"
+}

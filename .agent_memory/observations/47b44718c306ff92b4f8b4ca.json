@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '445,510p' src/optimize/reachability/graph.rs",
+  "summary": "sed -n '445,510p' src/optimize/reachability/graph.rs: d classes. fn seed_instantiated_magic_methods(&mut self) { let instantiated: Vec<_> = self.instantiated_classes.iter().cloned().collect(); for class in instantiated { let behavioral = self.behavioral.instantiated_classes.contains(&class); let checker_magic: Vec<_> =",
+  "text": "sed -n '445,510p' src/optimize/reachability/graph.rs: d classes. fn seed_instantiated_magic_methods(&mut self) { let instantiated: Vec<_> = self.instantiated_classes.iter().cloned().collect(); for class in instantiated { let behavioral = self.behavioral.instantiated_classes.contains(&class); let checker_magic: Vec<_> = self .checker_method_implementations .iter() .filter_map(|((visible_class, method, is_static), owner)| { (visible_class == &class && is_magic_method(method)).then(|| { ( (visible_class.clone(), method.clone(), *is_static), (owner.clone(), method.clone(), *is_static), ) }) }) .collect(); for (visible_method, owner_method) in checker_magic { self.reach.methods.insert(visible_method.clone()); self.reach.methods.insert(owner_method.clone()); if behavioral { self.behavioral.methods.insert(visible_method); self.behavioral.methods.insert(owner_method); } } let mut current = Some(class.clone()); let mut seen_classes = HashSet::new();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "47b44718c306ff92b4f8b4ca",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:51:12.637Z",
+  "stored_at": "2026-08-24T20:51:12.637Z"
+}

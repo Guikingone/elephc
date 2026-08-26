@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"\\\"argc\\\"\\|EVAL_ARGC_LOCAL_NAME\\|argv\" src/ir_lower/ | grep -v \"^src/ir_lower/context.rs:10[0-9][0-9]\" | head -20",
+  "summary": "grep -rn \"\\\"argc\\\"\\|EVAL_ARGC_LOCAL_NAME\\|argv\" src/ir_lower/ | grep -v \"^src/ir_lower/context.rs:10[0-9][0-9]\" | head -20: src/ir_lower/context.rs:173:const EVAL_ARGC_LOCAL_NAME: &str = \"argc\"; src/ir_lower/context.rs:174:const EVAL_ARGV_LOCAL_NAME: &str = \"argv\";",
+  "text": "grep -rn \"\\\"argc\\\"\\|EVAL_ARGC_LOCAL_NAME\\|argv\" src/ir_lower/ | grep -v \"^src/ir_lower/context.rs:10[0-9][0-9]\" | head -20: src/ir_lower/context.rs:173:const EVAL_ARGC_LOCAL_NAME: &str = \"argc\"; src/ir_lower/context.rs:174:const EVAL_ARGV_LOCAL_NAME: &str = \"argv\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f3f19899e115f9e874c2df39",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:45:04.219Z",
+  "stored_at": "2026-08-20T19:45:04.219Z"
+}

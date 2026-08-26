@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md')\nt = p.read_text()\nold = \"## Active work — Streams (`feat/streams-csv-signatures`)\\n\"\nnew = \"\"\"## Active work — Streams (`feat/streams-csv-signatures`)\n- ✅✅✅🔴🔴🔑★★★ [`stream_filter_register` relâchait sa trame DEUX FOIS](runtime-frame-balance-gate-whole-surface.md) `633be3d7f` — **42 → 14** échecs `io::streams`: 28 tests de filtres rouges pour une raison dont aucun ne parlait. 🛠️ PORTE = marche du CFG sur TOUT le runtime (1039/1041… [+804 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md')\nt = p.read_text()\nold = \"## Active work — Streams (`feat/streams-csv-signatures`)\\n\"\nnew = \"\"\"## Active work — Streams (`feat/streams-csv-signatures`)\n- ✅✅✅🔴🔴",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md')\nt = p.read_text()\nold = \"## Active work — Streams (`feat/streams-csv-signatures`)\\n\"\nnew = \"\"\"## Active work — Streams (`feat/streams-csv-signatures`)\n- ✅✅✅🔴🔴🔑★★★ [`stream_filter_register` relâchait sa trame DEUX FOIS](runtime-frame-balance-gate-whole-surface.md) `633be3d7f` — **42 → 14** échecs `io::streams`: 28 tests de filtres rouges pour une raison dont aucun ne parlait. 🛠️ PORTE = marche du CFG sur TOUT le runtime (1039/1041 helpers, 2 arches).\n- ✅✅✅🔴🔴🔑★★★ [`sscanf`/`fscanf` NE COMPILAIENT PLUS](prelude-named-only-by-the-backend-gets-pruned.md) `3c319ebbe` — moteur du prélude nommé SEULEMENT par le lowering ⇒ élagué. 🛠️ surface balayée: 15 builtins-préludes, 2 cassés.\n- ✅🔑 [Paramètre par référence OMIS ≠ littéral écrit dedans](byref-omitted-param-is-not-a-literal.md) `f3a75146f` — + `flock` out-param en mot BRUT dans un créneau boxé. 🔴 OUVERTS dedans: `flock` rend true sur les flux non-fichiers, `str_replace` sans `&$count`, `similar_text` absent.\n- ✅ `ZipArchive` enregistré derrière une porte qui ne pouvait pas s'ouvrir pour lui `163bd5e3b` — 🛠️ porte qui lit les DEUX listes (a trouvé un 2e nom à sa 1re exécution).\n\"\"\"\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('MEMORY.md updated')\nPY: MEMORY.md updated",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eafbcdc486e4dcb76462d893",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:44:09.291Z",
+  "stored_at": "2026-08-21T16:44:09.292Z"
+}

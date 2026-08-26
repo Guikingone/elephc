@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-af32c140cac10332d 2>&1 | head -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-ad831c47db6c55775 2>&1 | head -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-afcfcdc0f79e91072 2>&1 | head -1; df -h /",
+  "summary": "git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-af32c140cac10332d 2>&1 | head -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-ad831c47db6c55775 2>&1 | head -1; git worktree remove --force /Users/guillaume",
+  "text": "git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-af32c140cac10332d 2>&1 | head -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-ad831c47db6c55775 2>&1 | head -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-afcfcdc0f79e91072 2>&1 | head -1; df -h /: Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s1s1 460Gi 12Gi 32Gi 27% 459k 339M 0% /",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "306d16e1ae9e94212a7e7229",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T16:50:25.664Z",
+  "stored_at": "2026-08-15T16:50:25.665Z"
+}

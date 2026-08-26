@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='src/codegen/lower_inst/builtins/io/filter_helpers.rs'\ns=open(p).read()\nold='''    if std::env::var_os(\"ELEPHC_NO_INERT_FILTER\").is_some() { return Ok(()); }\n    let stream = expect_operand(inst, 0)?;\n    load_open_stream_handle_to_result(ctx, stream, \"stream_filter_append\")?;\n    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));\n    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);'''\nnew='''    let stream = expe… [+402 chars truncated]",
+  "summary": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='src/codegen/lower_inst/builtins/io/filter_helpers.rs'\ns=open(p).read()\nold='''    if std::env::var_os(\"ELEPHC_NO_INERT_FILTER\").is_some() { return Ok(()); }\n    let stream = expect_op",
+  "text": "python3 - <<'PYEOF'\nimport os\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np='src/codegen/lower_inst/builtins/io/filter_helpers.rs'\ns=open(p).read()\nold='''    if std::env::var_os(\"ELEPHC_NO_INERT_FILTER\").is_some() { return Ok(()); }\n    let stream = expect_operand(inst, 0)?;\n    load_open_stream_handle_to_result(ctx, stream, \"stream_filter_append\")?;\n    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));\n    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);'''\nnew='''    let stream = expect_operand(inst, 0)?;\n    load_open_stream_handle_to_result(ctx, stream, \"stream_filter_append\")?;\n    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));\n    materialize_stream_filter_mode(ctx, inst, Some(0))?;'''\nassert s.count(old)==1\ns=s.replace(old,new)\nopen(p,'w').write(s)\nprint('linking restored, switch removed')\nPYEOF\ncargo build 2>&1 | rg -i \"^error|-->\" | head -5; echo BUILT: linking restored, switch removed BUILT",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "14c80639327a86d582fa7d3d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:13:36.203Z",
+  "stored_at": "2026-08-17T15:13:36.205Z"
+}

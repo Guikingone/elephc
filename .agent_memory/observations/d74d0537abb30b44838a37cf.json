@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport pathlib\np = pathlib.Path('crates/elephc-builtin-contract/src/support.rs')\nt = p.read_text()\nold = '        assert_eq!(aot_registry, 543);'\nnew = '''        // 544 on the merged catalogue: this branch counted 543 and main 531, and main also\n        // PROMOTES get_object_vars out of the external surface into the registry. Neither\n        // branch's number survives the merge; this one is measured on the result.\n        assert_eq!(aot_registry, 544);'''\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('support.rs: aot_registry measured at 544')\n\"\ncargo test -p… [+70 chars truncated]",
+  "summary": "python3 -c \"\nimport pathlib\np = pathlib.Path('crates/elephc-builtin-contract/src/support.rs')\nt = p.read_text()\nold = '        assert_eq!(aot_registry, 543);'\nnew = '''        // 544 on the merged catalogue: this branch counted 543 and main 531, and main also\n        // PROMOTES get_object_vars out of the external surf",
+  "text": "python3 -c \"\nimport pathlib\np = pathlib.Path('crates/elephc-builtin-contract/src/support.rs')\nt = p.read_text()\nold = '        assert_eq!(aot_registry, 543);'\nnew = '''        // 544 on the merged catalogue: this branch counted 543 and main 531, and main also\n        // PROMOTES get_object_vars out of the external surface into the registry. Neither\n        // branch's number survives the merge; this one is measured on the result.\n        assert_eq!(aot_registry, 544);'''\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('support.rs: aot_registry measured at 544')\n\"\ncargo test -p elephc-builtin-contract 2>&1 | grep -E \"test result|FAILED\" | head -3: support.rs: aot_registry measured at 544 test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d74d0537abb30b44838a37cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:00:57.706Z",
+  "stored_at": "2026-08-20T18:00:57.707Z"
+}

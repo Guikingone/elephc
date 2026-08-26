@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '^<<<<<<<\\|^=======\\|^>>>>>>>' src/ir_lower/context.rs | head -20; echo '=== hunks ==='; sed -n '/^<<<<<<</,/^>>>>>>>/p' src/ir_lower/context.rs | head -60",
+  "summary": "About to run: grep -n '^<<<<<<<\\|^=======\\|^>>>>>>>' src/ir_lower/context.rs | head -20; echo '=== hunks ==='; sed -n '/^<<<<<<</,/^>>>>>>>/p' src/ir_lower/context.rs | head -60",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2b3f2751550ab88d8e138266",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:08:33.690Z",
+  "stored_at": "2026-08-26T17:08:33.690Z"
+}

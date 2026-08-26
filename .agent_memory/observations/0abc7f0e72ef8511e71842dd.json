@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn test_by_ref_out_parameter_rejects_an_incompatible_variable\" -B 20 -A 12 tests/codegen/io/streams.rs | head -36",
+  "summary": "grep -n \"fn test_by_ref_out_parameter_rejects_an_incompatible_variable\" -B 20 -A 12 tests/codegen/io/streams.rs | head -36: lds an incompatible type reports 10434-/// elephc's ordinary reassignment error. 10435-/// 10436-/// The write used to go straight into the caller's slot without consulting its representation: 104",
+  "text": "grep -n \"fn test_by_ref_out_parameter_rejects_an_incompatible_variable\" -B 20 -A 12 tests/codegen/io/streams.rs | head -36: lds an incompatible type reports 10434-/// elephc's ordinary reassignment error. 10435-/// 10436-/// The write used to go straight into the caller's slot without consulting its representation: 10437-/// an `int` landing in a `string` slot overwrote the pointer half with a small integer, and the 10438-/// program segfaulted on the next read. Binding the out-parameter through the normal assignment 10439-/// merge is what turns that silent corruption into a diagnostic. 10440-#[test] 10441:fn test_by_ref_out_parameter_rejects_an_incompatible_variable() { 10442- let error = compile_expect_type_error( 10443- r#\"<?php 10444-$would = \"untouched\"; 10445-$h = fopen(\"php://memory\", \"r+\"); 10446-flock($h, LOCK_SH, $would); 10447-\"#, 10448- ); 10449- assert!( 10450- error.contains(\"cannot reassign $would from string to int\"), 10451- \"expected a reassignment diagnostic, got: {error}\" 10452- ); 10453-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0abc7f0e72ef8511e71842dd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:09:30.441Z",
+  "stored_at": "2026-08-22T13:09:30.442Z"
+}

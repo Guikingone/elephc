@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n diterr.php 2>&1",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n diterr.php 2>&1: led to open directory: No such file or directory FilesystemIterator a file UnexpectedValueException: FilesystemIterator::__c",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n diterr.php 2>&1: led to open directory: No such file or directory FilesystemIterator a file UnexpectedValueException: FilesystemIterator::__construct(/private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/di7fdmiijathpd9taUUv5): Failed to open directory: Not a directory FilesystemIterator empty str ValueError: FilesystemIterator::__construct(): Argument #1 ($directory) must not be empty RecursiveDirectoryIterator missing UnexpectedValueException: RecursiveDirectoryIterator::__construct(/no/such/dir): Failed to open directory: No such file or directory RecursiveDirectoryIterator a file UnexpectedValueException: RecursiveDirectoryIterator::__construct(/private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/di7fdmiijathpd9taUUv5): Failed to open directory: Not a directory RecursiveDirectoryIterator empty str ValueError: RecursiveDirectoryIterator::__construct(): Argument #1 ($directory) must not be empty",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cbf150b4d2923d9f621bd4e4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:33:06.525Z",
+  "stored_at": "2026-08-23T09:33:06.526Z"
+}

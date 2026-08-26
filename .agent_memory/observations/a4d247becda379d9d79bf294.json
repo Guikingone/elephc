@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fpc_flags.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fpc_flags.py: \"\"\"Three callers of the one-shot writer never said what `$flags` was, so the CALLER's leftovers did.\n\n`__rt_file_put_contents` reads",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/fpc_flags.py: \"\"\"Three callers of the one-shot writer never said what `$flags` was, so the CALLER's leftovers did.\n\n`__rt_file_put_contents` reads `$flags` from x5 (rcx on x86_64) and tests bit 3, FILE_APPEND. Every\nsite that calls it for a reason of its own — `copy()`, the phar finalizer, the lowered-source copy\n— left that register alone, so the decision to TRUNCATE or to APPEND was made by whatever the last\nlowering happened to leave there. MEASURED: `file_put_contents($f, 'B', FILE_APPEND)` followed by\n`copy($f, $f)` gives \"ABAB\", and the same copy without the earlier append gives \"AB\".\n\nThe register is",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a4d247becda379d9d79bf294",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:12:40.339Z",
+  "stored_at": "2026-08-22T21:12:40.339Z"
+}

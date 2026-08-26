@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs; grep -rn \"STREAM_CLIENT\" $D/php_streams.h; echo \"--- bucket/filter funcs ---\"; grep -n \"^PHP_FUNCTION\" $D/user_filters.c; echo \"--- userspace ---\"; grep -n \"^PHP_FUNCTION\" $D/userspace.c",
+  "summary": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs; grep -rn \"STREAM_CLIENT\" $D/php_streams.h; echo \"--- bucket/filter funcs ---\"; grep -n \"^PHP_FUNCTION\" $D/user_filters.c; echo \"--- userspace",
+  "text": "D=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/audit_funcs; grep -rn \"STREAM_CLIENT\" $D/php_streams.h; echo \"--- bucket/filter funcs ---\"; grep -n \"^PHP_FUNCTION\" $D/user_filters.c; echo \"--- userspace ---\"; grep -n \"^PHP_FUNCTION\" $D/userspace.c: --- bucket/filter funcs --- 367:PHP_FUNCTION(stream_bucket_make_writeable) 454:PHP_FUNCTION(stream_bucket_prepend) 461:PHP_FUNCTION(stream_bucket_append) 468:PHP_FUNCTION(stream_bucket_new) 501:PHP_FUNCTION(stream_get_filters) 524:PHP_FUNCTION(stream_filter_register) --- userspace --- 463:PHP_FUNCTION(stream_wrapper_register) 503:PHP_FUNCTION(stream_wrapper_unregister) 530:PHP_FUNCTION(stream_wrapper_restore)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "78460a2b5a7ee726ca68ed6d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:54.758Z",
+  "stored_at": "2026-08-14T14:15:54.759Z"
+}

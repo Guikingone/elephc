@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build 2>&1 | grep -E \"^error\" -A6 | head -12; echo BUILT; zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh s3 s1 s2 s5 2>&1",
+  "summary": "cargo build 2>&1 | grep -E \"^error\" -A6 | head -12; echo BUILT; zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh s3 s1 s2 s5 2>&1: BUILT s3 IDENTICAL s1 IDENTICAL s2 IDENTICAL s5 ID",
+  "text": "cargo build 2>&1 | grep -E \"^error\" -A6 | head -12; echo BUILT; zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh s3 s1 s2 s5 2>&1: BUILT s3 IDENTICAL s1 IDENTICAL s2 IDENTICAL s5 IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9bf738986f1be84b72eaa94f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:55:31.638Z",
+  "stored_at": "2026-08-18T10:55:31.638Z"
+}

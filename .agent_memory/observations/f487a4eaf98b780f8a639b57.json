@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git reset -q && git add src/ir_lower/stmt/static_property_writes.rs src/types/checker/stmt_check/assignments/properties.rs src/types/checker/stmt_check/assignments/static_properties.rs tests/codegen/types.rs tests/codegen/types/static_property_hash.rs && git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(types): a string key into a `static array` property was refused, then lost\n\n`public static array $store = []` refused `self::$store[$k] = $v` outright — `Array index\nmust be integer` — while the INSTANCE property one line away accepted the same write and\npromoted the property to hash stora… [+1320 chars truncated]",
+  "summary": "About to run: git reset -q && git add src/ir_lower/stmt/static_property_writes.rs src/types/checker/stmt_check/assignments/properties.rs src/types/checker/stmt_check/assignments/static_properties.rs tests/codegen/t",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f487a4eaf98b780f8a639b57",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:25:31.418Z",
+  "stored_at": "2026-08-26T08:25:31.419Z"
+}

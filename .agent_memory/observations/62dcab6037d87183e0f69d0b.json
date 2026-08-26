@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj && timeout 3000 python3 run_named8.py 2>&1 | grep -E '^(IDENTICAL|DIFFERS|REFUSED|php|elephc|### )'",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj && timeout 3000 python3 run_named8.py 2>&1 | grep -E '^(IDENTICAL|DIFFERS|REFUSED|php|elephc|### )': IDENTICAL 180 DIFFERS 3 elephc REFUSED 0 php par",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj && timeout 3000 python3 run_named8.py 2>&1 | grep -E '^(IDENTICAL|DIFFERS|REFUSED|php|elephc|### )': IDENTICAL 180 DIFFERS 3 elephc REFUSED 0 php parse err 0 (fragments, not programs) ### kimi-k2.7-code-05 ### kimi-k3-27 ### kimi-k3-56",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "62dcab6037d87183e0f69d0b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:32:17.008Z",
+  "stored_at": "2026-08-25T13:32:17.009Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -d /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target 2>&1; echo \"--- CARGO_TARGET_DIR? ---\"; env | grep -i cargo; echo \"--- global bin ---\"; ls ~/.cargo/bin 2>/dev/null | head -20; which elephc 2>&1; echo \"--- worktree dirs ---\"; ls -a /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature | head -30",
+  "summary": "ls -d /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target 2>&1; echo \"--- CARGO_TARGET_DIR? ---\"; env | grep -i cargo; echo \"--- global bin ---\"; ls ~/.cargo/bin 2>/dev/null | head -20; which elephc 2>&1; echo \"--- worktree dirs ---\"; ls -a /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/st",
+  "text": "ls -d /Users/guillaumeloulier/PhpstormProjects/oss/elephc/target 2>&1; echo \"--- CARGO_TARGET_DIR? ---\"; env | grep -i cargo; echo \"--- global bin ---\"; ls ~/.cargo/bin 2>/dev/null | head -20; which elephc 2>&1; echo \"--- worktree dirs ---\"; ls -a /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature | head -30: JetBrains/Toolbox/scripts:/Applications/Obsidian.app/Contents/MacOS:/Users/guillaumeloulier/.lmstudio/bin:/Users/guillaumeloulier/Library/Application Support/JetBrains/Toolbox/scripts:/Applications/Obsidian.app/Contents/MacOS::/Users/guillaumeloulier/.lmstudio/bin:/Users/guillaumeloulier/.claude/plugins/cache/claude-plugins-official/rust-analyzer-lsp/1.0.0/bin --- global bin --- cargo cargo-clippy cargo-fmt cargo-miri cargo-nextest clippy-driver grcov rls rust-analyzer rust-gdb rust-gdbgui rust-lldb rustc rustdoc rustfmt rustup /opt/homebrew/bin/elephc --- worktree dirs --- . .. .agent_memory .agents .benchmarks .claude .codebase-memory .config .git .github .gitignore .plans AGENTS.md CHANGELOG.md CLAUDE.md CONTRIBUTING.md Cargo.lock Cargo.toml Dockerfile.test-linux-arm64 Dockerfile.test-linux-x86_64 LICENSE README.md ROADMAP.md assets benchmarks crates docs examples rustfmt.toml scripts",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "df891587199bcac5a7469ad4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:50.268Z",
+  "stored_at": "2026-08-14T14:11:50.268Z"
+}

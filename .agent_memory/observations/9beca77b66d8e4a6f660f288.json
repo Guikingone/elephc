@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-variadic-write-fails-only-in-a-loop.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-variadic-write-fails-only-in-a-loop.md: ---\nname: byref-variadic-write-fails-only-in-a-loop\ndescription: \"CORRIGÉ `781f52c0e`: `&...$out` ne traversait que pour une valeur que le lowering avait BOXÉE LUI-MÊME",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-variadic-write-fails-only-in-a-loop.md: ---\nname: byref-variadic-write-fails-only-in-a-loop\ndescription: \"CORRIGÉ `781f52c0e`: `&...$out` ne traversait que pour une valeur que le lowering avait BOXÉE LUI-MÊME — reste le foreach\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\nMesuré sur `php -n` 8.5.6, branche `feat/streams-csv-signatures`.\n\n🔴 **DEUX affirmations fausses corrigées par la mesure** — les garder en tête, elles se\nrépètent :\n1. « `&...$vars` range des ADRESSES et l'écriture REMPLACE l'adresse » → **FAUX**. La traversée\n   existe : `emit_mixed_array_set_ref_marker_writeback` (`codegen/lower_inst/arrays.rs`) suit le\n  ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9beca77b66d8e4a6f660f288",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T12:46:56.187Z",
+  "stored_at": "2026-08-18T12:46:56.188Z"
+}

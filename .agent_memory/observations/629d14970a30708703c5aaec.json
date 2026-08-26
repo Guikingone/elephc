@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git status --short | grep \"^UU\\|^AA\\|^DU\\|^UD\\|^DD\\|^AU\\|^UA\" | grep -v \"docs/internals/builtins/\\|docs/php/builtins\" | sed 's/^.. //'",
+  "summary": "git status --short | grep \"^UU\\|^AA\\|^DU\\|^UD\\|^DD\\|^AU\\|^UA\" | grep -v \"docs/internals/builtins/\\|docs/php/builtins\" | sed 's/^.. //': time/io/stream_wrapper_register.rs src/codegen_support/runtime/io/user_filter.rs src/codegen_support/runtime/io/user_wrapper.rs src/codegen_support/runtime/io/user_wrapper_url_stat.rs ",
+  "text": "git status --short | grep \"^UU\\|^AA\\|^DU\\|^UD\\|^DD\\|^AU\\|^UA\" | grep -v \"docs/internals/builtins/\\|docs/php/builtins\" | sed 's/^.. //': time/io/stream_wrapper_register.rs src/codegen_support/runtime/io/user_filter.rs src/codegen_support/runtime/io/user_wrapper.rs src/codegen_support/runtime/io/user_wrapper_url_stat.rs src/codegen_support/runtime/objects/mod.rs src/codegen_support/runtime/system/json_encode_str/x86_64.rs src/codegen_support/runtime/system/unserialize.rs src/ir/runtime_fn.rs src/ir_lower/expr/array_builtin_args.rs src/ir_lower/tests/mod.rs src/types/checker/builtins/mod.rs tests/builtin_parity_tests.rs tests/codegen/arrays/indexed/sorting.rs tests/codegen/io/streams.rs tests/codegen/json/mixed_index_access.rs tests/codegen/objects/gc_aliasing.rs tests/codegen/objects/property_access/nullsafe.rs tests/codegen/regressions/arrays.rs tests/codegen/strings/transform.rs tests/codegen/support/compiler.rs tests/codegen/support/runner.rs tests/error_tests.rs tests/error_tests/image.rs tests/ir_backend_smoke_test.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "629d14970a30708703c5aaec",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T16:56:14.901Z",
+  "stored_at": "2026-08-20T16:56:14.902Z"
+}

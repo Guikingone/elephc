@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/phpwrap_dyn.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/phpwrap_dyn.php: <?php\n// The same six, reached through a COMPUTED url rather than a literal.\nfunction u(string $s): string { return $s; }\n$h = fo",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/phpwrap_dyn.php: <?php\n// The same six, reached through a COMPUTED url rather than a literal.\nfunction u(string $s): string { return $s; }\n$h = fopen(u(\"php://memory\"), \"w+\");\nvar_dump(is_resource($h));\nfwrite($h, \"hello\");\nrewind($h);\nvar_dump(stream_get_contents($h));\nvar_dump(file_put_contents(u(\"php://output\"), \"OUT\\n\"));\nvar_dump(file_put_contents(u(\"php://memory\"), \"MEM\"));\nvar_dump(file_get_contents(u(\"php://memory\")));\nvar_dump(file_get_contents(u(\"php://temp\")));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cd4a68eae9fc71fad9469e9d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:02:09.253Z",
+  "stored_at": "2026-08-23T07:02:09.254Z"
+}

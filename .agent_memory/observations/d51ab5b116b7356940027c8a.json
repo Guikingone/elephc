@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git rev-parse HEAD | cat; git diff --name-status 76a1850d53d836dca0883f75f27bd106e83b6ae9 origin/main | awk '$1==\"A\"' | grep -iE 'monitor|instr|probe|call_graph' | head -20",
+  "summary": "About to run: git rev-parse HEAD | cat; git diff --name-status 76a1850d53d836dca0883f75f27bd106e83b6ae9 origin/main | awk '$1==\"A\"' | grep -iE 'monitor|instr|probe|call_graph' | head -20",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d51ab5b116b7356940027c8a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:06:59.562Z",
+  "stored_at": "2026-08-26T17:06:59.562Z"
+}

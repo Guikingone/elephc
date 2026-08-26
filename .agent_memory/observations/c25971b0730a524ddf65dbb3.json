@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"InlineHtml|inline_html|OpenTag|open_tag|\\\\?>\" src/lexer/scan.rs | head -20",
+  "summary": "About to run: rg -n \"InlineHtml|inline_html|OpenTag|open_tag|\\\\?>\" src/lexer/scan.rs | head -20",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c25971b0730a524ddf65dbb3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T20:43:06.630Z",
+  "stored_at": "2026-08-17T20:43:06.630Z"
+}

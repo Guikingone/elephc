@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps -A -o etime=,comm= | rg \"cargo\" | head -3",
+  "summary": "ps -A -o etime=,comm= | rg \"cargo\" | head -3: 01:52 /Users/guillaumeloulier/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo 16:01 /Users/guillaumeloulier/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+  "text": "ps -A -o etime=,comm= | rg \"cargo\" | head -3: 01:52 /Users/guillaumeloulier/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo 16:01 /Users/guillaumeloulier/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0307023787925c50be8e75fa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:40:15.213Z",
+  "stored_at": "2026-08-17T08:40:15.213Z"
+}

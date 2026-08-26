@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"stream_get_wrappers\" --include=\"*.rs\" src/codegen/lower_inst | head -5",
+  "summary": "grep -rn \"stream_get_wrappers\" --include=\"*.rs\" src/codegen/lower_inst | head -5: src/codegen/lower_inst/builtins/io.rs:116: lower_stream_copy_to_stream, lower_stream_get_line, lower_stream_get_meta_data, lower_stream_get_wrappers, src/codegen/lower_inst/builtins/io/stream_copy_queries.rs:143:/// Lowers `stream_get_wra",
+  "text": "grep -rn \"stream_get_wrappers\" --include=\"*.rs\" src/codegen/lower_inst | head -5: src/codegen/lower_inst/builtins/io.rs:116: lower_stream_copy_to_stream, lower_stream_get_line, lower_stream_get_meta_data, lower_stream_get_wrappers, src/codegen/lower_inst/builtins/io/stream_copy_queries.rs:143:/// Lowers `stream_get_wrappers()` to the static built-in wrapper list, then src/codegen/lower_inst/builtins/io/stream_copy_queries.rs:144:/// appends user-registered scheme names via the `__rt_stream_get_wrappers` src/codegen/lower_inst/builtins/io/stream_copy_queries.rs:146:pub(crate) fn lower_stream_get_wrappers( src/codegen/lower_inst/builtins/io/stream_copy_queries.rs:150: super::super::ensure_arg_count(inst, \"stream_get_wrappers\", 0)?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7865819179a8bf8ac0809a5b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:21:27.000Z",
+  "stored_at": "2026-08-14T14:21:27.001Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/captures.py 2>&1",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/captures.py 2>&1: === use_undef SAME === use_undef_unused SAME === use_undef_byref DIFFERS --- php --- NULL NULL --- elephc --- NULL int(92233720",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/captures.py 2>&1: === use_undef SAME === use_undef_unused SAME === use_undef_byref DIFFERS --- php --- NULL NULL --- elephc --- NULL int(9223372036854775806) === arrow_undef SAME === arrow_undef_concat SAME === arrow_defined SAME === use_undef_never_called SAME",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3f9d24563b837c8dea9b926f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:34:11.319Z",
+  "stored_at": "2026-08-20T19:34:11.319Z"
+}

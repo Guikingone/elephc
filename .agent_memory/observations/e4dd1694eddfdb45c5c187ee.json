@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && mkdir -p polyprobe && printf '<?php\\nif (!function_exists(\"strlen\")) { function strlen($s) { return 0; } }\\nvar_dump(strlen(\"abc\"));\\n' > polyprobe/t.php && php -n polyprobe/t.php && cd polyprobe && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q t.php 2>&1 | head -3",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && mkdir -p polyprobe && printf '<?php\\nif (!function_exists(\"strlen\")) { function strlen($s) { return 0; } }\\nvar_dump(strlen(\"abc\"));\\n' > polyprobe",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && mkdir -p polyprobe && printf '<?php\\nif (!function_exists(\"strlen\")) { function strlen($s) { return 0; } }\\nvar_dump(strlen(\"abc\"));\\n' > polyprobe/t.php && php -n polyprobe/t.php && cd polyprobe && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q t.php 2>&1 | head -3: int(3) warning[2:35]: Unused variable: $s Compiled 't.php' -> 't'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e4dd1694eddfdb45c5c187ee",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:55:28.821Z",
+  "stored_at": "2026-08-21T11:55:28.822Z"
+}

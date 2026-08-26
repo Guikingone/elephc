@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub(crate) fn local_type\" -A 25 src/ir_lower/context.rs | head -35",
+  "summary": "grep -n \"pub(crate) fn local_type\" -A 25 src/ir_lower/context.rs | head -35: ng the destination to a hash. 502- pub(crate) fn is_foreach_int_key(&self, name: &str) -> bool { 503- self.foreach_int_key_locals.contains(name) 504- } 505- 506- /// Returns the storage type for a `global` alias name. 507- /// 508- /// Under `",
+  "text": "grep -n \"pub(crate) fn local_type\" -A 25 src/ir_lower/context.rs | head -35: ng the destination to a hash. 502- pub(crate) fn is_foreach_int_key(&self, name: &str) -> bool { 503- self.foreach_int_key_locals.contains(name) 504- } 505- 506- /// Returns the storage type for a `global` alias name. 507- /// 508- /// Under `--web`, request superglobals resolve to their fixed 509- /// `AssocArray{Str, Mixed}` type directly: inside a function the 510- /// `top_level_env` snapshot may not carry them, but their global slot 511- /// must still be a Hash pointer (not a boxed Mixed cell) so the function -- 750: pub(crate) fn local_types_snapshot(&self) -> TypeEnv { 751- self.local_types.clone() 752- } 753- 754- /// Restores only the flow-sensitive type facts at a branch split. 755- /// 756- /// This deliberately avoids `set_local_type`, which would also widen the shared frame slot; 757- /// storage widening must survive while each branch gets its own logical type environment.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4127d740fa47a7e54fee7b60",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T16:11:26.118Z",
+  "stored_at": "2026-08-18T16:11:26.118Z"
+}

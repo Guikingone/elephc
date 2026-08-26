@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/parsed_php_at_compile_time.py 2>&1 | grep -E \"prelude\" | head -8",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/parsed_php_at_compile_time.py 2>&1 | grep -E \"prelude\" | head -8: 4 production call(s), 20 in tests src/pdo_prelude.rs 4 production call(s), 0 in",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/parsed_php_at_compile_time.py 2>&1 | grep -E \"prelude\" | head -8: 4 production call(s), 20 in tests src/pdo_prelude.rs 4 production call(s), 0 in tests src/opcache_prelude/tests/basics.rs 2 production call(s), 0 in tests src/scanf_prelude.rs 2 production call(s), 0 in tests src/opcache_prelude/tests/manifest_bake.rs 2 production call(s), 0 in tests src/mysqli_prelude.rs 2 production call(s), 0 in tests src/dir_prelude.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eee7c62d4239354356825288",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:35:17.668Z",
+  "stored_at": "2026-08-22T07:35:17.668Z"
+}

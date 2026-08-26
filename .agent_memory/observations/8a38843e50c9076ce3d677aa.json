@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bv8mjqjnm.output 2>/dev/null; echo \"[running=$(ps aux | grep -c '[c]odegen_tests-16c45')]\"; git log --oneline 3c8301be9..HEAD | cat",
+  "summary": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bv8mjqjnm.output 2>/dev/null; echo \"[running=$(ps aux | grep -c '[c]odegen_tests-16c45')]\"; git log --oneline 3c8301be9..HEAD | cat: [running=1] 14f6580b8 fi",
+  "text": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bv8mjqjnm.output 2>/dev/null; echo \"[running=$(ps aux | grep -c '[c]odegen_tests-16c45')]\"; git log --oneline 3c8301be9..HEAD | cat: [running=1] 14f6580b8 fix(streams): a compress.zlib:// URL built at run time could not reach the wrapper 189b48883 fix(functions): a by-reference variadic written through a foreach key reached no caller 781f52c0e fix(functions): a by-reference variadic wrote through only for a value it boxed itself 9cd2d922d fix(streams): stream_select() reported a php://memory stream READY, where php refuses it 9709fcd20 fix(streams): stream_select() answered 15 where php answers 1, on null $write/$except 0b68da9f4 feat(streams): sscanf()/fscanf() accept php's by-reference $vars output form",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8a38843e50c9076ce3d677aa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T14:52:21.817Z",
+  "stored_at": "2026-08-18T14:52:21.817Z"
+}

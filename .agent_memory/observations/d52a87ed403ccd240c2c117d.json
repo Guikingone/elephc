@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"ProgramOutput\" tests/codegen/support/*.rs | head -5; echo ---; grep -rn \"compile_and_run_in_dir\" tests/codegen/support/*.rs | head -5",
+  "summary": "About to run: grep -rn \"ProgramOutput\" tests/codegen/support/*.rs | head -5; echo ---; grep -rn \"compile_and_run_in_dir\" tests/codegen/support/*.rs | head -5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d52a87ed403ccd240c2c117d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:09:19.277Z",
+  "stored_at": "2026-08-22T09:09:19.277Z"
+}

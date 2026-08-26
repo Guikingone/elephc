@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nullprop.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nullprop.php: <?php\nclass One\n{\n    public $a;\n    public $b = 1;\n}\n$o = new One();\necho \"1 direct   : \";\nvar_dump($o->a);\necho \"2 literal  : \";\nv",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nullprop.php: <?php\nclass One\n{\n    public $a;\n    public $b = 1;\n}\n$o = new One();\necho \"1 direct   : \";\nvar_dump($o->a);\necho \"2 literal  : \";\nvar_dump([\"a\" => null]);\necho \"3 object   : \";\nvar_dump($o);\necho \"4 vars     : \";\n$vars = get_object_vars($o);\necho \"got \", count($vars), \"\\n\";\necho \"5 element  : \";\nvar_dump($vars[\"b\"]);\necho \"6 null one : \";\nvar_dump($vars[\"a\"]);\necho \"7 whole    : \";\nvar_dump($vars);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "14c753f6964a8f86d7e2e9e5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:45:25.267Z",
+  "stored_at": "2026-08-23T08:45:25.267Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/ | head -60; echo \"=== count ===\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/ | wc -l",
+  "summary": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/ | head -60; echo \"=== count ===\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/ | wc -l: .rs ir_backend_smoke_test.rs lexer_tests lexer_tests.rs nan_bool_coercion",
+  "text": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/ | head -60; echo \"=== count ===\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/ | wc -l: .rs ir_backend_smoke_test.rs lexer_tests lexer_tests.rs nan_bool_coercion_tests.rs native_pcre2_shim_tests.rs null_coalesce_merge_tests.rs null_value_codegen_tests.rs opcache_env_override_tests.rs opcache_ini_tests.rs opcache_jit_status_tests.rs opcache_manifest_tests.rs opcache_preload_tests.rs opcache_restrict_api_tests.rs opcache_strict_invalidate_tests.rs parser_tests parser_tests.rs php_oracle php_oracle_manifest_tests.rs php_profile_floor_tests.rs php_profile_independence_tests.rs php_profile_resolve_tests.rs php_profile_session_independence_tests.rs php_version_surface_tests.rs print_r_object_tests.rs print_r_return_mode_heap_tests.rs recursive_return_type_tests.rs resource_id_and_hash_context_tests.rs support uncaught_exception_report_tests.rs var_dump_nested_tests.rs var_dump_object_tests.rs var_export_and_strstr_result_tests.rs web_session_tests.rs web_tests.rs === count === 55",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6381ca5dbd69c35ce0119f88",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:49.616Z",
+  "stored_at": "2026-08-14T14:11:49.617Z"
+}

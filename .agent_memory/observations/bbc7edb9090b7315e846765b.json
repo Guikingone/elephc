@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/csv-flag-combinations.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/csv-flag-combinations.php: <?php\nfunction walk(string $content, int $flags): void {\n    file_put_contents(\"flags.csv\", $content);\n    $f ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/csv-flag-combinations.php: <?php\nfunction walk(string $content, int $flags): void {\n    file_put_contents(\"flags.csv\", $content);\n    $f = new SplFileObject(\"flags.csv\");\n    $f->setFlags($flags);\n    foreach ($f as $i => $row) {\n        echo $i, \"=\", json_encode($row), \";\";\n    }\n    echo \"\\n\";\n    unset($f);\n    unlink(\"flags.csv\");\n}\n$c = \"a,\\\"b,c\\\",d\\n\\n\\\"x\\ny\\\",z\\n\";\nwalk($c, SplFileObject::READ_CSV | SplFileObject::SKIP_EMPTY);\nwalk($c, SplFileObject::READ_CSV | SplFileObject::SKIP_EMPTY | SplFileObject::DROP_NEW_LINE);\nwalk(\"\\\"a\\nb\\nc\\\",z\\nq,r\\n\", SplFileObject::READ_CSV);\nwalk(\"a,b\\nc,d\", SplFileObject::READ_CSV",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bbc7edb9090b7315e846765b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:38:51.941Z",
+  "stored_at": "2026-08-25T09:38:51.942Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 205,225p src/types/stream_constants.rs",
+  "summary": "sed -n 205,225p src/types/stream_constants.rs: (\"SEEK_END\", 2), // STREAM_FROM_START / _CUR / _END are php-src *internal* whence names, not // PHP constants: `php -n -r 'var_dump(defined(\"STREAM_FROM_START\"));'` is // false. Declaring them let a program name a constant php does not have and // still compile. Same for S",
+  "text": "sed -n 205,225p src/types/stream_constants.rs: (\"SEEK_END\", 2), // STREAM_FROM_START / _CUR / _END are php-src *internal* whence names, not // PHP constants: `php -n -r 'var_dump(defined(\"STREAM_FROM_START\"));'` is // false. Declaring them let a program name a constant php does not have and // still compile. Same for STREAM_META_MODIFIED and STREAM_OPTION_CHUNK_SIZE. // glob() flags (POSIX-portable values). (\"GLOB_ERR\", 4), (\"GLOB_MARK\", 8), (\"GLOB_NOCHECK\", 16), (\"GLOB_NOSORT\", 32), (\"GLOB_BRACE\", 128), (\"GLOB_NOESCAPE\", 4096), (\"GLOB_ONLYDIR\", 1073741824), ]; #[cfg(test)] mod tests { use super::*; /// Verifies the stream constant invariant for stream filter all is three. #[test]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "057b544190e0c7868eca8672",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:57:13.574Z",
+  "stored_at": "2026-08-22T08:57:13.575Z"
+}

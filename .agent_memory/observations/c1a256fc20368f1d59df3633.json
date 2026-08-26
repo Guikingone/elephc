@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn emit_filter_apply_chain_aarch64\" -A 55 src/codegen_support/runtime/resources/filter.rs | head -60",
+  "summary": "grep -n \"fn emit_filter_apply_chain_aarch64\" -A 55 src/codegen_support/runtime/resources/filter.rs | head -60: th uses. Unlike a built-in, it may 363- // answer with a DIFFERENT buffer (its bucket brigade builds one), so both halves of 364- // the pair are carried forward, not just the length. 365- emitter.label(\"__rt_",
+  "text": "grep -n \"fn emit_filter_apply_chain_aarch64\" -A 55 src/codegen_support/runtime/resources/filter.rs | head -60: th uses. Unlike a built-in, it may 363- // answer with a DIFFERENT buffer (its bucket brigade builds one), so both halves of 364- // the pair are carried forward, not just the length. 365- emitter.label(\"__rt_apply_chain_user\"); 366- emitter.instruction(&format!(\"ldr x0, [x0, #{FILTER_OBJECT_OFFSET}]\")); // the php_user_filter instance this node owns 367- emitter.instruction(\"cbz x0, __rt_apply_chain_loop\"); // a node without an instance is inert 368- emitter.instruction(\"ldr x1, [sp, #0]\"); // buffer pointer 369- emitter.instruction(\"ldr x2, [sp, #8]\"); // current length 370- emitter.instruction(\"bl __rt_apply_user_filter_obj\"); // x1/x2 = the filtered pair 371- emitter.instruction(\"str x1, [sp, #0]\"); // carry the possibly-relocated buffer 372- emitter.instruction(\"str x2, [sp, #8]\"); // and its length 373- emitter.instruction(\"b __rt_apply_chain_loop\"); // continue down the chain 374-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c1a256fc20368f1d59df3633",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:55:00.939Z",
+  "stored_at": "2026-08-17T13:55:00.939Z"
+}

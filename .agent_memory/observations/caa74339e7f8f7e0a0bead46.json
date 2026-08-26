@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('frm5.php','w').write('''<?php\n$h = fopen(\"php://memory\", \"w+\");\ntry { stream_filter_remove($h); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\\\n\"; }\n$f = stream_filter_append($h, \"string.toupper\", STREAM_FILTER_WRITE);\nvar_dump(get_resource_type($f), stream_filter_remove($f), is_resource($f));\ntry { stream_filter_remove($f); } catch (Throwable $e) { echo get_class($e), \":… [+230 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('frm5.php','w').write('''<?php\n$h = fopen(\"php://memory\", \"w+\");\ntry { stream_filter_remove($h); } catch (Throwable $e) {",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('frm5.php','w').write('''<?php\n$h = fopen(\"php://memory\", \"w+\");\ntry { stream_filter_remove($h); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\\\n\"; }\n$f = stream_filter_append($h, \"string.toupper\", STREAM_FILTER_WRITE);\nvar_dump(get_resource_type($f), stream_filter_remove($f), is_resource($f));\ntry { stream_filter_remove($f); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\\\n\"; }\ntry { stream_filter_remove(42); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\\\n\"; }\nfclose($h);\n''')\nPY\nzsh difftests.sh frm5 2>&1 | head -12; echo \"=== php:\"; cat frm5_p.txt: frm5 COMPILE FAILED: error[7:28]: stream_filter_remove() expects resource, got int === php: TypeError: stream_filter_remove(): supplied resource is not a valid stream filter resource string(13) \"stream filter\" bool(true) bool(false) TypeError: stream_filter_remove(): supplied resource is not a valid stream filter resource TypeError: stream_filter_remove(): Argument #1 ($stream_filter) must be of type resource, int given",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "caa74339e7f8f7e0a0bead46",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:01:38.929Z",
+  "stored_at": "2026-08-17T15:01:38.929Z"
+}

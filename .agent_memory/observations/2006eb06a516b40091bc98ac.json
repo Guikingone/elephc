@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests -- codegen::math::functions::test_fmod_preserves_negative_zero_like_php codegen::numeric_scalars::test_echo_float_uses_php_precision_14_gcvt_layout codegen::type_builtins::float_checks::test_nan_constant codegen::pdo::test_pdo_sqlite_open_blob_readwrite_seek_and_fixed_size --exact --nocapture 2>&1 | tail -45",
+  "summary": "cargo test --test codegen_tests -- codegen::math::functions::test_fmod_preserves_negative_zero_like_php codegen::numeric_scalars::test_echo_float_uses_php_precision_14_gcvt_layout codegen::type_builtins::float_checks::test_nan_constant codegen::pdo::test_pdo_sqlite_open_blob_readwrite_seek_and_fixed_size --exact --noca",
+  "text": "cargo test --test codegen_tests -- codegen::math::functions::test_fmod_preserves_negative_zero_like_php codegen::numeric_scalars::test_echo_float_uses_php_precision_14_gcvt_layout codegen::type_builtins::float_checks::test_nan_constant codegen::pdo::test_pdo_sqlite_open_blob_readwrite_seek_and_fixed_size --exact --nocapture 2>&1 | tail -45: ht: \"NAN\" test codegen::type_builtins::float_checks::test_nan_constant ... FAILED thread 'codegen::pdo::test_pdo_sqlite_open_blob_readwrite_seek_and_fixed_size' (15959624) panicked at tests/codegen/pdo.rs:2622:5: assertion `left == right` failed left: \"ro:4:0:0:ABCD TEST:9:fixed:414243442054455354\" right: \"ro:4:4:0:ABCD TEST:9:fixed:414243442054455354\" test codegen::pdo::test_pdo_sqlite_open_blob_readwrite_seek_and_fixed_size ... FAILED failures: failures: codegen::math::functions::test_fmod_preserves_negative_zero_like_php codegen::numeric_scalars::test_echo_float_uses_php_precision_14_gcvt_layout codegen::pdo::test_pdo_sqlite_open_blob_readwrite_seek_and_fixed_size codegen::type_builtins::float_checks::test_nan_constant test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 8449 filtered out; finished in 23.86s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2006eb06a516b40091bc98ac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:48:19.533Z",
+  "stored_at": "2026-08-18T20:48:19.534Z"
+}

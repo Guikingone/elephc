@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filter_segv_narrow.py",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filter_segv_narrow.py: register only, plain class same register, then echo same register a class that does not exist BUILD FAILED: error[2:10]: s",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filter_segv_narrow.py: register only, plain class same register, then echo same register a class that does not exist BUILD FAILED: error[2:10]: stream_filter_register(): undefined class 'Nope' no register at all, just the class same register, nothing after it same two registers same register a php_user_filter subclass same register then stream_get_filters same stream_get_filters alone same",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f2137195a0cdef7b3b2643c6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:42:59.988Z",
+  "stored_at": "2026-08-21T15:42:59.988Z"
+}

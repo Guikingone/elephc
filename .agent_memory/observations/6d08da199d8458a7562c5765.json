@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sgl3.php','w').write('''<?php\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nstream_set_blocking($pair[0], false);\nfwrite($pair[1], \"abc\");\nvar_dump(fgets($pair[0]));\nfwrite($pair[1], \"def\\\\nghi\");\nvar_dump(fgets($pair[0]));\nvar_dump(fgets($pair[0]));\nfclose($pair[0]); fclose($pair[1]);\n''')\nPY\nzsh difftests.sh sgl3 2>&1 | head -14; echo \"=== php:\"; cat sgl3_p.txt",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sgl3.php','w').write('''<?php\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nstream_set_blocking($pa",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sgl3.php','w').write('''<?php\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nstream_set_blocking($pair[0], false);\nfwrite($pair[1], \"abc\");\nvar_dump(fgets($pair[0]));\nfwrite($pair[1], \"def\\\\nghi\");\nvar_dump(fgets($pair[0]));\nvar_dump(fgets($pair[0]));\nfclose($pair[0]); fclose($pair[1]);\n''')\nPY\nzsh difftests.sh sgl3 2>&1 | head -14; echo \"=== php:\"; cat sgl3_p.txt: sgl3 IDENTICAL === php: string(3) \"abc\" string(4) \"def \" string(3) \"ghi\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6d08da199d8458a7562c5765",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:47:32.953Z",
+  "stored_at": "2026-08-17T15:47:32.953Z"
+}

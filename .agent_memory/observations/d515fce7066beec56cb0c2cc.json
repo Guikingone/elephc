@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scts_data.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scts_data.py: \"\"\"Move the three fragments onto the file's own convention: a const beside its label.\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scts_data.py: \"\"\"Move the three fragments onto the file's own convention: a const beside its label.\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\n\nf = ROOT / 'src/codegen_support/runtime/data/fixed.rs'\nt = f.read_text()\nRAW = '''    out.push_str(\".globl _diag_scts_no_seek\\\\n_diag_scts_no_seek:\\\\n    .ascii \\\\\"Warning: stream_copy_to_stream(): Stream does not support seeking\\\\\\\\n\\\\\"\\\\n\");\n    out.push_str(\".globl _diag_scts_seek_head\\\\n_diag_scts_seek_head:\\\\n    .ascii \\\\\"Warning: stream_copy_to_stream(): Failed to",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d515fce7066beec56cb0c2cc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:53:47.480Z",
+  "stored_at": "2026-08-22T20:53:47.480Z"
+}

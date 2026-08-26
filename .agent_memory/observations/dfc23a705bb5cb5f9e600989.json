@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git commit -q -F - <<'MSG'\nfix(exceptions): the uncaught report printed the WRAPPER and dropped what it wrapped\n\n`throw new X($msg, 0, $previous)` is how a library says what it was doing when\nsomething underneath it failed, and php prints every link of that chain: the\ndeepest one under `Fatal error: Uncaught`, each later one under `Next`, and the\n`  thrown in ...` tail once, for the exception actually thrown.\n\nelephc printed the OUTERMOST link and stopped. MEASURED on `php -n` 8.5.6:\n\n    $a = new RuntimeException(\"first\");\n    $b = new LogicException(\"second\", 0, $a);\n    throw new TypeError(… [+1554 chars truncated]",
+  "summary": "About to run: git commit -q -F - <<'MSG' fix(exceptions): the uncaught report printed the WRAPPER and dropped what it wrapped `throw new X($msg, 0, $previous)` is how a library says what it was doing when something",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dfc23a705bb5cb5f9e600989",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:01:02.025Z",
+  "stored_at": "2026-08-24T18:01:02.025Z"
+}

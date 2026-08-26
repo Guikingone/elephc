@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"out.stderr\" tests/codegen tests/error_tests 2>/dev/null | grep \"assert\" | grep -v \"program failed\\|failed:\\|got stderr\\|{}\\\", out.stderr\" | grep -c \"contains\\|assert_eq\"; echo \"--- fichiers concernés ---\"; grep -rln \"out.stderr\" tests/codegen tests/error_tests 2>/dev/null | wc -l",
+  "summary": "grep -rn \"out.stderr\" tests/codegen tests/error_tests 2>/dev/null | grep \"assert\" | grep -v \"program failed\\|failed:\\|got stderr\\|{}\\\", out.stderr\" | grep -c \"contains\\|assert_eq\"; echo \"--- fichiers concernés ---\"; grep -rln \"out.stderr\" tests/codegen tests/error_tests 2>/dev/null | wc -l: 71 --- fichiers concernés --",
+  "text": "grep -rn \"out.stderr\" tests/codegen tests/error_tests 2>/dev/null | grep \"assert\" | grep -v \"program failed\\|failed:\\|got stderr\\|{}\\\", out.stderr\" | grep -c \"contains\\|assert_eq\"; echo \"--- fichiers concernés ---\"; grep -rln \"out.stderr\" tests/codegen tests/error_tests 2>/dev/null | wc -l: 71 --- fichiers concernés --- 64",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cf5f5dd77639bf708d533571",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:12:56.918Z",
+  "stored_at": "2026-08-18T13:12:56.918Z"
+}

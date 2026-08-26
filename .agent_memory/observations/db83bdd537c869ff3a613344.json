@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_ob_tests.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_ob_tests.py: import pathlib\n\nroot = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/migrate_ob_tests.py: import pathlib\n\nroot = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\np = root / 'tests/codegen/io/output_buffering.rs'\nt = p.read_text()\n\n# --- 1. no-buffer operations ---------------------------------------------------------------\nold = '''fn test_no_buffer_operations_return_false() {\n    let out = compile_and_run(\n        r#\"<?php\nvar_dump(ob_get_contents());\nvar_dump(ob_get_clean());\nvar_dump(ob_end_clean());\nvar_dump(ob_end_flush());\nvar_dump(ob_flush());\nvar_dump(ob_clean());\nvar_dump(ob_get_flush());\n\"#,\n    );\n    assert_eq!",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "db83bdd537c869ff3a613344",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T17:08:13.954Z",
+  "stored_at": "2026-08-19T17:08:13.955Z"
+}

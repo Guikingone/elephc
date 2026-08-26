@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"_disabled_builtin_wrappers\" src/codegen_support/ | grep -v unregister | head -4; echo \"=== how another io helper warns ===\"; grep -n \"__rt_diag_warning\" -B 3 src/codegen_support/runtime/io/unknown_wrapper_warning.rs | head -12",
+  "summary": "grep -rn \"_disabled_builtin_wrappers\" src/codegen_support/ | grep -v unregister | head -4; echo \"=== how another io helper warns ===\"; grep -n \"__rt_diag_warning\" -B 3 src/codegen_support/runtime/io/unknown_wrapper_warning.rs | head -12: /runtime/io/builtin_wrapper_index.rs:42: out.push_str(&comm_directive(\"_disabled_b",
+  "text": "grep -rn \"_disabled_builtin_wrappers\" src/codegen_support/ | grep -v unregister | head -4; echo \"=== how another io helper warns ===\"; grep -n \"__rt_diag_warning\" -B 3 src/codegen_support/runtime/io/unknown_wrapper_warning.rs | head -12: /runtime/io/builtin_wrapper_index.rs:42: out.push_str(&comm_directive(\"_disabled_builtin_wrappers\", 8, target)); src/codegen_support/runtime/io/fopen.rs:92: abi::emit_symbol_address(emitter, \"x9\", \"_disabled_builtin_wrappers\"); src/codegen_support/runtime/io/fopen.rs:477: abi::emit_symbol_address(emitter, \"r9\", \"_disabled_builtin_wrappers\"); === how another io helper warns === 180- emitter.label(\"__rt_uww_emit\"); 181- emitter.instruction(\"mov x1, x9\"); // message pointer 182- emitter.instruction(\"mov x2, x10\"); // message length 183: emitter.instruction(\"bl __rt_diag_warning\"); // stderr, and `@` suppresses it -- 337- emitter.label(\"__rt_uww_x_emit\"); 338- emitter.instruction(\"mov rdi, QWORD PTR [rbp - 56]\"); // message pointer 339- emitter.instruction(\"mov rsi, r10\"); // message length 340: emitter.instruction(\"call __rt_diag_warning\"); // stderr, and `@` suppresses it -- 397- ); 398- }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "13e3d199d8c46b6eef72f506",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:55:31.300Z",
+  "stored_at": "2026-08-21T16:55:31.301Z"
+}

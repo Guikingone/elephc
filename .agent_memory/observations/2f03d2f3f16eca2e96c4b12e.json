@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/resolve_docs_csv.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/resolve_docs_csv.py: \"\"\"Resolves the two doc conflicts by MEASURING php, not by choosing a side.\n\nEach side had half of it right and neither had al",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/resolve_docs_csv.py: \"\"\"Resolves the two doc conflicts by MEASURING php, not by choosing a side.\n\nEach side had half of it right and neither had all of it:\n\n  - this branch documented the full parameter list but a bare `array` return, and claimed\n    `$escape`'s default is `''` (\"PHP 8.4 … RFC 4180 doubling mode\").\n  - upstream documented `array|false` and the `while (($row = fgetcsv($h)) !== false)` loop it\n    terminates, but abbreviated the parameters to `[, $sep]`.\n\nMEASURED on `php -n` 8.5.6 through Reflection:\n\n    fgetcsv(mixed $stream, ?int $length = null, string $separator = ',',\n            string $enclo",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2f03d2f3f16eca2e96c4b12e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:40:22.129Z",
+  "stored_at": "2026-08-22T06:40:22.129Z"
+}

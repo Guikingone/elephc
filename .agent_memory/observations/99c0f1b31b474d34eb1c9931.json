@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; objdump -d --disassemble-symbols=___rt_tmpfile_named ./leak3 2>/dev/null | head -40 || otool -tV ./leak3 | grep -A 30 \"__rt_tmpfile_named\"| head -40",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; objdump -d --disassemble-symbols=___rt_tmpfile_named ./leak3 2>/dev/null | head -40 || otool -tV ./leak3 | grep -A 30 \"__rt_tmpfile_named\"| head -40",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; objdump -d --disassemble-symbols=___rt_tmpfile_named ./leak3 2>/dev/null | head -40 || otool -tV ./leak3 | grep -A 30 \"__rt_tmpfile_named\"| head -40: ./leak3: file format mach-o arm64",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "99c0f1b31b474d34eb1c9931",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:10:04.486Z",
+  "stored_at": "2026-08-23T08:10:04.486Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn merged_assignment_type' -A 45 src/types/checker/ | head -50",
+  "summary": "grep -rn 'fn merged_assignment_type' -A 45 src/types/checker/ | head -50: at) src/types/checker/type_compat/unions.rs-205- { src/types/checker/type_compat/unions.rs-206- return Some(existing.clone()); src/types/checker/type_compat/unions.rs-207- } src/types/checker/type_compat/unions.rs-208- if Self::pointer_types_comp",
+  "text": "grep -rn 'fn merged_assignment_type' -A 45 src/types/checker/ | head -50: at) src/types/checker/type_compat/unions.rs-205- { src/types/checker/type_compat/unions.rs-206- return Some(existing.clone()); src/types/checker/type_compat/unions.rs-207- } src/types/checker/type_compat/unions.rs-208- if Self::pointer_types_compatible(existing, new_ty) { src/types/checker/type_compat/unions.rs-209- return Some(match (existing, new_ty) { src/types/checker/type_compat/unions.rs-210- (PhpType::Pointer(Some(left)), PhpType::Pointer(Some(right))) if left == right => { src/types/checker/type_compat/unions.rs-211- PhpType::Pointer(Some(left.clone())) src/types/checker/type_compat/unions.rs-212- } src/types/checker/type_compat/unions.rs-213- (PhpType::Pointer(None), PhpType::Pointer(Some(tag))) src/types/checker/type_compat/unions.rs-214- | (PhpType::Pointer(Some(tag)), PhpType::Pointer(None)) => { src/types/checker/type_compat/unions.rs-215- PhpType::Pointer(Some(tag.clone()))",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4211d8b33ba4f6b51ad01437",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T10:15:12.133Z",
+  "stored_at": "2026-08-26T10:15:12.134Z"
+}

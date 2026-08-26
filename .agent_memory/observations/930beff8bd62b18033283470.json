@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"MEMORY\\|\\\"TEMP\\\"\\|STDIO\\|wrapper_type\\|stream_type\" --include=\"*.rs\" src/codegen_support/runtime/io/stream_get_meta_data.rs | head -25",
+  "summary": "grep -rn \"MEMORY\\|\\\"TEMP\\\"\\|STDIO\\|wrapper_type\\|stream_type\" --include=\"*.rs\" src/codegen_support/runtime/io/stream_get_meta_data.rs | head -25: 37: abi::emit_symbol_address(emitter, \"r10\", \"_meta_stype_stdio\"); // address of the \"STDIO\" literal src/codegen_support/runtime/io/stream_get_meta_data.rs:338: emitter.instr",
+  "text": "grep -rn \"MEMORY\\|\\\"TEMP\\\"\\|STDIO\\|wrapper_type\\|stream_type\" --include=\"*.rs\" src/codegen_support/runtime/io/stream_get_meta_data.rs | head -25: 37: abi::emit_symbol_address(emitter, \"r10\", \"_meta_stype_stdio\"); // address of the \"STDIO\" literal src/codegen_support/runtime/io/stream_get_meta_data.rs:338: emitter.instruction(\"mov QWORD PTR [rbp - 64], r10\"); // save the stream_type pointer src/codegen_support/runtime/io/stream_get_meta_data.rs:339: emitter.instruction(\"mov QWORD PTR [rbp - 72], 5\"); // save the stream_type length src/codegen_support/runtime/io/stream_get_meta_data.rs:343: emitter.instruction(\"call __rt_stream_type_name\"); // rax = name or 0, rdx = length src/codegen_support/runtime/io/stream_get_meta_data.rs:414: emit_set_str_slots_x86(emitter, \"_meta_key_stream_type\", 11, 64, 72); src/codegen_support/runtime/io/stream_get_meta_data.rs:415: // -- wrapper_type: map the StreamState wrapper id to its PHP-visible literal -- src/codegen_support/runtime/io/stream_get_meta_data.rs:416: emit_set_wrapper_type_x86(emitter);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "930beff8bd62b18033283470",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:21:55.643Z",
+  "stored_at": "2026-08-14T14:21:55.643Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_throw_current\" src/codegen_support/runtime/exceptions/*.rs | head -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_throw_current\" src/codegen_support/runtime/exceptions/*.rs | head -5: src/codegen_support/runtime/exceptions/rethrow_current.rs:2://! Emits the `__rt_rethrow_current`, `__rt_throw_current` runtime helper assem",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_throw_current\" src/codegen_support/runtime/exceptions/*.rs | head -5: src/codegen_support/runtime/exceptions/rethrow_current.rs:2://! Emits the `__rt_rethrow_current`, `__rt_throw_current` runtime helper assembly for rethrow current. src/codegen_support/runtime/exceptions/rethrow_current.rs:16:/// Transfers control to `__rt_throw_current` using a tail-jump, reusing the src/codegen_support/runtime/exceptions/rethrow_current.rs:25: emitter.instruction(\"b __rt_throw_current\"); // re-use the ordinary throw helper with the existing active exception state src/codegen_support/runtime/exceptions/rethrow_current.rs:28: emitter.instruction(\"jmp __rt_throw_current\"); // re-use the ordinary throw helper with the existing active exception state src/codegen_support/runtime/exceptions/throw_current.rs:2://! Emits the `__rt_throw_current`, `__rt_throw_current_uncaught` runtime helper assembly for throw current.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "68a4a80e643b96755c39f5f9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:46:32.575Z",
+  "stored_at": "2026-08-23T17:46:32.575Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"eval_barrier\" src/ir_lower/context.rs",
+  "summary": "grep -n \"eval_barrier\" src/ir_lower/context.rs: 125: eval_barrier_active: bool, 262: eval_barrier_active: bool, 355: eval_barrier_active: false, 394: eval_barrier_active: self.eval_barrier_active, 431: self.eval_barrier_active = snapshot.eval_barrier_active; 940: pub(crate) fn apply_eval_barrier(&mut self) { 941: self.",
+  "text": "grep -n \"eval_barrier\" src/ir_lower/context.rs: 125: eval_barrier_active: bool, 262: eval_barrier_active: bool, 355: eval_barrier_active: false, 394: eval_barrier_active: self.eval_barrier_active, 431: self.eval_barrier_active = snapshot.eval_barrier_active; 940: pub(crate) fn apply_eval_barrier(&mut self) { 941: self.eval_barrier_active = true; 959: if eval_barrier_can_widen(&self.builder.local_php_type(slot)) { 969: if kind == LocalKind::PhpLocal && eval_barrier_can_widen(&ty) { 1018: self.eval_barrier_active = true; 1030: .is_some_and(|slot| eval_barrier_can_widen(&self.builder.local_php_type(*slot))) 1051: pub(crate) const fn has_eval_barrier(&self) -> bool { 1052: self.eval_barrier_active 1062: /// Unlike `has_eval_barrier`, this also covers barrier-free AOT evals: 3050:fn eval_barrier_can_widen(php_type: &PhpType) -> bool {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d12d6b7a4e400525a8ee3ae4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:14:50.895Z",
+  "stored_at": "2026-08-20T19:14:50.895Z"
+}

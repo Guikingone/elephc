@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat > flock4.php <<'EOF'\n<?php\n$path = tempnam(sys_get_temp_dir(), \"fl4\");\nfile_put_contents($path, \"abc\");\n$cases = [\n    \"php-input\"   => @fopen(\"php://input\", \"r\"),\n    \"php-fd-1\"    => @fopen(\"php://fd/1\", \"w\"),\n    \"php-stderr\"  => fopen(\"php://stderr\", \"w\"),\n    \"php-temp-mm\" => fopen(\"php://temp/maxmemory:16\", \"w+\"),\n    \"glob\"        => @opendir(\"glob://\" . sys_get_temp_dir() . \"/*\"),\n];\nforeach ($cases as $name => $… [+193 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; cat > flock4.php <<'EOF' <?p",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8c22e0ed811199d1d3cc54f9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:40:04.167Z",
+  "stored_at": "2026-08-22T16:40:04.168Z"
+}

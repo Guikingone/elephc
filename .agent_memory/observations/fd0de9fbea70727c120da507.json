@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('frm4.php','w').write('''<?php\n$h = fopen(\"php://memory\", \"w+\");\n$z = stream_filter_append($h, \"zlib.deflate\", STREAM_FILTER_WRITE);\nvar_dump(is_resource($z), get_resource_type($z));\nvar_dump(stream_filter_remove($z));\nvar_dump(is_resource($z));\nfclose($h);\n''')\nPY\nzsh difftests.sh frm4 2>&1 | head -15",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('frm4.php','w').write('''<?php\n$h = fopen(\"php://memory\", \"w+\");\n$z = stream_filter_append($h, \"zlib.deflate\", STREAM_FIL",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('frm4.php','w').write('''<?php\n$h = fopen(\"php://memory\", \"w+\");\n$z = stream_filter_append($h, \"zlib.deflate\", STREAM_FILTER_WRITE);\nvar_dump(is_resource($z), get_resource_type($z));\nvar_dump(stream_filter_remove($z));\nvar_dump(is_resource($z));\nfclose($h);\n''')\nPY\nzsh difftests.sh frm4 2>&1 | head -15: frm4 DIFF: 1,2c1,2 < bool(true) < string(13) \"stream filter\" --- > bool(false) > string(7) \"Unknown\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fd0de9fbea70727c120da507",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:52:56.121Z",
+  "stored_at": "2026-08-17T14:52:56.122Z"
+}

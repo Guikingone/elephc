@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r 'function keep_pair($x) { return count($x) == 2; } $inner = [10, 11]; $rows = [[1], $inner, [2, 3]]; $filtered = array_filter($rows, \"keep_pair\"); unset($rows); unset($inner); echo @$filtered[0][1] . \"|\" . $filtered[1][0], \"\\n\"; echo json_encode(array_keys($filtered)), \"\\n\";' 2>&1 | head -4",
+  "summary": "About to run: php -n -r 'function keep_pair($x) { return count($x) == 2; } $inner = [10, 11]; $rows = [[1], $inner, [2, 3]]; $filtered = array_filter($rows, \"keep_pair\"); unset($rows); unset($inner); echo @$filtere",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d61c50b10caf711cb62b38c9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:24:36.026Z",
+  "stored_at": "2026-08-22T13:24:36.027Z"
+}

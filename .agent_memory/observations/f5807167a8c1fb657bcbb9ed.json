@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'pay_for_use\\|pay-for-use' src/types/checker/builtin_spl_classes.rs | head -12",
+  "summary": "About to run: grep -n 'pay_for_use\\|pay-for-use' src/types/checker/builtin_spl_classes.rs | head -12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f5807167a8c1fb657bcbb9ed",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:49:04.834Z",
+  "stored_at": "2026-08-24T20:49:04.834Z"
+}

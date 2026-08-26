@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "jq -r '.drifts[] | select(.symbol==\"stream_context_set_options\")' tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json",
+  "summary": "jq -r '.drifts[] | select(.symbol==\"stream_context_set_options\")' tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json: { \"category\": \"missing-function\", \"classification\": \"known-incompatibility\", \"closing_gate\": 2, \"elephc\": null, \"php\": { \"alias_of\": null, \"deprecated\": false, \"signature\": { \"para",
+  "text": "jq -r '.drifts[] | select(.symbol==\"stream_context_set_options\")' tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json: { \"category\": \"missing-function\", \"classification\": \"known-incompatibility\", \"closing_gate\": 2, \"elephc\": null, \"php\": { \"alias_of\": null, \"deprecated\": false, \"signature\": { \"parameters\": [ { \"allows_null\": true, \"by_reference\": false, \"can_be_passed_by_value\": true, \"default\": null, \"default_constant\": null, \"default_state\": \"none\", \"name\": \"context\", \"optional\": false, \"type\": null, \"variadic\": false }, { \"allows_null\": false, \"by_reference\": false, \"can_be_passed_by_value\": true, \"default\": null, \"default_constant\": null, \"default_state\": \"none\", \"name\": \"options\", \"optional\": false, \"type\": \"array\", \"variadic\": false } ], \"return_type\": \"true\", \"returns_reference\": false, \"tentative_return_type\": null } }, \"symbol\": \"stream_context_set_options\" }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b0c0779c8d2095ba8ec5c47b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:14:34.119Z",
+  "stored_at": "2026-08-14T14:14:34.119Z",
+  "low_signal": true
+}

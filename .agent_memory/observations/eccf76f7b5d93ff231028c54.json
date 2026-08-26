@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git push fork +643cb1031318fa8472c830c1cf5cc405b907c792:refs/heads/ci/streams-csv-fullci 2>&1 | tail -3",
+  "summary": "About to run: git push fork +643cb1031318fa8472c830c1cf5cc405b907c792:refs/heads/ci/streams-csv-fullci 2>&1 | tail -3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eccf76f7b5d93ff231028c54",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:29:01.208Z",
+  "stored_at": "2026-08-16T17:29:01.208Z"
+}

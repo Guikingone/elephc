@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 fallthrough_globals.py 2>&1 | head -40",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 fallthrough_globals.py 2>&1 | head -40: ck_live __rt_array_new ends with svc -> falls into __rt_array_push_int __rt_hash_new ends with svc -",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 fallthrough_globals.py 2>&1 | head -40: ck_live __rt_array_new ends with svc -> falls into __rt_array_push_int __rt_hash_new ends with svc -> falls into __rt_hash_grow __rt_hash_project_spread ends with mov -> falls into __rt_hash_spread_entry __rt_range ends with svc -> falls into __rt_shuffle __rt_iterable_unsupported_kind ends with svc -> falls into __rt_warn_foreach_non_iterable __rt_buffer_new ends with svc -> falls into __rt_buffer_free __rt_buffer_bounds_fail ends with svc -> falls into __rt_buffer_registry_exhausted __rt_buffer_registry_exhausted ends with svc -> falls into __rt_buffer_use_after_free __rt_buffer_use_after_free ends with svc -> falls into __rt_stdout_write __rt_file_from_bytes ends with str -> falls into __rt_file_split __rt_fputcsv ends with udf -> falls into __rt_basename __rt_dirname_levels ends with svc -> falls into __rt_fnmatch __rt_ptr_read_string ends with svc -> falls into __rt_ptr_write_string",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b265b6230f137299f7a2c342",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:20:38.242Z",
+  "stored_at": "2026-08-23T12:20:38.242Z"
+}

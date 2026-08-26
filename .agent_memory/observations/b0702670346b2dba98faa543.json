@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_audit_counts.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_audit_counts.py: \"\"\"The docs audit pins how many contracts take a non-registry AOT route.\n\nAdding fourteen prelude-provided functions moves tha",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_audit_counts.py: \"\"\"The docs audit pins how many contracts take a non-registry AOT route.\n\nAdding fourteen prelude-provided functions moves that number, and the audit is the gate that says\nso — which is the point of pinning it. Both halves are updated together: the total and the\nper-route breakdown, since a change that moved one without the other would pass one check and fail\nthe next.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = ROOT / 'scripts/docs/audit_builtins.py'\nt = p.read_text()\n\nold = '''    expected_counts =",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b0702670346b2dba98faa543",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:32:31.658Z",
+  "stored_at": "2026-08-21T12:32:31.659Z"
+}

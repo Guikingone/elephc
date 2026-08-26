@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"by-ref \\$vars output form\" --include=*.rs . | head -10",
+  "summary": "grep -rn \"by-ref \\$vars output form\" --include=*.rs . | head -10: (eval):1: no matches found: --include=*.rs",
+  "text": "grep -rn \"by-ref \\$vars output form\" --include=*.rs . | head -10: (eval):1: no matches found: --include=*.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "59b6507a8bf7bde95be2b8ef",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:32:45.213Z",
+  "stored_at": "2026-08-16T15:32:45.214Z",
+  "low_signal": true
+}

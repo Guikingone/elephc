@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - 🔴🔴 CONFIRMÉS SILENCIEUX — [sprintf-mixed-arg-from-nested-array-lost](sprintf-mixed-arg-from-nested-array-lost.md) -> - 🔴🔴 [SILENT: variadique à ARITÉS MIXTES = adresses brutes dans ...$rest](variadic",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - 🔴🔴 CONFIRMÉS SILENCIEUX — [sprintf-mixed-arg-from-nested-array-lost](sprintf-mixed-arg-from-nested-array-lost.md) -> - 🔴🔴 [SILENT: variadique à ARITÉS MIXTES = adresses brutes dans ...$rest](variadic-mixed-arity-string-args-collect-pointers.md) — `v(\"one\",\";\")`→`[4333567184]`; repro 3 l.\n- 🔴🔴 CONFIRMÉS SILENCIEUX — [sprintf-mixed-arg-from-nested-array-lost](sprintf-mixed-arg-from-nested-array-lost.md)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bb38b83c38bdd0fffad93eb7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T16:38:03.759Z",
+  "stored_at": "2026-08-14T16:38:03.760Z"
+}

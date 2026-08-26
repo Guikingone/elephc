@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '148,200p' src/codegen/lower_inst/builtins/io/stream_read_helpers.rs",
+  "summary": "sed -n '148,200p' src/codegen/lower_inst/builtins/io/stream_read_helpers.rs: ate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str); ctx.emitter.instruction(&format!(\"jmp {}\", done)); // bounded read completed successfully } } Ok(()) } /// Branches when a length value means \"read until EOF\". pub(supe",
+  "text": "sed -n '148,200p' src/codegen/lower_inst/builtins/io/stream_read_helpers.rs: ate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str); ctx.emitter.instruction(&format!(\"jmp {}\", done)); // bounded read completed successfully } } Ok(()) } /// Branches when a length value means \"read until EOF\". pub(super) fn emit_branch_if_unlimited_length( ctx: &mut FunctionContext<'_>, length_reg: &str, scratch_reg: &str, target_label: &str, ) { abi::emit_load_int_immediate(ctx.emitter, scratch_reg, NULL_SENTINEL); match ctx.emitter.target.arch { Arch::AArch64 => { ctx.emitter.instruction( &format!(\"cmp {}, {}\", length_reg, scratch_reg) ); // test whether length is PHP null ctx.emitter.instruction(&format!(\"b.eq {}\", target_label)); // null length means read until EOF ctx.emitter.instruction(&format!(\"cmp {}, #0\", length_reg)); // test whether length is negative ctx.emitter.instruction(&format!(\"b.lt {}\", target_label)); // negative length means read until EOF }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1d2fdde841cee7ed47a2e3cc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:46:58.834Z",
+  "stored_at": "2026-08-21T10:46:58.835Z"
+}

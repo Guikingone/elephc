@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dropped_upstream_symbols.py')\nt = p.read_text()\nt = t.replace(\"LABEL = re.compile(r'label_global\\\\(\\\"([A-Za-z_][\\\\w.$]*)\\\"\\\\)')\",\n              \"LABEL = re.compile(r'label(?:_global)?\\\\(\\\"([A-Za-z_][\\\\w.$]*)\\\"\\\\)')\")\nt = t.replace('''for n in missing:\n    print(f'    {n:52s} {base[n]}')''', '''import collections\nby_file = collections.Counter(base[n] for n in missing)\nfor f, n in b… [+325 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dropped_upstream_symbols.py')\nt = p.read_text()\nt = t.replace(\"LABEL = re.compile(r'label_global\\\\(\\\"([",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dropped_upstream_symbols.py')\nt = p.read_text()\nt = t.replace(\"LABEL = re.compile(r'label_global\\\\(\\\"([A-Za-z_][\\\\w.$]*)\\\"\\\\)')\",\n              \"LABEL = re.compile(r'label(?:_global)?\\\\(\\\"([A-Za-z_][\\\\w.$]*)\\\"\\\\)')\")\nt = t.replace('''for n in missing:\n    print(f'    {n:52s} {base[n]}')''', '''import collections\nby_file = collections.Counter(base[n] for n in missing)\nfor f, n in by_file.most_common():\n    print(f'    {n:4d} labels  {f}')''')\np.write_text(t)\nprint('grouped by file')\nPY\npython3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dropped_upstream_symbols.py 2>&1 | head -25: s 19 labels src/codegen_support/runtime/io/fgetcsv.rs 16 labels src/codegen_support/runtime/io/stream_filter.rs 15 labels src/codegen_support/runtime/io/fputcsv.rs 8 labels src/codegen_support/runtime/io/readdir.rs 4 labels src/codegen_support/runtime/io/fopen.rs 4 labels src/codegen_support/runtime/io/http_build_request.rs 4 labels src/codegen_support/runtime/io/user_wrapper_dir.rs 3 labels src/codegen_support/runtime/arrays/mixed_free_deep.rs 2 labels src/codegen_support/runtime/io/closedir.rs 2 labels src/codegen_support/runtime/io/fread.rs 2 labels src/codegen_support/runtime/io/pclose.rs 2 labels src/codegen_support/runtime/io/rewinddir.rs 2 labels src/codegen_support/runtime/io/stash_connect_host.rs 1 labels src/codegen_support/runtime/io/feof.rs 1 labels src/codegen_support/runtime/io/file.rs 1 labels src/codegen_support/runtime/io/stream_get_contents.rs added by this branch: 1656",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e4af19d22499c5ff1eb8b134",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:12:41.211Z",
+  "stored_at": "2026-08-21T19:12:41.212Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 1,60p src/codegen_support/runtime/arrays/hash_map.rs",
+  "summary": "sed -n 1,60p src/codegen_support/runtime/arrays/hash_map.rs:  the helper must copy before storing. /// /// This is the `__rt_array_map_str` contract: the callback returns a pointer into storage /// it does not hand over, so the destination gets its own copy via `__rt_str_persist`. Persist = 1, /// An already-owned stri",
+  "text": "sed -n 1,60p src/codegen_support/runtime/arrays/hash_map.rs:  the helper must copy before storing. /// /// This is the `__rt_array_map_str` contract: the callback returns a pointer into storage /// it does not hand over, so the destination gets its own copy via `__rt_str_persist`. Persist = 1, /// An already-owned string pair the helper stores verbatim. /// /// This is the `__rt_array_map_str_owned` contract: a descriptor callback wrapper detached /// the string from its boxed Mixed owner, so persisting again would leak the detached copy. Owned = 2, } /// Emits the `__rt_hash_map` runtime helper for associative (hash) sources. /// /// Walks the source hash in insertion order, invokes the callback once per entry with that /// entry's VALUE, and inserts `source key => callback result` into a freshly allocated /// destination hash. Keys are copied across untouched, which is what makes the single-array /// form of php-src `array_map()` key-preserving.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1f64f7f59c7b52a7d75a229c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:34:42.251Z",
+  "stored_at": "2026-08-22T11:34:42.251Z"
+}

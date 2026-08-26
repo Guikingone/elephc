@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '320,345p' src/types/checker/functions/resolution/signature.rs; echo \"=== after my fn ===\"; rtk proxy sed -n '370,385p' src/types/checker/functions/resolution/signature.rs",
+  "summary": "rtk proxy sed -n '320,345p' src/types/checker/functions/resolution/signature.rs; echo \"=== after my fn ===\"; rtk proxy sed -n '370,385p' src/types/checker/functions/resolution/signature.rs: >` reads those boxes back as ADDRESSES. Reporting the exit /// type here is what lets the call site convert its own local and re-t",
+  "text": "rtk proxy sed -n '320,345p' src/types/checker/functions/resolution/signature.rs; echo \"=== after my fn ===\"; rtk proxy sed -n '370,385p' src/types/checker/functions/resolution/signature.rs: >` reads those boxes back as ADDRESSES. Reporting the exit /// type here is what lets the call site convert its own local and re-type it. /// /// Only a WIDENING is reported. A body that merely reads the parameter, or one that sorts it /// in place, keeps its narrow element type — which is what keeps `sort($a)` compiling, since /// the backend has no Mixed-element sort. === after my fn === } fn provisional_return_type(&self, decl: &FnDecl) -> PhpType { if super::super::super::yield_validation::body_contains_yield(&decl.body) { return PhpType::Object(\"Generator\".to_string()); } let Some(type_ann) = decl.return_type.as_ref() else { return PhpType::Int; }; self.resolve_declared_return_type_hint(type_ann, decl.span, \"\") .unwrap_or(PhpType::Int) } /// Returns true when a declared generator return annotation accepts /// the actual `Generator` object returned when the body contains `yield`. ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e5cc3b0a6e5c573071fad790",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:50:11.966Z",
+  "stored_at": "2026-08-16T20:50:11.966Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"intern_string(\" src/ir_lower/ | head -5; echo \"--- how ctx reaches the data pool:\"; grep -n \"fn intern_global_name\" -A 5 src/ir_lower/context.rs",
+  "summary": "About to run: grep -rn \"intern_string(\" src/ir_lower/ | head -5; echo \"--- how ctx reaches the data pool:\"; grep -n \"fn intern_global_name\" -A 5 src/ir_lower/context.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "95811dac56ac16a8381a1746",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T19:52:19.498Z",
+  "stored_at": "2026-08-18T19:52:19.498Z"
+}

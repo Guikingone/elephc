@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '265,295p' src/ir/validator.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '265,295p' src/ir/validator.rs: }) { return Err(ValidationError::ValueDefMismatch(value_id)); } Ok(()) } } } /// Validates that non-refinable opcodes carry their canonical effect set. /// `load_local` additionally adm",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '265,295p' src/ir/validator.rs: }) { return Err(ValidationError::ValueDefMismatch(value_id)); } Ok(()) } } } /// Validates that non-refinable opcodes carry their canonical effect set. /// `load_local` additionally admits exactly `PURE`, which is attached only after /// the immutable-local pass proves that the named scalar slot cannot change. fn validate_instruction_effects( inst_id: InstId, inst: &Instruction, ) -> Result<(), ValidationError> { let expected = inst.op.default_effects(); let immutable_local_refinement = inst.op == Op::LoadLocal && inst.effects.is_pure(); if !inst.op.allows_effect_refinement() && !immutable_local_refinement && inst.effects != expected { return Err(ValidationError::EffectMismatch { inst: inst_id, expected, actual: inst.effects, }); } Ok(()) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b78784b205804682023a7cf6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:40:04.215Z",
+  "stored_at": "2026-08-23T16:40:04.215Z"
+}

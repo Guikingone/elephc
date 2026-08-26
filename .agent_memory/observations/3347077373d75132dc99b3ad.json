@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "awk 'NR>4271 && NR<4360 && /assert_eq!\\(compile_and_run_ir_backend\\(name, source\\), expected\\);/ {print NR\": \"$0}' tests/ir_backend_smoke_test.rs",
+  "summary": "awk 'NR>4271 && NR<4360 && /assert_eq!\\(compile_and_run_ir_backend\\(name, source\\), expected\\);/ {print NR\": \"$0}' tests/ir_backend_smoke_test.rs: 4312: assert_eq!(compile_and_run_ir_backend(name, source), expected);",
+  "text": "awk 'NR>4271 && NR<4360 && /assert_eq!\\(compile_and_run_ir_backend\\(name, source\\), expected\\);/ {print NR\": \"$0}' tests/ir_backend_smoke_test.rs: 4312: assert_eq!(compile_and_run_ir_backend(name, source), expected);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3347077373d75132dc99b3ad",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:47:26.128Z",
+  "stored_at": "2026-08-25T08:47:26.130Z"
+}

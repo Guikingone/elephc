@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && ls php_surface.json 2>/dev/null && python3 compare_surface.py 2>&1 | head -40",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && ls php_surface.json 2>/dev/null && python3 compare_surface.py 2>&1 | head -40: php_surface.json php 8.5.6 — elephc declares 518, AOT-supports 515 e",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && ls php_surface.json 2>/dev/null && python3 compare_surface.py 2>&1 | head -40: php_surface.json php 8.5.6 — elephc declares 518, AOT-supports 515 extension php elephc gap standard 544 376 168 mbstring 65 2 63 openssl 64 4 60 posix 40 0 40 date 48 11 37 sockets 37 1 36 Core 62 29 30 zlib 30 4 26 pcntl 25 0 25 session 23 0 23 calendar 18 0 18 hash 20 9 11 iconv 10 0 10 zip 10 0 10 Zend OPcache 8 0 8 ctype 11 4 7 filter 7 0 7 fileinfo 6 0 6 pcre 11 5 6 random 9 3 6 tokenizer 2 0 2 PDO 1 0 1 SPL 15 15 0 bcmath 14 14 0 json 5 5 0 out of scope by design: 27 extensions, 1058 functions",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c6a0b5efeaa683deee44b47f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:17:31.929Z",
+  "stored_at": "2026-08-21T12:17:31.930Z"
+}

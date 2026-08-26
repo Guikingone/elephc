@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh api /repos/Guikingone/elephc/actions/jobs/94783822471/logs 2>/dev/null | grep -E \"FAIL|panicked|assertion\" | head -12",
+  "summary": "gh api /repos/Guikingone/elephc/actions/jobs/94783822471/logs 2>/dev/null | grep -E \"FAIL|panicked|assertion\" | head -12: \u001b[36m::\u001b[0m\u001b[34;1mcatalog_is_valid_and_complete_for_all_contract_surfaces\u001b[0m 2026-08-14T14:10:29.8920170Z test registry::tests::catalog_is_valid_and_complete_for_all_contract_surfaces ... FAILED 20",
+  "text": "gh api /repos/Guikingone/elephc/actions/jobs/94783822471/logs 2>/dev/null | grep -E \"FAIL|panicked|assertion\" | head -12: \u001b[36m::\u001b[0m\u001b[34;1mcatalog_is_valid_and_complete_for_all_contract_surfaces\u001b[0m 2026-08-14T14:10:29.8920170Z test registry::tests::catalog_is_valid_and_complete_for_all_contract_surfaces ... FAILED 2026-08-14T14:10:29.8931900Z test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s 2026-08-14T14:10:29.8934030Z \u001b[0m\u001b[31;1mthread 'registry::tests::catalog_is_valid_and_complete_for_all_contract_surfaces' (220861) panicked at crates/elephc-builtin-contract/src/registry.rs:121:9:\u001b[0m 2026-08-14T14:10:29.8934780Z \u001b[31;1massertion `left == right` failed\u001b[0m 2026-08-14T14:10:29.9250150Z \u001b[35;1m TRY 1 FAIL\u001b[0m [ 0.010s] (─────────) \u001b[35;1melephc-builtin-contract\u001b[0m \u001b[36msupport::tests\u001b[0m\u001b[36m::\u001b[0m\u001b[34;1mevery_contract_has_a_backend_support_record\u001b[0m 2026-08-14T14:10:29.9252420Z test support::tests::every_contract_has_a_backend_support_record ... FAILED",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "762e0a62b1225e784da412af",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:58:07.871Z",
+  "stored_at": "2026-08-14T14:58:07.871Z"
+}

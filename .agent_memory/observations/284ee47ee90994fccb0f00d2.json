@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"MIXED_TAG_ASSOC_ARRAY\" src/ | head -4",
+  "summary": "grep -rn \"MIXED_TAG_ASSOC_ARRAY\" src/ | head -4: src/codegen/lower_inst/builtins/io/boxing_helpers.rs:630: box_array_or_false_result(ctx, MIXED_TAG_ASSOC_ARRAY, \"stat_array\");",
+  "text": "grep -rn \"MIXED_TAG_ASSOC_ARRAY\" src/ | head -4: src/codegen/lower_inst/builtins/io/boxing_helpers.rs:630: box_array_or_false_result(ctx, MIXED_TAG_ASSOC_ARRAY, \"stat_array\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "284ee47ee90994fccb0f00d2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:42:39.286Z",
+  "stored_at": "2026-08-20T17:42:39.286Z"
+}

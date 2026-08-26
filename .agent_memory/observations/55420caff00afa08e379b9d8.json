@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'wrapper' src/codegen_support/runtime/io/stream_get_meta_data.rs | sed -n '1,30p'",
+  "summary": "About to run: grep -rn 'wrapper' src/codegen_support/runtime/io/stream_get_meta_data.rs | sed -n '1,30p'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "55420caff00afa08e379b9d8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:43:58.988Z",
+  "stored_at": "2026-08-25T13:43:58.988Z"
+}

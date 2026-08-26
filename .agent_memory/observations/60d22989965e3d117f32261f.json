@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"data\" src/codegen/lower_inst/builtins/io/phar_write.rs | sed -n '20,45p'",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"data\" src/codegen/lower_inst/builtins/io/phar_write.rs | sed -n '20,45p': le_put_contents(\"phar://archive/entry\", data)`. 541: data: ValueId, 558: load_string_to_result(ctx, data, \"file_put_contents phar data\")?; 57",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"data\" src/codegen/lower_inst/builtins/io/phar_write.rs | sed -n '20,45p': le_put_contents(\"phar://archive/entry\", data)`. 541: data: ValueId, 558: load_string_to_result(ctx, data, \"file_put_contents phar data\")?; 570: load_string_to_result(ctx, data, \"file_put_contents phar data\")?; 644:/// Lowers `__elephc_phar_get_metadata()` into the metadata-read bridge call. 645:pub(crate) fn lower_elephc_phar_get_metadata( 649: publish_phar_get_metadata_function_pointer(ctx); 653: \"__elephc_phar_get_metadata\", 654: \"_elephc_phar_get_metadata_fn\", 667:/// Lowers `__elephc_phar_set_metadata()` into the metadata-write bridge call. 668:pub(crate) fn lower_elephc_phar_set_metadata( 672: publish_phar_set_metadata_function_pointer(ctx); 676: \"__elephc_phar_set_metadata\", 677: \"_elephc_phar_set_metadata_fn\", 690:/// Emits a `(path, data)` string -> bool PHAR bridge call (set metadata/stub). 692:/// Loads the path and data strings into the bridge's `(path_ptr, path_len, data_ptr,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "60d22989965e3d117f32261f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:14:41.666Z",
+  "stored_at": "2026-08-22T20:14:41.667Z"
+}

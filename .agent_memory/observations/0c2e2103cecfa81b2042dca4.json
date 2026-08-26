@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$g = fopen(\"php://temp\", \"r+\");\\n$row = fscanf($g, \"%%f\");\\nvar_dump($row);\\n' > isot2.php && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run isot2.php 2>&1 | head -2; printf '<?php\\n$g = fopen(\"php://temp\", \"r+\");\\nvar_dump(fscanf($g, \"%%f\"));\\n' > isot3.php && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams… [+63 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$g = fopen(\"php://temp\", \"r+\");\\n$row = fscanf($g, \"%%f\");\\nvar_dump($row);\\n' > isot2.php && /Users/guillaumeloulier/PhpstormPr",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$g = fopen(\"php://temp\", \"r+\");\\n$row = fscanf($g, \"%%f\");\\nvar_dump($row);\\n' > isot2.php && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run isot2.php 2>&1 | head -2; printf '<?php\\n$g = fopen(\"php://temp\", \"r+\");\\nvar_dump(fscanf($g, \"%%f\"));\\n' > isot3.php && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc run isot3.php 2>&1 | head -2: error[3:8]: fscanf(): the scanf engine was not injected for this program; `crate::scanf_prelude::detect` did not recognise this call site error[3:10]: fscanf(): the scanf engine was not injected for this program; `crate::scanf_prelude::detect` did not recognise this call site",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0c2e2103cecfa81b2042dca4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:52:23.334Z",
+  "stored_at": "2026-08-16T17:52:23.334Z"
+}

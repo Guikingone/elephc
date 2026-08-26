@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('scsr.php','w').write('''<?php\nclass R {\n    public $context;\n    public static array $reads = [];\n    public int $pos = 0;\n    public function stream_open($p, $m, $o, &$op) { return true; }\n    public function stream_read($n) { self::$reads[] = $n; $r = substr(str_repeat(\"a\", 100), $this->pos, $n); $this->pos += strlen($r); return $r; }\n    public function stream_write($d) { return strlen($d); }… [+556 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('scsr.php','w').write('''<?php\nclass R {\n    public $context;\n    public static array $reads = [];\n    public int $pos = ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('scsr.php','w').write('''<?php\nclass R {\n    public $context;\n    public static array $reads = [];\n    public int $pos = 0;\n    public function stream_open($p, $m, $o, &$op) { return true; }\n    public function stream_read($n) { self::$reads[] = $n; $r = substr(str_repeat(\"a\", 100), $this->pos, $n); $this->pos += strlen($r); return $r; }\n    public function stream_write($d) { return strlen($d); }\n    public function stream_eof() { return $this->pos >= 100; }\n    public function stream_tell() { return $this->pos; }\n    public function stream_seek($o, $w) { return false; }\n    public function stream_stat() { return []; }\n    public function stream_close() {}\n}\nstream_wrapper_register(\"chunkr\", \"R\");\n$h = fopen(\"chunkr://x\", \"rb\");\nstream_set_chunk_size($h, 17);\n$s = stream_get_contents($h);\nfclose($h);\nprintf(\"len=%d reads=%s\\\\n\", strlen($s), implode(\",\", R::$reads));\n''')\nPY\nzsh difftests.sh scsr 2>&1 | head -12; echo \"=== php:\"; cat scsr_p.txt: scsr DIFF: 1c1 < len=100 reads=17,17,17,17,17,17,17 --- > len=100 reads=17,17,17,17,17,17 === php: len=100 reads=17,17,17,17,17,17,17",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1e0319cfe624656aed9f94b9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T17:10:36.452Z",
+  "stored_at": "2026-08-17T17:10:36.453Z"
+}

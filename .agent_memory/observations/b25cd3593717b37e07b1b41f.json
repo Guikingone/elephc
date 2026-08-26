@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_eval_warning.py\ncargo test --test codegen_tests -- codegen::eval::test_eval_call_user_func codegen::eval::test_eval_error_contract_reports_non_fatal_warning codegen::eval_constructors::test_eval_reflection_class_constructor_by_ref codegen::eval_reflection_invocation 2>&1 | tail -12",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_eval_warning.py\ncargo test --test codegen_tests -- codegen::eval::test_eval_call_user_func codegen::eval::test_eval_error_contract_reports_non_f",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_eval_warning.py\ncargo test --test codegen_tests -- codegen::eval::test_eval_call_user_func codegen::eval::test_eval_error_contract_reports_non_fatal_warning codegen::eval_constructors::test_eval_reflection_class_constructor_by_ref codegen::eval_reflection_invocation 2>&1 | tail -12: eval warnings are now prefixed and terminated assertion `left == right` failed left: \" in /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_66350_ThreadId(34)_12/test.php on line 3\\nok\" right: \"ok\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace failures: codegen::eval::test_eval_error_contract_reports_non_fatal_warning test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 8437 filtered out; finished in 61.23s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b25cd3593717b37e07b1b41f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T21:03:08.161Z",
+  "stored_at": "2026-08-18T21:03:08.162Z"
+}

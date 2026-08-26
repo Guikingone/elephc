@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"StmtKind::Try\" -A 12 src/ir_lower/stmt/mod.rs | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"StmtKind::Try\" -A 12 src/ir_lower/stmt/mod.rs | head -20: 220: StmtKind::Try { 221- try_body, 222- catches, 223- finally_body, 224- } => lower_try(ctx, try_body, catches, finally_body.as_deref(), stmt.span), 225- St",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"StmtKind::Try\" -A 12 src/ir_lower/stmt/mod.rs | head -20: 220: StmtKind::Try { 221- try_body, 222- catches, 223- finally_body, 224- } => lower_try(ctx, try_body, catches, finally_body.as_deref(), stmt.span), 225- StmtKind::Break(level) => lower_break(ctx, *level), 226- StmtKind::Continue(level) => lower_continue(ctx, *level), 227- StmtKind::ExprStmt(expr) => { 228- let value = lower_expr(ctx, expr); 229- release_expr_statement_result(ctx, value, expr.span); 230- } 231- StmtKind::NamespaceDecl { name: _ } => lower_noop(ctx, stmt.span), 232- StmtKind::NamespaceBlock { name: _, body } => lower_block(ctx, body),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "de03646f8a261f31ed1a3cb0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:47:36.511Z",
+  "stored_at": "2026-08-23T17:47:36.511Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git add src/codegen/lower_inst/conversions.rs src/codegen/lower_inst/output_values.rs src/codegen/lower_inst/strings.rs src/optimize/effects.rs tests/codegen/object_to_string.rs tests/codegen/mod.rs; git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_objstr.txt 2>&1 | tail -4; git status --short src tests",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git add src/codegen/lower_inst/conversions.rs src/codegen/lower_inst/output_values.rs src/codegen/lower_inst/strings.rs src/optimize/effects.rs tests/codegen/object_to_string.rs tests/codegen/mod.rs; git commit -F /private/t",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git add src/codegen/lower_inst/conversions.rs src/codegen/lower_inst/output_values.rs src/codegen/lower_inst/strings.rs src/optimize/effects.rs tests/codegen/object_to_string.rs tests/codegen/mod.rs; git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_objstr.txt 2>&1 | tail -4; git status --short src tests: [worktree-streams-csv-signature 23990f2ba] fix(objects): an object with no `__toString` KILLED the process where php raises a catchable Error, and a first-class callable refused to compile at all 6 files changed, 292 insertions(+), 50 deletions(-) create mode 100644 tests/codegen/object_to_string.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6a28f5da5c824bb0c48df9b3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T18:20:32.786Z",
+  "stored_at": "2026-08-23T18:20:32.787Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/stack-trace-subsystem-measured-design.md 2>/dev/null | head -80",
+  "summary": "cat /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/stack-trace-subsystem-measured-design.md 2>/dev/null | head -80: duit SA PROPRE trame (`#0 p.php(2): fopen('', 'r')` puis `#1 {main}`) ; une méthode s'écrit `C->m()`. **Coût :** il n'existe **aucune « ligne courante ",
+  "text": "cat /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/stack-trace-subsystem-measured-design.md 2>/dev/null | head -80: duit SA PROPRE trame (`#0 p.php(2): fopen('', 'r')` puis `#1 {main}`) ; une méthode s'écrit `C->m()`. **Coût :** il n'existe **aucune « ligne courante » globale** — les diagnostics la publient par site. Donc chaque appel doit publier sa ligne et chaque prologue empiler `(descripteur, ligne, x29)` : ~6 instructions par appel de fonction. (Le profileur avait mesuré +3 % pour une instrumentation complète en release.) **Piège de conception :** tout incrément partiel FABRIQUE. Imprimer `#0 {main}` quand une trame de builtin ou une trame utilisateur existe est une trace FAUSSE, pire que l'absence actuelle. Le bloc ne doit sortir que lorsque la liste est prouvée complète — d'où l'idée d'estampiller `@48` au `new` lowered au niveau supérieur (⚠️ attention aux `include`, que php montre comme une trame). Décision utilisateur : **pay-for-use**. Voir [[uncaught-report-belongs-in-the-output-buffer]].",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b251d983809346b554342d24",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:49:22.190Z",
+  "stored_at": "2026-08-26T07:49:22.191Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/socket-pair-shapes.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/socket-pair-shapes.php: <?php\n// A local socket pair: what the stream API answers for a non-file, non-seekable stream.\n$pair = stream_soc",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/socket-pair-shapes.php: <?php\n// A local socket pair: what the stream API answers for a non-file, non-seekable stream.\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nvar_dump(is_array($pair), count($pair));\n[$a, $b] = $pair;\nvar_dump(is_resource($a), get_resource_type($a));\n\n$m = stream_get_meta_data($a);\nvar_dump($m[\"seekable\"], $m[\"blocked\"], $m[\"timed_out\"], $m[\"eof\"], $m[\"unread_bytes\"]);\nvar_dump(array_key_exists(\"wrapper_type\", $m), $m[\"stream_type\"]);\n\nvar_dump(fwrite($a, \"ping\\n\"));\nvar_dump(fgets($b));\n\nvar_dump(fwrite($a, \"abcdef\"));\nvar_dump(fread($b, 3), fread($b, 3));\n\n// Seeking a so",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0dd1c8c7d06948229c801611",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:54:13.109Z",
+  "stored_at": "2026-08-26T07:54:13.110Z"
+}

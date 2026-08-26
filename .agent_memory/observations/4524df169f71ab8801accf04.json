@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ 2>&1 | head -20",
+  "summary": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ 2>&1 | head -20: appendmode appendmode.php appendmode.s appendmode_compile.txt appendmode_e.txt appendmode_p.txt classconst classconst.php classc",
+  "text": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ 2>&1 | head -20: appendmode appendmode.php appendmode.s appendmode_compile.txt appendmode_e.txt appendmode_p.txt classconst classconst.php classconst.s classconst_compile.txt classconst_e.txt classconst_p.txt closetag closetag.php closetag.s closetag_compile.txt closetag_e.txt closetag_p.txt ct2 ct2.php",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4524df169f71ab8801accf04",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:10:03.505Z",
+  "stored_at": "2026-08-18T09:10:03.507Z"
+}

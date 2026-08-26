@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '370,410p' src/codegen_support/runtime/io/fgets.rs",
+  "summary": "sed -n '370,410p' src/codegen_support/runtime/io/fgets.rs: em V ABI. /// Input: rdi = opaque stream handle /// Output: rax = line start pointer (concat scratch or owned heap storage), rdx = line length /// Side effect: sets state-owned EOF when the stream is exhausted fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {",
+  "text": "sed -n '370,410p' src/codegen_support/runtime/io/fgets.rs: em V ABI. /// Input: rdi = opaque stream handle /// Output: rax = line start pointer (concat scratch or owned heap storage), rdx = line length /// Side effect: sets state-owned EOF when the stream is exhausted fn emit_fgets_linux_x86_64(emitter: &mut Emitter) { emitter.blank(); emitter.comment(\"--- runtime: fgets ---\"); emitter.label_global(\"__rt_fgets\"); // Frame: [rbp-8]=handle [rbp-16]=line length [rbp-24]=line pointer [rbp-32]=wrapper // chunk pointer [rbp-40]=line capacity [rbp-48]=byte scratch [rbp-56]=descriptor // [rbp-64]=caller's length bound (0 = unbounded) [rbp-72]=read-filter chain head // [rbp-80]=this iteration's destination, held across the pending-bytes probe emitter.instruction(\"push rbp\"); // preserve the caller frame pointer while fgets() uses local spill slots emitter.instruction(\"mov rbp, rsp\"); // establish a stable frame base for the saved handle and line metadata",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "53766167eca83a2318081bba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:00:29.979Z",
+  "stored_at": "2026-08-24T17:00:29.979Z"
+}

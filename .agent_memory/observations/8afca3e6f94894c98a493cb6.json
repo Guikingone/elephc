@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/adding-a-php-prelude-checklist.md')\nt = p.read_text()\nold = '''3. `src/lib.rs` + `src/main.rs` (`mod`), `src/pipeline.rs` et `src/ir_lower/tests/mod.rs`\n   (`inject_if_used`, après résolution des includes, avant résolution des noms).'''\nnew = '''3. `src/lib.rs` + `src/main.rs`… [+854 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY' import pat",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8afca3e6f94894c98a493cb6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:47:33.978Z",
+  "stored_at": "2026-08-21T12:47:33.979Z"
+}

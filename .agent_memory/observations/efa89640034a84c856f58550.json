@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs'\ns = open(p).read()\nold = '''            diagnostics.push_str(&body.replace(script_path, &basename));\n            diagnostics.push('\\\\n');'''\nnew = '''            // The MESSAGE only. php ends every diagnostic with ` in <file> on line <n>`, which is\n            // produced by one runtime path and pinned by tests of its own; repeating it in every\n            // assertion that cares about a wording would add a line number to maintain and no… [+632 chars truncated]",
+  "summary": "About to run: python3 - <<'PYEOF' p = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs' s = open(p).read() old = ''' diagnostics.push_str(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "efa89640034a84c856f58550",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T14:09:03.531Z",
+  "stored_at": "2026-08-18T14:09:03.531Z"
+}

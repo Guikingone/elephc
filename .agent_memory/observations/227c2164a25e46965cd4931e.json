@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('src/ir_lower/expr/lazy_isset.rs')\nt = p.read_text()\nOLD = '''    if matches!(\n        &args[0].kind,\n        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. }\n    ) {\n        let value = lower_null_probe_chain(ctx, &args[0]);'''\nNEW = '''    // …but not a property whose class answers `__isset`: php asks THAT before it asks `__get`,\n    // and the eager builtin below would call `__get` and believe its 7. The magic arm at the tail\n    // of this… [+651 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('src/ir_lower/expr/lazy_isset.rs')\nt = p.read_text()\nOLD = '''    if matches!(\n        &args[0].kind,\n        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. }\n    ) {\n ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PY'\nimport pathlib\np = pathlib.Path('src/ir_lower/expr/lazy_isset.rs')\nt = p.read_text()\nOLD = '''    if matches!(\n        &args[0].kind,\n        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. }\n    ) {\n        let value = lower_null_probe_chain(ctx, &args[0]);'''\nNEW = '''    // …but not a property whose class answers `__isset`: php asks THAT before it asks `__get`,\n    // and the eager builtin below would call `__get` and believe its 7. The magic arm at the tail\n    // of this function is what handles those, and it can only be reached by leaving them here.\n    // The probe builds expression trees and emits nothing, so asking it twice costs nothing.\n    if matches!(\n        &args[0].kind,\n        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. }\n    ) && lazy_empty_magic_property_calls(ctx, &args[0]).is_none()\n    {\n        let value = lower_null_probe_chain(ctx, &args[0]);'''\nassert t.count(OLD) == 1, 'the general arm is not where it was read'\np.write_text(t.replace(OLD, NEW, 1))\nprint('the general arm leaves the magic properties alone')\nPY\nCARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo build 2>&1 | tail -6: the general arm leaves the magic properties alone Compiling elephc v0.26.5 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 20s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "227c2164a25e46965cd4931e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T11:56:29.809Z",
+  "stored_at": "2026-08-23T11:56:29.810Z"
+}

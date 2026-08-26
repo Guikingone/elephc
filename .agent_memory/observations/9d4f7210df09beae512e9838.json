@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '300,320p' src/types/checker/functions/resolution/signature.rs; echo \"=== provisional ===\"; rtk proxy rg -n \"fn provisional_return_type\" -B4 src/types/checker/functions/resolution/signature.rs | head -8",
+  "summary": "About to run: rtk proxy sed -n '300,320p' src/types/checker/functions/resolution/signature.rs; echo \"=== provisional ===\"; rtk proxy rg -n \"fn provisional_return_type\" -B4 src/types/checker/functions/resolution/sig",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9d4f7210df09beae512e9838",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:50:38.200Z",
+  "stored_at": "2026-08-16T20:50:38.200Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"would_block\\|__rt_stream_get_line_done\\|__rt_concat_reserve\\|rbp - \" src/codegen_support/runtime/io/stream_get_line.rs | sed -n '/^3[0-9][0-9]/,$p' | head -25",
+  "summary": "grep -n \"would_block\\|__rt_stream_get_line_done\\|__rt_concat_reserve\\|rbp - \" src/codegen_support/runtime/io/stream_get_line.rs | sed -n '/^3[0-9][0-9]/,$p' | head -25: d the byte budget? 353: emitter.instruction(\"jge __rt_stream_get_line_done_x86\"); // stop at the maximum length 355: emitter.instruction(\"cmp QWORD PTR",
+  "text": "grep -n \"would_block\\|__rt_stream_get_line_done\\|__rt_concat_reserve\\|rbp - \" src/codegen_support/runtime/io/stream_get_line.rs | sed -n '/^3[0-9][0-9]/,$p' | head -25: d the byte budget? 353: emitter.instruction(\"jge __rt_stream_get_line_done_x86\"); // stop at the maximum length 355: emitter.instruction(\"cmp QWORD PTR [rbp - 72], 0\"); // the read-direction chain head 357: emitter.instruction(\"mov rsi, QWORD PTR [rbp - 40]\"); // reserved result start pointer 358: emitter.instruction(\"add rsi, QWORD PTR [rbp - 48]\"); // single-byte write pointer inside the reservation 359: emitter.instruction(\"mov rdi, QWORD PTR [rbp - 56]\"); // reload the resolved backend descriptor 371: emitter.instruction(\"mov rdi, QWORD PTR [rbp - 8]\"); // the opaque stream handle, not the descriptor 376: emitter.instruction(\"mov QWORD PTR [rbp - 88], rax\"); // save the chunk ptr across the release calls 378: emitter.instruction(\"mov r10, QWORD PTR [rbp - 40]\"); // the claimed result window 379: emitter.instruction(\"add r10, QWORD PTR [rbp - 48]\"); // the byte's destination inside it",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "48667dd8d64ac5f80dce354a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T16:23:01.267Z",
+  "stored_at": "2026-08-17T16:23:01.267Z"
+}

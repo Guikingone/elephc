@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '11955,11992p' tests/codegen/io/streams.rs",
+  "summary": "sed -n '11955,11992p' tests/codegen/io/streams.rs: ion stream_flush()RET_BOOL { return true; } public function stream_lock($op)RET_BOOL { return true; } public function stream_truncate($size)RET_BOOL { $this->buf = substr($this->buf, 0, $size); return true; } public function stream_close() {} } stream_wrapper_register(",
+  "text": "sed -n '11955,11992p' tests/codegen/io/streams.rs: ion stream_flush()RET_BOOL { return true; } public function stream_lock($op)RET_BOOL { return true; } public function stream_truncate($size)RET_BOOL { $this->buf = substr($this->buf, 0, $size); return true; } public function stream_close() {} } stream_wrapper_register(\"slots\", \"S\"); $f = fopen(\"slots://x\", \"r+\"); echo \"w\", fwrite($f, \"XY\"); echo \"s\", fseek($f, 3); echo \"t\", ftell($f); echo \"r\", fread($f, 4); echo \"f\", fflush($f) ? 1 : 0; echo \"l\", flock($f, LOCK_EX) ? 1 : 0; echo \"u\", ftruncate($f, 4) ? 1 : 0; echo \"e\", feof($f) ? 1 : 0; fclose($f); \"#; let declared = compile_and_run(&source.replace(\"RET_INT\", \": int\").replace(\"RET_BOOL\", \": bool\")); let undeclared = compile_and_run(&source.replace(\"RET_INT\", \"\").replace(\"RET_BOOL\", \"\")); assert_eq!( undeclared, declared, \"omitting the return type must not change what the wrapper reports\" ); assert_eq!(declared, \"w2s0t3rdefgf1l1u1e1\"); }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2db5ac5f8f87b4875147cf3a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:24:38.733Z",
+  "stored_at": "2026-08-21T14:24:38.733Z"
+}

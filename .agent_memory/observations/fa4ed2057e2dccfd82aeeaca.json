@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"Resource\" src/codegen_support/sentinels.rs | head -10; echo \"--- fns ---\"; grep -n \"pub fn\" src/codegen_support/sentinels.rs | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"Resource\" src/codegen_support/sentinels.rs | head -10; echo \"--- fns ---\"; grep -n \"pub fn\" src/codegen_support/sentinels.rs | head -20: --- fns --- 56:pub fn set_null_repr(repr: NullRepr) {",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"Resource\" src/codegen_support/sentinels.rs | head -10; echo \"--- fns ---\"; grep -n \"pub fn\" src/codegen_support/sentinels.rs | head -20: --- fns --- 56:pub fn set_null_repr(repr: NullRepr) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fa4ed2057e2dccfd82aeeaca",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:18:37.346Z",
+  "stored_at": "2026-08-23T07:18:37.347Z"
+}

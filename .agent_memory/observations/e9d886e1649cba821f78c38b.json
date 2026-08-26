@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '320,348p' src/codegen/lower_inst/builtins/io.rs; echo \"--- callers:\"; grep -n \"emit_dynamic_php_filter_read_route\" src/codegen/lower_inst/builtins/io.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '320,348p' src/codegen/lower_inst/builtins/io.rs; echo \"--- callers:\"; grep -n \"emit_dynamic_php_filter_read_route\" src/codegen/lower_inst/builtins/io.rs:  publishes the filter list and swaps the path to /// the RESOU",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '320,348p' src/codegen/lower_inst/builtins/io.rs; echo \"--- callers:\"; grep -n \"emit_dynamic_php_filter_read_route\" src/codegen/lower_inst/builtins/io.rs:  publishes the filter list and swaps the path to /// the RESOURCE, the resource is opened read-only through the same runtime openers `fopen()` /// dispatches to, the pending chain is attached once the stream is boxed, and the bytes come /// back through the shared open-read-close tail. /// /// Emits everything up to and including the fall-through label; the caller places the returned /// done-label AFTER its plain reader, so the streamed result skips it. A URL that names no /// usable filter falls through WITH the swapped resource, which is the unfiltered open php /// performs for the same URL. fn emit_dynamic_php_filter_read_route( ctx: &mut FunctionContext<'_>, prefix_symbol: &str, prefix_text: &str, callee: &str, ) -> Result<String> { let fall_through = ctx.next_label(\"fgc_dynf_plain\"); let done = ctx.next_label(\"fgc_dynf_done\"); --- callers: 341:fn emit_dynamic_php_filter_read_route(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e9d886e1649cba821f78c38b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:33:52.908Z",
+  "stored_at": "2026-08-24T07:33:52.908Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fwrite\" crates/elephc-builtin-contract/src/catalog_surfaces.rs crates/elephc-builtin-contract/src/support.rs crates/elephc-builtin-contract/src/eval_profile.rs | head -8; sed -n '110,130p' crates/elephc-builtin-contract/src/registry.rs",
+  "summary": "grep -n \"fwrite\" crates/elephc-builtin-contract/src/catalog_surfaces.rs crates/elephc-builtin-contract/src/support.rs crates/elephc-builtin-contract/src/eval_profile.rs | head -8; sed -n '110,130p' crates/elephc-builtin-contract/src/registry.rs: Registry { by_name, by_id } } #[cfg(test)] mod tests { use super::*; /// V",
+  "text": "grep -n \"fwrite\" crates/elephc-builtin-contract/src/catalog_surfaces.rs crates/elephc-builtin-contract/src/support.rs crates/elephc-builtin-contract/src/eval_profile.rs | head -8; sed -n '110,130p' crates/elephc-builtin-contract/src/registry.rs: Registry { by_name, by_id } } #[cfg(test)] mod tests { use super::*; /// Verifies the shared catalog validates and exposes every compiler/eval surface. #[test] fn catalog_is_valid_and_complete_for_all_contract_surfaces() { assert_eq!(contracts().len(), 544); assert_eq!(lookup(\"STRLEN\").map(|contract| contract.name), Some(\"strlen\")); assert_eq!(lookup(\"\\\\parse_url\").map(|contract| contract.name), Some(\"parse_url\")); } /// Verifies stable IDs resolve to the same contracts as PHP names. #[test] fn id_and_name_lookup_agree() { for contract in contracts() { assert!(std::ptr::eq(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ce753f6edb57c90b56b8cf89",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:58:47.551Z",
+  "stored_at": "2026-08-14T14:58:47.552Z"
+}

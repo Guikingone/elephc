@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \"\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/spl_tests.py')\nt = p.read_text()\nt = t.replace(\\\"ANCHOR = '''fn test_spl_file_object_stream_position_methods() {'''\\\", \\\"ANCHOR = '''/// Verifies SplFileObject stream methods use byte offsets and preserve file position.'''\\\")\nt = t.replace('''NEW = '''+chr(39)*3+'''fn test_spl_file_object_… [+792 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \"\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/spl_tests.",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \"\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/spl_tests.py')\nt = p.read_text()\nt = t.replace(\\\"ANCHOR = '''fn test_spl_file_object_stream_position_methods() {'''\\\", \\\"ANCHOR = '''/// Verifies SplFileObject stream methods use byte offsets and preserve file position.'''\\\")\nt = t.replace('''NEW = '''+chr(39)*3+'''fn test_spl_file_object_drop_new_line_drops_the_terminator() {''', '''NEW = '''+chr(39)*3+'''/// \\`DROP_NEW_LINE\\` removes the line terminator from every plain-line read.\n///\n/// The flag was honoured only on the READ_CSV path, so a \\`foreach\\` over the object handed back\n/// lines with their \\`\\\\\\\\n\\` still on.\n#[test]\nfn test_spl_file_object_drop_new_line_drops_the_terminator() {''')\nt = t.replace('''#[test]\nfn test_spl_file_object_stream_position_methods() {'''+chr(39)*3, '''/// Verifies SplFileObject stream methods use byte offsets and preserve file position.'''+chr(39)*3)\np.write_text(t)\nprint('anchors aligned')\n\"; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/spl_tests.py: anchors aligned two SPL rules pinned",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca33c41abc576eb2073b6026",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:37:02.581Z",
+  "stored_at": "2026-08-23T09:37:02.582Z"
+}

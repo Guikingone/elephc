@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '300,340p' src/codegen_support/runtime/data/fixed.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '300,340p' src/codegen_support/runtime/data/fixed.rs: label}:\\n .ascii {message:?}\\n\")); } // serialize()/unserialize() reference tracking (PHP r:/R: back-references). // serialize: a global value counter (every seria",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '300,340p' src/codegen_support/runtime/data/fixed.rs: label}:\\n .ascii {message:?}\\n\")); } // serialize()/unserialize() reference tracking (PHP r:/R: back-references). // serialize: a global value counter (every serialized value consumes the next // index, keys excluded) plus a pointer->index map of already-serialized objects // (parallel arrays, linear scan) so a repeated object emits r:<index>. unserialize: // a registry of created value boxes indexed by the same pre-order counter so r:<N> // resolves to the existing value. Reentrant calls snapshot the used prefix plus their // policy/depth fields through _unser_context. Capacity bounds the per-call object/value // count; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref). out.push_str(&comm_directive(\"_ser_value_counter\", 8, target)); out.push_str(&comm_directive(\"_ser_obj_count\", 8, target)); out.push_str(&comm_directive(\"_ser_obj_ptrs\", 524288, target));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bb319aa082f76b8dc92daef3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:53:19.939Z",
+  "stored_at": "2026-08-22T20:53:19.940Z"
+}

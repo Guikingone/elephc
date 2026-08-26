@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build --bin elephc 2>&1 | tail -1; mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/arrarg && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/arrarg && printf '%s\\n' '<?php' 'stream_context_set_option(stream_context_create([]), [\"a\" => 1]);' > p.php && php -n p.php 2>&1 | sed -n 3,6p",
+  "summary": "cargo build --bin elephc 2>&1 | tail -1; mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/arrarg && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktr",
+  "text": "cargo build --bin elephc 2>&1 | tail -1; mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/arrarg && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/arrarg && printf '%s\\n' '<?php' 'stream_context_set_option(stream_context_create([]), [\"a\" => 1]);' > p.php && php -n p.php 2>&1 | sed -n 3,6p: Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.73s Fatal error: Uncaught ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/arrarg/p.php:2 Stack trace: #0 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/arrarg/p.php(2): stream_context_set_option(Resource id #4, Array)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "00de7298511b6a00b33991f8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:07:51.324Z",
+  "stored_at": "2026-08-22T15:07:51.325Z"
+}

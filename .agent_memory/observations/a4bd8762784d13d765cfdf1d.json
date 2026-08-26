@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/split_smoke.py park && git add src/builtins/by_ref_fill.rs src/builtins/mod.rs src/ir_lower/expr/array_builtin_args.rs src/ir_lower/expr/call_arg_coercion.rs src/types/checker/inference/expr/effects.rs tests/ir_backend_smoke_test.rs && git status --short | grep '^[AM]'",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/split_smoke.py park && git add src/builtins/by_ref_fill.rs src/builtins/mod.rs src/ir_lower/expr/array_builtin_args.rs src/ir_lower/expr/call_arg_co",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/split_smoke.py park && git add src/builtins/by_ref_fill.rs src/builtins/mod.rs src/ir_lower/expr/array_builtin_args.rs src/ir_lower/expr/call_arg_coercion.rs src/types/checker/inference/expr/effects.rs tests/ir_backend_smoke_test.rs && git status --short | grep '^[AM]': iterable test parked; preg changes remain A src/builtins/by_ref_fill.rs M src/builtins/mod.rs M src/ir_lower/expr/array_builtin_args.rs M src/ir_lower/expr/call_arg_coercion.rs M src/types/checker/inference/expr/effects.rs M tests/ir_backend_smoke_test.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a4bd8762784d13d765cfdf1d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:39:46.119Z",
+  "stored_at": "2026-08-25T13:39:46.120Z"
+}

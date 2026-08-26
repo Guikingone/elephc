@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::compress_wrapper 2>&1 | grep -E \"^test result:|^failures:\" -A 4 | tail -8",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::compress_wrapper 2>&1 | grep -E \"^test result:|^failures:\" -A 4 | tail -8: test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 8842 filtered out; finished in 4.15s",
+  "text": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::compress_wrapper 2>&1 | grep -E \"^test result:|^failures:\" -A 4 | tail -8: test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 8842 filtered out; finished in 4.15s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9c8b2f7e60662ad7ceaa9f90",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:04:24.232Z",
+  "stored_at": "2026-08-22T15:04:24.233Z"
+}

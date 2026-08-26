@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '436,452p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md",
+  "summary": "rtk proxy sed -n '436,452p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md: lasses may extend PHP's `php_user_filter` base class; the fourth `stream_filter_append`/`prepend` `$params` argument is available as `$this->params` before `onCreate()` runs. The ",
+  "text": "rtk proxy sed -n '436,452p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md: lasses may extend PHP's `php_user_filter` base class; the fourth `stream_filter_append`/`prepend` `$params` argument is available as `$this->params` before `onCreate()` runs. The base class also declares `$filtername` and `$stream`, so the manual's `stream_bucket_new($this->stream, …)` idiom compiles; neither is seeded with a value yet. Optional `onCreate(): bool` and `onClose(): void` hooks are honored; `onClose()` fires exactly once, whether the filter is removed with `stream_filter_remove()` or carried off by `fclose()`. `$closing` is `false` on read and write dispatches and `true` on the single closing flush a removal performs. `PSFS_ERR_FATAL` cancels a removal but does not otherwise propagate as a stream error. `PSFS_FEED_ME` means the filter has taken the input and has no output yet, so the read returns nothing and fetches more input to dispatch again. A filter that buffers across",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ecf2a34c04e5fc45f92cabaa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:54:35.458Z",
+  "stored_at": "2026-08-17T09:54:35.459Z"
+}

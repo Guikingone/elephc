@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\np='/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md'\ns=open(p).read()\nold=\"- 🔴🎯 [DEUX voies de dispatch, UNE arche câblée]\"\nnew=\"- 🛠️🔴🔴 [`--emit-asm` d'un PROGRAMME ne montre PAS le runtime](emit-asm-shows-the-call-not-the-runtime.md) — la vraie porte = `cargo run --example dump_x86_runtime` + `clang -c` + `grep -c` du helper.\\n- 🔴🎯 [DEUX voies de dispatch, UNE arche câblée]\"\nif old in s:\n    s=s.replace(old,new,1)\nelse:\n    old2=\"- 🔴★★★ [DEUX voies de dispatch, UNE arche câblée]\"\n    assert old2 in s, \"an… [+301 chars truncated]",
+  "summary": "About to run: python3 - <<'PYEOF' p='/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md' s=open(p).read() old=\"- 🔴🎯 [DEUX voies de dispatch, UNE arche câbl",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4001e85fb586c4b1d55c4731",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:19:32.313Z",
+  "stored_at": "2026-08-17T18:19:32.313Z"
+}

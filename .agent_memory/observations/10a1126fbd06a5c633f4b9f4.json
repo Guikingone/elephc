@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lower_file_put_contents\" -A 30 src/codegen/lower_inst/builtins/io/phar_write.rs | head -34",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lower_file_put_contents\" -A 30 src/codegen/lower_inst/builtins/io/phar_write.rs | head -34: path = expect_operand(inst, 0)?; 62- let data = expect_operand(inst, 1)?; 63- // php throws rather than warning for an e",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lower_file_put_contents\" -A 30 src/codegen/lower_inst/builtins/io/phar_write.rs | head -34: path = expect_operand(inst, 0)?; 62- let data = expect_operand(inst, 1)?; 63- // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`. 64- super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?; 65- let path_literal = optional_const_string_operand(ctx, path)?; 66- if let Some(path_literal) = path_literal.as_deref() { 67- if path_literal.starts_with(\"phar://\") { 68- return lower_literal_phar_file_put_contents(ctx, inst, path_literal, data); 69- } 70- if let Some(underlying) = path_literal.strip_prefix(\"compress.zlib://\") { 71- return lower_literal_compress_zlib_file_put_contents( 72- ctx, 73- inst, 74- path_literal, 75- underlying, 76- data, 77- ); 78- } 79- // A scheme that is NOT built in names a wrapper the program registered, and the opener is 80- // the only thing that can serve it. Everything else reached the one-shot filesystem",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "10a1126fbd06a5c633f4b9f4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:55:19.859Z",
+  "stored_at": "2026-08-22T19:55:19.860Z"
+}

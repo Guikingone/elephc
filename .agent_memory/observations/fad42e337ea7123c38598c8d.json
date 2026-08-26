@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"name_resolver\" src/types/zlib_constants.rs | head -3; grep -rn \"ZLIB_INT_CONSTANTS\" src/name_resolver/*.rs src/name_resolver.rs 2>/dev/null | head -3",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"name_resolver\" src/types/zlib_constants.rs | head -3; grep -rn \"ZLIB_INT_CONSTANTS\" src/name_resolver/*.rs src/name_resolver.rs 2>/dev/null | head -3: src/types/zlib_constants.rs:8://! - `crate::name_resolver::name",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"name_resolver\" src/types/zlib_constants.rs | head -3; grep -rn \"ZLIB_INT_CONSTANTS\" src/name_resolver/*.rs src/name_resolver.rs 2>/dev/null | head -3: src/types/zlib_constants.rs:8://! - `crate::name_resolver::names` when recognizing builtin constant names. src/name_resolver/names.rs:418: .chain(crate::types::zlib_constants::ZLIB_INT_CONSTANTS.iter())",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fad42e337ea7123c38598c8d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:22:35.700Z",
+  "stored_at": "2026-08-23T09:22:35.700Z"
+}

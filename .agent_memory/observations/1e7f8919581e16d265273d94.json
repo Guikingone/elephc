@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\np='/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_sfr_test.py'\ns=open(p).read()\ns = s.replace('''// A value that is not a resource at all keeps the argument-name wording, with php's own name.\ntry {\n    stream_filter_remove(42);\n} catch (Throwable $e) {\n    echo get_class($e), \": \", $e->getMessage(), \"\\\\\\\\n\";\n}\nfclose($h);''', 'fclose($h);')\ns = s.replace('''            \"TypeError: stream_filter_remove(): Argument #1 ($stream_filter) must be of type resour… [+1087 chars truncated]",
+  "summary": "About to run: python3 - <<'PYEOF' p='/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_sfr_test.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1e7f8919581e16d265273d94",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:01:53.515Z",
+  "stored_at": "2026-08-17T15:01:53.515Z"
+}

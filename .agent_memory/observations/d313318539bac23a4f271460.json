@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/two-dispatches-one-arch-loses-the-diagnostic.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/two-dispatches-one-arch-loses-the-diagnostic.md: ---\nname: two-dispatches-one-arch-loses-the-diagnostic\ndescription: x86 n'appelait pas __rt_php_fd_open depuis la voie DYNAMIQUE — un test qui COMPTE les occurrences",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/two-dispatches-one-arch-loses-the-diagnostic.md: ---\nname: two-dispatches-one-arch-loses-the-diagnostic\ndescription: x86 n'appelait pas __rt_php_fd_open depuis la voie DYNAMIQUE — un test qui COMPTE les occurrences l'a attrapé; aarch64 était vert\nmetadata:\n  type: project\n---\n\n`php://fd/N` se résout par DEUX voies : l'URL littérale à l'abaissement, l'URL construite à l'exécution dans `__rt_php_wrapper_open`. Le test `test_php_fd_refusals_carry_phps_two_sentences` compte la phrase de refus **deux fois**. Sur aarch64 : 2. Sur x86 : **1** (CI run 31945130173, shard linux-x86_64 13/16). Corrigé par `dd9717c1f0`.\n\nTrois morceaux de la voie aarch6",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d313318539bac23a4f271460",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T13:09:32.878Z",
+  "stored_at": "2026-08-16T13:09:32.879Z"
+}

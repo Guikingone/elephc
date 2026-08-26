@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cp /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el/v.php /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php/v.php && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude… [+86 chars truncated]",
+  "summary": "cp /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el/v.php /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83",
+  "text": "cp /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el/v.php /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php/v.php && cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/el && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o v v.php >/dev/null 2>&1 && ./v: temp 0: start=false [k=0|len=2|eof=false] [k=1|len=2|eof=true] end=true key=2 plain 0: start=false [k=0|len=2|eof=false] [k=1|len=2|eof=false] [k=2|len=0|eof=true] end=true key=3 temp 1: start=false [k=0|len=2|eof=false] [k=1|len=1|eof=true] end=true key=2 plain 1: start=false [k=0|len=2|eof=false] [k=1|len=1|eof=true] end=true key=2 temp 2: start=false [k=0|len=2|eof=true] end=true key=1 plain 2: start=false [k=0|len=2|eof=false] [k=1|len=0|eof=true] end=true key=2 temp 3: start=false [k=0|len=0|eof=true] end=true key=1 plain 3: start=false [k=0|len=0|eof=true] end=true key=1 == fgets() by hand, then eof == temp: len=2 eof=true len=2 eof=true plain: len=2 eof=false len=2 eof=false == current() with no rewind == first='x ' key=0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "719b4e0d91eafc26715fecf2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:02:40.678Z",
+  "stored_at": "2026-08-25T14:02:40.679Z",
+  "low_signal": true
+}

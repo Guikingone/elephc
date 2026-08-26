@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$m = fopen(\"php://memory\",\"r+\");\\n$f = stream_filter_append($m, \"string.toupper\", STREAM_FILTER_WRITE);\\nvar_dump($f);\\necho get_resource_type($f), \"\\\\n\";\\nvar_dump(stream_filter_remove($f));\\ntry { stream_filter_remove($m); } catch (\\\\Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\\\n\"; }\\ntry { stream_filter_remove($f); } catch (\\\\Throwable $e) { echo get_class($e), \": \", $e->getMessage(),… [+87 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\n$m = fop",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8d4cf621f80eb6e548a952aa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:08:12.408Z",
+  "stored_at": "2026-08-17T08:08:12.408Z"
+}

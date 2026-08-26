@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8/kimi-k2.7-code-82.php",
+  "summary": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8/kimi-k2.7-code-82.php: <?php $raw = tempnam(sys_get_temp_dir(), 't'); file_put_contents($raw, 'uryyb'); $src = 'php://filter/read=stri",
+  "text": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8/kimi-k2.7-code-82.php: <?php $raw = tempnam(sys_get_temp_dir(), 't'); file_put_contents($raw, 'uryyb'); $src = 'php://filter/read=string.rot13/resource=' . $raw; $dst = tempnam(sys_get_temp_dir(), 't'); copy($src, $dst); echo file_get_contents($dst), \"\\n\"; unlink($raw); unlink($dst);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7668d2b2989742ae2bfa5862",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:28:32.751Z",
+  "stored_at": "2026-08-24T07:28:32.752Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Agent",
+  "path": "",
+  "command": "",
+  "summary": "Agent: async_launched acc589fd3d996523d TDD: zlib write + dir handles + stat cache claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `993efaa18f` ; sinon `git reset --hard 993efaa18f` AVANT tout (12 a",
+  "text": "async_launched acc589fd3d996523d TDD: zlib write + dir handles + stat cache claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `993efaa18f` ; sinon `git reset --hard 993efaa18f` AVANT tout (12 agents sur 12 ont reçu une base erronée — c'est systématique, ne saute JAMAIS cette étape). Chemins absolus ; ne pousse RIEN ; pas de Co-Authored-By ; jamais `.codebase-memory/*` stagé. ⚠️ RESSOURCES : ~25 GiB libres. Purge `$TMPDIR/elephc_*` de +2h AVANT de commencer, à mi-parcours et sur `No space left`. UN SEUL cargo à la fois ; builds debug ; PAS de docker ; scratch supprimé à la fin. Timeout nextest à 60 s pile = faux rouge → rejoue isolé via `cargo test`. ⚠️ PORTES avant commit : `cargo test -p elephc-builtin-contract` · `cargo test --test builtin_parity_tests` · `cargo nextest run --test ir_backend_smoke_test`. Catalogue touché ⇒ compteurs épinglés (registry.rs `contracts().len()`, support.rs eval_registry/eval_pending/aot_registry/aot_external/unsupported, builtin_parity_tests dont le SET des préludes) mis à jour DANS LE MÊME COMMIT + les six générateurs de docs relancés. TDD STRI",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3d9c0a62e04beefd4a99bdb2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T11:45:30.410Z",
+  "stored_at": "2026-08-16T11:45:30.410Z"
+}

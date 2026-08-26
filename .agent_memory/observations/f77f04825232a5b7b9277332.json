@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport json\nbase='tests/php_oracle/manifests/streams/php-8.5.6/%s/streams-full.json'\nT=['macos-aarch64','linux-x86_64','linux-aarch64']\ntab={}\nfor t in T:\n    c=json.load(open(base%t))['surface']['constants']\n    if isinstance(c,list):\n        c={e['name']:e.get('value') for e in c}\n    tab[t]=c\nnames=[n for n in tab['macos-aarch64'] if n.startswith('GLOB_')]\nnames+= [n for n in ('SEEK_SET','LOCK_EX','PHP_INT_SIZE','DIRECTORY_SEPARATOR') if n in tab['macos-aarch64']]\nprint(f'{\"name\":<26}'+''.join(f'{t:>16}' for t in T))\nfor n in sorted(set(names)):\n    row=[tab[t].get(n,'—') f… [+196 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import json base='tests/php_oracle/manifests/streams/php-8.5.6/%s/streams-full.json' T=['macos-aarch64','linux-x86_64','linux-aarch64'] tab={} for t in T: c=json.load(open(base%t))['s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f77f04825232a5b7b9277332",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:51:24.412Z",
+  "stored_at": "2026-08-22T08:51:24.413Z"
+}

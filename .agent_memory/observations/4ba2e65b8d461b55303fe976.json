@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fpc_wrapper_route.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fpc_wrapper_route.py: \"\"\"`file_put_contents()` on a user wrapper: open through the shared opener, write, close.\n\nphp-src's `file_put_contents` ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_fpc_wrapper_route.py: \"\"\"`file_put_contents()` on a user wrapper: open through the shared opener, write, close.\n\nphp-src's `file_put_contents` is `php_stream_open_wrapper` followed by a write, which is why a\nregistered wrapper is writable at all. elephc's lowering knew `phar://` and `compress.zlib://` and\nsent everything else to a one-shot filesystem writer, which treated `uww://x` as a FILENAME.\n\nThe route is the one `compress.zlib://` already takes, minus the deflate tail: open, `__rt_fwrite`,\nmark closed, release, and report the byte count php reports — the INPUT length, not what the\nwrapper claims to have consu",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4ba2e65b8d461b55303fe976",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:17:32.036Z",
+  "stored_at": "2026-08-21T18:17:32.036Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"_filtered_leftover\\|_filter_leftover\\|_stream_filter_buf\\|leftover\" src/codegen_support/runtime/io/*.rs | head -10",
+  "summary": "grep -rn \"_filtered_leftover\\|_filter_leftover\\|_stream_filter_buf\\|leftover\" src/codegen_support/runtime/io/*.rs | head -10: _address(emitter, \"rax\", \"_stream_filter_buf\"); // an empty input: the flush feeds no bytes src/codegen_support/runtime/io/fread_filtered.rs:502: abi::emit_symbol_address(emitter, \"rax\", \"_strea",
+  "text": "grep -rn \"_filtered_leftover\\|_filter_leftover\\|_stream_filter_buf\\|leftover\" src/codegen_support/runtime/io/*.rs | head -10: _address(emitter, \"rax\", \"_stream_filter_buf\"); // an empty input: the flush feeds no bytes src/codegen_support/runtime/io/fread_filtered.rs:502: abi::emit_symbol_address(emitter, \"rax\", \"_stream_filter_buf\"); // a readable pointer for a zero-length result src/codegen_support/runtime/io/fwrite.rs:11://! `_stream_filter_buf` scratch, transformed in place, and written from there src/codegen_support/runtime/io/fwrite.rs:241: abi::emit_symbol_address(emitter, \"x4\", \"_stream_filter_buf\"); src/codegen_support/runtime/io/fwrite.rs:612: abi::emit_symbol_address(emitter, \"r8\", \"_stream_filter_buf\"); // filter scratch base src/codegen_support/runtime/io/php_wrapper_open.rs:143: emitter.instruction(\"b.hi __rt_pwo_fd_form\"); // a leftover byte reads as no number src/codegen_support/runtime/io/php_wrapper_open.rs:304: emitter.instruction(\"ja __rt_pwo_fd_form_x\"); // a leftover byte reads as no number",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca88c58d2b26f5ccc35d6303",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:32:20.909Z",
+  "stored_at": "2026-08-21T18:32:20.910Z"
+}

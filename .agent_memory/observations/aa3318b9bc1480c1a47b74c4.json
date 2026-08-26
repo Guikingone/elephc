@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; echo \"=== php ===\"; php -n $S/q.php; target/debug/elephc -q $S/q.php >/dev/null 2>&1; echo \"=== elephc ===\"; $S/q",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; echo \"=== php ===\"; php -n $S/q.php; target/debug/elephc -q $S/q.php >/dev/null 2>&1; echo \"=== elephc ===\"; $S/q failed:  fgetcsv(): the $esca",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf; echo \"=== php ===\"; php -n $S/q.php; target/debug/elephc -q $S/q.php >/dev/null 2>&1; echo \"=== elephc ===\"; $S/q failed:  fgetcsv(): the $escape parameter must be provided as its default value will change in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/q.php on line 26 Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/q.php on line 26 Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fgetsperf/q.php on line 26 Deprecated: fgetcsv(): the $escape parameter",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aa3318b9bc1480c1a47b74c4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T16:57:10.389Z",
+  "stored_at": "2026-08-24T16:57:10.389Z"
+}

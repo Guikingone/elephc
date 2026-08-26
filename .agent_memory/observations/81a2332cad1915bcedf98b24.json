@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git reset -q --soft HEAD~1 && git restore --staged .cargo && git commit -q -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg29.txt && git log --oneline -1; echo \"--- now the cargo config on its own ---\"; git status --short | grep -v codebase-memory | head -3",
+  "summary": "About to run: git reset -q --soft HEAD~1 && git restore --staged .cargo && git commit -q -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "81a2332cad1915bcedf98b24",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:37:30.133Z",
+  "stored_at": "2026-08-22T06:37:30.133Z"
+}

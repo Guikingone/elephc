@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"by_ref_widened_params\" -B2 -A3 src/types/checker/inference/objects/methods.rs | head -30",
+  "summary": "rtk proxy rg -n \"by_ref_widened_params\" -B2 -A3 src/types/checker/inference/objects/methods.rs | head -30: 528- let widened = by_ref 529- && self 530: .by_ref_widened_params 531- .contains(&(format!(\"{}::{}\", impl_class_name, method_key), i)); 532- if !widened { 533- sig.params[i].1 = -- 1136- let widened = by_ref 1137",
+  "text": "rtk proxy rg -n \"by_ref_widened_params\" -B2 -A3 src/types/checker/inference/objects/methods.rs | head -30: 528- let widened = by_ref 529- && self 530: .by_ref_widened_params 531- .contains(&(format!(\"{}::{}\", impl_class_name, method_key), i)); 532- if !widened { 533- sig.params[i].1 = -- 1136- let widened = by_ref 1137- && self 1138: .by_ref_widened_params 1139- .contains(&(format!(\"{}::{}\", class_name, php_symbol_key(method)), i)); 1140- if !widened { 1141- sig.params[i].1 = -- 1233- let widened = by_ref 1234- && self 1235: .by_ref_widened_params 1236- .contains(&(format!(\"{}::{}\", direct_impl_class_name, php_symbol_key(method)), i)); 1237- if !widened { 1238- sig.params[i].1 =",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ba8012c595a24b1bafa67c72",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:36:00.048Z",
+  "stored_at": "2026-08-16T20:36:00.049Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/file_object_bounds.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/file_object_bounds.rs: //! Purpose:\n//! Integration tests for the edges of `SplFileObject`/`SplFileInfo`: the flag matrix that decides\n//! the trailing element, what `seek()` does outside the file, and wh",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/spl/file_object_bounds.rs: //! Purpose:\n//! Integration tests for the edges of `SplFileObject`/`SplFileInfo`: the flag matrix that decides\n//! the trailing element, what `seek()` does outside the file, and what a stat-backed getter does\n//! when it cannot stat.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - THE TRAILING ELEMENT TAKES THREE SHAPES, and which one it takes depends on TWO flags. Two\n//!   earlier readings of this each had half of it because neither varied `READ_AHEAD`. MEASURED\n//!   over the whole 6 file shapes × 8 flags matrix on `php -n` 8.5.6.\n//! - `SKIP",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "75aae43793d5725484e25f6a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T10:01:56.853Z",
+  "stored_at": "2026-08-25T10:01:56.853Z"
+}

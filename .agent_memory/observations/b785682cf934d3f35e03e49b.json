@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nclass RF extends php_user_filter { public function filter($in,$out,&$c,$cl): int { return PSFS_PASS_ON; } }\\ntry { var_dump(stream_filter_register(\"my.x\", \"\")); } catch (\\\\Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\\\n\"; }\\ntry { var_dump(stream_filter_register(\"\", \"RF\")); } catch (\\\\Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\\\n\"; }\\nvar_dump(stream_filter_register(\"my… [+187 chars truncated]",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nclass RF",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b785682cf934d3f35e03e49b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:42:43.874Z",
+  "stored_at": "2026-08-17T08:42:43.874Z"
+}

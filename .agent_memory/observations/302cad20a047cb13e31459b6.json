@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"spec.params\" src | head -5; grep -rn \"pub params\" src/builtins | head -10",
+  "summary": "grep -rn \"spec.params\" src | head -5; grep -rn \"pub params\" src/builtins | head -10: src/types/checker/builtins/out_params.rs:44: def.spec.params.iter().find(|param| param.name == name), src/types/checker/builtins/out_params.rs:46: _ => (arg, def.spec.params.get(index)), src/types/checker/builtins/out_params.rs:53: Non",
+  "text": "grep -rn \"spec.params\" src | head -5; grep -rn \"pub params\" src/builtins | head -10: src/types/checker/builtins/out_params.rs:44: def.spec.params.iter().find(|param| param.name == name), src/types/checker/builtins/out_params.rs:46: _ => (arg, def.spec.params.get(index)), src/types/checker/builtins/out_params.rs:53: None if index >= def.spec.params.len() => def.spec.variadic_writes, src/types/checker/builtins/out_params.rs:93: def.spec.params.iter().find(|param| param.name == name), src/types/checker/builtins/out_params.rs:95: _ => (arg, def.spec.params.get(index)), src/builtins/registry.rs:38: pub params: Vec<(String, PhpType)>,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "302cad20a047cb13e31459b6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:01:30.980Z",
+  "stored_at": "2026-08-21T11:01:30.981Z"
+}

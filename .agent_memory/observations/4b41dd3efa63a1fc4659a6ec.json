@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/spl-file-object-streams.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/spl-file-object-streams.php: <?php\n$t = new SplTempFileObject();\n$t->fwrite(\"temp\\n\");\n$t->rewind();\necho \"temp \", var_export($t->current",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/spl-file-object-streams.php: <?php\n$t = new SplTempFileObject();\n$t->fwrite(\"temp\\n\");\n$t->rewind();\necho \"temp \", var_export($t->current(), true), \"\\n\";\n\n$m = new SplFileObject(\"php://memory\", \"r+\");\n$m->fwrite(\"mem\\none\\n\");\n$m->rewind();\necho \"memory \";\nforeach ($m as $i => $line) { echo $i, \":\", var_export($line, true), \";\"; }\necho \"\\n\";\n\nfile_put_contents(\"rw.txt\", \"first\\n\");\n$f = new SplFileObject(\"rw.txt\", \"r+\");\n$f->fseek(0, SEEK_END);\n$f->fwrite(\"second\\n\");\n$f->rewind();\necho \"rw \";\nforeach ($f as $i => $line) { echo $i, \":\", rtrim($line, \"\\n\"), \";\"; }\necho \"\\n\";\n\n$t2 = new SplTempFileObject();\n$t2->fwrite(\"a\\n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4b41dd3efa63a1fc4659a6ec",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:25:57.857Z",
+  "stored_at": "2026-08-24T20:25:57.857Z"
+}

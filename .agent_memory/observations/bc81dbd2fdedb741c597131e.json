@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -oE 'STREAM_[A-Z_]+_OFFSET: i64 = [0-9]+' src/codegen_support/runtime/resources/layout.rs | awk -F'= ' '{print $2}' | sort -n | tr '\\n' ' '",
+  "summary": "grep -oE 'STREAM_[A-Z_]+_OFFSET: i64 = [0-9]+' src/codegen_support/runtime/resources/layout.rs | awk -F'= ' '{print $2}' | sort -n | tr '\\n' ' ': 0 8 16 16 24 32 40 48 56 64 80 88 96 104 144 152 160 168 176 184 192 200 208 216 224 232 240 248 256 296",
+  "text": "grep -oE 'STREAM_[A-Z_]+_OFFSET: i64 = [0-9]+' src/codegen_support/runtime/resources/layout.rs | awk -F'= ' '{print $2}' | sort -n | tr '\\n' ' ': 0 8 16 16 24 32 40 48 56 64 80 88 96 104 144 152 160 168 176 184 192 200 208 216 224 232 240 248 256 296",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bc81dbd2fdedb741c597131e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T16:02:37.146Z",
+  "stored_at": "2026-08-26T16:02:37.147Z"
+}

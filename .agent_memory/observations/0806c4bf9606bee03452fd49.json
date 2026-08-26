@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"stream_select\" crates/elephc-builtin-contract/src/*.rs | head -5",
+  "summary": "grep -rn \"stream_select\" crates/elephc-builtin-contract/src/*.rs | head -5: crates/elephc-builtin-contract/src/catalog_data.rs:16513: id: BuiltinId::from_canonical_name(\"stream_select\"), crates/elephc-builtin-contract/src/catalog_data.rs:16514: name: \"stream_select\", crates/elephc-builtin-contract/src/catalog_data.rs:1",
+  "text": "grep -rn \"stream_select\" crates/elephc-builtin-contract/src/*.rs | head -5: crates/elephc-builtin-contract/src/catalog_data.rs:16513: id: BuiltinId::from_canonical_name(\"stream_select\"), crates/elephc-builtin-contract/src/catalog_data.rs:16514: name: \"stream_select\", crates/elephc-builtin-contract/src/catalog_data.rs:16547: // distinction is real: `stream_select($r, $w, $e, null)` blocks forever because crates/elephc-builtin-contract/src/catalog_data.rs:16548: // there is no timeout at all, while `stream_select($r, $w, $e, 0, 0)` polls. A",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0806c4bf9606bee03452fd49",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:50:01.737Z",
+  "stored_at": "2026-08-21T16:50:01.738Z"
+}

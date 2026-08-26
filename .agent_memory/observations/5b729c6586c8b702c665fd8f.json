@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn eval_predefined_constant\\|=> None\" -B 2 -A 4 crates/elephc-magician/src/interpreter/constant_eval.rs | head -30",
+  "summary": "grep -n \"fn eval_predefined_constant\\|=> None\" -B 2 -A 4 crates/elephc-magician/src/interpreter/constant_eval.rs | head -30: 57- 58-/// Materializes one eval-visible predefined constant into a runtime cell. 59:fn eval_predefined_constant( 60- name: &str, 61- values: &mut impl RuntimeValueOps, 62-) -> Result<Option<Runt",
+  "text": "grep -n \"fn eval_predefined_constant\\|=> None\" -B 2 -A 4 crates/elephc-magician/src/interpreter/constant_eval.rs | head -30: 57- 58-/// Materializes one eval-visible predefined constant into a runtime cell. 59:fn eval_predefined_constant( 60- name: &str, 61- values: &mut impl RuntimeValueOps, 62-) -> Result<Option<RuntimeCellHandle>, EvalStatus> { 63- let Some(value) = eval_predefined_constant_value(name) else { -- 72- 73-/// Returns eval-visible predefined constants that do not live in dynamic context. 74:pub(in crate::interpreter) fn eval_predefined_constant_value( 75- name: &str, 76-) -> Option<EvalPredefinedConstant> { 77- match name.trim_start_matches('\\\\') { 78- \"PHP_URL_SCHEME\" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_SCHEME)), -- 188- \"PHP_SAPI\" => Some(EvalPredefinedConstant::String(EVAL_PHP_SAPI)), 189- \"DIRECTORY_SEPARATOR\" => Some(EvalPredefinedConstant::String(\"/\")), 190: _ => None, 191- } 192-} 193- 194-/// Returns the PHP OS constant for the host platform running the eval bridge.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5b729c6586c8b702c665fd8f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:25:36.943Z",
+  "stored_at": "2026-08-22T09:25:36.944Z"
+}

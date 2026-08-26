@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '281,330p' src/types/checker/functions/resolution/specialization.rs",
+  "summary": "rtk proxy sed -n '281,330p' src/types/checker/functions/resolution/specialization.rs:  different scalar pushes its raw machine word into that layout — read // back reinterpreted, with no diagnostic. // // The join uses `union_param_type`, not `wider_type`: a variadic tail is a PHP array // whose elements keep their own",
+  "text": "rtk proxy sed -n '281,330p' src/types/checker/functions/resolution/specialization.rs:  different scalar pushes its raw machine word into that layout — read // back reinterpreted, with no diagnostic. // // The join uses `union_param_type`, not `wider_type`: a variadic tail is a PHP array // whose elements keep their own type tags, so an int seen next to a float must become // `Mixed` (boxed) rather than being coerced to `Float` and stored as raw bits. if stored_sig.variadic.is_some() && seen_idx > regular_param_count && !variadic_param_is_by_ref(stored_sig) { let regular_names: Vec<String> = stored_sig.params[..regular_param_count] .iter() .map(|(name, _)| name.clone()) .collect(); let joined = if Self::has_unknown_named_variadic_arg(args, &regular_names) { PhpType::Iterable } else { let mut elem_ty = actual_arg_types[regular_param_count].clone(); for actual_ty in actual_arg_types.iter().skip(regular_param_count + 1) { elem_ty = Self::union_param_type(&elem_ty, actual_ty);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1c60bf5f92a4a421baa758d1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:44:24.083Z",
+  "stored_at": "2026-08-16T19:44:24.083Z"
+}

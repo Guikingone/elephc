@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "L=/Users/guillaumeloulier/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186; grep -rn \"GLOB_\" \"$L/src/unix/bsd/apple/mod.rs\" | head -20; echo \"--- SDK header (ground truth) ---\"; H=$(xcrun --show-sdk-path 2>/dev/null)/usr/include/glob.h; grep -n \"define[[:space:]]*GLOB_\" \"$H\" | head -25",
+  "summary": "L=/Users/guillaumeloulier/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186; grep -rn \"GLOB_\" \"$L/src/unix/bsd/apple/mod.rs\" | head -20; echo \"--- SDK header (ground truth) ---\"; H=$(xcrun --show-sdk-path 2>/dev/null)/usr/include/glob.h; grep -n \"define[[:space:]]*GLOB_\" \"$H\" | head -25 failed: This ses",
+  "text": "L=/Users/guillaumeloulier/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186; grep -rn \"GLOB_\" \"$L/src/unix/bsd/apple/mod.rs\" | head -20; echo \"--- SDK header (ground truth) ---\"; H=$(xcrun --show-sdk-path 2>/dev/null)/usr/include/glob.h; grep -n \"define[[:space:]]*GLOB_\" \"$H\" | head -25 failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command is too complex to verify that it stays inside the worktree. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Split it into plain, separate commands and run them from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "da367d6c94b800621c2bada8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:54:33.678Z",
+  "stored_at": "2026-08-22T08:54:33.678Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -A16 \"^=== DIFF stream_context_set_option_basic\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/results.txt | head -22",
+  "summary": "rg -A16 \"^=== DIFF stream_context_set_option_basic\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/results.txt | head -22: === DIFF stream_context_set_option_basic --- php bool(true) Deprecated: Cal",
+  "text": "rg -A16 \"^=== DIFF stream_context_set_option_basic\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/results.txt | head -22: === DIFF stream_context_set_option_basic --- php bool(true) Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options() instead in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/work/stream_context_set_option_basic/stream_context_set_option_basic.php on line 14 bool(true) array(1) { [\"http\"]=> array(3) { [\"method\"]=> string(4) \"POST\" [\"protocol_version\"]=> float(1.1) [\"user_agent\"]=> string(10) \"PHPT Agent\" } }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6e8c5f8b6d67404b4ede7426",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:47:44.415Z",
+  "stored_at": "2026-08-17T06:47:44.416Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"parse_property_hooks(\" src/parser/stmt/oop/body.rs | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"parse_property_hooks(\" src/parser/stmt/oop/body.rs | head: 337: parse_property_hooks(tokens, pos, member_span, &prop_name, type_expr.as_ref())?; 817: parse_property_hooks(tokens, pos, member_span, &prop_name, type_e",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"parse_property_hooks(\" src/parser/stmt/oop/body.rs | head: 337: parse_property_hooks(tokens, pos, member_span, &prop_name, type_expr.as_ref())?; 817: parse_property_hooks(tokens, pos, member_span, &prop_name, type_expr.as_ref())?; 899:fn parse_property_hooks(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ebb9ac59a226fdd9e70a8132",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:40:22.184Z",
+  "stored_at": "2026-08-23T08:40:22.184Z"
+}

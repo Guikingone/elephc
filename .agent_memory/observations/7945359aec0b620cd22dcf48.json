@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(io): `php://temp` is at EOF one read before every other stream, and elephc never was\n\nMEASURED on `php -n` 8.5.6 over `\"a\\nbb\\n\"`: the `fgets()` that returns the final `\"bb\\n\"`\nleaves `feof()` TRUE on `php://temp` and FALSE on `php://memory` and on a plain file.\n`stream_get_line()` agrees with `fgets()`. `fread()` and `fgetc()` never differ, on any of\nthe three. It is not a size effect either — a first line of 9001 bytes, well past the\nchunk, answers exactly the same way.\n\nThe reason is php-src's own plumbing rather than a rule about tempo… [+978 chars truncated]",
+  "summary": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(io): `php://temp` is at EOF one read before every other stream, and elephc never was\n\nMEASURED on `php -n` 8.5.6 over `\"a\\nbb\\n\"`: the `fgets()` that returns the final `\"bb\\n\"`\nleaves `feof()` TRUE on `php://temp` and FALSE on `php://memory` and on a plain file.\n`s",
+  "text": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(io): `php://temp` is at EOF one read before every other stream, and elephc never was\n\nMEASURED on `php -n` 8.5.6 over `\"a\\nbb\\n\"`: the `fgets()` that returns the final `\"bb\\n\"`\nleaves `feof()` TRUE on `php://temp` and FALSE on `php://memory` and on a plain file.\n`stream_get_line()` agrees with `fgets()`. `fread()` and `fgetc()` never differ, on any of\nthe three. It is not a size effect either — a first line of 9001 bytes, well past the\nchunk, answers exactly the same way.\n\nThe reason is php-src's own plumbing rather than a rule about temporary files. `php://temp`\nWRAPS an inner memory stream and copies that stream's `eof` after every read. A line read\nasks for a whole chunk, so filling the buffer drives the inner stream one read past its\nlast byte — the read that returns nothing and raises its `eof`. A sized `fread()` stops as\nsoon as it has what the caller asked for, and never makes that extra read.\n\nSo this reproduces the extra READ rather than guessing at its consequence: a line reader\nthat has emptied the holding area on a temp stream fills it once more. Bytes arriving keep\nthe stream open — that is the 9001-byte case, where the probe finds the next line already\nin hand — and nothing arriving is the end. A seek still clears it, because a seek always\ndid.\n\nIt runs AFTER the line has been published, never before: the fill claims a concat window\nof its own, and run while the line still held one it would build its chunk on top of the\nline and hand back bytes that had moved.\nMSG\ngit log --oneline -1: f8eca652e fix(io): `php://temp` is at EOF one read before every other stream, and elephc never was",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7945359aec0b620cd22dcf48",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:37:19.733Z",
+  "stored_at": "2026-08-25T14:37:19.733Z"
+}

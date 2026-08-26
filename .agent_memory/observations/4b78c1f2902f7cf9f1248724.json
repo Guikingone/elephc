@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 dynamic_wrapper_url.py 2>&1",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 dynamic_wrapper_url.py 2>&1: SAME literal php : 'string(14) \"one two three \"' SAME concat php : 'string(14) \"one two three \"' SAME var_whol",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 dynamic_wrapper_url.py 2>&1: SAME literal php : 'string(14) \"one two three \"' SAME concat php : 'string(14) \"one two three \"' SAME var_whole php : 'string(14) \"one two three \"' SAME param php : 'string(14) \"one two three \"' DIFFERS fgc_concat php : 'string(14) \"one two three \"' elephc : 'Warning: file_get_contents(compress.zlib://sample.gz): Failed to open stream: No such file or directory in fgc' DIFFERS file_concat php : 'int(3)' elephc : 'Warning: file_get_contents(compress.zlib://sample.gz): Failed to open stream: No such file or directory in fil' SAME data_concat php : 'string(3) \"one\"'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4b78c1f2902f7cf9f1248724",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:18:52.159Z",
+  "stored_at": "2026-08-21T11:18:52.160Z"
+}

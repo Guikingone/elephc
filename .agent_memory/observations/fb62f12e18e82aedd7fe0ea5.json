@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test zz_temp_probe 2>&1 | tail -25",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test zz_temp_probe 2>&1 | tail -25: Finished `test` profile [unoptimized] target(s) in 0.56s Running tests/ir_backend_smoke_test.rs (target/debug/deps/ir_backend_smoke_test-4051ca592f0a1f58) running 1 test test zz_temp_pr",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test zz_temp_probe 2>&1 | tail -25: Finished `test` profile [unoptimized] target(s) in 0.56s Running tests/ir_backend_smoke_test.rs (target/debug/deps/ir_backend_smoke_test-4051ca592f0a1f58) running 1 test test zz_temp_probe_preg_matches_shape ... FAILED failures: ---- zz_temp_probe_preg_matches_shape stdout ---- thread 'zz_temp_probe_preg_matches_shape' (64706277) panicked at tests/ir_backend_smoke_test.rs:6967:5: elephc failed for zz_temp_probe: stderr=error[6:6]: preg_match_all() takes exactly 2 arguments note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace failures: zz_temp_probe_preg_matches_shape test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 257 filtered out; finished in 2.81s error: test failed, to rerun pass `-p elephc --test ir_backend_smoke_test`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fb62f12e18e82aedd7fe0ea5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:11:57.625Z",
+  "stored_at": "2026-08-25T13:11:57.625Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nullres.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nullres.php: <?php\n// A wrong argument type is a CATCHABLE TypeError in php, not a compile-time refusal.\ntry {\n    fgetc(null);\n} catch (TypeError",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nullres.php: <?php\n// A wrong argument type is a CATCHABLE TypeError in php, not a compile-time refusal.\ntry {\n    fgetc(null);\n} catch (TypeError $e) {\n    echo \"caught: \", $e->getMessage(), \"\\n\";\n}\ntry {\n    $r = fread($undefinedHandle, 10);\n    var_dump($r);\n} catch (TypeError $e) {\n    echo \"caught2: \", $e->getMessage(), \"\\n\";\n}\necho \"still running\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "97a9225414a85f512c2f5001",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:33:35.174Z",
+  "stored_at": "2026-08-23T17:33:35.174Z"
+}

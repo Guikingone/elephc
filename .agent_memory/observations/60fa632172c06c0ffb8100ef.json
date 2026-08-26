@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"^fn \\|^pub(super) fn \\|^pub fn \" src/tz_prelude/detect.rs",
+  "summary": "grep -n \"^fn \\|^pub(super) fn \\|^pub fn \" src/tz_prelude/detect.rs: 28:pub(super) fn program_uses_tz_introspection(program: &[Stmt]) -> bool { 34:fn name_is_tz_fn(name: &Name) -> bool { 47:fn name_is_eval_fn(name: &Name) -> bool { 54:fn method_is_tz(method: &str) -> bool { 62:fn callable_target_refs_tz(target: &Callabl",
+  "text": "grep -n \"^fn \\|^pub(super) fn \\|^pub fn \" src/tz_prelude/detect.rs: 28:pub(super) fn program_uses_tz_introspection(program: &[Stmt]) -> bool { 34:fn name_is_tz_fn(name: &Name) -> bool { 47:fn name_is_eval_fn(name: &Name) -> bool { 54:fn method_is_tz(method: &str) -> bool { 62:fn callable_target_refs_tz(target: &CallableTarget) -> bool { 72:fn params_ref_tz(params: &[(String, Option<TypeExpr>, Option<Expr>, bool)]) -> bool { 80:fn trait_use_refs_tz(_trait_use: &TraitUse) -> bool { 85:fn class_property_refs_tz(property: &ClassProperty) -> bool { 90:fn class_method_refs_tz(method: &ClassMethod) -> bool { 95:fn class_const_refs_tz(constant: &ClassConst) -> bool { 100:fn enum_case_refs_tz(case: &EnumCaseDecl) -> bool { 106:fn packed_field_refs_tz(_field: &PackedField) -> bool { 112:fn instanceof_target_refs_tz(target: &InstanceOfTarget) -> bool { 122:fn expr_refs_tz(expr: &Expr) -> bool { 254:fn stmt_refs_tz(stmt: &Stmt) -> bool {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "60fa632172c06c0ffb8100ef",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:41:22.080Z",
+  "stored_at": "2026-08-21T10:41:22.080Z"
+}

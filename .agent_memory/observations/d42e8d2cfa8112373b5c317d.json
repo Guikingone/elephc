@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "Eh bah go, on prend tout, ça doit être 100% compliant côté streams avec PHP",
+  "summary": "Eh bah go, on prend tout, ça doit être 100% compliant côté streams avec PHP",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d42e8d2cfa8112373b5c317d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:26:54.084Z",
+  "stored_at": "2026-08-21T17:26:54.084Z",
+  "low_signal": true
+}

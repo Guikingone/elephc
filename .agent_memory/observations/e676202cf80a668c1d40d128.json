@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '260,300p' src/pipeline.rs; echo \"=== signature ===\"; grep -n \"pub fn inject_if_used\" -A 10 src/opcache_prelude.rs | head -14",
+  "summary": "sed -n '260,300p' src/pipeline.rs; echo \"=== signature ===\"; grep -n \"pub fn inject_if_used\" -A 10 src/opcache_prelude.rs | head -14:  let phase_started = Instant::now(); let ast = crate::image_prelude::inject_if_used( ast, with_crates.contains(\"image\"), &mut prelude_inventory, ); timings.record_since(\"image-prelude\", ",
+  "text": "sed -n '260,300p' src/pipeline.rs; echo \"=== signature ===\"; grep -n \"pub fn inject_if_used\" -A 10 src/opcache_prelude.rs | head -14:  let phase_started = Instant::now(); let ast = crate::image_prelude::inject_if_used( ast, with_crates.contains(\"image\"), &mut prelude_inventory, ); timings.record_since(\"image-prelude\", phase_started); // Inject the incremental-hashing prelude (the `HashContext` class and the // `hash_init`/`hash_update`/`hash_final`/`hash_copy` wrappers over the internal // `__elephc_hash_ctx_*` builtins) only when the program references that surface, // so non-hashing binaries never declare `HashContext` and never link // `-lelephc_crypto`. Runs after include resolution so hashing inside includes is // detected, and before name resolution so a namespaced caller resolves to it. crate::progress::phase(\"hash-prelude\"); let phase_started = Instant::now(); let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory); timings.record_since(\"hash-prelude\", phase_started); === signature ===",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e676202cf80a668c1d40d128",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:43:42.340Z",
+  "stored_at": "2026-08-21T12:43:42.341Z"
+}

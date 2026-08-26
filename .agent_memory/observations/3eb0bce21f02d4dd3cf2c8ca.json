@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/filterown.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/filterown.php: <?php\n// Which filter names does php consider ALREADY TAKEN?\nclass RF extends php_user_filter {\n    public function filter($in, ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/filterown.php: <?php\n// Which filter names does php consider ALREADY TAKEN?\nclass RF extends php_user_filter {\n    public function filter($in, $out, &$c, $cl): int { return PSFS_PASS_ON; }\n}\n$names = [\n    \"string.toupper\", \"string.tolower\", \"string.rot13\", \"string.strip_tags\",\n    \"zlib.deflate\", \"zlib.inflate\", \"bzip2.compress\", \"bzip2.decompress\",\n    \"convert.iconv.UTF-8/ISO-8859-1\", \"convert.base64-encode\",\n    \"convert.quoted-printable-encode\", \"dechunk\", \"consumed\",\n    \"not.a.real.filter\",\n];\nforeach ($names as $n) {\n    echo str_pad($n, 34), var_export(stream_filter_register($n, \"RF\"), true), \"\\n\";\n",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3eb0bce21f02d4dd3cf2c8ca",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:46:49.574Z",
+  "stored_at": "2026-08-17T08:46:49.575Z"
+}

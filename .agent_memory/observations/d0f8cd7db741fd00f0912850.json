@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd ~/.cache/elephc; otool -r runtime-v0.26.5-macos-aarch64-rtdf0d2c118e429349-heap8388608.o 2>/dev/null | awk '$1==\"00033160\" || $1==\"00033178\" {print}' | head -4; echo \"(none printed = no relocation at that address)\"",
+  "summary": "cd ~/.cache/elephc; otool -r runtime-v0.26.5-macos-aarch64-rtdf0d2c118e429349-heap8388608.o 2>/dev/null | awk '$1==\"00033160\" || $1==\"00033178\" {print}' | head -4; echo \"(none printed = no relocation at that address)\": 00033178 1 2 1 2 0 221 (none printed = no relocation at that address)",
+  "text": "cd ~/.cache/elephc; otool -r runtime-v0.26.5-macos-aarch64-rtdf0d2c118e429349-heap8388608.o 2>/dev/null | awk '$1==\"00033160\" || $1==\"00033178\" {print}' | head -4; echo \"(none printed = no relocation at that address)\": 00033178 1 2 1 2 0 221 (none printed = no relocation at that address)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d0f8cd7db741fd00f0912850",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:21:16.241Z",
+  "stored_at": "2026-08-23T12:21:16.242Z"
+}

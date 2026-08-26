@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/php_substreams.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/php_substreams.py: \"\"\"`php://memory` and its five siblings were readable and writable ONLY through `fopen()`.\n\nMEASURED on `php -n` 8.5.6 — every ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/php_substreams.py: \"\"\"`php://memory` and its five siblings were readable and writable ONLY through `fopen()`.\n\nMEASURED on `php -n` 8.5.6 — every one of these answers, and every one of them was `false` with\n`Failed to open stream: No such file or directory` in elephc:\n\n    file_put_contents  php://output 14 (through the output BUFFER)   php://stdout 14 (past it)\n                       php://stderr 14   php://memory 14   php://temp 12   php://input false\n    file_get_contents  php://memory \"\"   php://temp \"\"     php://output \"\"  php://stdout \"\"\n\nThe one-shot readers and writers went straight to `open(2)`, which k",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "27b0985da85e874543c36e4f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:19:43.609Z",
+  "stored_at": "2026-08-22T21:19:43.609Z"
+}

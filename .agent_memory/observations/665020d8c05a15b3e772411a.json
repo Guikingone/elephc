@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '114,124p;225,233p;1057,1068p;1129,1140p' src/codegen_support/runtime/io/ob_buffer.rs",
+  "summary": "sed -n '114,124p;225,233p;1057,1068p;1129,1140p' src/codegen_support/runtime/io/ob_buffer.rs: emitter, \"x0\", gated_msg.0); // load the flags-gated notice prefix emitter.instruction(&format!(\"mov x1, #{}\", gated_msg.1)); // notice prefix byte length emitter.instruction(\"mov rdx, QWORD PTR [rbp - 24]\"); // return the raw",
+  "text": "sed -n '114,124p;225,233p;1057,1068p;1129,1140p' src/codegen_support/runtime/io/ob_buffer.rs: emitter, \"x0\", gated_msg.0); // load the flags-gated notice prefix emitter.instruction(&format!(\"mov x1, #{}\", gated_msg.1)); // notice prefix byte length emitter.instruction(\"mov rdx, QWORD PTR [rbp - 24]\"); // return the raw contents length emitter.instruction(&format!(\"jmp {done}\")); // finish emitter.label(&fail); if let Some((msg_sym, msg_len)) = no_buffer_msg { abi::emit_symbol_address(emitter, \"rdi\", msg_sym); // load the no-buffer notice line emitter.instruction(&format!(\"mov esi, {}\", msg_len)); // notice byte length emitter.instruction(\"call __rt_stdout_write\"); // write the notice through the funnel } emitter.instruction(&format!(\"jmp {none}\")); // return the null failure pair emitter.label(&gated); abi::emit_symbol_address(emitter, \"rdi\", gated_msg.0); // load the flags-gated notice prefix emitter.instruction(&format!(\"mov esi, {}\", gated_msg.1)); // notice prefix byte length",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "665020d8c05a15b3e772411a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T17:04:29.560Z",
+  "stored_at": "2026-08-19T17:04:29.560Z"
+}

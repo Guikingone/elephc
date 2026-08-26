@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bt97ph7lq.output 2>/dev/null; echo \"--- RAM top ---\"; ps -o rss=,comm= -ax 2>/dev/null | sort -rn | head -3 | awk '{printf \"%.1f GB  %s\\n\", $1/1048576, $2}'; echo \"--- free disk ---\"; df -h /Users/guillaumeloulier 2>&1 | tail -1",
+  "summary": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bt97ph7lq.output 2>/dev/null; echo \"--- RAM top ---\"; ps -o rss=,comm= -ax 2>/dev/null | sort -rn | head -3 | awk '{printf \"%.1f GB  %s\\n\", $1/1048576, $2}';",
+  "text": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bt97ph7lq.output 2>/dev/null; echo \"--- RAM top ---\"; ps -o rss=,comm= -ax 2>/dev/null | sort -rn | head -3 | awk '{printf \"%.1f GB  %s\\n\", $1/1048576, $2}'; echo \"--- free disk ---\"; df -h /Users/guillaumeloulier 2>&1 | tail -1: shed in 25.31s null_sentinel rc=0 test result: ok. 33 passed; 0 failed; 3 ignored; 0 measured; 8796 filtered out; finished in 9.26s objects rc=101 test result: FAILED. 243 passed; 3 failed; 0 ignored; 0 measured; 8586 filtered out; finished in 67.76s oop rc=0 test result: ok. 588 passed; 0 failed; 0 ignored; 0 measured; 8244 filtered out; finished in 167.94s optimizer rc=101 test result: FAILED. 326 passed; 1 failed; 1 ignored; 0 measured; 8504 filtered out; finished in 94.81s regressions rc=101 test result: FAILED. 340 passed; 2 failed; 0 ignored; 0 measured; 8490 filtered out; finished in 94.13s runtime_gc rc=101 test result: FAILED. 341 passed; 1 failed; 0 ignored; 0 measured; 8490 filtered out; finished in 99.39s --- RAM top --- 0.9 GB /Applications/Kaspersky 0.6 GB /Applications/Brave 0.5 GB claude --- free disk --- /dev/disk3s5 460Gi 422Gi 10Gi 98% 5.6M 109M 5% /System/Volumes/Data",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e3f76c3b63ed358bdfab7c3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:19:02.697Z",
+  "stored_at": "2026-08-22T07:19:02.699Z"
+}

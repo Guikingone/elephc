@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"label_global(\\\"__rt_\" src/codegen_support/runtime/io/stream_wrapper_lookup.rs src/codegen_support/runtime/io/wrapper*.rs 2>/dev/null | head -10; echo \"=== files ===\"; ls src/codegen_support/runtime/io/ | grep -iE \"wrapper|scheme\" | head -15",
+  "summary": "grep -rn \"label_global(\\\"__rt_\" src/codegen_support/runtime/io/stream_wrapper_lookup.rs src/codegen_support/runtime/io/wrapper*.rs 2>/dev/null | head -10; echo \"=== files ===\"; ls src/codegen_support/runtime/io/ | grep -iE \"wrapper|scheme\" | head -15: (eval):1: no matches found: src/codegen_support/runtime/io/wrapper*.",
+  "text": "grep -rn \"label_global(\\\"__rt_\" src/codegen_support/runtime/io/stream_wrapper_lookup.rs src/codegen_support/runtime/io/wrapper*.rs 2>/dev/null | head -10; echo \"=== files ===\"; ls src/codegen_support/runtime/io/ | grep -iE \"wrapper|scheme\" | head -15: (eval):1: no matches found: src/codegen_support/runtime/io/wrapper*.rs === files === builtin_wrapper_index.rs path_is_wrapper.rs php_wrapper_open.rs readfile_wrapper.rs socket_scheme.rs stream_get_wrappers.rs stream_wrapper_register.rs stream_wrapper_unregister.rs unknown_wrapper_warning.rs user_wrapper.rs user_wrapper_cast.rs user_wrapper_dir.rs user_wrapper_path_op.rs user_wrapper_set_option.rs user_wrapper_table.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "232d005d2046dbae47259bc3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:54:20.109Z",
+  "stored_at": "2026-08-21T16:54:20.110Z"
+}

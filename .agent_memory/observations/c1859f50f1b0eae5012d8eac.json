@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '15048,15100p;16246,16300p' tests/codegen/io/streams.rs",
+  "summary": "sed -n '15048,15100p;16246,16300p' tests/codegen/io/streams.rs:  apply, and each of these installs a per-fd handle and a /// program-local helper thunk instead, so the lowering now emits the attach SEQUENCES at the /// call site and picks between them by comparing the name. /// /// The refusals matter as much as the at",
+  "text": "sed -n '15048,15100p;16246,16300p' tests/codegen/io/streams.rs:  apply, and each of these installs a per-fd handle and a /// program-local helper thunk instead, so the lowering now emits the attach SEQUENCES at the /// call site and picks between them by comparing the name. /// /// The refusals matter as much as the attaches. `convert.iconv.` and `convert.iconv.UTF-8` carry /// no separator, so php has no filter for them and answers `false`; `convert.iconv.nope/alsonope` /// names a conversion `iconv_open()` cannot open, and php finds that out when it CREATES the /// filter, so that is `false` too. An EMPTY half is none of those — iconv reads it as the current /// locale's charset, and php attaches. All measured on `php -n` 8.5.6. #[test] fn test_stream_filter_append_resolves_a_run_time_filter_name() { let out = compile_and_run( r#\"<?php $names = [\"zlib.deflate\", \"zlib.inflate\", \"bzip2.compress\", \"bzip2.decompress\", \"convert.iconv.UTF-8/ISO-8859-1\"];",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c1859f50f1b0eae5012d8eac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:09:49.934Z",
+  "stored_at": "2026-08-18T15:09:49.935Z"
+}

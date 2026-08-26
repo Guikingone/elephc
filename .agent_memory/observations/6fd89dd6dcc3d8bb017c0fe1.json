@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test uncaught_exception_report_tests 2>&1 | tail -4; CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --lib 2>&1 | tail -3",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test uncaught_exception_report_tests 2>&1 | tail -4; CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --lib 2>&1 | tail -3: test uncaught_empty_message_omits_the_separator ... ok test result: ok. 8 passed; 0 failed; 0",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test uncaught_exception_report_tests 2>&1 | tail -4; CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --lib 2>&1 | tail -3: test uncaught_empty_message_omits_the_separator ... ok test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.82s test result: ok. 1537 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 93.55s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6fd89dd6dcc3d8bb017c0fe1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:36:19.275Z",
+  "stored_at": "2026-08-26T09:36:19.275Z"
+}

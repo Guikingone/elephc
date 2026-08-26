@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls ~/php-src 2>/dev/null | head -3; ls /Users/guillaumeloulier/PhpstormProjects/oss/php-src 2>/dev/null | head -3; find / -maxdepth 4 -name \"php_glob.h\" 2>/dev/null | head -5",
+  "summary": "About to run: ls ~/php-src 2>/dev/null | head -3; ls /Users/guillaumeloulier/PhpstormProjects/oss/php-src 2>/dev/null | head -3; find / -maxdepth 4 -name \"php_glob.h\" 2>/dev/null | head -5",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a3a926ceae7ac00364c6c6ae",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:53:23.435Z",
+  "stored_at": "2026-08-22T08:53:23.435Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"O_CLOEXEC\\|O_NONBLOCK\\|cloexec\\|0x1000000\\|FD_CLOEXEC\" src/codegen_support/platform/target.rs src/codegen_support/runtime/io/fopen.rs | head -10; echo \"(empty = not handled)\"",
+  "summary": "grep -rn \"O_CLOEXEC\\|O_NONBLOCK\\|cloexec\\|0x1000000\\|FD_CLOEXEC\" src/codegen_support/platform/target.rs src/codegen_support/runtime/io/fopen.rs | head -10; echo \"(empty = not handled)\": src/codegen_support/platform/target.rs:89: /// `O_NONBLOCK` open/`fcntl` flag bit — the value differs between macOS (empty = not handl",
+  "text": "grep -rn \"O_CLOEXEC\\|O_NONBLOCK\\|cloexec\\|0x1000000\\|FD_CLOEXEC\" src/codegen_support/platform/target.rs src/codegen_support/runtime/io/fopen.rs | head -10; echo \"(empty = not handled)\": src/codegen_support/platform/target.rs:89: /// `O_NONBLOCK` open/`fcntl` flag bit — the value differs between macOS (empty = not handled)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d8372f419b285ef3cca51dbf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:23:31.207Z",
+  "stored_at": "2026-08-14T14:23:31.207Z"
+}

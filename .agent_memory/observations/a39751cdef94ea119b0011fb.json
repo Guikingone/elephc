@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sgl2.php','w').write('''<?php\n// blocking file, last line without a delimiter: php hands it back\n$p = \"sgl2.txt\";\nfile_put_contents($p, \"one\\\\ntwo\\\\nthree\");\n$h = fopen($p, \"rb\");\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nfclose($h);\nunlink($p);\n// the length cap wins o… [+667 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sgl2.php','w').write('''<?php\n// blocking file, last line without a delimiter: php hands it back\n$p = \"sgl2.txt\";\nfile_p",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sgl2.php','w').write('''<?php\n// blocking file, last line without a delimiter: php hands it back\n$p = \"sgl2.txt\";\nfile_put_contents($p, \"one\\\\ntwo\\\\nthree\");\n$h = fopen($p, \"rb\");\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nfclose($h);\nunlink($p);\n// the length cap wins over the delimiter\n$p2 = \"sgl2b.txt\";\nfile_put_contents($p2, \"abcdefghij\\\\nklm\");\n$h = fopen($p2, \"rb\");\nvar_dump(stream_get_line($h, 4, \"\\\\n\"));\nvar_dump(stream_get_line($h, 100, \"\\\\n\"));\nfclose($h);\nunlink($p2);\n// non-blocking, the LENGTH cap is reached before any delimiter\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nstream_set_blocking($pair[0], false);\nfwrite($pair[1], \"abcdefgh\");\nvar_dump(stream_get_line($pair[0], 4, \"\\\\n\"));\nvar_dump(stream_get_line($pair[0], 4, \"\\\\n\"));\nvar_dump(stream_get_line($pair[0], 4, \"\\\\n\"));\nfclose($pair[0]);\nfclose($pair[1]);\n''')\nPY\nzsh difftests.sh sgl2 2>&1 | head -22; echo \"=== php:\"; cat sgl2_p.txt: sgl2 IDENTICAL === php: string(3) \"one\" string(3) \"two\" string(5) \"three\" bool(false) string(4) \"abcd\" string(6) \"efghij\" string(4) \"abcd\" string(4) \"efgh\" bool(false)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a39751cdef94ea119b0011fb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:46:47.073Z",
+  "stored_at": "2026-08-17T15:46:47.075Z"
+}

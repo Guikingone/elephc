@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"sorted_classes\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs | head -3; rtk proxy grep -rn \"fn emit_user_class_data\\|sorted_classes:\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs | head -4",
+  "summary": "rtk proxy grep -n \"sorted_classes\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs | head -3; rtk proxy grep -rn \"fn emit_user_class_data\\|sorted_classes:\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-c",
+  "text": "rtk proxy grep -n \"sorted_classes\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs | head -3; rtk proxy grep -rn \"fn emit_user_class_data\\|sorted_classes:\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs | head -4: retain(|(class_name, _)| allowed_class_names.contains(*class_name)); 138: sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs:134: let mut sorted_classes: Vec<(&String, &ClassInfo)> = classes.iter().collect(); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs:1233: sorted_classes: &[(&String, &ClassInfo)], /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs:1521: sorted_classes: &[(&String, &ClassInfo)], /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/user.rs:1646: sorted_classes: &[(&String, &ClassInfo)],",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dc25f6e7bbd0674dd5bd6cc2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:49:13.631Z",
+  "stored_at": "2026-08-17T09:49:13.632Z"
+}

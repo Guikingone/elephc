@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git status --short -- src tests crates scripts docs | head -30",
+  "summary": "git status --short -- src tests crates scripts docs | head -30: _count.md M docs/internals/builtins/_internal/__elephc_object_prop_name.md M docs/internals/builtins/_internal/__elephc_object_prop_value.md M docs/internals/builtins/_internal/__elephc_pdo_adapter_addr.md M docs/internals/builtins/_internal/__elephc_pdo_c",
+  "text": "git status --short -- src tests crates scripts docs | head -30: _count.md M docs/internals/builtins/_internal/__elephc_object_prop_name.md M docs/internals/builtins/_internal/__elephc_object_prop_value.md M docs/internals/builtins/_internal/__elephc_pdo_adapter_addr.md M docs/internals/builtins/_internal/__elephc_pdo_called_class_status.md M docs/internals/builtins/_internal/__elephc_pdo_statement_class_status.md M docs/internals/builtins/_internal/__elephc_phar_bzip2_archive.md M docs/internals/builtins/_internal/__elephc_phar_decompress_archive.md M docs/internals/builtins/_internal/__elephc_phar_get_file_metadata.md M docs/internals/builtins/_internal/__elephc_phar_get_metadata.md M docs/internals/builtins/_internal/__elephc_phar_get_signature_hash.md M docs/internals/builtins/_internal/__elephc_phar_get_signature_type.md M docs/internals/builtins/_internal/__elephc_phar_get_stub.md M docs/internals/builtins/_internal/__elephc_phar_gzip_archive.md",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d7201c778fc2051b0fbc6bd2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:34:22.428Z",
+  "stored_at": "2026-08-21T12:34:22.428Z"
+}

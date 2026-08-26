@@ -191,6 +191,10 @@ impl Checker {
             top_level_env: HashMap::new(),
             active_ref_params: HashSet::new(),
             active_globals: HashSet::new(),
+            // Filled by `check_types_impl` from the whole program before the first walk; an empty
+            // set here just means "no `global` declaration is known", which is the safe default
+            // for the handful of tests that build a `Checker` directly.
+            program_global_names: HashSet::new(),
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
             eval_barrier_active: false,
@@ -210,6 +214,20 @@ impl Checker {
             string_incdec_locals: HashSet::new(),
             widened_scalar_locals: HashSet::new(),
             tentative_return_deprecations: Vec::new(),
+            strict_locals: false,
+            local_conditional_depth: 0,
+            local_binding_depth: HashMap::new(),
+            ref_aliased_locals: HashSet::new(),
+            static_local_names: HashSet::new(),
+            typed_local_names: HashSet::new(),
+            local_bind_kill_sites: HashMap::new(),
+            local_retype_sites: HashMap::new(),
+            statement_position_expr: None,
+            body_contains_eval: false,
+            mixed_storage_locals: HashSet::new(),
+            mixed_storage_store_sites: HashMap::new(),
+            binding_decision_warnings: HashMap::new(),
+            retired_mixed_storage_store_sites: HashSet::new(),
         }
     }
 }

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"variadic_by_ref\" src | grep -v \"^src/parser/\" | head -20",
+  "summary": "grep -rn \"variadic_by_ref\" src | grep -v \"^src/parser/\" | head -20: rs.rs:126: variadic_by_ref: false, src/types/checker/builtin_iterators.rs:152: variadic_by_ref: false, src/types/checker/builtin_iterators.rs:181: variadic_by_ref: false, src/types/checker/method_pass.rs:119: let fallback_ty = if method.variadic_by_ref",
+  "text": "grep -rn \"variadic_by_ref\" src | grep -v \"^src/parser/\" | head -20: rs.rs:126: variadic_by_ref: false, src/types/checker/builtin_iterators.rs:152: variadic_by_ref: false, src/types/checker/builtin_iterators.rs:181: variadic_by_ref: false, src/types/checker/method_pass.rs:119: let fallback_ty = if method.variadic_by_ref { src/types/checker/builtin_json.rs:76: variadic_by_ref: false, src/types/checker/driver/declaration_metadata.rs:134: ref_params.push(method.variadic_by_ref); src/types/checker/mod.rs:269: pub variadic_by_ref: bool, src/types/checker/driver/functions.rs:59: variadic_by_ref, src/types/checker/driver/functions.rs:92: ref_flags.push(*variadic_by_ref); src/types/checker/driver/functions.rs:103: variadic_by_ref: *variadic_by_ref, src/types/checker/builtin_spl_classes/common.rs:83: variadic_by_ref: false, src/types/checker/builtin_spl_classes/regex.rs:316: variadic_by_ref: false, src/types/checker/callables/closures.rs:46: variadic_by_ref: bool,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee6b11fd8b40f559d7038ded",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:25:21.521Z",
+  "stored_at": "2026-08-18T09:25:21.522Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '300,320p' src/types/checker/functions/resolution/signature.rs; echo \"=== provisional ===\"; rtk proxy rg -n \"fn provisional_return_type\" -B4 src/types/checker/functions/resolution/signature.rs | head -8",
+  "summary": "rtk proxy sed -n '300,320p' src/types/checker/functions/resolution/signature.rs; echo \"=== provisional ===\"; rtk proxy rg -n \"fn provisional_return_type\" -B4 src/types/checker/functions/resolution/signature.rs | head -8: -typed for a body that WIDENED a by-reference array /// parameter, or `None` when none did. /// ///",
+  "text": "rtk proxy sed -n '300,320p' src/types/checker/functions/resolution/signature.rs; echo \"=== provisional ===\"; rtk proxy rg -n \"fn provisional_return_type\" -B4 src/types/checker/functions/resolution/signature.rs | head -8: -typed for a body that WIDENED a by-reference array /// parameter, or `None` when none did. /// /// A by-reference parameter is compiled against the CALLER's storage. When the body ends up /// holding boxed element slots — `foreach ($a as $k => $v) { $a[$k] = $v * 2; }` does, through /// the loop storage contract — the caller's array is rewritten to boxed slots too, and a /// caller still typed `array<int>` reads those boxes back as ADDRESSES. Reporting the exit /// type here is what lets the call site convert its own local and re-type it. === provisional === 368- /// 369- /// A hint that fails to resolve (unknown class, misplaced `never`) falls back to the 370- /// placeholder rather than raising here: the authoritative pass resolves the same hint 371- /// again and reports that error with its original span and ordering. 372: fn provisional_return_type(&self, decl: &FnDecl) -> PhpType {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fa66bf4d65d3998c997c4b6b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:50:38.914Z",
+  "stored_at": "2026-08-16T20:50:38.914Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln 'wrapper_id\\|scheme' src/codegen_support/runtime/io/ | head -20; echo ---; grep -rn 'fn.*scheme\\|__rt_stream_scheme\\|__rt_url_scheme' src/codegen_support/runtime/io/*.rs | head -10",
+  "summary": "grep -rln 'wrapper_id\\|scheme' src/codegen_support/runtime/io/ | head -20; echo ---; grep -rn 'fn.*scheme\\|__rt_stream_scheme\\|__rt_url_scheme' src/codegen_support/runtime/io/*.rs | head -10: en_support/runtime/io/stream_socket_sendto.rs src/codegen_support/runtime/io/stream_record_mode.rs src/codegen_support/runtime/i",
+  "text": "grep -rln 'wrapper_id\\|scheme' src/codegen_support/runtime/io/ | head -20; echo ---; grep -rn 'fn.*scheme\\|__rt_stream_scheme\\|__rt_url_scheme' src/codegen_support/runtime/io/*.rs | head -10: en_support/runtime/io/stream_socket_sendto.rs src/codegen_support/runtime/io/stream_record_mode.rs src/codegen_support/runtime/io/path_is_wrapper.rs src/codegen_support/runtime/io/opendir.rs src/codegen_support/runtime/io/php_wrapper_open.rs src/codegen_support/runtime/io/stream_socket_server.rs src/codegen_support/runtime/io/stream_socket_server_v6.rs src/codegen_support/runtime/io/file_get_contents_url.rs src/codegen_support/runtime/io/unix_socket_server.rs src/codegen_support/runtime/io/unknown_wrapper_warning.rs --- src/codegen_support/runtime/io/stream_socket_server.rs:92:fn emit_load_scheme_byte(emitter: &mut Emitter, addr: &str, byte: &str, wide: &str, offset: u32) { src/codegen_support/runtime/io/stream_socket_server.rs:106:fn emit_scheme_byte_guard( src/codegen_support/runtime/io/unknown_wrapper_warning.rs:365: fn test_x86_64_clears_the_scheme_counter_before_the_clamp_branch() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "952fc8721592eb4d17bb9b43",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:07:09.953Z",
+  "stored_at": "2026-08-24T18:07:09.954Z"
+}

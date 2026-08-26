@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"Immediate::Data(\" src/ir_lower/ | head -5; echo \"--- interning helpers:\"; grep -rn \"fn intern_\" src/ir/builder.rs src/ir/module.rs | head -10",
+  "summary": "grep -rn \"Immediate::Data(\" src/ir_lower/ | head -5; echo \"--- interning helpers:\"; grep -rn \"fn intern_\" src/ir/builder.rs src/ir/module.rs | head -10: :424: let Some(Immediate::Data(data)) = inst.immediate else { src/ir_lower/builtin_datetime.rs:433: let Some(Immediate::Data(data)) = inst.immediate else { src/ir_lowe",
+  "text": "grep -rn \"Immediate::Data(\" src/ir_lower/ | head -5; echo \"--- interning helpers:\"; grep -rn \"fn intern_\" src/ir/builder.rs src/ir/module.rs | head -10: :424: let Some(Immediate::Data(data)) = inst.immediate else { src/ir_lower/builtin_datetime.rs:433: let Some(Immediate::Data(data)) = inst.immediate else { src/ir_lower/effect_refinement.rs:168: let Immediate::Data(name_id) = instruction.immediate.as_ref()? else { src/ir_lower/effect_refinement.rs:182: let Immediate::Data(method_id) = instruction.immediate.as_ref()? else { --- interning helpers: src/ir/module.rs:179: pub fn intern_string(&mut self, value: &str) -> DataId { src/ir/module.rs:184: pub fn intern_float(&mut self, value: f64) -> DataId { src/ir/module.rs:198: pub fn intern_global_name(&mut self, value: &str) -> DataId { src/ir/module.rs:203: pub fn intern_function_name(&mut self, value: &str) -> DataId { src/ir/module.rs:208: pub fn intern_class_name(&mut self, value: &str) -> DataId { src/ir/module.rs:214:fn intern_string_vec(values: &mut Vec<String>, value: &str) -> DataId {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "250ca2896d8b3013a1bae5e4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T19:52:15.091Z",
+  "stored_at": "2026-08-18T19:52:15.092Z"
+}

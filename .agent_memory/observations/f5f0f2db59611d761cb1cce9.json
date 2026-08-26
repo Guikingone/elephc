@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm46.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm46.php: <?php\n// Does the null-array answer track the descriptor?\n$p = sys_get_temp_dir() . \"/rm46.txt\";\nfile_put_contents($p, \"hello\");\n$a =",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/rm46.php: <?php\n// Does the null-array answer track the descriptor?\n$p = sys_get_temp_dir() . \"/rm46.txt\";\nfile_put_contents($p, \"hello\");\n$a = fopen($p, \"r\");\n$b = fopen($p, \"r\");\n$c = fopen($p, \"r\");\nvar_dump((int) $a, (int) $b, (int) $c);\n\n$r = [$a];\n$w = null;\n$e = null;\nvar_dump(stream_select($r, $w, $e, 0));\n\n$r = [$b];\n$w = null;\n$e = null;\nvar_dump(stream_select($r, $w, $e, 0));\n\n$r = [$c];\n$w = null;\n$e = null;\nvar_dump(stream_select($r, $w, $e, 0));\n\nfclose($a);\nfclose($b);\nfclose($c);\nunlink($p);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f5f0f2db59611d761cb1cce9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:22:20.836Z",
+  "stored_at": "2026-08-18T11:22:20.836Z"
+}

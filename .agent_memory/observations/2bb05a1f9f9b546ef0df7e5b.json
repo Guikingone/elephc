@@ -1,0 +1,17 @@
+{
+  "type": "tool_use",
+  "tool": "TaskOutput",
+  "path": "",
+  "command": "",
+  "summary": "TaskOutput: success",
+  "text": "success",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2bb05a1f9f9b546ef0df7e5b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:20:00.708Z",
+  "stored_at": "2026-08-23T17:20:00.708Z",
+  "low_signal": true
+}

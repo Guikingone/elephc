@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_keys.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_keys.py: \"\"\"array_filter() keeps php's keys, and accepts an associative source.\n\nMEASURED on `php -n` 8.5.6 against elephc, one progra",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/array_filter_keys.py: \"\"\"array_filter() keeps php's keys, and accepts an associative source.\n\nMEASURED on `php -n` 8.5.6 against elephc, one program per case: 3 of 13 matched. Seven were\nSILENT wrong answers — the survivors were renumbered from zero, so `array_filter([0,1,2])` gave\n`[0=>1, 1=>2]` where php gives `[1=>1, 2=>2]`, and the keys were wrong as keys, not merely in the\nrendering: `isset($result[0])` answered true where php answers false. The other three were\ncompile-time refusals: any associative source at all, `array_filter() first argument must be\narray`.\n\nThe result therefore has to be able to CARRY key",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9cc18971f7c7c1690240350b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:41:08.072Z",
+  "stored_at": "2026-08-22T11:41:08.072Z"
+}

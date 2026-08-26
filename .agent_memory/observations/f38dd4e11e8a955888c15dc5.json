@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '806,850p' src/codegen_support/runtime/io/fgetcsv.rs",
+  "summary": "sed -n '806,850p' src/codegen_support/runtime/io/fgetcsv.rs: truction(\"mov QWORD PTR [rbp - 32], 2\"); // state = InQuotedField emitter.instruction(\"jmp __rt_fgetcsv_x_loop\"); // continue loop // -- state 1: InField (unquoted, accumulating) -- emitter.label(\"__rt_fgetcsv_x_st1\"); emitter.instruction(\"movzx ecx, BYTE PTR",
+  "text": "sed -n '806,850p' src/codegen_support/runtime/io/fgetcsv.rs: truction(\"mov QWORD PTR [rbp - 32], 2\"); // state = InQuotedField emitter.instruction(\"jmp __rt_fgetcsv_x_loop\"); // continue loop // -- state 1: InField (unquoted, accumulating) -- emitter.label(\"__rt_fgetcsv_x_st1\"); emitter.instruction(\"movzx ecx, BYTE PTR [rbp - 8]\"); // load sep emitter.instruction(\"cmp al, cl\"); // c == sep? emitter.instruction(\"je __rt_fgetcsv_x_push_reset\"); // -> push field, reset emitter.instruction(\"cmp QWORD PTR [rbp - 96], 0\"); // is a newline ordinary data here? emitter.instruction(\"jne __rt_fgetcsv_x_st1_data\"); // `str_getcsv` keeps it as data emitter.instruction(\"cmp al, 0x0a\"); // c == newline (0x0A)? emitter.instruction(\"je __rt_fgetcsv_x_push_end\"); // -> push field, end emitter.instruction(\"cmp al, 0x0d\"); // c == carriage return (0x0D)? emitter.instruction(\"je __rt_fgetcsv_x_push_end\"); // -> push field, end emitter.label(\"__rt_fgetcsv_x_st1_data\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f38dd4e11e8a955888c15dc5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:21:36.563Z",
+  "stored_at": "2026-08-18T09:21:36.563Z"
+}

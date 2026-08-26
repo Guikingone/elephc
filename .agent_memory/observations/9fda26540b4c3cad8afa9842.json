@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'SPL_FILE_READ_AHEAD\\|SPL_FILE_DROP_NEW_LINE\\|SPL_FILE_SKIP_EMPTY\\|SPL_FILE_READ_CSV' src/types/checker/builtin_spl_classes/filesystem.rs | head -6",
+  "summary": "grep -n 'SPL_FILE_READ_AHEAD\\|SPL_FILE_DROP_NEW_LINE\\|SPL_FILE_SKIP_EMPTY\\|SPL_FILE_READ_CSV' src/types/checker/builtin_spl_classes/filesystem.rs | head -6: 23:const SPL_FILE_DROP_NEW_LINE: i64 = 1; 24:const SPL_FILE_READ_AHEAD: i64 = 2; 25:const SPL_FILE_SKIP_EMPTY: i64 = 4; 26:const SPL_FILE_READ_CSV: i64 = 8; 215: c",
+  "text": "grep -n 'SPL_FILE_READ_AHEAD\\|SPL_FILE_DROP_NEW_LINE\\|SPL_FILE_SKIP_EMPTY\\|SPL_FILE_READ_CSV' src/types/checker/builtin_spl_classes/filesystem.rs | head -6: 23:const SPL_FILE_DROP_NEW_LINE: i64 = 1; 24:const SPL_FILE_READ_AHEAD: i64 = 2; 25:const SPL_FILE_SKIP_EMPTY: i64 = 4; 26:const SPL_FILE_READ_CSV: i64 = 8; 215: class_const(\"DROP_NEW_LINE\", SPL_FILE_DROP_NEW_LINE), 216: class_const(\"READ_AHEAD\", SPL_FILE_READ_AHEAD),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9fda26540b4c3cad8afa9842",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:54:36.793Z",
+  "stored_at": "2026-08-25T09:54:36.794Z"
+}

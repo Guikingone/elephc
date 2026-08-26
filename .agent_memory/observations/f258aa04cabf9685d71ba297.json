@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ArrayLiteral\" src/types/checker/infer*.rs src/types/checker/infer/*.rs 2>/dev/null | head -6; ls src/types/checker/ | head -30",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ArrayLiteral\" src/types/checker/infer*.rs src/types/checker/infer/*.rs 2>/dev/null | head -6; ls src/types/checker/ | head -30: (eval):1: no matches found: src/types/checker/infer*.rs builtin_class_gate.rs builtin_",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ArrayLiteral\" src/types/checker/infer*.rs src/types/checker/infer/*.rs 2>/dev/null | head -6; ls src/types/checker/ | head -30: (eval):1: no matches found: src/types/checker/infer*.rs builtin_class_gate.rs builtin_enums.rs builtin_interfaces.rs builtin_iterators.rs builtin_json.rs builtin_spl_classes builtin_spl_classes.rs builtin_spl_exceptions.rs builtin_stdclass.rs builtin_types builtin_user_filter.rs builtins callables driver extern_decl.rs functions functions.rs inference loop_storage.rs method_pass.rs mod.rs null_probe.rs schema stmt_check stmt_check.rs tentative_return_types.rs type_compat type_compat.rs yield_validation",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f258aa04cabf9685d71ba297",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:36:48.179Z",
+  "stored_at": "2026-08-23T17:36:48.179Z"
+}

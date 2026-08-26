@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh gaps 2>&1 | head -20",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh gaps 2>&1 | head -20: gaps DIFF: 1,10c1 < 1a: 2:1,2 < 1b: x,y < 1c: [1,\"s\",2.5] < 1d: {\"k\":1,\"j\":2} < 1e: 1,2,1,2 < 2a: 2,3 < ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh gaps 2>&1 | head -20: gaps DIFF: 1,10c1 < 1a: 2:1,2 < 1b: x,y < 1c: [1,\"s\",2.5] < 1d: {\"k\":1,\"j\":2} < 1e: 1,2,1,2 < 2a: 2,3 < 2b: 4,5 < 2c: 1,2,99 < 2d: 2,3 < 2e: 1,2,3 --- > difftests.sh:7: no such file or directory: ./gaps",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "466dad57ab274c8bc612c5a3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T21:01:18.401Z",
+  "stored_at": "2026-08-16T21:01:18.401Z",
+  "low_signal": true
+}

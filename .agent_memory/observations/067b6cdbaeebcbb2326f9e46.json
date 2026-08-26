@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_INCREMENTAL=0 cargo check -p elephc 2>&1 | grep -E \"^error\" -A 8 | head -30",
+  "summary": "CARGO_INCREMENTAL=0 cargo check -p elephc 2>&1 | grep -E \"^error\" -A 8 | head -30: error[E0382]: borrow of moved value: `loaded` --> src/codegen/lower_inst/builtins/io/string_validation.rs:146:15 | 142 | let loaded = ctx.load_value_to_result(value)?.codegen_repr(); | ------ move occurs because `loaded` has type `model:",
+  "text": "CARGO_INCREMENTAL=0 cargo check -p elephc 2>&1 | grep -E \"^error\" -A 8 | head -30: error[E0382]: borrow of moved value: `loaded` --> src/codegen/lower_inst/builtins/io/string_validation.rs:146:15 | 142 | let loaded = ctx.load_value_to_result(value)?.codegen_repr(); | ------ move occurs because `loaded` has type `model::PhpType`, which does not implement the `Copy` trait 143 | require_optional_int(loaded, name)?; | ------ value moved here ... 146 | } else if loaded == PhpType::TaggedScalar { -- error: could not compile `elephc` (lib) due to 1 previous error",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "067b6cdbaeebcbb2326f9e46",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:51:17.161Z",
+  "stored_at": "2026-08-21T11:51:17.162Z"
+}

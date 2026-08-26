@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/scanf-engine-moves-from-asm-to-prelude.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/scanf-engine-moves-from-asm-to-prelude.md: ---\nname: scanf-engine-moves-from-asm-to-prelude\ndescription: \"sscanf/fscanf: 700 l d'asm × 2 arches remplacées par un prélude elephc-PHP + un port Rust pour eval; règles ",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/scanf-engine-moves-from-asm-to-prelude.md: ---\nname: scanf-engine-moves-from-asm-to-prelude\ndescription: \"sscanf/fscanf: 700 l d'asm × 2 arches remplacées par un prélude elephc-PHP + un port Rust pour eval; règles php mesurées non devinables\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\n`sscanf('77 xx', '%d %d')` rendait `['77', '']` — php rend `[77, NULL]`. Le moteur était `__rt_sscanf`, ~700 lignes d'assembleur PAR ARCHE qui repoussait chaque match en TRANCHE D'OCTETS. Au-delà des types il ne connaissait que `%d %f %s %%` : ni largeur, ni suppression `%*d`, ni classes `%[a-z]`, ni `%i/%u/%x/%X/%o/%c/%n/%e/%E/%g/%D`, ni modifica",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0312878d2b1887919affd17e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:05:54.613Z",
+  "stored_at": "2026-08-16T17:05:54.614Z"
+}

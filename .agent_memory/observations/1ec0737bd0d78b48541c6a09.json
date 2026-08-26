@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fgetcsv\\|fputcsv\\|setCsvControl\\|getCsvControl\" -A 3 /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ext/spl/spl_directory.stub.php | head -40; echo \"=== file.stub.php ===\"; grep -n \"function fgetcsv\\|function fputcsv\" -A 2 /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ext/standard/file.stub.php; echo \"=== string.stub.php ===\"; grep -n \"function str_getcsv\" -A 2 /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ext/standard/string.stub.php",
+  "summary": "grep -n \"fgetcsv\\|fputcsv\\|setCsvControl\\|getCsvControl\" -A 3 /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ext/spl/spl_directory.stub.php | head -40; echo \"=== file.stub.php ===\"; grep -n \"function fgetcsv\\|function fputcsv\" -A 2 /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ext/standard/file.s",
+  "text": "grep -n \"fgetcsv\\|fputcsv\\|setCsvControl\\|getCsvControl\" -A 3 /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ext/spl/spl_directory.stub.php | head -40; echo \"=== file.stub.php ===\"; grep -n \"function fgetcsv\\|function fputcsv\" -A 2 /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ext/standard/file.stub.php; echo \"=== string.stub.php ===\"; grep -n \"function str_getcsv\" -A 2 /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ext/standard/string.stub.php failed: Exit code 2 301: public function fgetcsv(string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\"): array|false {} 302- 303- /** @tentative-return-type */ 304: public function fputcsv(array $fields, string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\", string $eol = \"\\n\"): int|false {} 305- 306- /** @tentative-return-type */ 307: public function setCsvControl(string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\"): void {} 308- 309- /** @tentative-return-type */ 310: public function getCsvControl(): array {} 311- 312- /** 313- * @param int $wouldBlock === file.stub.php === === string.stub.php === ugrep: warning: /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ext/standard/string.stub.php: No such file or directory",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1ec0737bd0d78b48541c6a09",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:26.489Z",
+  "stored_at": "2026-08-14T14:15:26.489Z"
+}

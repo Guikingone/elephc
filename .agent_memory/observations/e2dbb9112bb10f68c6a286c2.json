@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh byref_stress blast b1 b2 b4 b5 pushref 2>&1 | head -18",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh byref_stress blast b1 b2 b4 b5 pushref 2>&1 | head -18: byref_stress DIFF: 10c10 < 9: 2,4,{\"x\":2,\"y\":4} --- > 9: 4341995896,43",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh byref_stress blast b1 b2 b4 b5 pushref 2>&1 | head -18: byref_stress DIFF: 10c10 < 9: 2,4,{\"x\":2,\"y\":4} --- > 9: 4341995896,4341995808,{\"x\":2,\"y\":4} blast DIFF: 5c5 < assoc: 2,4 --- > assoc: 4304817720,4304817672 b1 IDENTICAL b2 IDENTICAL b4 IDENTICAL b5 IDENTICAL pushref IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e2dbb9112bb10f68c6a286c2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:05:28.397Z",
+  "stored_at": "2026-08-16T20:05:28.397Z",
+  "low_signal": true
+}

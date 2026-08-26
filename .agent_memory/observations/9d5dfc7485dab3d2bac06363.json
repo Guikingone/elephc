@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_gap.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_gap.py: \"\"\"Which php constants does the COMPILED surface declare that eval() cannot resolve?\n\n`GLOB_MARK` turned up as a fatal inside",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_gap.py: \"\"\"Which php constants does the COMPILED surface declare that eval() cannot resolve?\n\n`GLOB_MARK` turned up as a fatal inside eval() while the compiled program resolved it fine. One\nreported gap is never one gap in this repo, so this asks the whole question: every name in every\ncompiled constant table, checked against the hand-written match the eval interpreter resolves\nthrough.\n\"\"\"\nimport pathlib\nimport re\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\ncompiled = {}\nfor path in sorted((ROOT / 'src/types').glob('*_constants.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9d5dfc7485dab3d2bac06363",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:25:00.460Z",
+  "stored_at": "2026-08-22T09:25:00.461Z"
+}

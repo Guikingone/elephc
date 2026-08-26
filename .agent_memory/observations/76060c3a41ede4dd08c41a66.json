@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '344,392p' docs/php/streams.md",
+  "summary": "sed -n '344,392p' docs/php/streams.md: ength, int $flags = 0, string &$address = \"\"): string\\|false` | Receive bytes and optionally write back the sender address as `host:port`. | | `stream_socket_get_name()` | `stream_socket_get_name($socket, bool $remote): string\\|false` | Return local or remote socket name as `host:",
+  "text": "sed -n '344,392p' docs/php/streams.md: ength, int $flags = 0, string &$address = \"\"): string\\|false` | Receive bytes and optionally write back the sender address as `host:port`. | | `stream_socket_get_name()` | `stream_socket_get_name($socket, bool $remote): string\\|false` | Return local or remote socket name as `host:port`. | | `stream_socket_pair()` | `stream_socket_pair(int $domain, int $type, int $protocol): array` | Create a pair of connected socket streams, for example `STREAM_PF_UNIX`, `STREAM_SOCK_STREAM`, `0`. | | `popen()` | `popen(string $command, string $mode): resource\\|false` | Open a pipe to a process in read (`\"r\"`) or write (`\"w\"`) mode. | | `pclose()` | `pclose($handle): int` | Close a process pipe and return its termination status. | Socket addresses use `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. Host names are resolved through the system resolver to IPv4. ## Directory streams",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "76060c3a41ede4dd08c41a66",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:21:01.317Z",
+  "stored_at": "2026-08-14T14:21:01.317Z"
+}

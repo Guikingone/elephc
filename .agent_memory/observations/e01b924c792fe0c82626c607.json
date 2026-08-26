@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/byref_out_params.py",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/byref_out_params.py: param rc=0 string=No such file or directory positional, all four given rc=0 true|integer|string literal 0 in a by-ref slot r",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/byref_out_params.py: param rc=0 string=No such file or directory positional, all four given rc=0 true|integer|string literal 0 in a by-ref slot rc=255 Fatal error: Uncaught Error: stream_socket_client(): Argument #2 ($error_code) could not be passed by reference in /private/tmp/claude-501/-Users-guil literal null in a by-ref slot rc=255 Fatal error: Uncaught Error: stream_socket_client(): Argument #2 ($error_code) could not be passed by reference in /private/tmp/claude-501/-Users-guil by-ref params simply omitted rc=0 accepted true flock undeclared out-param rc=0 integer=0 flock out-param omitted rc=0 bool(false) preg_match undeclared matches rc=0 array=[\"42\",\"42\"] preg_match literal in matches slot rc=255 Fatal error: Uncaught Error: preg_match(): Argument #3 ($matches) could not be passed by reference in /private/tmp/claude-501/-Users-guillaumeloulier- str_replace named count skipping subject rc=0 bbnbnb|3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e01b924c792fe0c82626c607",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:12:24.260Z",
+  "stored_at": "2026-08-21T16:12:24.261Z"
+}

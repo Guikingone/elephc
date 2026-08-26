@@ -87,7 +87,10 @@ Physical source (.php or .lfc)
   entry/include/autoload file set before constant folding and emits any preload
   warning against that complete set.
 - **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
-  validates types and emits warnings.
+  validates types and emits warnings. By default an untyped local may retype
+  (with a warning) instead of failing; with
+  [`--strict-locals`](cli-reference.md#strict-locals-mode) an incompatible
+  local retype is a compile error instead.
 
 ## Middle: AST optimization
 

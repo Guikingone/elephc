@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/closetag/probe.sh",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/closetag/probe.sh: #!/bin/zsh\n# Maps which closing-tag shapes elephc accepts, against php.\nELEPHC=/Users/guillaumeloulier/PhpstormProjects/oss/elephc/",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/closetag/probe.sh: #!/bin/zsh\n# Maps which closing-tag shapes elephc accepts, against php.\nELEPHC=/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc\ncd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/closetag\n\nprintf '<?php echo \"a\\\\n\"; ?>tail\\n'            > v1.php   # close then literal text\nprintf '<?php echo \"a\\\\n\"; ?>'                  > v2.php   # close, nothing after, no newline\nprintf '<?php echo \"a\\\\n\"; ?>\\n<?php echo \"b\\\\n\";\\n' ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3b5dbac9ca2bd7513f7e5377",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:40:40.441Z",
+  "stored_at": "2026-08-17T06:40:40.442Z"
+}

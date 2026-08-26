@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/wrapper-read-buffer-consumers.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/wrapper-read-buffer-consumers.md: ---\nname: wrapper-read-buffer-consumers\ndescription: \"🔴🔴 Le tampon de lecture par flux est REMPLI mais 4 lecteurs l'ignoraient sur un wrapper utilisateur (fgets borné, fread/fgetc/",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/wrapper-read-buffer-consumers.md: ---\nname: wrapper-read-buffer-consumers\ndescription: \"🔴🔴 Le tampon de lecture par flux est REMPLI mais 4 lecteurs l'ignoraient sur un wrapper utilisateur (fgets borné, fread/fgetc/sgc, feof, fpassthru) — CORRIGÉ; RESTE stream_get_line qui prend sans SCANNER\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\nphp garde ce qu'une lecture n'a pas consommé dans le tampon du FLUX, partagé par tous les lecteurs.\nelephc remplit ce tampon (`__rt_stream_pending_put`, alimenté par la boucle de ligne de `fgets`)\net **quatre lecteurs l'ignoraient**, chacun à sa façon — uniquement sur un wrapper enregistré",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4990006bc0c30e1e55cbc187",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:34:51.037Z",
+  "stored_at": "2026-08-21T13:34:51.038Z"
+}

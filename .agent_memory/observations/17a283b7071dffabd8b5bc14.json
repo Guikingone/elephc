@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"fn lower_string_replace\" src/ | head -2",
+  "summary": "About to run: rg -rn \"fn lower_string_replace\" src/ | head -2",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "17a283b7071dffabd8b5bc14",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:26:03.909Z",
+  "stored_at": "2026-08-17T21:26:03.911Z"
+}

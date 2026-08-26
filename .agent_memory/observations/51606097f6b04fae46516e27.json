@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs'\ns = open(p).read()\nold = '''            diagnostics.push_str(&body.replace(script_path, &basename));\n            diagnostics.push('\\\\n');'''\nnew = '''            // The MESSAGE only. php ends every diagnostic with ` in <file> on line <n>`, which is\n            // produced by one runtime path and pinned by tests of its own; repeating it in every\n            // assertion that cares about a wording would add a line number to maintain and no… [+632 chars truncated]",
+  "summary": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs'\ns = open(p).read()\nold = '''            diagnostics.push_str(&body.replace(script_path, &basename));\n            diagnostics.push('\\\\n');'''\nnew = '''            // The M",
+  "text": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/support/runner.rs'\ns = open(p).read()\nold = '''            diagnostics.push_str(&body.replace(script_path, &basename));\n            diagnostics.push('\\\\n');'''\nnew = '''            // The MESSAGE only. php ends every diagnostic with ` in <file> on line <n>`, which is\n            // produced by one runtime path and pinned by tests of its own; repeating it in every\n            // assertion that cares about a wording would add a line number to maintain and no\n            // coverage. A test that wants the location asserts on `stdout` before the split, or\n            // on the dedicated location tests.\n            let message = match body.find(&needle) {\n                Some(cut) => &body[..cut],\n                None => body,\n            };\n            let _ = &basename;\n            diagnostics.push_str(message);\n            diagnostics.push('\\\\n');'''\nassert old in s, \"diagnostics push anchor not found\"\ns = s.replace(old, new, 1)\nopen(p, 'w').write(s)\nprint(\"diagnostics field carries the message only\")\nPYEOF\ncargo build --tests 2>&1 | grep -E \"^(error|warning)\" -A5 | head -12; echo BUILT: diagnostics field carries the message only BUILT",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "51606097f6b04fae46516e27",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T14:14:03.953Z",
+  "stored_at": "2026-08-18T14:14:03.954Z"
+}

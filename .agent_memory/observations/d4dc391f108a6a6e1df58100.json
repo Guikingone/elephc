@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_doctest.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_doctest.txt: fix(docs): an indented block in the trace-buffer module doc was compiled as RUST and failed the doctest gate\n\n`cargo test -p elep",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_doctest.txt: fix(docs): an indented block in the trace-buffer module doc was compiled as RUST and failed the doctest gate\n\n`cargo test -p elephc --doc` was red on\n`src/codegen_support/runtime/exceptions/trace_buffer.rs` line 21: the measured rendering of php's\nframe arguments is written as an indented block, and rustdoc compiles an indented block inside a\ndoc comment as Rust. Fencing it as ```text states what it is and takes it out of the doctest.\n\nThe gate is red on all three architectures in CI and green in every local run that does not\ninclude `--doc`, which is why it survived.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d4dc391f108a6a6e1df58100",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T15:58:24.499Z",
+  "stored_at": "2026-08-23T15:58:24.500Z"
+}

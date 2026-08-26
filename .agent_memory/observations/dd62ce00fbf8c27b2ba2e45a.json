@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/hrh_matrix.sh",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/hrh_matrix.sh: #!/bin/zsh\n# Which SHAPES of naming $http_response_header raise php's compile-time deprecation.\n# Each case is its own file: the flag p",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/hrh_matrix.sh: #!/bin/zsh\n# Which SHAPES of naming $http_response_header raise php's compile-time deprecation.\n# Each case is its own file: the flag php keeps is per compilation context, so two cases in one\n# file would contaminate each other — which is the whole point of the write case below.\ncd \"$(dirname \"$0\")\" || exit 1\nmkdir -p hrh_cases\nrun() {\n  name=\"$1\"; body=\"$2\"\n  printf '%s' \"$body\" > \"hrh_cases/$name.php\"\n  out=$(php -n \"hrh_cases/$name.php\" 2>/dev/null | grep -c \"is deprecated\")\n  warn=$(php -n \"hrh_cases/$name.php\" 2>/dev/null | grep -c \"Undefined variable\")\n  printf '%-26s deprecated=%s  unde",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dd62ce00fbf8c27b2ba2e45a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:46:42.197Z",
+  "stored_at": "2026-08-18T15:46:42.198Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -rn \"require_boxed_by_ref_storage\" -g '*.rs' src/ | head -5",
+  "summary": "rtk proxy rg -rn \"require_boxed_by_ref_storage\" -g '*.rs' src/ | head -5: src/types/checker/functions/call_validation.rs: self.n( src/types/checker/functions/resolution/call.rs: self.n( src/types/checker/functions/resolution/resolved.rs: self.n( src/types/checker/type_compat/declarations.rs: pub(crate) fn n(",
+  "text": "rtk proxy rg -rn \"require_boxed_by_ref_storage\" -g '*.rs' src/ | head -5: src/types/checker/functions/call_validation.rs: self.n( src/types/checker/functions/resolution/call.rs: self.n( src/types/checker/functions/resolution/resolved.rs: self.n( src/types/checker/type_compat/declarations.rs: pub(crate) fn n(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7efb62805b7174085ec13c00",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:29:53.276Z",
+  "stored_at": "2026-08-16T17:29:53.276Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/temp-alone.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/temp-alone.php: <?php\n$t = new SplTempFileObject();\necho \"ftell \", var_export($t->ftell(), true), \"\\n\";\necho \"getFlags \", var_export($t-",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/temp-alone.php: <?php\n$t = new SplTempFileObject();\necho \"ftell \", var_export($t->ftell(), true), \"\\n\";\necho \"getFlags \", var_export($t->getFlags(), true), \"\\n\";\necho \"fwrite \", var_export($t->fwrite(\"z\\n\"), true), \"\\n\";\necho \"eof \", var_export($t->eof(), true), \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3d745b8671c5f401b1ef05d7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:51:54.108Z",
+  "stored_at": "2026-08-24T20:51:54.109Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_tmpfile_keeps_the_file\\|fn test_tmpfile_is_removed\\|fn test_tmpfile_leaves_nothing\" tests/codegen/io/streams.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_tmpfile_keeps_the_file\\|fn test_tmpfile_is_removed\\|fn test_tmpfile_leaves_nothing\" tests/codegen/io/streams.rs: 5251:fn test_tmpfile_keeps_the_file_its_uri_names_until_close() { 5276:fn test_tmpfile_leaves_",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_tmpfile_keeps_the_file\\|fn test_tmpfile_is_removed\\|fn test_tmpfile_leaves_nothing\" tests/codegen/io/streams.rs: 5251:fn test_tmpfile_keeps_the_file_its_uri_names_until_close() { 5276:fn test_tmpfile_leaves_nothing_behind_without_fclose() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "47304c98ecf1253dd018ef2e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:23:37.216Z",
+  "stored_at": "2026-08-23T08:23:37.216Z"
+}

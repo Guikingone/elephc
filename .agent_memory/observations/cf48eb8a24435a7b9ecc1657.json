@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn new_object_expr\\|fn throw_stmt\\|fn not_expr\\|fn expr(\" src/types/checker/builtin_spl_classes/*.rs | head -6",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn new_object_expr\\|fn throw_stmt\\|fn not_expr\\|fn expr(\" src/types/checker/builtin_spl_classes/*.rs | head -6: src/types/checker/builtin_spl_classes/common.rs:188:pub(super) fn throw_stmt(value: Expr) -> Stmt { sr",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn new_object_expr\\|fn throw_stmt\\|fn not_expr\\|fn expr(\" src/types/checker/builtin_spl_classes/*.rs | head -6: src/types/checker/builtin_spl_classes/common.rs:188:pub(super) fn throw_stmt(value: Expr) -> Stmt { src/types/checker/builtin_spl_classes/common.rs:260:pub(super) fn expr(kind: ExprKind) -> Expr { src/types/checker/builtin_spl_classes/common.rs:302:pub(super) fn not_expr(value: Expr) -> Expr { src/types/checker/builtin_spl_classes/common.rs:332:pub(super) fn new_object_expr(class_name: &str, args: Vec<Expr>) -> Expr {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cf48eb8a24435a7b9ecc1657",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:35:22.634Z",
+  "stored_at": "2026-08-23T09:35:22.634Z"
+}

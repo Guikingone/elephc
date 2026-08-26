@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/surface.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/surface.py: \"\"\"Lists the stream/file surface elephc claims, straight out of the generated registry.\n\nThe audit packet needs the API the subsystem ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/surface.py: \"\"\"Lists the stream/file surface elephc claims, straight out of the generated registry.\n\nThe audit packet needs the API the subsystem actually exposes, not a hand-typed list — a\nhand-typed one is exactly how a catalogue becomes a promise nothing keeps.\n\"\"\"\nimport json\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\nentries = json.loads((ROOT / 'scripts/docs/builtin_registry.json').read_text())\n\nAREAS = {'Stream', 'Streams', 'Filesystem', 'File', 'Directory', 'Zlib', 'Network', 'Url'}\nPREFIXES = (\n    'stre",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a699536aeea736d1cf443bae",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:35:36.815Z",
+  "stored_at": "2026-08-22T16:35:36.815Z"
+}

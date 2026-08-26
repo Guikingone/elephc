@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='src/codegen_support/runtime/strings/resource_type_name.rs'\ns=open(p).read()\nold='''        assert_eq!(\n            asm.matches(\"    ldr x30, [sp, #8]\\\\n\").count(),\n            2,\n            \"both post-lookup arms must restore the link register:\\\\n{asm}\"\n        );'''\nnew='''        assert_eq!(\n            asm.matches(\"    ldr x30, [sp, #8]\\\\n\").count(),\n            3,\n            \"all three post-lookup arms must restore the link register:\\\\n{asm}\"\n        );'''\nassert s.count(old)==1\ns=s.replace(old,new)\nold2='''        assert_eq!(\n            asm.matches(\"    sub sp, sp,… [+245 chars truncated]",
+  "summary": "python3 - <<'PY'\np='src/codegen_support/runtime/strings/resource_type_name.rs'\ns=open(p).read()\nold='''        assert_eq!(\n            asm.matches(\"    ldr x30, [sp, #8]\\\\n\").count(),\n            2,\n            \"both post-lookup arms must restore the link register:\\\\n{asm}\"\n        );'''\nnew='''        assert_eq!(\n    ",
+  "text": "python3 - <<'PY'\np='src/codegen_support/runtime/strings/resource_type_name.rs'\ns=open(p).read()\nold='''        assert_eq!(\n            asm.matches(\"    ldr x30, [sp, #8]\\\\n\").count(),\n            2,\n            \"both post-lookup arms must restore the link register:\\\\n{asm}\"\n        );'''\nnew='''        assert_eq!(\n            asm.matches(\"    ldr x30, [sp, #8]\\\\n\").count(),\n            3,\n            \"all three post-lookup arms must restore the link register:\\\\n{asm}\"\n        );'''\nassert s.count(old)==1\ns=s.replace(old,new)\nold2='''        assert_eq!(\n            asm.matches(\"    sub sp, sp, #16\\\\n\").count(),'''\nopen(p,'w').write(s)\nprint(\"count updated\")\nPY\nrtk proxy sed -n '350,368p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/strings/resource_type_name.rs: count updated assert_eq!( asm.matches(\" sub sp, sp, #16\\n\").count(), 1, \"the frame is reserved once:\\n{asm}\" ); assert_eq!( asm.matches(\" add sp, sp, #16\\n\").count(), 2, \"both post-lookup arms must release the frame:\\n{asm}\" ); assert!(asm.contains(\" ret\\n\"), \"must return with ret:\\n{asm}\"); } /// The helper must never consult the resource-id registry: reading `_resource_id_next` /// here would mint an id for a handle that is merely being displayed and shift the id /// the next `fopen()` is owed. #[test] fn the_helper_never_touches_the_resource_id_registry_on_either_target() { for target in [",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "872e6beaba04ce4da0cc30aa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:21:00.846Z",
+  "stored_at": "2026-08-17T08:21:00.846Z"
+}

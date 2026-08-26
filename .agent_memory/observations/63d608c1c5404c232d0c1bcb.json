@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff 783c63af13bce20312cd093f85a92c83ea4b9aee..origin/main -- src/codegen_support/runtime/io/stream_wrapper_register.rs | grep -E \"^[-+]\" | grep -vE \"^[-+][-+]\" | head -12",
+  "summary": "git diff 783c63af13bce20312cd093f85a92c83ea4b9aee..origin/main -- src/codegen_support/runtime/io/stream_wrapper_register.rs | grep -E \"^[-+]\" | grep -vE \"^[-+][-+]\" | head -12: - emitter.instruction(\"b.eq __rt_swr_chk_next\"); + emitter.instruction(\"b.eq __rt_swr_chk_next\"); // '+' is accepted — next byte - emitter.inst",
+  "text": "git diff 783c63af13bce20312cd093f85a92c83ea4b9aee..origin/main -- src/codegen_support/runtime/io/stream_wrapper_register.rs | grep -E \"^[-+]\" | grep -vE \"^[-+][-+]\" | head -12: - emitter.instruction(\"b.eq __rt_swr_chk_next\"); + emitter.instruction(\"b.eq __rt_swr_chk_next\"); // '+' is accepted — next byte - emitter.instruction(\"b.lt __rt_swr_badproto\"); + emitter.instruction(\"b.lt __rt_swr_badproto\"); // outside PHP's scheme alphabet — warn and fail - emitter.instruction(\"b.le __rt_swr_chk_next\"); + emitter.instruction(\"b.le __rt_swr_chk_next\"); // '-' and '.' are accepted — next byte - emitter.instruction(\"b.lt __rt_swr_badproto\"); + emitter.instruction(\"b.lt __rt_swr_badproto\"); // outside PHP's scheme alphabet — warn and fail - emitter.instruction(\"b.le __rt_swr_chk_next\"); + emitter.instruction(\"b.le __rt_swr_chk_next\"); // digits are accepted — next byte - emitter.instruction(\"b.lt __rt_swr_badproto\"); + emitter.instruction(\"b.lt __rt_swr_badproto\"); // outside PHP's scheme alphabet — warn and fail",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "63d608c1c5404c232d0c1bcb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:08:36.988Z",
+  "stored_at": "2026-08-21T19:08:36.988Z"
+}

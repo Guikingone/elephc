@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh run view --job 95201250439 -R Guikingone/elephc --log 2>&1 | rg \"FAILED|panicked at|type check failed\" | head -6",
+  "summary": "gh run view --job 95201250439 -R Guikingone/elephc --log 2>&1 | rg \"FAILED|panicked at|type check failed\" | head -6:  failed; 0 ignored; 0 measured; 1314 filtered out; finished in 16.78s Non-Codegen Tests (macos-aarch64) Run non-codegen tests 2026-08-16T17:45:59.6225000Z ^[[0m^[[31;1mthread 'ir_lower::tests::corpus::lo",
+  "text": "gh run view --job 95201250439 -R Guikingone/elephc --log 2>&1 | rg \"FAILED|panicked at|type check failed\" | head -6:  failed; 0 ignored; 0 measured; 1314 filtered out; finished in 16.78s Non-Codegen Tests (macos-aarch64) Run non-codegen tests 2026-08-16T17:45:59.6225000Z ^[[0m^[[31;1mthread 'ir_lower::tests::corpus::lowers_examples_corpus' (30985) panicked at src/ir_lower/tests/mod.rs:78:70:^[[0m Non-Codegen Tests (macos-aarch64) Run non-codegen tests 2026-08-16T17:45:59.6226110Z ^[[31;1mtype check failed: CompileError { span: Span { line: 19, col: 43, end_line: 19, end_col: 54 }, file: None, message: \"count() argument must be array or Countable object\", related: [] }^[[0m Non-Codegen Tests (macos-aarch64) Run non-codegen tests 2026-08-16T17:46:12.6918880Z test ir_lower::tests::corpus::lowers_examples_corpus ... FAILED Non-Codegen Tests (macos-aarch64) Run non-codegen tests 2026-08-16T17:46:12.6923060Z test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1314 filtered out; finished in 13.05s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5072e6f1d280ea432ee40627",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:11:02.103Z",
+  "stored_at": "2026-08-16T19:11:02.104Z"
+}

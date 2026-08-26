@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"cannot reassign\" tests/ docs/ AGENTS.md 2>/dev/null | head -10",
+  "summary": "grep -rn \"cannot reassign\" tests/ docs/ AGENTS.md 2>/dev/null | head -10: tests/error_tests/type_system.rs:141: expect_error(\"<?php $x = 42; $x = \\\"hello\\\";\", \"cannot reassign $x\"); tests/error_tests/misc/syntax_misc.rs:246:/// string produces a \"cannot reassign $value\" error. tests/error_tests/misc/syntax_misc.rs:251:",
+  "text": "grep -rn \"cannot reassign\" tests/ docs/ AGENTS.md 2>/dev/null | head -10: tests/error_tests/type_system.rs:141: expect_error(\"<?php $x = 42; $x = \\\"hello\\\";\", \"cannot reassign $x\"); tests/error_tests/misc/syntax_misc.rs:246:/// string produces a \"cannot reassign $value\" error. tests/error_tests/misc/syntax_misc.rs:251: \"cannot reassign $value\", tests/error_tests/io_builtins/streams.rs:873: \"cannot reassign $n from int to string\", tests/codegen/io/streams.rs:10450: error.contains(\"cannot reassign $would from string to int\"), tests/codegen/callables/closures.rs:1453:/// checker in ordinary straight-line code too (`cannot reassign $e from int to string`), so it docs/internals/the-type-checker.md:119:$x = \"hello\"; // ← Type error: cannot reassign $x from Int to Str docs/internals/the-type-checker.md:599:// Error: Type error: cannot reassign $x from Int to Str",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "680138cd80c62041edc5e33e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:12:20.598Z",
+  "stored_at": "2026-08-22T10:12:20.599Z"
+}

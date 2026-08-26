@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"ready_count\\|2104\" src/codegen_support/runtime/io/stream_select.rs | head -20",
+  "summary": "grep -n \"ready_count\\|2104\" src/codegen_support/runtime/io/stream_select.rs | head -20: 45:/// `[2088]` except_len, `[2096]` nfds, `[2104]` ready_count, `[2112]` timeout_ms, 124: emitter.instruction(\"str x0, [sp, #2104]\"); // save the ready descriptor count 133: emitter.instruction(\"ldr x0, [sp, #2104]\"); // return the",
+  "text": "grep -n \"ready_count\\|2104\" src/codegen_support/runtime/io/stream_select.rs | head -20: 45:/// `[2088]` except_len, `[2096]` nfds, `[2104]` ready_count, `[2112]` timeout_ms, 124: emitter.instruction(\"str x0, [sp, #2104]\"); // save the ready descriptor count 133: emitter.instruction(\"ldr x0, [sp, #2104]\"); // return the ready descriptor count 511: emitter.instruction(\"mov QWORD PTR [rbp - 2104], rax\"); // save the ready descriptor count 520: emitter.instruction(\"mov rax, QWORD PTR [rbp - 2104]\"); // return the ready descriptor count",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a715fc5c67337ac91c6ed1eb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:19:47.334Z",
+  "stored_at": "2026-08-18T11:19:47.334Z"
+}

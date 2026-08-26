@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/callable-ladder-is-bounded-by-mentioned-names.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/callable-ladder-is-bounded-by-mentioned-names.md: ---\nname: callable-ladder-is-bounded-by-mentioned-names\ndescription: only 36 of 577 builtins were callable through a variable; widening needs a bound because the di",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/callable-ladder-is-bounded-by-mentioned-names.md: ---\nname: callable-ladder-is-bounded-by-mentioned-names\ndescription: only 36 of 577 builtins were callable through a variable; widening needs a bound because the dispatch ladder is inlined per call site at ~120 lines of asm per builtin\nmetadata:\n  type: project\n---\n\n`$fn = \"feof\"; $fn($h);` était `Call to undefined function <dynamic>()`, et\n`array_map(\"strtoupper\", $a)` un `Undefined function` du VÉRIFICATEUR. 488 builtins partageaient\nun refus générique — « typed backend operation has no runtime-selected wrapper contract » —\nattaché par la politique, pas par un constat sur eux : **mesuré**, a",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "88e4484e7905f58d79fd46eb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:08:01.547Z",
+  "stored_at": "2026-08-22T12:08:01.548Z"
+}

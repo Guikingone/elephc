@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_for\" tests/codegen/control_flow/branches_and_loops.rs | head; echo ---; tail -20 tests/codegen/control_flow/branches_and_loops.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_for\" tests/codegen/control_flow/branches_and_loops.rs | head; echo ---; tail -20 tests/codegen/control_flow/branches_and_loops.rs: 169:fn test_for_loop() { 176:fn test_for_break() { 215:fn test_for_with_incr",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_for\" tests/codegen/control_flow/branches_and_loops.rs | head; echo ---; tail -20 tests/codegen/control_flow/branches_and_loops.rs: 169:fn test_for_loop() { 176:fn test_for_break() { 215:fn test_for_with_increment() { --- r#\"<?php $x = null; if ($x) { echo \"true\"; } else { echo \"false\"; } \"#, ); assert_eq!(out, \"false\"); } /// Verifies null as a while condition prevents loop entry and prints ok. #[test] fn test_while_null_no_loop() { let out = compile_and_run(\"<?php $x = null; while ($x) { echo \\\"bad\\\"; } echo \\\"ok\\\";\"); assert_eq!(out, \"ok\"); } // --- Ternary operator ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c3cd5c8a1cbdb5a96cfd498e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:14:44.687Z",
+  "stored_at": "2026-08-23T13:14:44.688Z"
+}

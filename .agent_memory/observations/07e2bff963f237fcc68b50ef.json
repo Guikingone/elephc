@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /private/tmp | head -20; echo \"--- count elephc test dirs ---\"; ls -d /private/tmp/elephc* 2>/dev/null | wc -l; ls -d /private/var/folders/*/*/T/elephc* 2>/dev/null | wc -l",
+  "summary": "About to run: ls /private/tmp | head -20; echo \"--- count elephc test dirs ---\"; ls -d /private/tmp/elephc* 2>/dev/null | wc -l; ls -d /private/var/folders/*/*/T/elephc* 2>/dev/null | wc -l",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "07e2bff963f237fcc68b50ef",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:27:08.357Z",
+  "stored_at": "2026-08-22T16:27:08.357Z"
+}

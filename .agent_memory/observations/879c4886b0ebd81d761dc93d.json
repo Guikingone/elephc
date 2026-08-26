@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/dynamic-method-name.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/dynamic-method-name.php: <?php\nclass Box {\n    public function one(): string { return \"1\"; }\n    public function two(): string { return \"",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/dynamic-method-name.php: <?php\nclass Box {\n    public function one(): string { return \"1\"; }\n    public function two(): string { return \"2\"; }\n    public function three(): string { return \"3\"; }\n}\n$b = new Box();\n\n$m = \"one\";\necho \"single \", $b->$m(), \"\\n\";\n\nforeach ([\"one\", \"two\", \"three\"] as $name) {\n    echo \"loop \", $name, \"=\", $b->$name(), \";\";\n}\necho \"\\n\";\n\n$calls = [\"two\", \"one\"];\nforeach ($calls as $c) { echo \"arr \", $b->$c(), \";\"; }\necho \"\\n\";\n\necho \"callable \", call_user_func([$b, \"three\"]), \"\\n\";\nforeach ([\"one\", \"two\"] as $n) { echo \"cuf \", call_user_func([$b, $n]), \";\"; }\necho \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "879c4886b0ebd81d761dc93d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:08:11.599Z",
+  "stored_at": "2026-08-25T12:08:11.599Z"
+}

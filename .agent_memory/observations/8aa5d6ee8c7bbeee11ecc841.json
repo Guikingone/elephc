@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '20,70p' src/types/checker/driver/top_level.rs",
+  "summary": "sed -n '20,70p' src/types/checker/driver/top_level.rs: ull_probe_roots(probe_roots, &mut global_env, &mut all_errors); self.top_level_env = global_env.clone(); self.eval_barrier_active = saved_eval_barrier_active; self.null_probe_scope_is_top_level = saved_null_probe_scope; (global_env, all_errors) } /// Decides, with ",
+  "text": "sed -n '20,70p' src/types/checker/driver/top_level.rs: ull_probe_roots(probe_roots, &mut global_env, &mut all_errors); self.top_level_env = global_env.clone(); self.eval_barrier_active = saved_eval_barrier_active; self.null_probe_scope_is_top_level = saved_null_probe_scope; (global_env, all_errors) } /// Decides, with the finished `global_env` in hand, whether each tolerated null-probe root /// was legitimate. /// /// A name still absent from `global_env` was never assigned anywhere at top level, so it is /// `null` for the whole scope: binding it to `PhpType::Void` both matches PHP and gives EIR /// lowering a slot type it can answer `isset`/`empty`/`??` from without reading storage that /// no store ever initializes. A name that *is* bound was assigned somewhere in the same /// scope, so its slot carries that assigned type and the probe would read it before the /// store — the original `Undefined variable` diagnostic is restored for those.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8aa5d6ee8c7bbeee11ecc841",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T08:11:10.218Z",
+  "stored_at": "2026-08-21T08:11:10.218Z"
+}

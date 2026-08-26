@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'pub enum PhpType' src/ | head -3",
+  "summary": "grep -rn 'pub enum PhpType' src/ | head -3: src/types/model.rs:18:pub enum PhpType { src/ir/instr.rs:176:pub enum PhpTypePredicate {",
+  "text": "grep -rn 'pub enum PhpType' src/ | head -3: src/types/model.rs:18:pub enum PhpType { src/ir/instr.rs:176:pub enum PhpTypePredicate {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1cad9a7f9e481dcc3deacb6e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:05:49.805Z",
+  "stored_at": "2026-08-24T19:05:49.806Z"
+}

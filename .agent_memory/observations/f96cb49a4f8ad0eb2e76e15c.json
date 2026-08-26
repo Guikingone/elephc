@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"user_wrapper\\|uw_route\\|emit_dynamic_user_wrapper\" src/codegen/lower_inst/builtins/io/host_directory_process.rs | head -10",
+  "summary": "About to run: grep -rn \"user_wrapper\\|uw_route\\|emit_dynamic_user_wrapper\" src/codegen/lower_inst/builtins/io/host_directory_process.rs | head -10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f96cb49a4f8ad0eb2e76e15c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:51:04.511Z",
+  "stored_at": "2026-08-21T17:51:04.511Z"
+}

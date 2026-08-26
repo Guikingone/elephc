@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\nimport os\np='/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_qpwrap.py'\ns=open(p).read()\nbad_start = s.index(\"# --- an escape costs three\")\nbad_end = s.index(\"# --- QP wraps as it encodes\")\ngood = '''# --- an escape costs three, and php never splits one across a break ---\nold = \"    emitter.label(\\\\\"__rt_asf_qpe_escape\\\\\");\\\\n\"\nnew = old + soft_break(\"esc\", 3) + '''+\"'''\"+'''    emitter.instruction(\"add x14, x14, #3\");                                    //… [+206 chars truncated]",
+  "summary": "python3 - <<'PYEOF'\nimport os\np='/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_qpwrap.py'\ns=open(p).read()\nbad_start = s.index(\"# --- an escape costs three\")\nbad_end = s.index(\"# --- QP wraps as it ",
+  "text": "python3 - <<'PYEOF'\nimport os\np='/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_qpwrap.py'\ns=open(p).read()\nbad_start = s.index(\"# --- an escape costs three\")\nbad_end = s.index(\"# --- QP wraps as it encodes\")\ngood = '''# --- an escape costs three, and php never splits one across a break ---\nold = \"    emitter.label(\\\\\"__rt_asf_qpe_escape\\\\\");\\\\n\"\nnew = old + soft_break(\"esc\", 3) + '''+\"'''\"+'''    emitter.instruction(\"add x14, x14, #3\");                                    // `=XX` occupies three columns\n'''+\"'''\"+'''\nassert s.count(old) == 1, s.count(old)\ns = s.replace(old, new)\n\n'''\ns = s[:bad_start] + good + s[bad_end:]\nopen(p,'w').write(s)\nprint('escape anchor fixed')\nPYEOF: escape anchor fixed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "74f1b77a96f033629cb0b094",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:12:07.373Z",
+  "stored_at": "2026-08-17T14:12:07.374Z"
+}

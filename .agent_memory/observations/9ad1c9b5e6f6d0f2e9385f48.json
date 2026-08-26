@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add -A src tests crates scripts docs && git status --short -- src tests crates scripts | head -30",
+  "summary": "git add -A src tests crates scripts docs && git status --short -- src tests crates scripts | head -30: g_surfaces.rs M crates/elephc-builtin-contract/src/registry.rs M crates/elephc-builtin-contract/src/support.rs M scripts/docs/audit_builtins.py M scripts/docs/builtin_registry.json M scripts/docs/elephc_builtins/extra",
+  "text": "git add -A src tests crates scripts docs && git status --short -- src tests crates scripts | head -30: g_surfaces.rs M crates/elephc-builtin-contract/src/registry.rs M crates/elephc-builtin-contract/src/support.rs M scripts/docs/audit_builtins.py M scripts/docs/builtin_registry.json M scripts/docs/elephc_builtins/extract.py M scripts/docs/elephc_builtins/test_contract_pipeline.py M src/codegen/lower_inst/builtins/io.rs M src/codegen/lower_inst/builtins/io/fopen_core.rs M src/codegen/lower_inst/builtins/io/host_directory_process.rs M src/codegen/lower_inst/builtins/io/phar_read.rs M src/codegen/lower_inst/builtins/io/string_validation.rs M src/codegen/lower_inst/call_operands.rs A src/gz_prelude.rs A src/gz_prelude/detect.rs M src/ir_lower/tests/mod.rs M src/lib.rs M src/main.rs M src/pipeline.rs M tests/codegen/io.rs A tests/codegen/io/compress_wrapper.rs A tests/codegen/io/gz_streams.rs M tests/codegen/mod.rs A tests/codegen/prelude_injection_parity.rs M tests/codegen/support/compiler.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9ad1c9b5e6f6d0f2e9385f48",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:56:42.403Z",
+  "stored_at": "2026-08-21T12:56:42.403Z"
+}

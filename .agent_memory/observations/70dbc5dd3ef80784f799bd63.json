@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-surface-sweep-beats-a-green-suite.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-surface-sweep-beats-a-green-suite.md: ---\nname: streams-surface-sweep-beats-a-green-suite\ndescription: \"🛠️★★★ Suite VERTE ≠ conforme: un balayage différentiel de 46 programmes sur la SURFACE streams a trouv",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-surface-sweep-beats-a-green-suite.md: ---\nname: streams-surface-sweep-beats-a-green-suite\ndescription: \"🛠️★★★ Suite VERTE ≠ conforme: un balayage différentiel de 46 programmes sur la SURFACE streams a trouvé 11 divergences que 1015 tests ne voyaient pas\"\nmetadata:\n  node_type: memory\n  type: feedback\n  modified: 2026-08-21T00:00:00.000Z\n---\n\n`io::streams` était à **615 tests verts, 0 échec** (parti de 47 échecs). Ça prouve que les tests\npassent, pas que la surface est couverte. Le balayage l'a dit autrement : **35 identiques,\n7 divergentes, 4 qui ne compilent pas** dès la 1re exécution.\n\n## 🛠️ La technique\n\n`streams_behaviour_swee",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "70dbc5dd3ef80784f799bd63",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:03:08.910Z",
+  "stored_at": "2026-08-21T19:03:08.911Z"
+}

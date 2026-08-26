@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"return_type\" scripts/docs/elephc_builtins/extract.py | head -10",
+  "summary": "grep -n \"return_type\" scripts/docs/elephc_builtins/extract.py | head -10: 561: return_type = _normalize_type(entry.get(\"returns\", \"mixed\")) 564: if return_type == \"mixed\" and home_rel: 567: return_type = precise 569: return_type = RETURN_TYPE_OVERRIDES[canonical] 601: return_type=return_type, 665: \"return_type\": b.sig.",
+  "text": "grep -n \"return_type\" scripts/docs/elephc_builtins/extract.py | head -10: 561: return_type = _normalize_type(entry.get(\"returns\", \"mixed\")) 564: if return_type == \"mixed\" and home_rel: 567: return_type = precise 569: return_type = RETURN_TYPE_OVERRIDES[canonical] 601: return_type=return_type, 665: \"return_type\": b.sig.return_type,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3f16beb661ca268134556fcf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:05:57.978Z",
+  "stored_at": "2026-08-18T11:05:57.978Z"
+}

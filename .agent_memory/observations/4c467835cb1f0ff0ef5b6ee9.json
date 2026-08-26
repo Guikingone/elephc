@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/bufpos.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/bufpos.php: <?php\n// With a read buffer in play, every position and EOF answer has to stay php's.\n$path = \"pos.txt\";\nfile_put_contents($path, \"012",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/bufpos.php: <?php\n// With a read buffer in play, every position and EOF answer has to stay php's.\n$path = \"pos.txt\";\nfile_put_contents($path, \"0123456789abcdefghijklmnopqrstuvwxyz\");\n\n$h = fopen($path, \"rb\");\necho \"start \", ftell($h), \" \", var_export(feof($h), true), \"\\n\";\necho \"read5 \", fread($h, 5), \" tell \", ftell($h), \"\\n\";\necho \"read3 \", fread($h, 3), \" tell \", ftell($h), \"\\n\";\necho \"getc \", fgetc($h), \" tell \", ftell($h), \"\\n\";\nfseek($h, 30);\necho \"seek30 tell \", ftell($h), \" next \", fread($h, 3), \" tell \", ftell($h), \"\\n\";\nrewind($h);\necho \"rewind tell \", ftell($h), \" next \", fread($h, 2), \"\\n\";\nfs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4c467835cb1f0ff0ef5b6ee9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T19:32:45.818Z",
+  "stored_at": "2026-08-23T19:32:45.819Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"__rt_stream_record_meta_wrapper\\|preserve the caller's wrapper id\" src/codegen_support/runtime/io/stream_record_meta.rs | head -10",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"__rt_stream_record_meta_wrapper\\|preserve the caller's wrapper id\" src/codegen_support/runtime/io/stream_record_meta.rs | head -10: 110: emitter.instruction(\"b.ne __rt_stream_record_meta_wrapper\"); // preserve the c",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"__rt_stream_record_meta_wrapper\\|preserve the caller's wrapper id\" src/codegen_support/runtime/io/stream_record_meta.rs | head -10: 110: emitter.instruction(\"b.ne __rt_stream_record_meta_wrapper\"); // preserve the caller's wrapper id for ordinary backends 112: emitter.instruction(\"b __rt_stream_record_meta_wrapper\"); // publish the inferred Phar identity 134: emitter.label(\"__rt_stream_record_meta_wrapper\"); 229: emitter.instruction(\"jne __rt_stream_record_meta_wrapper_x86\"); // preserve the caller's wrapper id for ordinary backends 231: emitter.instruction(\"jmp __rt_stream_record_meta_wrapper_x86\"); // publish the inferred Phar identity 247: emitter.label(\"__rt_stream_record_meta_wrapper_x86\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d0d0bca15f290427d6e932b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:17:59.608Z",
+  "stored_at": "2026-08-22T19:17:59.609Z"
+}

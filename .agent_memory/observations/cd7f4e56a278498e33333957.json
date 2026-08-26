@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles_iterable_echo 2>&1 | grep -A 4 'panicked' | head -6; echo '=== unset ==='; CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles_unset_locals 2>&1 | grep -A 4 'panicked' | head -6",
+  "summary": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles_iterable_echo 2>&1 | grep -A 4 'panicked' | head -6; echo '=== unset ==='; CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles",
+  "text": "CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles_iterable_echo 2>&1 | grep -A 4 'panicked' | head -6; echo '=== unset ==='; CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles_unset_locals 2>&1 | grep -A 4 'panicked' | head -6: thread 'ir_backend_handles_iterable_echo' (62827314) panicked at tests/ir_backend_smoke_test.rs:5271:5: assertion `left == right` failed left: \"Array|Array|\\nWarning: Array to string conversion in /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_iterable_echo_67506_1787647490546688000/main.php on line 10\\nArraydone\" right: \"Array|Array|Arraydone\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace === unset === thread 'ir_backend_handles_unset_locals' (62827797) panicked at tests/ir_backend_smoke_test.rs:1576:9: assertion `left == right` failed left: \"\\nWarning: Undefined variable $x in /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_unset_int_local_67694_1787647494816277000/main.php on line 1\\nnull\" right: \"null\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cd7f4e56a278498e33333957",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:44:58.188Z",
+  "stored_at": "2026-08-25T08:44:58.189Z"
+}

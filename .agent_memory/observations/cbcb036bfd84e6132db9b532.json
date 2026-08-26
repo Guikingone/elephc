@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_tests2.py && cargo test --test codegen_tests test_data_uri_is_read 2>&1 | rg \"^test result|left:|right:\" | head -4",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_tests2.py && cargo test --test codegen_tests test_data_uri_is_read 2>&1 | rg \"^test result|left:|right:\" | head -4: three tests added test resul",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/add_tests2.py && cargo test --test codegen_tests test_data_uri_is_read 2>&1 | rg \"^test result|left:|right:\" | head -4: three tests added test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8414 filtered out; finished in 2.59s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cbcb036bfd84e6132db9b532",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:16:12.047Z",
+  "stored_at": "2026-08-17T12:16:12.048Z"
+}

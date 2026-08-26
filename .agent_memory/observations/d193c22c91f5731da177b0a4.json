@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git log --oneline -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git log --oneline -8:  module doc was compiled as RUST and failed the doctest gate e2a5b8b43 fix(runtime): two x86_64 `array_unique()` call sites handed __rt_incref its pointer in rdi, which it never reads 17c8607ba fix(pars",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git log --oneline -8:  module doc was compiled as RUST and failed the doctest gate e2a5b8b43 fix(runtime): two x86_64 `array_unique()` call sites handed __rt_incref its pointer in rdi, which it never reads 17c8607ba fix(parser): a `for` clause accepted ONE assignment to a plain variable, so `for ($i = 0, $n = count($a); …)` did not compile d38332537 fix(memory): a store in a loop's CONDITION never released what it overwrote, so the idiomatic read loop leaked one allocation per iteration 39fc23941 fix(runtime): is_dir() SEGFAULTED in any program that did not also call glob(..., GLOB_ONLYDIR) 919c33e7a fix(objects): two empty() arms were unreachable behind one that claimed every property access c12904c8c fix(objects): a method call on a non-object always said \"on null\", whatever the receiver was 1d56e4dad fix(exceptions): a TypeError whose message is built at run time reported neither its location nor its trace",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d193c22c91f5731da177b0a4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:25:46.911Z",
+  "stored_at": "2026-08-23T16:25:46.911Z"
+}

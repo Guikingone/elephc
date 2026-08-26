@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"could not be passed by reference\" src/ | head -5",
+  "summary": "grep -rn \"could not be passed by reference\" src/ | head -5: src/types/checker/builtins/mod.rs:137: \"{}(): Argument #{} (${}) could not be passed by reference\",",
+  "text": "grep -rn \"could not be passed by reference\" src/ | head -5: src/types/checker/builtins/mod.rs:137: \"{}(): Argument #{} (${}) could not be passed by reference\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4a857f9b0c5e472834a8c2f3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:11:35.080Z",
+  "stored_at": "2026-08-21T16:11:35.081Z"
+}

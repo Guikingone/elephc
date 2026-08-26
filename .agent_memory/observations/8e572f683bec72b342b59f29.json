@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '645,706p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/method_pass.rs",
+  "summary": "rtk proxy sed -n '645,706p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/method_pass.rs: , so the pair-carrying `$path` stays aligned. \"stream_metadata\" => vec![PhpType::Str, PhpType::Int, PhpType::Mixed], _ => return None, }) } /// The return type each `",
+  "text": "rtk proxy sed -n '645,706p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/method_pass.rs: , so the pair-carrying `$path` stays aligned. \"stream_metadata\" => vec![PhpType::Str, PhpType::Int, PhpType::Mixed], _ => return None, }) } /// The return type each `streamWrapper` contract method's FIXED runtime ABI is built around. /// /// Only the slots the dispatcher reads out of the string-result pair appear. The scalar slots need /// no entry: `bool`, `int` and a boxed `mixed` all travel in the same single result register, so an /// inference that lands on the wrong one of those still reaches the dispatcher intact. The stat /// slots are deliberately absent for the opposite reason — `stream_stat()`/`url_stat()` hand back a /// boxed Mixed cell on purpose, which is why the vtable documents them as having to stay untyped. fn stream_wrapper_contract_return_type(method_key: &str) -> Option<PhpType> { match method_key { \"stream_read\" | \"dir_readdir\" => Some(PhpType::Str), _ => None, } }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8e572f683bec72b342b59f29",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:04:05.533Z",
+  "stored_at": "2026-08-17T12:04:05.534Z"
+}

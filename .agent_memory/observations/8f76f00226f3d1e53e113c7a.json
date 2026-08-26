@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"filtername\\|_stream_prop\\|seed.*stream\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/filter_helpers.rs | head -8",
+  "summary": "rtk proxy grep -rn \"filtername\\|_stream_prop\\|seed.*stream\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/filter_helpers.rs | head -8 completed",
+  "text": "rtk proxy grep -rn \"filtername\\|_stream_prop\\|seed.*stream\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/filter_helpers.rs | head -8 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8f76f00226f3d1e53e113c7a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:24:16.980Z",
+  "stored_at": "2026-08-17T09:24:16.982Z"
+}

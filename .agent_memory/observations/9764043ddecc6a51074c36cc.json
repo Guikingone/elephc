@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/p2_ftell.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/p2_ftell.php: <?php\n// ftell() on a stream carrying a read filter: php reports consumed-from-source, not returned-to-caller?\n$p = sys_get_temp_",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/p2_ftell.php: <?php\n// ftell() on a stream carrying a read filter: php reports consumed-from-source, not returned-to-caller?\n$p = sys_get_temp_dir() . '/p2_ftell_' . getmypid() . '.txt';\nfile_put_contents($p, \"YWJjZGVmZ2hpag==\"); // base64 of abcdefghij\n$h = fopen($p, 'r');\nstream_filter_append($h, 'convert.base64-decode', STREAM_FILTER_READ);\necho \"t0=\", ftell($h), \"\\n\";\n$d = fread($h, 4);\necho \"read=[\", $d, \"] t1=\", ftell($h), \"\\n\";\n$d = fread($h, 4);\necho \"read=[\", $d, \"] t2=\", ftell($h), \"\\n\";\n$d = stream_get_contents($h);\necho \"rest=[\", $d, \"] t3=\", ftell($h), \" eof=\", var_export(feof($h), true), \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9764043ddecc6a51074c36cc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:30:37.136Z",
+  "stored_at": "2026-08-16T15:30:37.137Z"
+}

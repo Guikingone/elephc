@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git checkout -q HEAD -- src/codegen/lower_inst/exceptions.rs src/codegen/context.rs src/codegen/lower_inst/builtins/io/resource_handles.rs && git status --short | grep -v codebase-memory | head -3; echo \"--- restored ---\"; git log --oneline -1",
+  "summary": "About to run: git checkout -q HEAD -- src/codegen/lower_inst/exceptions.rs src/codegen/context.rs src/codegen/lower_inst/builtins/io/resource_handles.rs && git status --short | grep -v codebase-memory | head -3; ec",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1229b7e17441584571311e7d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:22:26.721Z",
+  "stored_at": "2026-08-22T07:22:26.722Z"
+}

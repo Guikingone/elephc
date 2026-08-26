@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\nd = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj')\nbody = '''<?php\n\nclass Unrelated\n{\n    function neverCalled()\n    {\n        return 1;\n    }\n}\necho \"before|\";\n$h = @fopen(\"no_such_wrapper://x\", \"r\");\nfwrite($h, \"x\");\n'''\n(d / 'tracemain.php').write_text(body)\n\np = d / 'add_trace_test.py'\nt = p.read_text()\nt = t.replace('''echo \"… [+938 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\nd = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj')\nb",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 - <<'PYEOF'\nimport pathlib\nd = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj')\nbody = '''<?php\n\nclass Unrelated\n{\n    function neverCalled()\n    {\n        return 1;\n    }\n}\necho \"before|\";\n$h = @fopen(\"no_such_wrapper://x\", \"r\");\nfwrite($h, \"x\");\n'''\n(d / 'tracemain.php').write_text(body)\n\np = d / 'add_trace_test.py'\nt = p.read_text()\nt = t.replace('''echo \"before|\";\nfwrite(false, \"x\");\n\"####,''', '''echo \"before|\";\n$h = @fopen(\"no_such_wrapper://x\", \"r\");\nfwrite($h, \"x\");\n\"####,''')\nt = t.replace('''/// The class here is deliberately the thing that used to suppress it. MEASURED on `php -n` 8.5.6.''',\n              '''/// The class here is deliberately the thing that used to suppress it. The `false` comes from a\n/// failing `fopen()` rather than a literal, because elephc REFUSES a literal `false` in a resource\n/// parameter at compile time where php compiles it and raises at run time — a separate divergence,\n/// and not the one this test is about. MEASURED on `php -n` 8.5.6.''')\np.write_text(t)\nprint('probe and test use a runtime false')\nPYEOF\ncd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n tracemain.php 2>&1 | sed 's|/private/tmp/[^ )]*obj|<dir>|g': probe and test use a runtime false before| Fatal error: Uncaught TypeError: fwrite(): Argument #1 ($stream) must be of type resource, false given in <dir>/tracemain.php:12 Stack trace: #0 <dir>/tracemain.php(12): fwrite(false, 'x') #1 {main} thrown in <dir>/tracemain.php on line 12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca87951a6eaeb7b1db36ee9b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:45:55.940Z",
+  "stored_at": "2026-08-22T19:45:55.941Z"
+}

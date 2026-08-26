@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 -c \"\nimport pathlib\np = pathlib.Path('uwpos.php')\nt = p.read_text().replace('\\\"w\\\", \\\"W\\\"', '\\\"wt\\\", \\\"W\\\"').replace('w://x', 'wt://x')\np.write_text(t)\nprint('probe uses a two-letter scheme')\n\"; php -n uwpos.php 2>&1",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 -c \"\nimport pathlib\np = pathlib.Path('uwpos.php')\nt = p.read_text().replace('\\\"w\\\", \\\"W\\\"', '\\\"wt\\\", \\\"W\\\"').replace('w://x', 'wt://x')\np.wr",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 -c \"\nimport pathlib\np = pathlib.Path('uwpos.php')\nt = p.read_text().replace('\\\"w\\\", \\\"W\\\"', '\\\"wt\\\", \\\"W\\\"').replace('w://x', 'wt://x')\np.write_text(t)\nprint('probe uses a two-letter scheme')\n\"; php -n uwpos.php 2>&1: probe uses a two-letter scheme w: t0=0 t1=2 t2=3 a: t0=0 t1=2 t2=3 r+: t0=0 t1=2 t2=3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "792869c8b0c045c59905f640",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:53:32.746Z",
+  "stored_at": "2026-08-22T17:53:32.747Z"
+}

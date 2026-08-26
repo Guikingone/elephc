@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_php_filter_parse\" src/ | grep -v \"php_filter_dynamic.rs\" | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_php_filter_parse\" src/ | grep -v \"php_filter_dynamic.rs\" | head: src/codegen/lower_inst/builtins/io/phar_write.rs:313:/// One spelling serves both forms: the URL bytes are probed with `__rt_php_filter_parse` a",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"__rt_php_filter_parse\" src/ | grep -v \"php_filter_dynamic.rs\" | head: src/codegen/lower_inst/builtins/io/phar_write.rs:313:/// One spelling serves both forms: the URL bytes are probed with `__rt_php_filter_parse` at src/codegen/lower_inst/builtins/io/phar_write.rs:450: abi::emit_call_label(ctx.emitter, \"__rt_php_filter_parse\"); src/codegen/lower_inst/builtins/io/phar_write.rs:542: abi::emit_call_label(ctx.emitter, \"__rt_php_filter_parse\"); src/codegen/lower_inst/builtins/io/fopen_core.rs:306: abi::emit_call_label(ctx.emitter, \"__rt_php_filter_parse\"); src/codegen/lower_inst/builtins/io/fopen_core.rs:325: abi::emit_call_label(ctx.emitter, \"__rt_php_filter_parse\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "62acf93f0a60ef7ea20797d1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:30:45.490Z",
+  "stored_at": "2026-08-24T07:30:45.490Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"label_global(\\\"__rt_mixed_cast_int\\\")\" -A22 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/ | head -26",
+  "summary": "rtk proxy grep -rn \"label_global(\\\"__rt_mixed_cast_int\\\")\" -A22 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/ | head -26: ams-csv-signature/src/codegen_support/runtime/arrays/mixed_cast_int.rs-57- emitter.instruction(\"mov x0, #0\"); // null and u",
+  "text": "rtk proxy grep -rn \"label_global(\\\"__rt_mixed_cast_int\\\")\" -A22 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/ | head -26: ams-csv-signature/src/codegen_support/runtime/arrays/mixed_cast_int.rs-57- emitter.instruction(\"mov x0, #0\"); // null and unsupported payloads cast to zero for now /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/arrays/mixed_cast_int.rs-58- emitter.instruction(\"b __rt_mixed_cast_int_done\"); // return the normalized integer result /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/arrays/mixed_cast_int.rs-59- -- /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/arrays/mixed_cast_int.rs:109: emitter.label_global(\"__rt_mixed_cast_int\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/arrays/mixed_cast_int.rs-110-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b4558ff76723e8f94753972e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:10:38.807Z",
+  "stored_at": "2026-08-17T07:10:38.807Z"
+}

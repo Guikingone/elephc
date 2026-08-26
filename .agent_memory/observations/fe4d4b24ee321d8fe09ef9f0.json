@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy find . -type d -name \"prelude*\" -not -path \"./target/*\" -not -path \"./.git/*\" | head -10; echo \"=== php files ===\"; rtk proxy find . -name \"*.php\" -not -path \"./target/*\" -not -path \"./.git/*\" -not -path \"./tests/*\" -not -path \"./examples/*\" | head -20",
+  "summary": "rtk proxy find . -type d -name \"prelude*\" -not -path \"./target/*\" -not -path \"./.git/*\" | head -10; echo \"=== php files ===\"; rtk proxy find . -name \"*.php\" -not -path \"./target/*\" -not -path \"./.git/*\" -not -path \"./tests/*\" -not -path \"./examples/*\" | head -20: === php files === ./tools/php_oracle/canonical_value.php",
+  "text": "rtk proxy find . -type d -name \"prelude*\" -not -path \"./target/*\" -not -path \"./.git/*\" | head -10; echo \"=== php files ===\"; rtk proxy find . -name \"*.php\" -not -path \"./target/*\" -not -path \"./.git/*\" -not -path \"./tests/*\" -not -path \"./examples/*\" | head -20: === php files === ./tools/php_oracle/canonical_value.php ./tools/php_oracle/bootstrap.php ./tools/php_oracle/manifest_probe.php ./crates/elephc-tz/data/generate.php ./crates/elephc-crypto/tests/gen_openssl_fixtures.php ./showcases/http-server/server.php ./showcases/http-server/main.php ./showcases/http-server/native.php ./showcases/http-server/http.php ./showcases/http-server/routes.php ./showcases/contacts/main.php ./showcases/contacts/export.php ./showcases/contacts/search.php ./showcases/contacts/db.php ./showcases/contacts/display.php ./showcases/doom/main.php ./showcases/doom/src/Wad/WadLoader.php ./showcases/doom/src/Wad/WadEntry.php ./showcases/doom/src/Wad/WadFile.php ./showcases/doom/src/App/Application.php",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fe4d4b24ee321d8fe09ef9f0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:39:40.651Z",
+  "stored_at": "2026-08-16T15:39:40.652Z"
+}

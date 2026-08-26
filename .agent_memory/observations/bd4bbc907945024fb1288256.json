@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PYEOF'\np = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md'\ns = open(p).read()\nold = \"| `compress.bzip2://` | Read-only wrapper that opens the underlying file and applies `bzip2.decompress`. |\"\nif old not in s:\n    import re\n    m = [l for l in s.split('\\n') if 'compress.bzip2://' in l and l.startswith('|')]\n    print(\"current row:\", m[:1])\nelse:\n    new = (\"| `compress.bzip2://` | Opens the underlying file and applies `bzip2.decompress` when reading or \"\n           \"`bzip2.compress` when writing, so `fopen(\\\"compres… [+337 chars truncated]",
+  "summary": "About to run: python3 - <<'PYEOF' p = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/streams.md' s = open(p).read() old = \"| `compress.bzip2://` | Read-only wr",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bd4bbc907945024fb1288256",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:35:23.640Z",
+  "stored_at": "2026-08-18T13:35:23.640Z"
+}

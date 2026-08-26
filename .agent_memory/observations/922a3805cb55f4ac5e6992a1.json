@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,60p' src/codegen_support/runtime/exceptions/trace_buffer.rs",
+  "summary": "About to run: sed -n '1,60p' src/codegen_support/runtime/exceptions/trace_buffer.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "922a3805cb55f4ac5e6992a1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:19:58.850Z",
+  "stored_at": "2026-08-26T09:19:58.851Z"
+}

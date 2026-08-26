@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '14930,14965p' crates/elephc-builtin-contract/src/catalog_data.rs",
+  "summary": "sed -n '14930,14965p' crates/elephc-builtin-contract/src/catalog_data.rs: requirements: &[], }, BuiltinContract { id: BuiltinId::from_canonical_name(\"sscanf\"), name: \"sscanf\", area: Area::String, kind: BuiltinKind::Function, params: &[ ParamSpec { name: \"string\", ty: TypeSpec::Str, default: None, by_ref: false, writes:",
+  "text": "sed -n '14930,14965p' crates/elephc-builtin-contract/src/catalog_data.rs: requirements: &[], }, BuiltinContract { id: BuiltinId::from_canonical_name(\"sscanf\"), name: \"sscanf\", area: Area::String, kind: BuiltinKind::Function, params: &[ ParamSpec { name: \"string\", ty: TypeSpec::Str, default: None, by_ref: false, writes: None, }, ParamSpec { name: \"format\", ty: TypeSpec::Str, default: None, by_ref: false, writes: None, }, ], variadic: Some(\"vars\"), variadic_writes: Some(TypeSpec::Mixed), min_args: None, max_args: None, arity_error: None, returns: TypeSpec::Mixed, by_ref_return: false, summary: \"Parses a string according to a format.\", examples: &[ ], php_manual: Some(\"https://www.php.net/manual/en/function.sscanf.php\"), deprecation: None, extension: false,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "198cc35c1e3ec86920260176",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:04:55.684Z",
+  "stored_at": "2026-08-18T11:04:55.684Z"
+}

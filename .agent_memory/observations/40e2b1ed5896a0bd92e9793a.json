@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(output): `echo` on an `iterable` parameter converted an array in SILENCE\n\nphp raises `Array to string conversion` at every site that turns an array into\na string, and `echo $items` inside `function show(iterable $items)` is one of\nthem: MEASURED on `php -n` 8.5.6, two calls raise two warnings, each naming the\nline of the `echo` itself rather than either call site.\n\nelephc printed `Array` and said nothing. Everything needed was already in\nplace — the EIR instruction admitted `may_warn`, the backend published the line\nfor it, and the runtime… [+689 chars truncated]",
+  "summary": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(output): `echo` on an `iterable` parameter converted an array in SILENCE\n\nphp raises `Array to string conversion` at every site that turns an array into\na string, and `echo $items` inside `function show(iterable $items)` is one of\nthem: MEASURED on `php -n` 8.5.6, ",
+  "text": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(output): `echo` on an `iterable` parameter converted an array in SILENCE\n\nphp raises `Array to string conversion` at every site that turns an array into\na string, and `echo $items` inside `function show(iterable $items)` is one of\nthem: MEASURED on `php -n` 8.5.6, two calls raise two warnings, each naming the\nline of the `echo` itself rather than either call site.\n\nelephc printed `Array` and said nothing. Everything needed was already in\nplace — the EIR instruction admitted `may_warn`, the backend published the line\nfor it, and the runtime writer had already dispatched on the heap kind and knew\nit was looking at an array. That arm just never raised the diagnostic, while the\n`echo $array` spelling one line away did, through an entirely different path.\n\nThe warning belongs in the runtime writer because only the runtime knows the\nkind: the same helper serves payloads that print nothing at all. Both arches,\nmirroring the boxed-Mixed writer that had already been given this exact fix.\n\nThe test pinning `\"Array|Array|Arraydone\"` had been failing since the local-array\nhalf started warning. It now asserts the whole php-identical shape: three\nwarnings, two at the `echo`'s line and one at the local's.\nMSG\ngit log --oneline -3: 38c7e83e9 fix(output): `echo` on an `iterable` parameter converted an array in SILENCE 58a47cf3c fix(preg): preg_match() wrote `true` into $matches, or filled an array nothing could read 835f4338c fix(spl): every exception an SPL class raised claimed to come from line 0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "40e2b1ed5896a0bd92e9793a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:40:19.912Z",
+  "stored_at": "2026-08-25T13:40:19.913Z"
+}

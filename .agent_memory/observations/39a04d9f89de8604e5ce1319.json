@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git diff HEAD 262f2aec22437509e2df9d3cf95b7e9df6554667 --stat | wc -l; git push fork +262f2aec22437509e2df9d3cf95b7e9df6554667:refs/heads/ci/streams-csv-fullci 2>&1 | tail -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a51b64e40f0e7ceb7 2>&1 | head -1; df -h / | tail -1",
+  "summary": "git diff HEAD 262f2aec22437509e2df9d3cf95b7e9df6554667 --stat | wc -l; git push fork +262f2aec22437509e2df9d3cf95b7e9df6554667:refs/heads/ci/streams-csv-fullci 2>&1 | tail -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a51b64e40f0e7ceb7 2>&1 | head -1; df -h ",
+  "text": "git diff HEAD 262f2aec22437509e2df9d3cf95b7e9df6554667 --stat | wc -l; git push fork +262f2aec22437509e2df9d3cf95b7e9df6554667:refs/heads/ci/streams-csv-fullci 2>&1 | tail -1; git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a51b64e40f0e7ceb7 2>&1 | head -1; df -h / | tail -1: 0 + 7cd4ee8bba...262f2aec22 262f2aec22437509e2df9d3cf95b7e9df6554667 -> ci/streams-csv-fullci (forced update) /dev/disk3s1s1 460Gi 12Gi 25Gi 32% 459k 266M 0% /",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "39a04d9f89de8604e5ce1319",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T11:44:27.739Z",
+  "stored_at": "2026-08-16T11:44:27.740Z"
+}

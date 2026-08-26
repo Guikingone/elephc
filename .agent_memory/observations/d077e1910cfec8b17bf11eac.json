@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log --oneline -3 -- tests/codegen/arrays/assoc_helpers.rs; echo \"--- hash_key_compare history ---\"; git log --oneline -3 -- src/codegen_support/runtime/arrays/hash_key_compare.rs 2>/dev/null || echo \"(no such file)\"",
+  "summary": "git log --oneline -3 -- tests/codegen/arrays/assoc_helpers.rs; echo \"--- hash_key_compare history ---\"; git log --oneline -3 -- src/codegen_support/runtime/arrays/hash_key_compare.rs 2>/dev/null || echo \"(no such file)\": 4b7a991fa fix: remediate Kimi K3 security and performance audit 499b83cec test: document core codeg",
+  "text": "git log --oneline -3 -- tests/codegen/arrays/assoc_helpers.rs; echo \"--- hash_key_compare history ---\"; git log --oneline -3 -- src/codegen_support/runtime/arrays/hash_key_compare.rs 2>/dev/null || echo \"(no such file)\": 4b7a991fa fix: remediate Kimi K3 security and performance audit 499b83cec test: document core codegen tests 65b43cf27 docs: add codegen test docblocks --- hash_key_compare history --- 4b7a991fa fix: remediate Kimi K3 security and performance audit",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d077e1910cfec8b17bf11eac",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:18:39.107Z",
+  "stored_at": "2026-08-21T07:18:39.107Z"
+}

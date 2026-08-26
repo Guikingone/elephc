@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/context_property_cases.py 2>&1 | head -40",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/context_property_cases.py 2>&1 | head -40: e 12\\nfalse' elephc: 'Warning: fopen(): Unable to find the wrapper \"w\" - did you forget to enable it w",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/context_property_cases.py 2>&1 | head -40: e 12\\nfalse' elephc: 'Warning: fopen(): Unable to find the wrapper \"w\" - did you forget to enable it when you configured PHP? in p.php on line 12\\n\\nWarning: fopen(w://x): Failed to open stream: No such file or directory in p.php on line 12\\nfal' DIFFERS --- two-letter scheme, untyped $context php: 'resource' elephc: 'resource' same --- two-letter, typed mixed $context php: 'resource' elephc: 'resource' same --- two-letter, NO $context declared php: 'Deprecated: Creation of dynamic property W::$context is deprecated in p.php on line 11\\nresource' elephc: 'Deprecated: Creation of dynamic property W::$context is deprecated in p.php on line 11\\nresource' same --- is the context a resource inside stream_open? php: 'bool(true)\\nresource' elephc: 'bool(false)\\nresource' DIFFERS --- no context passed to fopen php: 'resource(5) of type (stream-context)\\nresource' elephc: 'NULL\\nresource' DIFFERS",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a710efb35f95c8614505b3d8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:00:15.516Z",
+  "stored_at": "2026-08-21T17:00:15.518Z"
+}

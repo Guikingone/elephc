@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'pub enum TypeSpec' -A 30 crates/elephc-builtin-contract/src/ | head -40",
+  "summary": "grep -rn 'pub enum TypeSpec' -A 30 crates/elephc-builtin-contract/src/ | head -40: xed cell where a raw address belongs. crates/elephc-builtin-contract/src/spec.rs-74- /// crates/elephc-builtin-contract/src/spec.rs-75- /// A `check` hook makes the declared type non-authoritative, not unused. crates/elephc-builtin-contr",
+  "text": "grep -rn 'pub enum TypeSpec' -A 30 crates/elephc-builtin-contract/src/ | head -40: xed cell where a raw address belongs. crates/elephc-builtin-contract/src/spec.rs-74- /// crates/elephc-builtin-contract/src/spec.rs-75- /// A `check` hook makes the declared type non-authoritative, not unused. crates/elephc-builtin-contract/src/spec.rs-76- Ptr, crates/elephc-builtin-contract/src/spec.rs-77- /// PHP `callable`, as the owned runtime descriptor it lowers to. crates/elephc-builtin-contract/src/spec.rs-78- /// crates/elephc-builtin-contract/src/spec.rs-79- /// Same reason as `Ptr`: `__elephc_normalize_callable` checks as `PhpType::Callable`, whose crates/elephc-builtin-contract/src/spec.rs-80- /// representation is a descriptor rather than a boxed cell. crates/elephc-builtin-contract/src/spec.rs-81- Callable, crates/elephc-builtin-contract/src/spec.rs-82- /// PHP's `?T` — a parameter that accepts `null` as a VALUE of its own. crates/elephc-builtin-contract/src/spec.rs-83- ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ec4f6ca5c0e2db5f19603b04",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:14:50.019Z",
+  "stored_at": "2026-08-25T13:14:50.020Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "target/debug/deps/codegen_tests-d468f4b4b84961b3 assoc_key_sorts --test-threads=1 2>&1 | grep -E \"panicked|left:|right:\" | cut -c1-400 | head -12",
+  "summary": "About to run: target/debug/deps/codegen_tests-d468f4b4b84961b3 assoc_key_sorts --test-threads=1 2>&1 | grep -E \"panicked|left:|right:\" | cut -c1-400 | head -12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "91694b2fe7b41909bb63dd87",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:20:14.946Z",
+  "stored_at": "2026-08-21T07:20:14.946Z"
+}

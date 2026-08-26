@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w41; mkdir -p $S/w41; cp $S/probes2/csv-roundtrip.php $S/w41/p.php; cd $S/w41 && php -n p.php 2>&1 | sed 's|/private.*main.php|<f>|'",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w41; mkdir -p $S/w41; cp $S/probes2/csv-roundtrip.php $S/w41/p.php; cd $S/w41 && php -n p.php 2>&1 | sed 's|/private.*main.php|<f>|': Dep",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w41; mkdir -p $S/w41; cp $S/probes2/csv-roundtrip.php $S/w41/p.php; cd $S/w41 && php -n p.php 2>&1 | sed 's|/private.*main.php|<f>|': Deprecated: fputcsv(): the $escape parameter must be provided as its default value will change in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/w41/p.php on line 3 12: Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/w41/p.php on line 7 hello:world:array",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "652642f44a148b3ae273fa95",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:32:47.190Z",
+  "stored_at": "2026-08-25T08:32:47.191Z"
+}

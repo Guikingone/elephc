@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/php-src-own-test-suite-as-the-oracle.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/php-src-own-test-suite-as-the-oracle.md: ---\nname: php-src-own-test-suite-as-the-oracle\ndescription: \"OUTIL ★★★ — faire tourner les .phpt de php-src dans les DEUX implémentations; + les 2 divergences GLOBALES qui n",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/php-src-own-test-suite-as-the-oracle.md: ---\nname: php-src-own-test-suite-as-the-oracle\ndescription: \"OUTIL ★★★ — faire tourner les .phpt de php-src dans les DEUX implémentations; + les 2 divergences GLOBALES qui noient le signal si on ne les normalise pas\"\nmetadata:\n  node_type: memory\n  type: reference\n---\n\n**Le meilleur oracle pour une surface entière = la suite de tests de php-src elle-même.** `git clone --depth 1 --branch PHP-8.5 https://github.com/php/php-src` (~1 min). Outils écrits: `scratchpad/phpt/extract.py` (extrait `--FILE--`), `run.py` (lance `php -n` ET elephc dans un répertoire PRIVÉ par cas — les tests de php se marc",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6914f802254353c78d10fbd7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:10:25.879Z",
+  "stored_at": "2026-08-17T09:10:25.880Z"
+}

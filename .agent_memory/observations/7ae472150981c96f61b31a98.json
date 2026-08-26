@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_set_option.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_set_option.py: \"\"\"`stream_context_set_option()`'s seven shapes, run under both.\n\nThe test's doc block already carries php's answers, measured. ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_set_option.py: \"\"\"`stream_context_set_option()`'s seven shapes, run under both.\n\nThe test's doc block already carries php's answers, measured. Running the same program through\nelephc says which of the seven it gets wrong, and whether the gap is a missing refusal, a wrong\nmessage, or a deprecation counted differently.\n\"\"\"\nimport pathlib, subprocess, shutil\n\nD = pathlib.Path(__file__).parent / 'ctxsetopt'\nELEPHC = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc'\n\nSRC = r'''<?php\n$c1 = stream_context_create();\ntry { echo stream_context_set_option(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7ae472150981c96f61b31a98",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:01:47.467Z",
+  "stored_at": "2026-08-21T17:01:47.468Z"
+}

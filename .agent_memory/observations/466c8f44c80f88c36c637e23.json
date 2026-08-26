@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 3000 python3 run.py 2>&1 | head -30",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 3000 python3 run.py 2>&1 | head -30: IDENTICAL 95 DIFFERS 4 REFUSED 3 php parse 0 --- REFUSED --- ### reassign-across-classes error[13:8",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 3000 python3 run.py 2>&1 | head -30: IDENTICAL 95 DIFFERS 4 REFUSED 3 php parse 0 --- REFUSED --- ### reassign-across-classes error[13:8]: Undefined method: Throwable::name ### reassign-across-kinds error[44:8]: Undefined method: Throwable::name ### references-family error[50:36]: Type error: cannot reassign $x from array<int> to array<string> --- DIFFERS --- ### generators-and-statics (exit php=0 elephc=0) php : array(1) { elephc: array(2) { php : } elephc: [1]=> php : array(2) { elephc: int(1) php : [0]=> elephc: } php : int(0) elephc: array(2) { php : [1]=> elephc: [0]=> ...",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "466c8f44c80f88c36c637e23",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T19:53:54.674Z",
+  "stored_at": "2026-08-26T19:53:54.675Z"
+}

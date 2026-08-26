@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '\"seek\", vec!\\[param(\"line\"' -B 2 -A 2 src/types/checker/builtin_spl_classes/filesystem.rs; echo '--- props ---'; grep -n 'fn spl_file_object_properties' -A 20 src/types/checker/builtin_spl_classes/filesystem.rs | head -22",
+  "summary": "About to run: grep -n '\"seek\", vec!\\[param(\"line\"' -B 2 -A 2 src/types/checker/builtin_spl_classes/filesystem.rs; echo '--- props ---'; grep -n 'fn spl_file_object_properties' -A 20 src/types/checker/builtin_spl_cl",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c49700c85f4fae1514b5aba5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:30:06.099Z",
+  "stored_at": "2026-08-25T09:30:06.100Z"
+}

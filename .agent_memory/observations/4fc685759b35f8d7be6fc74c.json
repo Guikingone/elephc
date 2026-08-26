@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/run.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/run.py: \"\"\"Runs every extracted php-src case through `php -n` and through elephc, and classifies.\n\nEach case gets its OWN working directory: php'",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/run.py: \"\"\"Runs every extracted php-src case through `php -n` and through elephc, and classifies.\n\nEach case gets its OWN working directory: php's tests litter the cwd with fixtures and several\nof them use the same file names, so a shared directory makes one test's leftovers another\ntest's input.\n\nVerdicts:\n  IDENT    both produced the same bytes\n  DIFF     both ran, outputs differ\n  CRASH    elephc's binary died on a signal (php did not)\n  COMPILE  elephc refused to compile the source\n  PHPFAIL  `php -n` itself failed/timed out — the case is not a usable oracle\n  TIMEOUT  elephc's binary hung\n\"\"\"\nimp",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4fc685759b35f8d7be6fc74c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:38:04.456Z",
+  "stored_at": "2026-08-17T06:38:04.457Z"
+}

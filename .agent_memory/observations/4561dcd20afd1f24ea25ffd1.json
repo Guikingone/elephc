@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn lower_runtime_call_args\\|fn lower_builtin_args\\|runtime_call\" src/ir_lower --include=* -l 2>/dev/null | head; grep -rln \"RuntimeFnId\" src/ir_lower | head",
+  "summary": "About to run: grep -rn \"fn lower_runtime_call_args\\|fn lower_builtin_args\\|runtime_call\" src/ir_lower --include=* -l 2>/dev/null | head; grep -rln \"RuntimeFnId\" src/ir_lower | head",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4561dcd20afd1f24ea25ffd1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:58:32.572Z",
+  "stored_at": "2026-08-21T10:58:32.572Z"
+}

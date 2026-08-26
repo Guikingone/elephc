@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Monitor",
+  "path": "",
+  "command": "until ! ps aux | grep -q \"[c]odegen_tests\"; do sleep 20; done; grep -E \"^test result:|^error|FAILED|panicked\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/brfuivzh4.output | head -20",
+  "summary": "until ! ps aux | grep -q \"[c]odegen_tests\"; do sleep 20; done; grep -E \"^test result:|^error|FAILED|panicked\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/brfuivzh4.output | head -20: bm38l99aa",
+  "text": "until ! ps aux | grep -q \"[c]odegen_tests\"; do sleep 20; done; grep -E \"^test result:|^error|FAILED|panicked\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/brfuivzh4.output | head -20: bm38l99aa",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "81a116ae60c05fea9c836a9c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:31:56.479Z",
+  "stored_at": "2026-08-23T09:31:56.479Z"
+}

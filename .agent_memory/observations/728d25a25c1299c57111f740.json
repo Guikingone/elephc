@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"__rt_filter_create_fail_x86\\|__rt_filter_create_fail\" src/codegen_support/runtime/resources/filter.rs | head -6; grep -n \"__rt_heap_free\" src/codegen_support/runtime/resources/filter.rs | head -3",
+  "summary": "grep -n \"__rt_filter_create_fail_x86\\|__rt_filter_create_fail\" src/codegen_support/runtime/resources/filter.rs | head -6; grep -n \"__rt_heap_free\" src/codegen_support/runtime/resources/filter.rs | head -3: 105: emitter.instruction(\"cbz x0, __rt_filter_create_fail\"); // heap exhausted 146: emitter.label(\"__rt_filter_cre",
+  "text": "grep -n \"__rt_filter_create_fail_x86\\|__rt_filter_create_fail\" src/codegen_support/runtime/resources/filter.rs | head -6; grep -n \"__rt_heap_free\" src/codegen_support/runtime/resources/filter.rs | head -3: 105: emitter.instruction(\"cbz x0, __rt_filter_create_fail\"); // heap exhausted 146: emitter.label(\"__rt_filter_create_fail\"); 761: emitter.instruction(\"jz __rt_filter_create_fail\"); 802: emitter.label(\"__rt_filter_create_fail\"); 586: emitter.instruction(\"bl __rt_heap_free\"); // the copy never escapes this helper 688: // __rt_heap_free takes its pointer in rax on x86_64, not rdi — same convention as 692: emitter.instruction(\"call __rt_heap_free\"); // the copy never escapes this helper",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "728d25a25c1299c57111f740",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:41:37.805Z",
+  "stored_at": "2026-08-17T14:41:37.805Z"
+}

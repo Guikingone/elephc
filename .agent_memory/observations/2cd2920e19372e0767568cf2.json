@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/flock_lowering.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/flock_lowering.py: \"\"\"Asks the wrapper before asking the descriptor, exactly as `ftell()` already does here.\n\nThe idiom copied is the one three li",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/flock_lowering.py: \"\"\"Asks the wrapper before asking the descriptor, exactly as `ftell()` already does here.\n\nThe idiom copied is the one three lines above in this same file: load the HANDLE, ask a helper a\nquestion only the recorded stream identity can answer, and only then fall back to the descriptor.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\np = ROOT / 'src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs'\nt = p.read_text()\n\nOLD = '''/// Lowers `flock(stream, operation, would_block?)` through the libc floc",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2cd2920e19372e0767568cf2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:16:02.229Z",
+  "stored_at": "2026-08-22T17:16:02.229Z"
+}

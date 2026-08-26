@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && printf '<?php\\n$a = $http_response_header;\\n$b = $http_response_header;\\necho \"done\\\\n\";\\n' > multi.php && php -n multi.php 2>/dev/null | sed 's|/private.*scratchpad/|…/|' | grep -c \"Deprecated\"",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && printf '<?php\\n$a = $http_response_header;\\n$b = $http_response_header;\\necho \"done\\\\n\";\\n' > multi.php && php -n multi.php 2>/dev/null | sed 's|/priv",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && printf '<?php\\n$a = $http_response_header;\\n$b = $http_response_header;\\necho \"done\\\\n\";\\n' > multi.php && php -n multi.php 2>/dev/null | sed 's|/private.*scratchpad/|…/|' | grep -c \"Deprecated\": 2",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ae2925b097d9ec709b457470",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:46:16.676Z",
+  "stored_at": "2026-08-18T15:46:16.677Z"
+}

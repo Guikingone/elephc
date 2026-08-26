@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 1,40p src/codegen_support/runtime/io/stream_wrapper_register.rs; echo \"=== validation? ===\"; grep -n \"0x2b\\|0x2e\\|0x2d\\|alpha\\|valid\\|scheme\\|dup\\|taken\" src/codegen_support/runtime/io/stream_wrapper_register.rs | head -15",
+  "summary": "sed -n 1,40p src/codegen_support/runtime/io/stream_wrapper_register.rs; echo \"=== validation? ===\"; grep -n \"0x2b\\|0x2e\\|0x2d\\|alpha\\|valid\\|scheme\\|dup\\|taken\" src/codegen_support/runtime/io/stream_wrapper_register.rs | head -15:  const DUPLICATE_PROTOCOL_WARNING: &str = \"Warning: stream_wrapper_register(): Protocol i",
+  "text": "sed -n 1,40p src/codegen_support/runtime/io/stream_wrapper_register.rs; echo \"=== validation? ===\"; grep -n \"0x2b\\|0x2e\\|0x2d\\|alpha\\|valid\\|scheme\\|dup\\|taken\" src/codegen_support/runtime/io/stream_wrapper_register.rs | head -15:  const DUPLICATE_PROTOCOL_WARNING: &str = \"Warning: stream_wrapper_register(): Protocol is already defined.\\n\"; /// Emits the `__rt_stream_wrapper_register` runtime helper. /// Input: AArch64 x0 = proto ptr, x1 = proto len, x2 = class ptr, x3 = class len, /// x4 = flags. x86_64 uses rdi/rsi/rdx/rcx/r8 for the same values. /// Output: 1 when the registration was stored, 0 when the table is full. === validation? === 19://! PHP-level `$scheme = \"dyn\" . $i;` reuses one local slot per iteration, so 31: \"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\n\"; 60: // -- reserve a free slot, growing the table when every slot is taken -- 70: // A PHP-level `$scheme = \"dyn\" . $i;` reuses one local slot per iteration, so 125: // -- reserve a free slot, growing the table when every slot is taken -- 135: // A PHP-level `$scheme = \"dyn\" . $i;` reuses one local slot per iteration, so",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "895c43976bc8e164fdd4d003",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:52:02.965Z",
+  "stored_at": "2026-08-21T16:52:02.965Z"
+}

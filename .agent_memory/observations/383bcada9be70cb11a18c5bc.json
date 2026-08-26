@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn configure_host_managed_pcre2' -A 30 tests/ | head -45",
+  "summary": "About to run: grep -rn 'fn configure_host_managed_pcre2' -A 30 tests/ | head -45",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "383bcada9be70cb11a18c5bc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:02:13.890Z",
+  "stored_at": "2026-08-25T13:02:13.891Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/splmsg.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/splmsg.txt: feat(spl): SplFileObject could not scan a line, and reading past its last one answered a value php never produces\n\n`$file->fscanf('%d %s')",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/splmsg.txt: feat(spl): SplFileObject could not scan a line, and reading past its last one answered a value php never produces\n\n`$file->fscanf('%d %s')` was `Undefined method`. php has had it since 5.1, it is\nthe object form of the `fscanf()` this branch just rebuilt, and a program that\nuses it does not compile at all.\n\nIt is one line through the shared scanf engine, so the method and the free\nfunction cannot drift — `%d` comes back as an INT on both. The LINE NUMBER rule\nis php's own and is NOT `fgets()`'s: measured on `php -n` 8.5.6, the FIRST\n`fscanf()` of a fresh object leaves `key()` where it was and ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "548e130f9327e08b6d5908b3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T18:14:28.333Z",
+  "stored_at": "2026-08-16T18:14:28.335Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"strlen\" src/*prelude*.rs src/prelude/ 2>/dev/null | head; ls src | grep -i prelude",
+  "summary": "grep -rln \"strlen\" src/*prelude*.rs src/prelude/ 2>/dev/null | head; ls src | grep -i prelude: src/image_prelude.rs src/scanf_prelude.rs src/pdo_prelude.rs src/var_export_prelude.rs dir_prelude dir_prelude.rs hash_prelude hash_prelude.rs image_prelude image_prelude.rs list_id_prelude list_id_prelude.rs opcache_prelude ",
+  "text": "grep -rln \"strlen\" src/*prelude*.rs src/prelude/ 2>/dev/null | head; ls src | grep -i prelude: src/image_prelude.rs src/scanf_prelude.rs src/pdo_prelude.rs src/var_export_prelude.rs dir_prelude dir_prelude.rs hash_prelude hash_prelude.rs image_prelude image_prelude.rs list_id_prelude list_id_prelude.rs opcache_prelude opcache_prelude.rs pdo_prelude pdo_prelude.rs prelude_prune prelude_prune.rs scanf_prelude scanf_prelude.rs tz_prelude tz_prelude.rs var_export_prelude var_export_prelude.rs version_prelude.rs web_prelude web_prelude.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c75eda160db50c69e9620ed3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:35:11.174Z",
+  "stored_at": "2026-08-20T20:35:11.174Z"
+}

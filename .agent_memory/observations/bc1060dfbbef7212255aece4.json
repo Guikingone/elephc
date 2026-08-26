@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 22,28p src/codegen/lower_inst/builtins/io/phar_write.rs",
+  "summary": "sed -n 22,28p src/codegen/lower_inst/builtins/io/phar_write.rs: // reused, so advancing it is the whole of what php does here. abi::emit_call_label(ctx.emitter, \"__rt_resource_id_burn\"); let path = expect_operand(inst, 0)?; let data = expect_operand(inst, 1)?; let path_literal = optional_const_string_operand(ctx, path)",
+  "text": "sed -n 22,28p src/codegen/lower_inst/builtins/io/phar_write.rs: // reused, so advancing it is the whole of what php does here. abi::emit_call_label(ctx.emitter, \"__rt_resource_id_burn\"); let path = expect_operand(inst, 0)?; let data = expect_operand(inst, 1)?; let path_literal = optional_const_string_operand(ctx, path)?; if let Some(path_literal) = path_literal.as_deref() { if path_literal.starts_with(\"phar://\") {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bc1060dfbbef7212255aece4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:00:14.049Z",
+  "stored_at": "2026-08-21T18:00:14.050Z"
+}

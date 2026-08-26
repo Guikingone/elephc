@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 16513,16575p crates/elephc-builtin-contract/src/catalog_data.rs",
+  "summary": "sed -n 16513,16575p crates/elephc-builtin-contract/src/catalog_data.rs: s = null`, NOT `int $microseconds = 0`. The // distinction is real: `stream_select($r, $w, $e, null)` blocks forever because // there is no timeout at all, while `stream_select($r, $w, $e, 0, 0)` polls. A // declared `0` default would spell the sec",
+  "text": "sed -n 16513,16575p crates/elephc-builtin-contract/src/catalog_data.rs: s = null`, NOT `int $microseconds = 0`. The // distinction is real: `stream_select($r, $w, $e, null)` blocks forever because // there is no timeout at all, while `stream_select($r, $w, $e, 0, 0)` polls. A // declared `0` default would spell the second one for a caller who wrote neither. ParamSpec { name: \"microseconds\", ty: TypeSpec::Int, default: Some(DefaultSpec::Null), by_ref: false, writes: None, }, ], variadic: None, variadic_writes: None, min_args: None, max_args: None, arity_error: None, // php-src returns `int|false`: the ready-descriptor count, or `false` when the // underlying `poll`/`select` itself failed. returns: TypeSpec::Mixed, by_ref_return: false, summary: \"Runs the equivalent of the select() system call on the given arrays of streams.\", examples: &[ ], php_manual: Some(\"function.stream-select\"), deprecation: None, extension: false, internal: false, requirements: &[], },",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3e1d1a5be11b61a4187b7ab8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:50:06.828Z",
+  "stored_at": "2026-08-21T16:50:06.829Z"
+}

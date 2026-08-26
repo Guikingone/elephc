@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_write_tests.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_write_tests.py: \"\"\"Pins the write side of the wrapper surface, and scandir's own empty-path wording.\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/U",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/add_write_tests.py: \"\"\"Pins the write side of the wrapper surface, and scandir's own empty-path wording.\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = ROOT / 'tests/codegen/io/streams.rs'\n\nTESTS = r'''\n/// Verifies `file_put_contents()` writes THROUGH a user-registered wrapper.\n///\n/// php-src's `file_put_contents` is `php_stream_open_wrapper` followed by a write, which is what\n/// makes a registered wrapper writable at all. elephc's lowering knew `phar://` and\n/// `compress.zlib://` and sent every other URL to a one-shot ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a0afd0d0f973fe7356d5f7cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:26:20.929Z",
+  "stored_at": "2026-08-21T18:26:20.930Z"
+}

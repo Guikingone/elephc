@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_srwire.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_srwire.py: import os\nimport re\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n# --- reg",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_srwire.py: import os\nimport re\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\n# --- register the runtime helper ---\np = 'src/codegen_support/runtime/strings/mod.rs'\ns = open(p).read()\nm = re.search(r'^(pub |pub\\(crate\\) )?mod str_replace;$', s, re.M)\nassert m, 'str_replace module declaration not found'\ns = s[:m.end()] + '\\nmod str_replace_arrays;' + s[m.end():]\nm2 = re.search(r'^pub(\\(crate\\))? use str_replace::[^;]+;$', s, re.M)\nif m2:\n    s = s[:m2.end()] + '\\npub(crate) use str_replace_arrays::emit_str_replace_search_array;' + s[m2.end():]\n   ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9517c1499744fa2aa182a90c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:33:14.824Z",
+  "stored_at": "2026-08-17T21:33:14.825Z"
+}

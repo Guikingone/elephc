@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -o \"context. is published for the duration\" docs/php/system-and-io.md | head -1; grep -o \"\\`\\$context\\` is published for the read\" docs/php/system-and-io.md | head -1; echo \"--- upstream's url_stat paragraph survived? ---\"; grep -c \"url_stat()\\` method instead of the filesystem\" docs/php/system-and-io.md; echo \"--- json_encode wording ---\"; grep -o \"lowercase-hex\" docs/php/system-and-io.md | head -1",
+  "summary": "grep -o \"context. is published for the duration\" docs/php/system-and-io.md | head -1; grep -o \"\\`\\$context\\` is published for the read\" docs/php/system-and-io.md | head -1; echo \"--- upstream's url_stat paragraph survived? ---\"; grep -c \"url_stat()\\` method instead of the filesystem\" docs/php/system-and-io.md; echo \"--",
+  "text": "grep -o \"context. is published for the duration\" docs/php/system-and-io.md | head -1; grep -o \"\\`\\$context\\` is published for the read\" docs/php/system-and-io.md | head -1; echo \"--- upstream's url_stat paragraph survived? ---\"; grep -c \"url_stat()\\` method instead of the filesystem\" docs/php/system-and-io.md; echo \"--- json_encode wording ---\"; grep -o \"lowercase-hex\" docs/php/system-and-io.md | head -1: context` is published for the duration --- upstream's url_stat paragraph survived? --- 1 --- json_encode wording --- lowercase-hex",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f2247270c06d8a0c69903e2a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:42:02.728Z",
+  "stored_at": "2026-08-22T06:42:02.728Z"
+}

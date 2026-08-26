@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '380,430p' src/codegen/lower_inst/reference_arguments.rs",
+  "summary": "sed -n '380,430p' src/codegen/lower_inst/reference_arguments.rs: ady stores a ref-cell pointer. fn local_ref_arg_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<LocalRefArgSource> { let Some(value_ref) = ctx.function.value(value) else { return Err(CodegenIrError::missing_entry(\"value\", value.as_raw())); }; ",
+  "text": "sed -n '380,430p' src/codegen/lower_inst/reference_arguments.rs: ady stores a ref-cell pointer. fn local_ref_arg_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<LocalRefArgSource> { let Some(value_ref) = ctx.function.value(value) else { return Err(CodegenIrError::missing_entry(\"value\", value.as_raw())); }; let ValueDef::Instruction { inst, .. } = value_ref.def else { return Err(CodegenIrError::unsupported( \"by-reference method call argument from non-local value\", )); }; let inst_ref = ctx .function .instruction(inst) .ok_or_else(|| CodegenIrError::missing_entry(\"instruction\", inst.as_raw()))?; match inst_ref.op { Op::LoadLocal | Op::LoadRefCell => {} _ => { return Err(CodegenIrError::unsupported(format!( \"by-reference method call argument from opcode {}\", inst_ref.op.name() ))) } }; let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else { return Err(CodegenIrError::invalid_module( \"by-reference load argument has no local slot\", ));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ec8876ca34b58fe2fbe89651",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:02:10.468Z",
+  "stored_at": "2026-08-20T20:02:10.468Z"
+}

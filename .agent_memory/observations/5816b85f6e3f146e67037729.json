@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/reassign_probe.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/reassign_probe.py: \"\"\"How wide is the \"cannot reassign $x from string to int\" rule?\n\nIt stopped a stream program from compiling at all, and the fou",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/reassign_probe.py: \"\"\"How wide is the \"cannot reassign $x from string to int\" rule?\n\nIt stopped a stream program from compiling at all, and the four-line reduction — `$x = \"a\";\n$x = 5;` — is valid php that any interpreter runs. Before calling that a defect or a design, it is\nworth knowing exactly which shapes it refuses: a rule that only bites at top level is a different\nthing from one that bites everywhere.\n\"\"\"\nimport pathlib\nimport shutil\nimport subprocess\n\nHERE = pathlib.Path(__file__).parent\nD = HERE / 'reassignprobe'\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5816b85f6e3f146e67037729",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:11:53.557Z",
+  "stored_at": "2026-08-22T10:11:53.558Z"
+}

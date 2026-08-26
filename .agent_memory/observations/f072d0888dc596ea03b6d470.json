@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ./target/debug/elephc --emit-ir /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/offunion.php 2>/dev/null | sed -n '/function main/,/^  }/p' | sed -n '1,22p'",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ./target/debug/elephc --emit-ir /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/offunion.php 2>/dev/null",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ./target/debug/elephc --emit-ir /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/offunion.php 2>/dev/null | sed -n '/function main/,/^  }/p' | sed -n '1,22p': eap(Mixed) php=mixed own=owned = runtime_call v5 v6 v7 ; effects: reads_local, writes_local, reads_heap, writes_heap, reads_global, writes_global, reads_fs, writes_fs, reads_process, writes_process, output, alloc_heap, alloc_concat, may_throw, may_fatal, may_warn, may_deopt ; span: 5:12 v9: I64 php=null = runtime_call v8 runtime.var_dump ; effects: reads_local, writes_local, reads_heap, writes_heap, reads_global, reads_fs, writes_fs, reads_process, writes_process, output, alloc_heap, alloc_concat, may_throw, may_fatal, may_warn, may_deopt ; span: 5:1 release v8 ; effects: writes_heap, refcount_op ; span: 5:1 concat_reset ; effects: writes_global ; span: 6:1 v10: Heap(Mixed) php=array<mixed, int>|false own=maybe_owned = load_local slot[0] ; effects: reads_local ; span: 6:10 v11: Str php=string own=persistent = const_str data[5] ; span: 6:13 v12: I64 php=bool = const_bool true ; span: 6:12",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f072d0888dc596ea03b6d470",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:51:30.631Z",
+  "stored_at": "2026-08-24T08:51:30.632Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; grep -n \"bl __rt_mixed_unbox\" nullprop2.s | head -20; echo \"=== context of each ===\"; grep -n -B 4 \"bl __rt_mixed_unbox\" nullprop2.s | grep -E \"src line\" | head -20",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; grep -n \"bl __rt_mixed_unbox\" nullprop2.s | head -20; echo \"=== context of each ===\"; grep -n -B 4 \"bl __rt_mixed_unbox\" nullprop2.s | grep -E \"src ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; grep -n \"bl __rt_mixed_unbox\" nullprop2.s | head -20; echo \"=== context of each ===\"; grep -n -B 4 \"bl __rt_mixed_unbox\" nullprop2.s | grep -E \"src line\" | head -20:  5711: bl __rt_mixed_unbox 5870: bl __rt_mixed_unbox 6320: bl __rt_mixed_unbox 6504: bl __rt_mixed_unbox 6668: bl __rt_mixed_unbox === context of each === 3678- ; @src line=1000018 col=1 op=type_predicate 3704- ; @src line=1000019 col=1 op=type_predicate 4027- ; @src line=1000022 col=1 op=type_predicate 4043- ; @src line=1000023 col=1 op=type_predicate 4163- ; @src line=1000025 col=1 op=type_predicate 4299- ; @src line=1000026 col=1 op=is_null 4468- ; @src line=1000027 col=1 op=type_predicate 4587- ; @src line=1000029 col=1 op=type_predicate 4679- ; @src line=1000038 col=1 op=type_predicate 5394- ; @src line=1000031 col=1 op=type_predicate 5708- ; @src line=1000033 col=1 op=type_predicate 5867- ; @src line=1000034 col=1 op=type_predicate 6317- ; @src line=1000039 col=1 op=runtime_call 10430- ; @src line=15 col=36 end=15:47 op=is_null 10554- ; @src line=16 col=25 end=16:36 op=runtime_call",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "13acd3a293c812a022eec53a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:53:06.682Z",
+  "stored_at": "2026-08-23T08:53:06.683Z"
+}

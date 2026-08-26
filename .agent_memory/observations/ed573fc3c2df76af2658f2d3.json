@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '455,500p' src/ir_lower/expr/array_builtin_args.rs",
+  "summary": "sed -n '455,500p' src/ir_lower/expr/array_builtin_args.rs: ng::Standard); match argument_lowering { crate::builtins::semantics::BuiltinArgumentLowering::Count => { lower_count_args(ctx, sig, args) } crate::builtins::semantics::BuiltinArgumentLowering::Date => { lower_date_args(ctx, sig, args) } crate::builtins::semanti",
+  "text": "sed -n '455,500p' src/ir_lower/expr/array_builtin_args.rs: ng::Standard); match argument_lowering { crate::builtins::semantics::BuiltinArgumentLowering::Count => { lower_count_args(ctx, sig, args) } crate::builtins::semantics::BuiltinArgumentLowering::Date => { lower_date_args(ctx, sig, args) } crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => { lower_json_decode_args(ctx, sig, args) } crate::builtins::semantics::BuiltinArgumentLowering::PregReplaceCallback if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) => { lower_preg_replace_callback_args(ctx, sig, args) } crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) => { lower_args(ctx, args) } crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) => {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ed573fc3c2df76af2658f2d3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:13:56.649Z",
+  "stored_at": "2026-08-25T13:13:56.649Z"
+}

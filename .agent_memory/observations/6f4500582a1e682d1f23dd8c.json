@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h /System/Volumes/Data /private/tmp /Users/guillaumeloulier",
+  "summary": "df -h /System/Volumes/Data /private/tmp /Users/guillaumeloulier: Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 431Gi 307Mi 100% 5.6M 3.1M 64% /System/Volumes/Data /dev/disk3s5 460Gi 431Gi 307Mi 100% 5.6M 3.1M 64% /System/Volumes/Data /dev/disk3s5 460Gi 431Gi 307Mi 100% 5.6M 3.1M 6",
+  "text": "df -h /System/Volumes/Data /private/tmp /Users/guillaumeloulier: Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 431Gi 307Mi 100% 5.6M 3.1M 64% /System/Volumes/Data /dev/disk3s5 460Gi 431Gi 307Mi 100% 5.6M 3.1M 64% /System/Volumes/Data /dev/disk3s5 460Gi 431Gi 307Mi 100% 5.6M 3.1M 64% /System/Volumes/Data",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6f4500582a1e682d1f23dd8c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:21:16.254Z",
+  "stored_at": "2026-08-23T13:21:16.254Z"
+}

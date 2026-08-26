@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/undefined_variables.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/undefined_variables.rs: /// Verifies a read inside a multi-line interpolated string names the line it is WRITTEN on. -> /// Verifies an undefined variable used as an ARRAY ELEMENT yields a null element.\n///",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/undefined_variables.rs: /// Verifies a read inside a multi-line interpolated string names the line it is WRITTEN on. -> /// Verifies an undefined variable used as an ARRAY ELEMENT yields a null element.\n///\n/// The literal's storage element type is chosen syntactically, and an unrecognised expression\n/// fell back to `Int`. An undefined read is neither: it answers null, so the literal was stamped\n/// `array<int>` and the whole program was REFUSED with `unsupported EIR backend feature:\n/// array_push for PHP type Void`. `[null]` and `[$x]` where `$x = null` both compiled, which is\n/// what made",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f3203c63ba4a97c7ca61eff4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T18:17:27.771Z",
+  "stored_at": "2026-08-23T18:17:27.771Z"
+}

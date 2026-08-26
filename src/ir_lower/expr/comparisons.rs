@@ -37,12 +37,19 @@ pub(super) fn lower_compare(
         lhs = lhs_key;
         rhs = rhs_key;
     }
+    let uses_runtime_relational_compare = matches!(
+        op,
+        BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+    )
+        && (needs_runtime_ordering_dispatch(ctx, lhs.value)
+            || needs_runtime_ordering_dispatch(ctx, rhs.value));
     let opcode = match op {
         BinOp::StrictEq => Op::StrictEq,
         BinOp::StrictNotEq => Op::StrictNotEq,
         BinOp::Eq => Op::LooseEq,
         BinOp::NotEq => Op::LooseNotEq,
         BinOp::Spaceship => Op::Spaceship,
+        _ if uses_runtime_relational_compare => Op::PhpRelCmp,
         _ if lhs.ir_type == IrType::F64 || rhs.ir_type == IrType::F64 => Op::FCmp,
         _ if lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 => Op::ICmp,
         _ if lhs.ir_type == IrType::Str && rhs.ir_type == IrType::Str => Op::StrCmp,
@@ -55,7 +62,7 @@ pub(super) fn lower_compare(
         lhs = coerce_to_int(ctx, lhs, left);
         rhs = coerce_to_int(ctx, rhs, right);
     }
-    let immediate = if matches!(opcode, Op::ICmp | Op::FCmp | Op::StrCmp) {
+    let immediate = if matches!(opcode, Op::ICmp | Op::FCmp | Op::StrCmp | Op::PhpRelCmp) {
         Some(Immediate::CmpPredicate(cmp_predicate(op)))
     } else {
         None
@@ -74,6 +81,14 @@ pub(super) fn lower_compare(
         release_binary_operand_temporary(ctx, rhs, expr.span);
     }
     result
+}
+
+/// Returns whether an operand carries a runtime tag that must select PHP's ordering rule.
+fn needs_runtime_ordering_dispatch(ctx: &LoweringContext<'_, '_>, value: ValueId) -> bool {
+    matches!(
+        ctx.builder.value_php_type(value).codegen_repr(),
+        PhpType::Mixed | PhpType::TaggedScalar
+    )
 }
 
 /// Releases an owning binary-operator operand once the consuming opcode has read it.
@@ -163,4 +178,3 @@ pub(super) fn cmp_predicate(op: &BinOp) -> CmpPredicate {
         _ => CmpPredicate::Eq,
     }
 }
-

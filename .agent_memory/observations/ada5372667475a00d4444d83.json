@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 nullable_sweep.py 2>&1",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 nullable_sweep.py 2>&1:  of type ?string is deprecated in strtr.php on line 1 string(3) \"' elephc : 'string(3) \"abc\"' DIFFERS substr php : ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 nullable_sweep.py 2>&1:  of type ?string is deprecated in strtr.php on line 1 string(3) \"' elephc : 'string(3) \"abc\"' DIFFERS substr php : 'string(4) \"ello\"' elephc : 'string(0) \"\"' DIFFERS substr_neg php : 'string(3) \"llo\"' elephc : 'string(0) \"\"' SAME touch DIFFERS umask php : 'bool(true)' elephc : 'REFUSED: EIR backend error: unsupported EIR backend feature: umask mask for PHP type Void' SAME sgc SAME scs 20 agree, 8 differ, out of 28 driven cases 5 of the 33 sites are NOT covered here: SKIPPED readline(prompt) — reads stdin; not drivable as a one-line non-interactive program SKIPPED stream_select(microseconds) — takes three by-reference array arguments SKIPPED stream_socket_recvfrom(address) — needs a live socket pair SKIPPED stream_context_set_option(option_name) — the null belongs to the two-argument overload, not this position SKIPPED __elephc_strtotime_raw(baseTimestamp) — internal shim, not php-visible",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ada5372667475a00d4444d83",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:07:15.775Z",
+  "stored_at": "2026-08-21T11:07:15.775Z"
+}

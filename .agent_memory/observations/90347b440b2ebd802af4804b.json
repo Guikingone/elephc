@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/compare.py 2>&1 | head -100",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/compare.py 2>&1 | head -100:  rc=0, elephc rc=n/a) --- php --- Warning: Attempt to read property \"name\" on null in prop_on_null.php on line 1 NUL",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/compare.py 2>&1 | head -100:  rc=0, elephc rc=n/a) --- php --- Warning: Attempt to read property \"name\" on null in prop_on_null.php on line 1 NULL --- elephc --- COMPILE REFUSED error[1:29]: Property access requires an object or typed pointer === offset_on_null DIFFERS (php rc=0, elephc rc=n/a) --- php --- Warning: Trying to access array offset on null in offset_on_null.php on line 1 NULL --- elephc --- COMPILE REFUSED error[1:29]: Cannot index non-array === strlen_undef DIFFERS (php rc=0, elephc rc=n/a) --- php --- Warning: Undefined variable $undef in strlen_undef.php on line 1 Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in strlen_undef.php on line 1 int(0) --- elephc --- COMPILE REFUSED error[1:29]: strlen() argument must be string === undef_plus_int SAME (php rc=0, elephc rc=0) === undef_concat SAME (php rc=0, elephc rc=0) === undef_in_fn SAME (php rc=0, elephc rc=0)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "90347b440b2ebd802af4804b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:14:11.059Z",
+  "stored_at": "2026-08-20T19:14:11.059Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_fopen_user_wrapper_fseek_dispatches_to_stream_seek\" -B 20 -A 40 tests/codegen/io/streams.rs | head -70",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_fopen_user_wrapper_fseek_dispatches_to_stream_seek\" -B 20 -A 40 tests/codegen/io/streams.rs | head -70:  for fopen user wrapper fseek missing method returns minus one. 12853-#[test] 12854-fn test_fopen_user_",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_fopen_user_wrapper_fseek_dispatches_to_stream_seek\" -B 20 -A 40 tests/codegen/io/streams.rs | head -70:  for fopen user wrapper fseek missing method returns minus one. 12853-#[test] 12854-fn test_fopen_user_wrapper_fseek_missing_method_returns_minus_one() { 12855- // Phase 10 step 4: when the wrapper class does not implement stream_seek, 12856- // the user-wrapper helper falls through to the PHP -1 failure sentinel. 12857- let out = compile_and_run( 12858- r#\"<?php 12859-class NoSeekW { 12860- public function stream_open($p, $m, $o, &$op): bool { return true; } 12861-} 12862-stream_wrapper_register(\"noseek\", \"NoSeekW\"); 12863-$f = fopen(\"noseek://x\", \"r\"); 12864-echo fseek($f, 10); 12865-\"#, 12866- ); 12867- assert_eq!(out, \"-1\"); 12868-} 12869- 12870-/// Verifies stream_set_blocking() and stream_set_timeout() on a registered 12871-/// userspace-wrapper stream dispatch into the wrapper's stream_set_option(), 12872-/// threading the option code and value; a wrapper without stream_set_option",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5e86b2d5bb4296acc36bf6ec",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:08:48.625Z",
+  "stored_at": "2026-08-22T18:08:48.625Z"
+}

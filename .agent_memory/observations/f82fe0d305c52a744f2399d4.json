@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo check --all-targets 2>&1 | tail -3 && git add src/codegen_support/runtime/io/fopen.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg9.txt 2>&1 | tail -3",
+  "summary": "cargo check --all-targets 2>&1 | tail -3 && git add src/codegen_support/runtime/io/fopen.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg9.txt 2>&1 | tail -3: Checking elephc v0.",
+  "text": "cargo check --all-targets 2>&1 | tail -3 && git add src/codegen_support/runtime/io/fopen.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg9.txt 2>&1 | tail -3: Checking elephc v0.26.4 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `dev` profile [unoptimized + debuginfo] target(s) in 26.55s [worktree-streams-csv-signature 0f3b6b7f9] fix(streams): a filter URL over a user wrapper crashed, on a shared stack slot 1 file changed, 18 insertions(+), 10 deletions(-)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f82fe0d305c52a744f2399d4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:56:12.967Z",
+  "stored_at": "2026-08-21T09:56:12.968Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"prelude_inventory\" src/pipeline.rs | head -10; echo \"=== who registers into it ===\"; grep -rn \"prelude_inventory\\.\" src/pipeline.rs | head -10",
+  "summary": "grep -rn \"prelude_inventory\" src/pipeline.rs | head -10; echo \"=== who registers into it ===\"; grep -rn \"prelude_inventory\\.\" src/pipeline.rs | head -10: src/pipeline.rs:134: let mut prelude_inventory = optimize::reachability::PreludeInventory::new(); src/pipeline.rs:163: &mut prelude_inventory, src/pipeline.rs:170: &m",
+  "text": "grep -rn \"prelude_inventory\" src/pipeline.rs | head -10; echo \"=== who registers into it ===\"; grep -rn \"prelude_inventory\\.\" src/pipeline.rs | head -10: src/pipeline.rs:134: let mut prelude_inventory = optimize::reachability::PreludeInventory::new(); src/pipeline.rs:163: &mut prelude_inventory, src/pipeline.rs:170: &mut prelude_inventory, src/pipeline.rs:185: &mut prelude_inventory, src/pipeline.rs:196: let ast = list_id_prelude::inject_if_used(ast, &mut prelude_inventory); src/pipeline.rs:205: let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory); src/pipeline.rs:272: &mut prelude_inventory, src/pipeline.rs:286: &mut prelude_inventory, src/pipeline.rs:298: let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory); src/pipeline.rs:334: &mut prelude_inventory, === who registers into it ===",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b83596a9dc5f84c2cd97b90a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:31:23.675Z",
+  "stored_at": "2026-08-21T16:31:23.675Z"
+}

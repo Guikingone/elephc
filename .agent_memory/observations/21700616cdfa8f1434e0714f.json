@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/stype_arms.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/stype_arms.py: \"\"\"Two wrappers had no recorded `stream_type`, so a descriptor probe answered for them.\n\nMEASURED on `php -n` 8.5.6, `stream_get_me",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/stype_arms.py: \"\"\"Two wrappers had no recorded `stream_type`, so a descriptor probe answered for them.\n\nMEASURED on `php -n` 8.5.6, `stream_get_meta_data()[\"stream_type\"]`:\n\n    compress.zlib://f.gz   php: ZLIB        elephc: STDIO\n    a user wrapper         php: user-space  elephc: tcp_socket\n\nThe fallback only asks whether `lseek` works. A zlib stream is served from a real temp file, so it\nseeks and read as STDIO; a user wrapper's descriptor is a SYNTHETIC handle that no `lseek` can\nmove, so it read as a socket — the loudest possible wrong answer for a stream that is not a\nnetwork anything.\n\nBoth are read ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "21700616cdfa8f1434e0714f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:34:32.620Z",
+  "stored_at": "2026-08-22T17:34:32.622Z"
+}

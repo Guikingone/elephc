@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"pub enum PhpVersion\" -A 14 src | head -20",
+  "summary": "grep -rn \"pub enum PhpVersion\" -A 14 src | head -20: src/php_version.rs:18:pub enum PhpVersion { src/php_version.rs-19- Php80, src/php_version.rs-20- Php81, src/php_version.rs-21- Php82, src/php_version.rs-22- Php83, src/php_version.rs-23- Php84, src/php_version.rs-24- Php85, src/php_version.rs-25- Php86, src/php_versi",
+  "text": "grep -rn \"pub enum PhpVersion\" -A 14 src | head -20: src/php_version.rs:18:pub enum PhpVersion { src/php_version.rs-19- Php80, src/php_version.rs-20- Php81, src/php_version.rs-21- Php82, src/php_version.rs-22- Php83, src/php_version.rs-23- Php84, src/php_version.rs-24- Php85, src/php_version.rs-25- Php86, src/php_version.rs-26-} src/php_version.rs-27- src/php_version.rs-28-impl PhpVersion { src/php_version.rs-29- /// Every accepted version in ascending semantic order. src/php_version.rs-30- pub const ALL: [Self; 7] = [ src/php_version.rs-31- Self::Php80, src/php_version.rs-32- Self::Php81,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3f56efbbe4dd41b9e24c8250",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:48:59.945Z",
+  "stored_at": "2026-08-21T12:48:59.946Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php/r.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php/r.php: <?php\nfunction probe(string $label, $h): void {\n    fwrite($h, \"abcde\");\n    rewind($h);\n    echo $label, \": \";\n    echo \"read3=\", var",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php/r.php: <?php\nfunction probe(string $label, $h): void {\n    fwrite($h, \"abcde\");\n    rewind($h);\n    echo $label, \": \";\n    echo \"read3=\", var_export(fread($h, 3), true), \" eof=\", var_export(feof($h), true), \" tell=\", ftell($h), \" | \";\n    echo \"read2=\", var_export(fread($h, 2), true), \" eof=\", var_export(feof($h), true), \" tell=\", ftell($h), \" | \";\n    echo \"read1=\", var_export(fread($h, 1), true), \" eof=\", var_export(feof($h), true), \"\\n\";\n}\nprobe(\"memory\", fopen(\"php://memory\", \"r+\"));\nprobe(\"temp\", fopen(\"php://temp\", \"r+\"));\nprobe(\"plain\", fopen(\"plain.txt\", \"w+\"));\n\nfunction lines(string $label,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ac1747ea9fb3b1e05177b230",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:42:38.357Z",
+  "stored_at": "2026-08-25T13:42:38.358Z"
+}

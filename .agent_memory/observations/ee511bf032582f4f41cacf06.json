@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.label(\"__rt_fread_syscall_now\");\n    // -- perform read syscall --\n    emitter.instruction(\"ldr x0, [sp, #32]\");                                   // fd -> emitter.label(\"",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.label(\"__rt_fread_syscall_now\");\n    // -- perform read syscall --\n    emitter.instruction(\"ldr x0, [sp, #32]\");                                   // fd -> emitter.label(\"__rt_fread_syscall_now\");\n    // -- perform read syscall --\n    emitter.instruction(\"ldr x0, [sp, #32]\");                                   // fd for read syscall\n    emitter.instruction(\"ldr x1, [sp, #16]\");                                   // buffer pointer: the TLS probe clobbers caller-saved x12\n    emitter.instruction(\"ldr x2, [sp, #8]\");                                    // number of bytes to read\n    emitter.instruction(\"ldr x9, [sp, #48]\");           ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee511bf032582f4f41cacf06",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:21:14.534Z",
+  "stored_at": "2026-08-23T20:21:14.535Z"
+}

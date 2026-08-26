@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"__rt_apply_chain_user_x\" -A 12 src/codegen_support/runtime/resources/filter.rs | head -16",
+  "summary": "grep -n \"__rt_apply_chain_user_x\" -A 12 src/codegen_support/runtime/resources/filter.rs | head -16: mitter.instruction(\"mov rax, QWORD PTR [rbp - 8]\"); // buffer pointer 464- emitter.instruction(\"mov rdx, QWORD PTR [rbp - 16]\"); // current length 465- emitter.instruction(\"mov rcx, QWORD PTR [rbp - 40]\"); // built-in fi",
+  "text": "grep -n \"__rt_apply_chain_user_x\" -A 12 src/codegen_support/runtime/resources/filter.rs | head -16: mitter.instruction(\"mov rax, QWORD PTR [rbp - 8]\"); // buffer pointer 464- emitter.instruction(\"mov rdx, QWORD PTR [rbp - 16]\"); // current length 465- emitter.instruction(\"mov rcx, QWORD PTR [rbp - 40]\"); // built-in filter id 466- emitter.instruction(\"call __rt_apply_stream_filter\"); // transform in place; rdx = new length 467- emitter.instruction(\"mov QWORD PTR [rbp - 40], rdx\"); // the new length outlives the clear 468- // The published parameters are cleared immediately, so they are non-zero for exactly the 469- // duration of one application. The legacy per-descriptor path (which still serves `zlib.*` and 470- // `bzip2.*`) calls the same applier without a node, and a `line-length` left behind by an -- 480: emitter.label(\"__rt_apply_chain_user_x\"); 481- emitter.instruction(&format!(\"mov rdi, QWORD PTR [rax + {FILTER_OBJECT_OFFSET}]\")); // the php_user_filter instance this node owns",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8f2f6ebf8849e1cb27f77d16",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:31:53.517Z",
+  "stored_at": "2026-08-17T18:31:53.518Z"
+}

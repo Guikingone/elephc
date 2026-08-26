@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::spl::filesystem)' 2>&1 | tail -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::spl::filesystem)' 2>&1 | tail -8: PASS [ 3.421s] (22/23) elephc::codegen_tests cod",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::spl::filesystem)' 2>&1 | tail -8: PASS [ 3.421s] (22/23) elephc::codegen_tests codegen::spl::filesystem::test_spl_temp_file_object_spills_after_threshold PASS [ 3.464s] (23/23) elephc::codegen_tests codegen::spl::filesystem::test_spl_temp_file_object_stream_read_write ──────────── Summary [ 9.533s] 23 tests run: 20 passed, 3 failed, 8902 skipped FAIL [ 4.278s] ( 8/23) elephc::codegen_tests codegen::spl::filesystem::test_spl_file_info_and_file_object_behavior FAIL [ 2.985s] (15/23) elephc::codegen_tests codegen::spl::filesystem::test_spl_file_object_read_csv_flag_combinations FAIL [ 3.046s] (16/23) elephc::codegen_tests codegen::spl::filesystem::test_spl_file_object_read_csv_parses_records_not_exploded_lines error: test run failed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "432230144454d568aaf40a36",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:17:07.082Z",
+  "stored_at": "2026-08-24T08:17:07.083Z"
+}

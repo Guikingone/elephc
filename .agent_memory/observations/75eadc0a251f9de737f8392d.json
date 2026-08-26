@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,60p' src/codegen_support/sentinels.rs",
+  "summary": "sed -n '1,60p' src/codegen_support/sentinels.rs: num NullRepr { /// In-band `PHP_INT_MAX - 1` sentinel in one-word scalar slots (legacy opt-out). Sentinel, /// Inline two-word `{payload, tag}` scalars for null-capable slots (default). #[default] Tagged, } thread_local! { /// Active null representation for the compilati",
+  "text": "sed -n '1,60p' src/codegen_support/sentinels.rs: num NullRepr { /// In-band `PHP_INT_MAX - 1` sentinel in one-word scalar slots (legacy opt-out). Sentinel, /// Inline two-word `{payload, tag}` scalars for null-capable slots (default). #[default] Tagged, } thread_local! { /// Active null representation for the compilation running on this thread. One compilation /// is single-threaded, so a thread-local avoids threading the flag through every emitter /// signature; `generate`/`generate_user_asm` set it unconditionally at entry. static NULL_REPR: Cell<NullRepr> = const { Cell::new(NullRepr::Tagged) }; } /// Installs the null representation for the compilation running on this thread. Must run /// before type checking: parameter specialization consults it for null-capable widening. pub fn set_null_repr(repr: NullRepr) { NULL_REPR.with(|cell| cell.set(repr)); } /// Returns true when the active compilation uses the tagged null representation.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "75eadc0a251f9de737f8392d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:26:08.833Z",
+  "stored_at": "2026-08-20T19:26:08.834Z"
+}

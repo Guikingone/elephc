@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/plain-warnings.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/plain-warnings.php: <?php\n$bad = \"/no/such/dir/x.txt\";\nfile_get_contents($bad);\nfopen($bad, \"r\");\nreadfile($bad);\nfile($bad);\nunlink($ba",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/plain-warnings.php: <?php\n$bad = \"/no/such/dir/x.txt\";\nfile_get_contents($bad);\nfopen($bad, \"r\");\nreadfile($bad);\nfile($bad);\nunlink($bad);\nrmdir(\"/no/such/dir\");\nrename($bad, \"/no/such/dir/y.txt\");\ncopy($bad, \"out.txt\");\nfile_put_contents(\"/no/such/dir/y.txt\", \"x\");\nmkdir(\"/no/such/dir/deep/deeper\");\nopendir(\"/no/such/dir\");\nscandir(\"/no/such/dir\");\ntouch($bad);\nchmod($bad, 0644);\nfilesize($bad);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0b3dad18b2c8d00c509a3c3a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:20:58.592Z",
+  "stored_at": "2026-08-24T18:20:58.593Z"
+}

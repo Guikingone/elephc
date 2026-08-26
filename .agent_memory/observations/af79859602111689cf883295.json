@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/scanf_prelude/detect.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/scanf_prelude/detect.rs: //! Purpose:\n//! Decides whether a parsed program references PHP's `sscanf()` or `fscanf()`, so the scanf\n//! prelude is injected only for programs that scan.\n//!\n//! Called from:\n//! - `crate:",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/scanf_prelude/detect.rs: //! Purpose:\n//! Decides whether a parsed program references PHP's `sscanf()` or `fscanf()`, so the scanf\n//! prelude is injected only for programs that scan.\n//!\n//! Called from:\n//! - `crate::scanf_prelude::inject_if_used`.\n//!\n//! Key details:\n//! - Runs before name resolution, so function `Name`s are raw source text; matched\n//!   case-insensitively on the unqualified last segment (PHP function names are\n//!   case-insensitive and may be written `\\sscanf`).\n//! - THE NAME SET IS EXACT, NOT A PREFIX. `sscanf` and `fscanf` sit next to `sprintf`,\n//!   `fprintf` and `fgets`, none of which nee",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "af79859602111689cf883295",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:10:01.654Z",
+  "stored_at": "2026-08-16T16:10:01.654Z"
+}

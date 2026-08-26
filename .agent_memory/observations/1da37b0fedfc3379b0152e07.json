@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_copy_to_stream\" tests/codegen_tests/ 2>/dev/null | head -10; echo ===; ls tests/ | head -30",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_copy_to_stream\" tests/codegen_tests/ 2>/dev/null | head -10; echo ===; ls tests/ | head -30 failed: Exit code 1 (eval):1: == not found",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stream_copy_to_stream\" tests/codegen_tests/ 2>/dev/null | head -10; echo ===; ls tests/ | head -30 failed: Exit code 1 (eval):1: == not found",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1da37b0fedfc3379b0152e07",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:57:40.923Z",
+  "stored_at": "2026-08-22T20:57:40.924Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_step3.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_step3.py: \"\"\"The warning php raises for an unknown flag, and an unguarded directory test for glob to call.\n\n`__rt_is_dir` carries the \"t",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_step3.py: \"\"\"The warning php raises for an unknown flag, and an unguarded directory test for glob to call.\n\n`__rt_is_dir` carries the \"the file:// wrapper was unregistered\" refusal, which is right for\n`is_dir()` and wrong for `glob()`: php routes glob through no stream wrapper, and the surface test\npins that glob keeps working while the wrapper is gone. So glob calls the guard-free core, which\nis the same code with the entry label moved down one line — not a second copy of the stat logic.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/strea",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2ab9942dfd242c2c66afda21",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:03:10.370Z",
+  "stored_at": "2026-08-22T09:03:10.371Z"
+}

@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php && php -n r.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php && php -n r.php: memory: read3='abc' eof=false tell=3 | read2='de' eof=false tell=5 | read1='' eof=true temp: read3='abc' eof=false tell=3 | rea",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/php && php -n r.php: memory: read3='abc' eof=false tell=3 | read2='de' eof=false tell=5 | read1='' eof=true temp: read3='abc' eof=false tell=3 | read2='de' eof=false tell=5 | read1='' eof=true plain: read3='abc' eof=false tell=3 | read2='de' eof=false tell=5 | read1='' eof=true memory-lines: 'a '/eof=false 'bb '/eof=false false/eof=true temp-lines: 'a '/eof=false 'bb '/eof=true false/eof=true plain-lines: 'a '/eof=false 'bb '/eof=false false/eof=true memory-nonl: 'a '/eof=false 'bb'/eof=true false/eof=true temp-nonl: 'a '/eof=false 'bb'/eof=true false/eof=true plain-nonl: 'a '/eof=false 'bb'/eof=true false/eof=true",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e0ed401fe5a0ab8b42daa0d2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:42:45.431Z",
+  "stored_at": "2026-08-25T13:42:45.431Z",
+  "low_signal": true
+}

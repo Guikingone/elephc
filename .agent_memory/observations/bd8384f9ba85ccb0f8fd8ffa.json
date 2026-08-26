@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests -- io::streams::test_named_out_parameter io::streams::test_out_parameter_rejects io::streams::test_flock_would_block 2>&1 | tail -15",
+  "summary": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests -- io::streams::test_named_out_parameter io::streams::test_out_parameter_rejects io::streams::test_flock_would_block 2>&1 | tail -15: ---- codegen::io::streams::test_flock_would_block_out_parameter_may_be_undeclared stdout ---- thread 'codegen::io::s",
+  "text": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests -- io::streams::test_named_out_parameter io::streams::test_out_parameter_rejects io::streams::test_flock_would_block 2>&1 | tail -15: ---- codegen::io::streams::test_flock_would_block_out_parameter_may_be_undeclared stdout ---- thread 'codegen::io::streams::test_flock_would_block_out_parameter_may_be_undeclared' (35662983) panicked at tests/codegen/io/streams.rs:10396:5: assertion `left == right` failed left: \"NULL=NULL\" right: \"integer=0\" failures: codegen::io::streams::test_flock_would_block_out_parameter_may_be_undeclared codegen::io::streams::test_out_parameter_rejects_an_argument_without_storage test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 8779 filtered out; finished in 1.21s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bd8384f9ba85ccb0f8fd8ffa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:16:16.599Z",
+  "stored_at": "2026-08-21T16:16:16.600Z"
+}

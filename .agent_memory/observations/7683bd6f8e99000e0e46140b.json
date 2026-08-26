@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn lower_user_stream_filter_attach\\b\" -A 30 src/codegen/lower_inst/builtins/io/filter_helpers.rs | head -34",
+  "summary": "grep -n \"fn lower_user_stream_filter_attach\\b\" -A 30 src/codegen/lower_inst/builtins/io/filter_helpers.rs | head -34: ter 503- ctx.emitter.instruction(\"mov x1, x2\"); // name length 504- abi::emit_call_label(ctx.emitter, \"__rt_builtin_filter_id\"); 505- ctx.emitter.instruction(&format!(\"cbz x0, {}\", user_path)); // not a",
+  "text": "grep -n \"fn lower_user_stream_filter_attach\\b\" -A 30 src/codegen/lower_inst/builtins/io/filter_helpers.rs | head -34: ter 503- ctx.emitter.instruction(\"mov x1, x2\"); // name length 504- abi::emit_call_label(ctx.emitter, \"__rt_builtin_filter_id\"); 505- ctx.emitter.instruction(&format!(\"cbz x0, {}\", user_path)); // not a built-in: use the user-filter path 506- ctx.emitter.instruction(\"str x0, [sp, #-16]!\"); // preserve the resolved id across the operand loads 507- } 508- Arch::X86_64 => { 509- ctx.emitter.instruction(\"mov rdi, rax\"); // name pointer 510- ctx.emitter.instruction(\"mov rsi, rdx\"); // name length 511- abi::emit_call_label(ctx.emitter, \"__rt_builtin_filter_id\"); 512- ctx.emitter.instruction(\"test rax, rax\"); 513- ctx.emitter.instruction(&format!(\"jz {}\", user_path)); // not a built-in: use the user-filter path 514- ctx.emitter.instruction(\"push rax\"); // preserve the resolved id across the operand loads 515- } 516- } 517- load_open_stream_handle_to_result(ctx, stream, \"stream_filter_append\")?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7683bd6f8e99000e0e46140b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T20:10:35.192Z",
+  "stored_at": "2026-08-17T20:10:35.192Z"
+}

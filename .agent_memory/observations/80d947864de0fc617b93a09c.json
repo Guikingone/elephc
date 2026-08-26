@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/recheck.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/recheck.py: \"\"\"Recompiles every probe in this directory and diffs it against `php -n`, one line per probe.\"\"\"\nimport pathlib\nimport subprocess\n\nHE",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/recheck.py: \"\"\"Recompiles every probe in this directory and diffs it against `php -n`, one line per probe.\"\"\"\nimport pathlib\nimport subprocess\n\nHERE = pathlib.Path(__file__).parent\nELEPHC = (\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'streams-csv-signature/target/debug/elephc'\n)\n\nfor src in sorted(HERE.glob('*.php')):\n    name = src.stem\n    php = subprocess.run(['php', '-n', str(src)], capture_output=True, text=True, cwd=str(HERE))\n    build = subprocess.run([ELEPHC, '-o', name, src.name],\n                           capture_output=True, text=True, cwd=str(HERE))\n   ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "80d947864de0fc617b93a09c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:49:40.458Z",
+  "stored_at": "2026-08-22T16:49:40.458Z"
+}

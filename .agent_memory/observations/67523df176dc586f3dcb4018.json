@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"ConstClassName\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/ | head -6",
+  "summary": "rtk proxy grep -rn \"ConstClassName\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/ | head -6: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/validator.rs:307: ConstStr | ConstClassName | DataAddr | Warn | IncludeOnc",
+  "text": "rtk proxy grep -rn \"ConstClassName\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/ | head -6: /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/validator.rs:307: ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/validator.rs:412: ConstF64 | ConstStr | ConstClassName | ConstEnumCase | LoadCalledClassId | DataAddr | ArrayNew | HashNew /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/instr.rs:248: ConstClassName, /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/instr.rs:568: | ConstClassName /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ir/instr.rs:830: ConstClassName => \"const_class_name\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "67523df176dc586f3dcb4018",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:43:36.168Z",
+  "stored_at": "2026-08-17T09:43:36.168Z"
+}

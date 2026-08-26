@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n filterprops.php 2>&1 | head -16",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n filterprops.php 2>&1 | head -16: onCreate: filtername='probe.a' params=array ( 'k' => 1, ) stream=NULL filter: filtername='probe.a' para",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n filterprops.php 2>&1 | head -16: onCreate: filtername='probe.a' params=array ( 'k' => 1, ) stream=NULL filter: filtername='probe.a' params=array ( 'k' => 1, ) stream=stream closing=false filter: filtername='probe.a' params=array ( 'k' => 1, ) stream=stream closing=false read back: 'hello' filter: filtername='probe.a' params=array ( 'k' => 1, ) stream=stream closing=true onClose: stream=NULL onCreate: filtername='probe.b' params=NULL stream=NULL filter: filtername='probe.b' params=NULL stream=stream closing=false",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b2d47e1f752a809bc0b1e6d6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:29:10.804Z",
+  "stored_at": "2026-08-17T09:29:10.805Z"
+}

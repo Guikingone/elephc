@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '55,80p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs; rtk proxy grep -n \"_resource_type_stream\\b\" -A3 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/fixed.rs | head -6",
+  "summary": "rtk proxy sed -n '55,80p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs; rtk proxy grep -n \"_resource_type_stream\\b\" -A3 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_s",
+  "text": "rtk proxy sed -n '55,80p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs; rtk proxy grep -n \"_resource_type_stream\\b\" -A3 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/data/fixed.rs | head -6:  stream /// closes every filter still attached. Modelling it as a registry resource is what /// lets `is_resource()` observe that invalidation. pub(crate) const RESOURCE_KIND_FILTER: u64 = 3; /// Live resource lifecycle state. pub(crate) const RESOURCE_STATUS_LIVE: u64 = 1; /// Closing resource lifecycle state, published before re-entrant cleanup. pub(crate) const RESOURCE_STATUS_CLOSING: u64 = 2; /// Closed resource lifecycle state. pub(crate) const RESOURCE_STATUS_CLOSED: u64 = 3; /// Marks registry slots whose state storage is owned by the registry. 1563: out.push_str(\".globl _resource_type_stream\\n_resource_type_stream:\\n .ascii \\\"stream\\\"\\n\"); 1564- out.push_str(\".globl _resource_type_unknown\\n_resource_type_unknown:\\n .ascii \\\"Unknown\\\"\\n\"); 1565- out.push_str(\".globl _fmt_g\\n_fmt_g:\\n .asciz \\\"%.14G\\\"\\n\"); 1566- out.push_str(\".globl _fmt_star_e\\n_fmt_star_e:\\n .asciz \\\"%.*e\\\"\\n\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "42f4b0b6475b18c5e722f245",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:09:08.536Z",
+  "stored_at": "2026-08-17T08:09:08.536Z"
+}

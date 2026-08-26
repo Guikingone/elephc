@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"Fwrite\" -B4 -A24 src/codegen/lower_inst/runtime_functions/group_04.rs | head -40",
+  "summary": "rg -n \"Fwrite\" -B4 -A24 src/codegen/lower_inst/runtime_functions/group_04.rs | head -40: nId::Getcwd => Some({ 29- crate::codegen::lower_inst::builtins::io::lower_getcwd(ctx, inst) 30- }), 31- RuntimeFnId::Gethostbyaddr => Some({ 32- crate::codegen::lower_inst::builtins::io::lower_gethostbyaddr(ctx, inst) 33- }), 34- R",
+  "text": "rg -n \"Fwrite\" -B4 -A24 src/codegen/lower_inst/runtime_functions/group_04.rs | head -40: nId::Getcwd => Some({ 29- crate::codegen::lower_inst::builtins::io::lower_getcwd(ctx, inst) 30- }), 31- RuntimeFnId::Gethostbyaddr => Some({ 32- crate::codegen::lower_inst::builtins::io::lower_gethostbyaddr(ctx, inst) 33- }), 34- RuntimeFnId::Gethostbyname => Some({ 35- crate::codegen::lower_inst::builtins::io::lower_gethostbyname(ctx, inst) 36- }), 37- RuntimeFnId::Gethostname => Some({ 38- crate::codegen::lower_inst::builtins::io::lower_gethostname(ctx, inst) 39- }), 40- RuntimeFnId::Getprotobyname => Some({ 41- crate::codegen::lower_inst::builtins::io::lower_getprotobyname(ctx, inst) 42- }), 43- RuntimeFnId::Getprotobynumber => Some({ 44- crate::codegen::lower_inst::builtins::io::lower_getprotobynumber(ctx, inst) 45- }), 46- RuntimeFnId::Getservbyname => Some({ 47- crate::codegen::lower_inst::builtins::io::lower_getservbyname(ctx, inst) 48- }), 49- RuntimeFnId::Getservbyport => Some({",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eeff56bdc0f8e7eee0c681b0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:53:07.168Z",
+  "stored_at": "2026-08-17T06:53:07.169Z"
+}

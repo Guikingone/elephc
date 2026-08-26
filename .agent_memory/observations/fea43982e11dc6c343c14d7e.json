@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/pdo-sqlite-blob-ftell-after-write-is-zero.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/pdo-sqlite-blob-ftell-after-write-is-zero.md: ---\nname: pdo-sqlite-blob-ftell-after-write-is-zero\ndescription: PRÉ-EXISTANT vérifié — test_pdo_sqlite_open_blob_readwrite_seek_and_fixed_size échoue: ftell après fwri",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/pdo-sqlite-blob-ftell-after-write-is-zero.md: ---\nname: pdo-sqlite-blob-ftell-after-write-is-zero\ndescription: PRÉ-EXISTANT vérifié — test_pdo_sqlite_open_blob_readwrite_seek_and_fixed_size échoue: ftell après fwrite sur un BLOB rend 0 au lieu de 4\nmetadata:\n  type: project\n---\n\n`codegen::pdo::test_pdo_sqlite_open_blob_readwrite_seek_and_fixed_size` est ROUGE : `ftell()` après un `fwrite()` sur un flux BLOB SQLite rend `0` là où le test attend `4`. Découvert le 2026-08-15 par l'agent php://-fidelity, qui a **prouvé l'antériorité en stashant son diff et en rejouant sur `98f3fc9509` propre** — échec identique.\n\n**Why:** c'est exactement le ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fea43982e11dc6c343c14d7e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T16:23:36.110Z",
+  "stored_at": "2026-08-15T16:23:36.110Z"
+}

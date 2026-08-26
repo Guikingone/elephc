@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/codegen_support/runtime/io/stream_get_meta_data.rs src/codegen_support/runtime/io/stream_transport.rs src/codegen_support/runtime/io/fsockopen.rs src/codegen_support/runtime/io/fsockopen_meta.rs src/codegen_support/runtime/io/socket_connect_warning.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/emitters/platform.rs src/codegen/lower_inst/builtins/io/boxing_helpers.rs src/codegen/lower_inst/builtins/io/host_directory_process.rs crates/elephc-builtin-contract/src/catalog_data.rs tests/codegen/io/streams.rs tests/error_te… [+67 chars truncated]",
+  "summary": "git add src/codegen_support/runtime/io/stream_get_meta_data.rs src/codegen_support/runtime/io/stream_transport.rs src/codegen_support/runtime/io/fsockopen.rs src/codegen_support/runtime/io/fsockopen_meta.rs src/codegen_support/runtime/io/socket_connect_warning.rs src/codegen_support/runtime/io/mod.rs src/codegen_suppor",
+  "text": "git add src/codegen_support/runtime/io/stream_get_meta_data.rs src/codegen_support/runtime/io/stream_transport.rs src/codegen_support/runtime/io/fsockopen.rs src/codegen_support/runtime/io/fsockopen_meta.rs src/codegen_support/runtime/io/socket_connect_warning.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/emitters/platform.rs src/codegen/lower_inst/builtins/io/boxing_helpers.rs src/codegen/lower_inst/builtins/io/host_directory_process.rs crates/elephc-builtin-contract/src/catalog_data.rs tests/codegen/io/streams.rs tests/error_tests/io_builtins/streams.rs docs/ scripts/docs/builtin_registry.json completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6f2f61b2cedfd79811e5860e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:50:27.834Z",
+  "stored_at": "2026-08-17T13:50:27.835Z"
+}

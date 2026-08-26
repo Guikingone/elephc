@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\n# Promote the helper to a shared crate-visible function so both passes use one rule.\np='src/types/checker/functions/resolution/signature.rs'\ns=open(p).read()\nold = \"\"\"/// Returns whether an array-ish type's ELEMENT representation CHANGED across the body.\"\"\"\nnew = \"\"\"/// Returns whether an array-ish type's ELEMENT representation CHANGED across the body.\"\"\"\nassert s.count(old)==1\ns=s.replace(\"fn array_element_representation_changes(entry: &PhpType, exit: &PhpType) -> bool {\",\n            \"pub(in crate::types) fn array_element_representation_changes(entry: &PhpType, exit: &PhpTyp… [+263 chars truncated]",
+  "summary": "python3 - <<'PY'\n# Promote the helper to a shared crate-visible function so both passes use one rule.\np='src/types/checker/functions/resolution/signature.rs'\ns=open(p).read()\nold = \"\"\"/// Returns whether an array-ish type's ELEMENT representation CHANGED across the body.\"\"\"\nnew = \"\"\"/// Returns whether an array-ish typ",
+  "text": "python3 - <<'PY'\n# Promote the helper to a shared crate-visible function so both passes use one rule.\np='src/types/checker/functions/resolution/signature.rs'\ns=open(p).read()\nold = \"\"\"/// Returns whether an array-ish type's ELEMENT representation CHANGED across the body.\"\"\"\nnew = \"\"\"/// Returns whether an array-ish type's ELEMENT representation CHANGED across the body.\"\"\"\nassert s.count(old)==1\ns=s.replace(\"fn array_element_representation_changes(entry: &PhpType, exit: &PhpType) -> bool {\",\n            \"pub(in crate::types) fn array_element_representation_changes(entry: &PhpType, exit: &PhpType) -> bool {\")\nopen(p,'w').write(s)\nprint('helper exported')\nPY\nrtk proxy rg -n \"pub\\(crate\\) use|pub use\" src/types/checker/functions/resolution/mod.rs 2>/dev/null | head -5; rtk proxy rg -n \"mod signature\" src/types/checker/functions/resolution/mod.rs | head -3: helper exported 12:mod signature;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d80efba382e91a94293cf924",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:28:45.273Z",
+  "stored_at": "2026-08-16T20:28:45.273Z"
+}

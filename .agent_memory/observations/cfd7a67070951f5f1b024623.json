@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"writes\" src/types/checker/builtins/mod.rs | grep -n \"merge_local_assignment_type\\|env.insert\\|bind\" | head -6; grep -rn \"merge_local_assignment_type\" src/types/checker/ | head -6",
+  "summary": "grep -rn \"writes\" src/types/checker/builtins/mod.rs | grep -n \"merge_local_assignment_type\\|env.insert\\|bind\" | head -6; grep -rn \"merge_local_assignment_type\" src/types/checker/ | head -6: src/types/checker/stmt_check/assignments/locals.rs:211: merge_local_assignment_type(checker, name, &ty, span, env) src/types/check",
+  "text": "grep -rn \"writes\" src/types/checker/builtins/mod.rs | grep -n \"merge_local_assignment_type\\|env.insert\\|bind\" | head -6; grep -rn \"merge_local_assignment_type\" src/types/checker/ | head -6: src/types/checker/stmt_check/assignments/locals.rs:211: merge_local_assignment_type(checker, name, &ty, span, env) src/types/checker/stmt_check/assignments/locals.rs:749:pub(crate) fn merge_local_assignment_type( src/types/checker/inference/expr/effects.rs:310: crate::types::checker::stmt_check::assignments::locals::merge_local_assignment_type(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cfd7a67070951f5f1b024623",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:10:32.359Z",
+  "stored_at": "2026-08-22T13:10:32.359Z"
+}

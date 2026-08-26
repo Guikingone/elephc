@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"MagicConstant::File\\|MagicConstant::Line\" src/codegen src/ir_lower 2>/dev/null | head -5",
+  "summary": "grep -rn \"MagicConstant::File\\|MagicConstant::Line\" src/codegen src/ir_lower 2>/dev/null | head -5: src/ir_lower/tests/exhaustive.rs:355: expr(ExprKind::MagicConstant(MagicConstant::File)),",
+  "text": "grep -rn \"MagicConstant::File\\|MagicConstant::Line\" src/codegen src/ir_lower 2>/dev/null | head -5: src/ir_lower/tests/exhaustive.rs:355: expr(ExprKind::MagicConstant(MagicConstant::File)),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d63f2aebc3511fbff1f7bd10",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:42:09.712Z",
+  "stored_at": "2026-08-18T13:42:09.713Z"
+}

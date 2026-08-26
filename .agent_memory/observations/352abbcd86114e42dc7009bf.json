@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/plain-file-streams-are-unbuffered.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/plain-file-streams-are-unbuffered.md: ---\nname: plain-file-streams-are-unbuffered\ndescription: \"LIVRÉ: un fichier ordinaire prend un CHUNK ENTIER (fgetc 499 ms → 92 ms sur 900 Ko, unread_bytes juste). Le tampon dép",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/plain-file-streams-are-unbuffered.md: ---\nname: plain-file-streams-are-unbuffered\ndescription: \"LIVRÉ: un fichier ordinaire prend un CHUNK ENTIER (fgetc 499 ms → 92 ms sur 900 Ko, unread_bytes juste). Le tampon déplace CINQ autres réponses — ftell, feof, le débordement de tampon, fpassthru, et le seek interne de stream_get_contents.\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\n## La mesure qui a dimensionné le travail (900 000 octets)\n\n| | php | elephc AVANT | elephc APRÈS |\n|---|---|---|---|\n| `fread($h, 8192)` en boucle | 0 ms | 1 ms | 1 ms |\n| `fgetc($h)` en boucle | 14 ms | **499 ms** | **92 ms** |\n\nLe chemin de lecture",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "352abbcd86114e42dc7009bf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:55:32.946Z",
+  "stored_at": "2026-08-23T20:55:32.946Z"
+}

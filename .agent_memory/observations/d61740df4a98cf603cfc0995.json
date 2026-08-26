@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/remaining_seven.py 2>&1 | head -50",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/remaining_seven.py 2>&1 | head -50: arguments is deprecated, use stream_context_set_options() instead in /private/tmp/claude-501/-Users-guillaume",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/remaining_seven.py 2>&1 | head -50: arguments is deprecated, use stream_context_set_options() instead in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/seven/c3/p.php on line 7\\nValueError: stream_context_set_option(): Argument #3 ($option_name) cannot be null w' elephc: 'Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options() instead in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/seven/c3/p.php on line 7' --- wrapper without a context property same --- untyped context property receives its context php: 'bool(true)\\nbool(true)' elephc: 'bool(false)\\nbool(true)' --- wrapper scheme acceptance php: '11111011|1' elephc: '11111111|1'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d61740df4a98cf603cfc0995",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:45:18.823Z",
+  "stored_at": "2026-08-21T16:45:18.823Z"
+}

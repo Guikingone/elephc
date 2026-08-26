@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"emit_str_replace\\b\" src/codegen_support/runtime/emitters/ | head -3",
+  "summary": "About to run: rg -rn \"emit_str_replace\\b\" src/codegen_support/runtime/emitters/ | head -3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "450b256b6c99e8e31deb3adf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:33:26.963Z",
+  "stored_at": "2026-08-17T21:33:26.963Z"
+}

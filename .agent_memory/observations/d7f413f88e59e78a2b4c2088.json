@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '714,760p' src/codegen/lower_inst/exceptions.rs; echo '=== current_builtin_frame ==='; grep -rn 'fn current_builtin_frame' -A 20 src/codegen/ | head -25",
+  "summary": "sed -n '714,760p' src/codegen/lower_inst/exceptions.rs; echo '=== current_builtin_frame ==='; grep -rn 'fn current_builtin_frame' -A 20 src/codegen/ | head -25: rd of, and a profiled call wraps one of the same. src/codegen/context.rs-416- let name = match target { src/codegen/context.rs-417- crate::ir::RuntimeCallTarge",
+  "text": "sed -n '714,760p' src/codegen/lower_inst/exceptions.rs; echo '=== current_builtin_frame ==='; grep -rn 'fn current_builtin_frame' -A 20 src/codegen/ | head -25: rd of, and a profiled call wraps one of the same. src/codegen/context.rs-416- let name = match target { src/codegen/context.rs-417- crate::ir::RuntimeCallTarget::Function(target) src/codegen/context.rs-418- | crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. } => { src/codegen/context.rs-419- // The argument lowering's own `array|false` unwrap is not a php function: naming src/codegen/context.rs-420- // it wrote `#0 expect_array_arg(false, 'array_keys(): A...')` where php writes src/codegen/context.rs-421- // `#0 array_keys(false)`. Its lowering opens the frame php would. src/codegen/context.rs-422- if matches!(target, crate::ir::RuntimeFnId::ExpectArrayArg) { src/codegen/context.rs-423- return None; src/codegen/context.rs-424- } src/codegen/context.rs-425- target.as_eir() src/codegen/context.rs-426- } src/codegen/context.rs-427- _ => return None, src/codegen/context.rs-428- };",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d7f413f88e59e78a2b4c2088",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T09:24:43.821Z",
+  "stored_at": "2026-08-26T09:24:43.822Z"
+}

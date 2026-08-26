@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn stream_get_line\\|stream_get_line\" src/codegen_support/runtime/io/ | head -10",
+  "summary": "grep -rn \"fn stream_get_line\\|stream_get_line\" src/codegen_support/runtime/io/ | head -10: en_support/runtime/io/fgetcsv.rs:35:/// answers `false` when `php_stream_get_line()` reports no line at all, and only then calls src/codegen_support/runtime/io/fread.rs:210: // `__rt_stream_get_line` reports its own. The result p",
+  "text": "grep -rn \"fn stream_get_line\\|stream_get_line\" src/codegen_support/runtime/io/ | head -10: en_support/runtime/io/fgetcsv.rs:35:/// answers `false` when `php_stream_get_line()` reports no line at all, and only then calls src/codegen_support/runtime/io/fread.rs:210: // `__rt_stream_get_line` reports its own. The result pointer is deliberately NOT src/codegen_support/runtime/io/stream_get_line.rs:2://! Emits the `__rt_stream_get_line` runtime helper assembly for the src/codegen_support/runtime/io/stream_get_line.rs:3://! stream_get_line builtin. src/codegen_support/runtime/io/stream_get_line.rs:21:/// stream_get_line: read up to a length or an ending delimiter from a stream. src/codegen_support/runtime/io/stream_get_line.rs:26:pub fn emit_stream_get_line(emitter: &mut Emitter) { src/codegen_support/runtime/io/stream_get_line.rs:28: emit_stream_get_line_linux_x86_64(emitter); src/codegen_support/runtime/io/stream_get_line.rs:34: emitter.comment(\"--- runtime: stream_get_line ---\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7843c1ced98f5e67f17d1972",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:20:49.982Z",
+  "stored_at": "2026-08-14T14:20:49.983Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/io/stream_get_line.rs\")\ns = p.read_text()\nfor a, b, n in [\n    ('emitter.instruction(\"sub sp, sp, #96\");                                     // frame for saved regs and parse state',\n     'emitter.instruction(\"sub sp, sp, #112\");                                    // frame for saved regs and parse state', 1),\n    ('emitter.instruction(\"add sp, sp, #96\");                                     // release the frame',\n     'emitter.instruction(\"add sp, sp, #112\");                                    // release the frame', 1… [+439 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/io/stream_get_line.rs\")\ns = p.read_text()\nfor a, b, n in [\n    ('emitter.instruction(\"sub sp, sp, #96\");                                     // frame for saved regs and parse state',\n     'emitter.instruction(\"sub sp, sp, #112\");             ",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/io/stream_get_line.rs\")\ns = p.read_text()\nfor a, b, n in [\n    ('emitter.instruction(\"sub sp, sp, #96\");                                     // frame for saved regs and parse state',\n     'emitter.instruction(\"sub sp, sp, #112\");                                    // frame for saved regs and parse state', 1),\n    ('emitter.instruction(\"add sp, sp, #96\");                                     // release the frame',\n     'emitter.instruction(\"add sp, sp, #112\");                                    // release the frame', 1),\n    ('emitter.instruction(\"sub rsp, 96\");                                         // frame for the parse state',\n     'emitter.instruction(\"sub rsp, 112\");                                        // frame for the parse state', 1),\n]:\n    assert s.count(a) == n, (a[:50], s.count(a))\n    s = s.replace(a, b)\np.write_text(s)\nprint(\"frames grown\")\nPY\ngrep -n 'mov rsp, rbp\\|leave' src/codegen_support/runtime/io/stream_get_line.rs | head -3: frames grown 15://! - A read that would BLOCK is not the end of the line: php answers `false` and leaves the bytes 89: emitter.instruction(\"cbz x9, __rt_sgl_backend_probe\"); // unfiltered: leave the scratch cursor alone 341: emitter.instruction(\"je __rt_sgl_backend_probe_x86\"); // unfiltered: leave the scratch cursor alone",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3048bf13d4ce81d4f01e734e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:19:13.535Z",
+  "stored_at": "2026-08-24T17:19:13.536Z"
+}

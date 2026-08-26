@@ -1449,10 +1449,12 @@ echo $fib(10);
 /// existing by-ref test used. The int-to-int row below is kept as the control — it must stay
 /// correct through any future narrowing of the widening rule.
 ///
-/// An int-to-STRING row is deliberately absent. `$e = 1; $e = "grown";` is refused by the
-/// checker in ordinary straight-line code too (`cannot reassign $e from int to string`), so it
-/// would pin an unrelated gradual-typing over-rejection rather than anything about references.
-/// Reassigning to `null` is allowed, which is what makes these four rows reachable.
+/// An int-to-STRING row is deliberately absent. A `use (&$e)` capture makes `$e`
+/// reference-aliased, so `$e = 1; $e = "grown";` stays a hard `cannot reassign $e from int to
+/// string` here even in permissive mode — a depth-0 retype only warns and re-binds when NO
+/// reference can still reach the old cell. Pinning it would exercise that eligibility rule
+/// rather than anything about how references carry a written-back value. Reassigning to `null`
+/// is allowed, which is what makes these four rows reachable.
 #[test]
 fn test_by_ref_capture_writes_back_a_different_type() {
     let out = compile_and_run(

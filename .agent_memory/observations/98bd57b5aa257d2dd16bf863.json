@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -m3 '^version' Cargo.toml; echo \"=== git log ===\"; git log --oneline -3; echo \"=== CHANGELOG head ===\"; head -30 CHANGELOG.md",
+  "summary": "grep -m3 '^version' Cargo.toml; echo \"=== git log ===\"; git log --oneline -3; echo \"=== CHANGELOG head ===\"; head -30 CHANGELOG.md: elling the manual shows — still reads as undeclared, while `public mixed $context;` works. - Added PHP 8.2's `Deprecated: Creation of dynamic property <Class>::$context is deprecated` for ",
+  "text": "grep -m3 '^version' Cargo.toml; echo \"=== git log ===\"; git log --oneline -3; echo \"=== CHANGELOG head ===\"; head -30 CHANGELOG.md: elling the manual shows — still reads as undeclared, while `public mixed $context;` works. - Added PHP 8.2's `Deprecated: Creation of dynamic property <Class>::$context is deprecated` for a stream wrapper that declares no `$context`. PHP assigns the stream context onto the wrapper object whether or not the class declared a property for it, and deprecates the invented assignment; elephc skipped the injection and said nothing, so a program PHP would tell to declare its property heard nothing here. The class name comes from the same class-id table `var_dump()` reads. A separate defect is now visible and tracked: a wrapper that declares `$context` as its FIRST property is indistinguishable from one that declares none, because the vtable stores the property's offset with no sentinel and zero is a valid offset — such a wrapper never receives its context, and now also collects this deprecation.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "98bd57b5aa257d2dd16bf863",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:12:22.753Z",
+  "stored_at": "2026-08-14T14:12:22.754Z"
+}

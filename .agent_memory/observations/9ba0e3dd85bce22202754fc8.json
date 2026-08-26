@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_probe.py 2>&1 | tail -30",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_probe.py 2>&1 | tail -30: constant php elephc eval SEEK_SET 0Fatal error: eval() runtime failed <-- DIFFERS SEEK_END 2 <none> <-- D",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_probe.py 2>&1 | tail -30: constant php elephc eval SEEK_SET 0Fatal error: eval() runtime failed <-- DIFFERS SEEK_END 2 <none> <-- DIFFERS FILE_APPEND 8 <none> <-- DIFFERS FILE_IGNORE_NEW_LINES 2 <none> <-- DIFFERS STREAM_FILTER_READ 1 <none> <-- DIFFERS STREAM_CLIENT_CONNECT 4 <none> <-- DIFFERS STREAM_USE_PATH 1 <none> <-- DIFFERS SCANDIR_SORT_DESCENDING 1 <none> <-- DIFFERS PSFS_PASS_ON 2 <none> <-- DIFFERS E_ALL 30719 <none> <-- DIFFERS E_USER_WARNING 512 <none> <-- DIFFERS E_NOTICE 8 <none> <-- DIFFERS ENT_QUOTES 3 <none> <-- DIFFERS JSON_OBJECT_AS_ARRAY 1 <none> <-- DIFFERS PHP_SESSION_NONE 1 <none> <-- DIFFERS ZLIB_ENCODING_GZIP 31 <none> <-- DIFFERS CAL_GREGORIAN 0 <none> <-- DIFFERS SUNFUNCS_RET_STRING <none> <-- DIFFERS LOCK_EX 2 <none> <-- DIFFERS PATHINFO_EXTENSION 4 <none> <-- DIFFERS GLOB_MARK 8 <none> <-- DIFFERS 0/21 resolve identically elephc stopped at: SEEK_SET=Fatal error: eval() runtime failed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9ba0e3dd85bce22202754fc8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:41:57.407Z",
+  "stored_at": "2026-08-22T09:41:57.407Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '262,295p' src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "sed -n '262,295p' src/types/checker/builtin_spl_classes/filesystem.rs: TypeExpr::Bool), ] } /// Builds directory iterator storage properties shared by directory subclasses. fn directory_iterator_properties() -> Vec<ClassProperty> { vec![ protected_storage_property(\"directory\", TypeExpr::Str), protected_storage_property",
+  "text": "sed -n '262,295p' src/types/checker/builtin_spl_classes/filesystem.rs: TypeExpr::Bool), ] } /// Builds directory iterator storage properties shared by directory subclasses. fn directory_iterator_properties() -> Vec<ClassProperty> { vec![ protected_storage_property(\"directory\", TypeExpr::Str), protected_storage_property(\"entries\", array_type()), protected_storage_property(\"position\", TypeExpr::Int), protected_storage_property(\"fsFlags\", TypeExpr::Int), protected_storage_property(\"entriesArePathnames\", TypeExpr::Bool), ] } /// Builds GlobIterator storage properties. fn glob_iterator_properties() -> Vec<ClassProperty> { vec![protected_storage_property(\"pattern\", TypeExpr::Str)] } /// Builds RecursiveCachingIterator storage properties. fn recursive_caching_iterator_properties() -> Vec<ClassProperty> { vec![storage_property(\"recursiveInner\", named_type(\"RecursiveIterator\"))] } /// Builds SplFileInfo methods. fn spl_file_info_methods() -> Vec<ClassMethod> { vec![",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "39448adf9cfe6e9daed8bcfa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:46:00.845Z",
+  "stored_at": "2026-08-24T20:46:00.846Z"
+}

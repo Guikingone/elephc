@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"on line\\|:%d\\|uncaught\" src/codegen_support/runtime/exceptions*.rs src/codegen_support/runtime/exceptions/*.rs 2>/dev/null | head -6",
+  "summary": "About to run: grep -rn \"on line\\|:%d\\|uncaught\" src/codegen_support/runtime/exceptions*.rs src/codegen_support/runtime/exceptions/*.rs 2>/dev/null | head -6",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8b2ebfa4c7a120202807766b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:43:41.785Z",
+  "stored_at": "2026-08-18T13:43:41.785Z"
+}

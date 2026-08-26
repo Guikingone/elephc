@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/verify_tests.sh",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/verify_tests.sh: #!/bin/zsh\n# Every fixture from tests/codegen/undefined_variables.rs, run through php -n so the test file\n# encodes MEASURED output r",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/verify_tests.sh: #!/bin/zsh\n# Every fixture from tests/codegen/undefined_variables.rs, run through php -n so the test file\n# encodes MEASURED output rather than my expectation of it.\nBASE=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad\nWORK=$BASE/verify_tests\nrm -rf \"$WORK\"; mkdir -p \"$WORK\"; cd \"$WORK\" || exit 1\n\nshow() {\n  name=\"$1\"; body=\"$2\"\n  printf '%s' \"$body\" > \"$name.php\"\n  printf '\\n=== %s ===\\n' \"$name\"\n  php -n \"$name.php\" 2>/dev/null | sed \"s|$WORK/||g\" | cat -v | sed 's/^/  /'\n  pri",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1482a69d318dda31f5f1a22a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T19:47:08.647Z",
+  "stored_at": "2026-08-18T19:47:08.647Z"
+}

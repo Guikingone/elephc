@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/surface.php')\nt = p.read_text()\nold = \"$out['extensions'] = get_loaded_extensions();\"\nnew = \"\"\"$out['extensions'] = get_loaded_extensions();\n// Which extension owns each function: that is what makes the comparison against elephc's\n// catalogue actionable, since whole extensions (curl, intl, ldap) are out of scope by design.\n$byext = [];\nforeach (get_loaded_extensions() as $ext) {… [+586 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/surface.php')\nt = p.read_text()\nold = \"$out['extensions'] = get_loaded_extensions();\"\nnew = \"\"\"$out['ex",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/surface.php')\nt = p.read_text()\nold = \"$out['extensions'] = get_loaded_extensions();\"\nnew = \"\"\"$out['extensions'] = get_loaded_extensions();\n// Which extension owns each function: that is what makes the comparison against elephc's\n// catalogue actionable, since whole extensions (curl, intl, ldap) are out of scope by design.\n$byext = [];\nforeach (get_loaded_extensions() as $ext) {\n    $fns = get_extension_funcs($ext);\n    if ($fns !== false) {\n        $byext[$ext] = $fns;\n    }\n}\n$out['functions_by_extension'] = $byext;\"\"\"\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('ok')\nPY\ncd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && php -n surface.php > php_surface.json 2>&1 && echo \"regenerated\" && python3 -c \"\nimport json; d=json.load(open('php_surface.json')); print(len(d['functions_by_extension']), 'extensions mapped')\": ok regenerated 52 extensions mapped",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "92f1830b2899803cafc1ec9b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:02:41.788Z",
+  "stored_at": "2026-08-21T10:02:41.789Z"
+}

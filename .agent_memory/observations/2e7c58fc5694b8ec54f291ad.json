@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'user_wrapper_fstat\\|user_wrapper_url_stat\\|user_wrapper_flock\\|user_wrapper_ftruncate\\|user_wrapper_metadata\\|user_wrapper_set_option\\|user_wrapper_cast\\|user_wrapper_path_op\\|user_wrapper_dir' src/codegen src/codegen_support --include='*.rs' -l 2>/dev/null | sort",
+  "summary": "About to run: grep -rn 'user_wrapper_fstat\\|user_wrapper_url_stat\\|user_wrapper_flock\\|user_wrapper_ftruncate\\|user_wrapper_metadata\\|user_wrapper_set_option\\|user_wrapper_cast\\|user_wrapper_path_op\\|user_wrapper_d",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2e7c58fc5694b8ec54f291ad",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:12:10.609Z",
+  "stored_at": "2026-08-14T14:12:10.609Z"
+}

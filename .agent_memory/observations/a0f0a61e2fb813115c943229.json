@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_test.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_test.py: \"\"\"Pins the empty-options context, which used to segfault the next set_option().\n\nThe test writes `[]` deliberately: an empty INDEXED ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_test.py: \"\"\"Pins the empty-options context, which used to segfault the next set_option().\n\nThe test writes `[]` deliberately: an empty INDEXED array is what made the options slot hold a\nlist where every reader expects a hash. `stream_context_create()` with no argument never had the\nbug, so a test that used that form would pass without the fix.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = ROOT / 'tests/codegen/io/streams.rs'\nt = p.read_text()\n\nANCHOR = '''/// Verifies `glob()` orders'''\nif ANCHOR not in t:\n    ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a0f0a61e2fb813115c943229",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:24:42.222Z",
+  "stored_at": "2026-08-22T15:24:42.222Z"
+}

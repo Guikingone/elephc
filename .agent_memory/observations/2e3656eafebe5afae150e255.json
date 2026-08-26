@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests -E 'test(test_resource_destructors_follow_the_builtin_that_produces_them)' 2>&1 | tail -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests -E 'test(test_resource_destructors_follow_the_builtin_that_produces_them)' 2>&1 | tail -8: right: true note: run with `RUST_BACKTRACE=1` envi",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests -E 'test(test_resource_destructors_follow_the_builtin_that_produces_them)' 2>&1 | tail -8: right: true note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace Cancelling due to test failure: ──────────── Summary [ 0.302s] 1 test run: 0 passed, 1 failed, 8892 skipped FAIL [ 0.252s] (1/1) elephc::codegen_tests codegen::runtime_reachability::test_resource_destructors_follow_the_builtin_that_produces_them error: test run failed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2e3656eafebe5afae150e255",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:06:52.779Z",
+  "stored_at": "2026-08-23T13:06:52.779Z"
+}

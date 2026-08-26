@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"fn box_stream_string_or_false_on_unconsumed_result\" -A22 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -26",
+  "summary": "rtk proxy grep -rn \"fn box_stream_string_or_false_on_unconsumed_result\" -A22 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -26: .rs-37- } /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/",
+  "text": "rtk proxy grep -rn \"fn box_stream_string_or_false_on_unconsumed_result\" -A22 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/ | head -26: .rs-37- } /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/boxing_helpers.rs-38- Arch::X86_64 => { /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/boxing_helpers.rs-39- ctx.emitter.instruction(\"test rcx, rcx\"); // nothing consumed at all? /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/boxing_helpers.rs-40- ctx.emitter.instruction(&format!(\"jz {}\", false_label)); // PHP reports false for an exhausted stream /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/boxing_helpers.rs-41- ctx.emitter.instruction(\"mov rdi, rax\"); // pass the stream string pointer as the Mixed low payload word",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cf8fa86b14f44f8c7d973da5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:19:18.874Z",
+  "stored_at": "2026-08-17T12:19:18.875Z"
+}

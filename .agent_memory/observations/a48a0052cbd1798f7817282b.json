@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/copy_publish_name.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/copy_publish_name.py: \"\"\"`copy()` publishes its own name for the two helpers it delegates to, then takes it back.\n\nCleared unconditionally afterwa",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/copy_publish_name.py: \"\"\"`copy()` publishes its own name for the two helpers it delegates to, then takes it back.\n\nCleared unconditionally afterwards: the slots are global, and a name left behind would make the\nNEXT `file_get_contents()` in the program call itself `copy`.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\np = ROOT / 'src/codegen/lower_inst/builtins/io/filesystem_ops.rs'\nt = p.read_text()\n\nOLD = '''    lower_binary_path_call_with_context(ctx, inst, \"copy\", \"__rt_copy\")\n}'''\nNEW = '''    // php names the functio",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a48a0052cbd1798f7817282b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:00:41.118Z",
+  "stored_at": "2026-08-22T20:00:41.119Z"
+}

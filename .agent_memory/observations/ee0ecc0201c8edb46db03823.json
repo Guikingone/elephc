@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -c \"^#\\[test\\]\" tests/codegen/io/streams.rs 2>/dev/null || ls tests/codegen/io/ 2>/dev/null | head -20",
+  "summary": "rg -c \"^#\\[test\\]\" tests/codegen/io/streams.rs 2>/dev/null || ls tests/codegen/io/ 2>/dev/null | head -20: 541",
+  "text": "rg -c \"^#\\[test\\]\" tests/codegen/io/streams.rs 2>/dev/null || ls tests/codegen/io/ 2>/dev/null | head -20: 541",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee0ecc0201c8edb46db03823",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:28:37.901Z",
+  "stored_at": "2026-08-17T06:28:37.902Z"
+}

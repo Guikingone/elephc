@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test error_tests 2>&1 | tail -40",
+  "summary": "cargo test --test error_tests 2>&1 | tail -40:  return_type: Some(Void), by_ref_return: false, body: [], span: Span { line: 0, col: 0, end_line: 0, end_col: 0 }, attributes: [] }], methods: {\"update\": FunctionSig { params: [(\"subject\", Object(\"SplSubject\"))], param_type_exprs: [Some(Named(Name { kind: Unqualified, part",
+  "text": "cargo test --test error_tests 2>&1 | tail -40:  return_type: Some(Void), by_ref_return: false, body: [], span: Span { line: 0, col: 0, end_line: 0, end_col: 0 }, attributes: [] }], methods: {\"update\": FunctionSig { params: [(\"subject\", Object(\"SplSubject\"))], param_type_exprs: [Some(Named(Name { kind: Unqualified, parts: [\"SplSubject\"], text: \"SplSubject\" }))], param_attributes: [], defaults: [None], return_type: Void, declared_return: true, by_ref_return: false, ref_params: [false], declared_params: [true], variadic: None, deprecation: None }}, late_static_method_returns: {}, method_declaring_interfaces: {\"update\": \"SplObserver\"}, method_order: [\"update\"], method_slots: {\"update\": 0}, static_methods: {}, late_static_static_method_returns: {}, static_method_declaring_interfaces: {}, static_method_order: [], constants: {}, constant_types: {}, constant_declaring_interfaces: {}, final_constants: {} }, \"Stringable\": InterfaceInfo { inter",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "277871873d25603bb2de72fd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:10:43.981Z",
+  "stored_at": "2026-08-20T19:10:43.981Z",
+  "low_signal": true
+}

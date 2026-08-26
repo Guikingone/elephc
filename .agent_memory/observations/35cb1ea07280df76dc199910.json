@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "find /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T -maxdepth 1 -name 'elephc_*' -exec rm -rf {} + 2>/dev/null; ls -d /var/folders/*/*/T/elephc_* 2>/dev/null | wc -l; df -h /Users/guillaumeloulier | tail -1",
+  "summary": "About to run: find /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T -maxdepth 1 -name 'elephc_*' -exec rm -rf {} + 2>/dev/null; ls -d /var/folders/*/*/T/elephc_* 2>/dev/null | wc -l; df -h /Users/guillaumeloulier |",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "35cb1ea07280df76dc199910",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:24:32.738Z",
+  "stored_at": "2026-08-24T17:24:32.738Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture 2>&1 | tail -10",
+  "summary": "About to run: python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture 2>&1 | tail -10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "88fd41b0e299b933ce6789c2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:25:23.044Z",
+  "stored_at": "2026-08-16T17:25:23.044Z"
+}

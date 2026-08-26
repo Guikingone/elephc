@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h /Users/guillaumeloulier 2>&1 | tail -2; ls /private/tmp/claude-501 2>/dev/null | head -3",
+  "summary": "df -h /Users/guillaumeloulier 2>&1 | tail -2; ls /private/tmp/claude-501 2>/dev/null | head -3: Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 426Gi 3.9Gi 100% 5.6M 41M 12% /System/Volumes/Data -Users-guillaumeloulier-PhpstormProjects-oss-elephc -Users-guillaumeloulier-PhpstormProj",
+  "text": "df -h /Users/guillaumeloulier 2>&1 | tail -2; ls /private/tmp/claude-501 2>/dev/null | head -3: Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 426Gi 3.9Gi 100% 5.6M 41M 12% /System/Volumes/Data -Users-guillaumeloulier-PhpstormProjects-oss-elephc -Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-lazy-petting-popcorn -Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-lucky-swimming-pizza",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f4076b7dca279a9f245dffff",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:27:02.578Z",
+  "stored_at": "2026-08-22T16:27:02.579Z"
+}

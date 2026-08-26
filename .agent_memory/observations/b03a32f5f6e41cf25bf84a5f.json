@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scheme.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scheme.php: <?php\n\nforeach ([\"w://x\", \"bogus://x\", \"ab://x\", \"a-b://x\", \"9x://x\"] as $url) {\n    $h = @fopen($url, \"r\");\n    echo $url, \" => \", va",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scheme.php: <?php\n\nforeach ([\"w://x\", \"bogus://x\", \"ab://x\", \"a-b://x\", \"9x://x\"] as $url) {\n    $h = @fopen($url, \"r\");\n    echo $url, \" => \", var_export($h, true), \"\\n\";\n}\necho \"--- unsuppressed ---\\n\";\n$h = fopen(\"bogus://x\", \"r\");\n$h = fopen(\"w://x\", \"r\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b03a32f5f6e41cf25bf84a5f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:47:54.882Z",
+  "stored_at": "2026-08-22T17:47:54.883Z"
+}

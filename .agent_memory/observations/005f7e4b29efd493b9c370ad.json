@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md\")\ns = p.read_text()\nanchor = \"- ✅📏🔑★★★ [Tampon de lecture des fichiers ordinaires LIVRÉ](plain-file-streams-are-unbuffered.md)\"\nassert s.count(anchor) == 1, s.count(anchor)\nnew = \"\"\"- ✅📏🔑★★★ [Un lecteur de LIGNE ne peut pas dire combien d'octets il veut](a-line-reader-cannot-ask-for-what-it-wants.md) — `fgets` 538 → 20 ms (php 4) ; remplir a réveillé le DERNIER consommateur aveugle, `stream_get_line`.\n- ✅🔑★★★ [Le rapport « Uncaught… [+714 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md\")\ns = p.read_text()\nanchor = \"- ✅📏🔑★★★ [Tampon de lecture des fichiers ordinaires LIVRÉ](plain-file-streams-are-unbuffered.md)\"\nassert s.count(anchor) == 1, s.c",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md\")\ns = p.read_text()\nanchor = \"- ✅📏🔑★★★ [Tampon de lecture des fichiers ordinaires LIVRÉ](plain-file-streams-are-unbuffered.md)\"\nassert s.count(anchor) == 1, s.count(anchor)\nnew = \"\"\"- ✅📏🔑★★★ [Un lecteur de LIGNE ne peut pas dire combien d'octets il veut](a-line-reader-cannot-ask-for-what-it-wants.md) — `fgets` 538 → 20 ms (php 4) ; remplir a réveillé le DERNIER consommateur aveugle, `stream_get_line`.\n- ✅🔑★★★ [Le rapport « Uncaught » jetait la chaîne `previous`](uncaught-report-dropped-the-previous-chain.md) — il imprimait le WRAPPER sans l'échec qu'il enveloppait. 2 tests épinglaient une sortie morte.\n- ✅🔑★★★ [`stream_get_wrappers()` listait `file` et RIEN ne l'honorait](file-url-scheme-was-advertised-never-implemented.md) — 12/12 false ; règle exacte + la liste de ce qui ne la suit PAS (realpath, readlink, glob, chdir…).\n- ✅🔑★★★ [Sept builtins de chemin échouaient EN SILENCE](seven-path-builtins-failed-in-silence.md) — 16 avertissements php contre 9, dont 2 au mauvais nom ; 7 FORMES différentes. 🔴 OUVERT: `chown($p, fileowner($p))`.\n\"\"\" + anchor\np.write_text(s.replace(anchor, new))\nprint(\"index updated\", len(p.read_text()))\nPY: index updated 22618",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "005f7e4b29efd493b9c370ad",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:53:54.409Z",
+  "stored_at": "2026-08-24T19:53:54.410Z"
+}

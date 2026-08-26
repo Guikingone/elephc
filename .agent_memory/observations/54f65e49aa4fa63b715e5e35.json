@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: # Memory index — one line per memory. Detail lives in topic files.\n_Un nom nu (sans lien) = fiche `<nom>.md` du même dossier._\n\n## Consignes de travail (feedback Guillaume)\n- 🔴🔴 [« Corrigé » n'est vrai q",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: # Memory index — one line per memory. Detail lives in topic files.\n_Un nom nu (sans lien) = fiche `<nom>.md` du même dossier._\n\n## Consignes de travail (feedback Guillaume)\n- 🔴🔴 [« Corrigé » n'est vrai que SUR UNE BRANCHE](a-fix-lives-on-a-branch-not-in-the-repo.md) · 🛠️🔴🔴 [31 correctifs ÉCHOUÉS sur une backup](verified-fixes-stranded-on-a-backup-branch.md) — seule l'EXÉCUTION tranche.\n- [Graphe de code = RÉFLEXE](use-code-graph-reflexively.md) · [MANDAT: TOUT corriger](mandat-tout-corriger-sans-limite-temps.md) · [zéro erreurs Symfony](mandat-zero-erreurs-symfony.md) — notifier aux jalons pui",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "54f65e49aa4fa63b715e5e35",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:08:41.182Z",
+  "stored_at": "2026-08-16T17:08:41.183Z"
+}

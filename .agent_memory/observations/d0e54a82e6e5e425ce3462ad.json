@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"macro_rules! param\" -A 20 crates/elephc-builtin-contract/src/catalog_surfaces.rs | head -26",
+  "summary": "grep -n \"macro_rules! param\" -A 20 crates/elephc-builtin-contract/src/catalog_surfaces.rs | head -26: 16:macro_rules! param { 17- ($name:literal, $ty:ident) => { 18- ParamSpec { 19- name: $name, 20- ty: TypeSpec::$ty, 21- default: None, 22- by_ref: false, 23-writes: None, 24- } 25- }; 26- ($name:literal, $ty:ident = $d",
+  "text": "grep -n \"macro_rules! param\" -A 20 crates/elephc-builtin-contract/src/catalog_surfaces.rs | head -26: 16:macro_rules! param { 17- ($name:literal, $ty:ident) => { 18- ParamSpec { 19- name: $name, 20- ty: TypeSpec::$ty, 21- default: None, 22- by_ref: false, 23-writes: None, 24- } 25- }; 26- ($name:literal, $ty:ident = $default:expr) => { 27- ParamSpec { 28- name: $name, 29- ty: TypeSpec::$ty, 30- default: Some($default), 31- by_ref: false, 32-writes: None, 33- } 34- }; 35-} 36-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d0e54a82e6e5e425ce3462ad",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:19:36.202Z",
+  "stored_at": "2026-08-21T12:19:36.202Z"
+}

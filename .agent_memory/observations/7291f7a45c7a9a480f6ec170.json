@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm31 2>&1",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm31 2>&1: rm31 DIFF: 3,5c3,5 < convert.iconv.UTF-8/ => true < convert.iconv./UTF-8 => true < convert.iconv.UTF-8/ISO-8859-1 => true",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh rm31 2>&1: rm31 DIFF: 3,5c3,5 < convert.iconv.UTF-8/ => true < convert.iconv./UTF-8 => true < convert.iconv.UTF-8/ISO-8859-1 => true --- > convert.iconv.UTF-8/ => false > convert.iconv./UTF-8 => false > convert.iconv.UTF-8/ISO-8859-1 => false",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7291f7a45c7a9a480f6ec170",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:51:03.001Z",
+  "stored_at": "2026-08-18T09:51:03.002Z"
+}

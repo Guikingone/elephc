@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_options.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_options.rs: /// php-src's verbatim `ValueError` wording for a negative `stream_select()` `$microseconds`.\nconst STREAM_SELECT_NEGATIVE_MICROSECONDS_MESSAGE: &str =\n    \"str -> //",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_options.rs: /// php-src's verbatim `ValueError` wording for a negative `stream_select()` `$microseconds`.\nconst STREAM_SELECT_NEGATIVE_MICROSECONDS_MESSAGE: &str =\n    \"str -> /// php-src's verbatim `ValueError` wording for a negative `stream_select()` `$microseconds`.\nconst STREAM_SELECT_NEGATIVE_MICROSECONDS_MESSAGE: &str =\n    \"stream_select(): Argument #5 ($microseconds) must be greater than or equal to 0\";\n\n/// php-src's wording when nothing in the three arrays could be cast to a selectable descriptor.\n///\n/// `stream_array_to_fd_set()` counts the streams `php_stream_cast()` accepted and\n/// `PHP_FUNCTION(stream_select)` throws on a zero total",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b790cdd1a1b424efda19cd93",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:05:53.880Z",
+  "stored_at": "2026-08-17T07:05:53.880Z"
+}

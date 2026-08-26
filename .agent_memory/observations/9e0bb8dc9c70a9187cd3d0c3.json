@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '^<<<<<<<\\|^=======\\|^>>>>>>>' src/ir_lower/function.rs | head -32",
+  "summary": "grep -n '^<<<<<<<\\|^=======\\|^>>>>>>>' src/ir_lower/function.rs | head -32: 86:<<<<<<< HEAD 88:======= 92:>>>>>>> origin/main 212:<<<<<<< HEAD 214:======= 218:>>>>>>> origin/main 322:<<<<<<< HEAD 324:======= 328:>>>>>>> origin/main 422:<<<<<<< HEAD 424:======= 428:>>>>>>> origin/main 537:<<<<<<< HEAD 539:======= 543:>>",
+  "text": "grep -n '^<<<<<<<\\|^=======\\|^>>>>>>>' src/ir_lower/function.rs | head -32: 86:<<<<<<< HEAD 88:======= 92:>>>>>>> origin/main 212:<<<<<<< HEAD 214:======= 218:>>>>>>> origin/main 322:<<<<<<< HEAD 324:======= 328:>>>>>>> origin/main 422:<<<<<<< HEAD 424:======= 428:>>>>>>> origin/main 537:<<<<<<< HEAD 539:======= 543:>>>>>>> origin/main 645:<<<<<<< HEAD 647:======= 651:>>>>>>> origin/main 1004:<<<<<<< HEAD 1006:======= 1010:>>>>>>> origin/main 1214:<<<<<<< HEAD 1216:======= 1220:>>>>>>> origin/main 1259:<<<<<<< HEAD 1261:======= 1268:>>>>>>> origin/main 1316:<<<<<<< HEAD 1318:======= 1322:>>>>>>> origin/main",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9e0bb8dc9c70a9187cd3d0c3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:07:49.548Z",
+  "stored_at": "2026-08-26T17:07:49.549Z"
+}

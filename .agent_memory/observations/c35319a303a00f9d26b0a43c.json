@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"Op::PropGet\" src/ir_lower/ | grep -v \"property_get_result_type\\|PropGetForWrite\" | head -6",
+  "summary": "grep -rn \"Op::PropGet\" src/ir_lower/ | grep -v \"property_get_result_type\\|PropGetForWrite\" | head -6: src/ir_lower/effect_refinement.rs:153: Op::PropGet | Op::NullsafePropGet => { src/ir_lower/context.rs:2046: Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet) src/ir_lower/stmt/property_array_writes.rs:26: Op",
+  "text": "grep -rn \"Op::PropGet\" src/ir_lower/ | grep -v \"property_get_result_type\\|PropGetForWrite\" | head -6: src/ir_lower/effect_refinement.rs:153: Op::PropGet | Op::NullsafePropGet => { src/ir_lower/context.rs:2046: Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet) src/ir_lower/stmt/property_array_writes.rs:26: Op::PropGet, src/ir_lower/stmt/property_array_writes.rs:30: Op::PropGet.default_effects(), src/ir_lower/stmt/property_array_writes.rs:86: Op::PropGet, src/ir_lower/stmt/property_array_writes.rs:90: Op::PropGet.default_effects(),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c35319a303a00f9d26b0a43c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T17:32:16.406Z",
+  "stored_at": "2026-08-19T17:32:16.406Z"
+}

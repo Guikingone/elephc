@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r '\n$m=fopen(\"php://memory\",\"w+\");\nstream_filter_append($m,\"convert.base64-encode\",STREAM_FILTER_WRITE);\nfwrite($m,\"hello world\"); rewind($m); echo \"b64enc=\",stream_get_contents($m),\"\\n\";\necho \"dec=\",file_get_contents(\"php://filter/read=convert.base64-decode/resource=data://text/plain,aGVsbG8=\"),\"\\n\";\necho \"rot=\",file_get_contents(\"php://filter/read=string.rot13/resource=data://text/plain,abc\"),\"\\n\";\n$chunked=\"4\\r\\nWiki\\r\\n5\\r\\npedia\\r\\n0\\r\\n\\r\\n\";\necho \"dechunk=\",file_get_contents(\"php://filter/read=dechunk/resource=data://text/plain,\".rawurlencode($chunked)),\"\\n\";\necho \"qp=\",file_get… [+254 chars truncated]",
+  "summary": "php -n -r '\n$m=fopen(\"php://memory\",\"w+\");\nstream_filter_append($m,\"convert.base64-encode\",STREAM_FILTER_WRITE);\nfwrite($m,\"hello world\"); rewind($m); echo \"b64enc=\",stream_get_contents($m),\"\\n\";\necho \"dec=\",file_get_contents(\"php://filter/read=convert.base64-decode/resource=data://text/plain,aGVsbG8=\"),\"\\n\";\necho \"rot",
+  "text": "php -n -r '\n$m=fopen(\"php://memory\",\"w+\");\nstream_filter_append($m,\"convert.base64-encode\",STREAM_FILTER_WRITE);\nfwrite($m,\"hello world\"); rewind($m); echo \"b64enc=\",stream_get_contents($m),\"\\n\";\necho \"dec=\",file_get_contents(\"php://filter/read=convert.base64-decode/resource=data://text/plain,aGVsbG8=\"),\"\\n\";\necho \"rot=\",file_get_contents(\"php://filter/read=string.rot13/resource=data://text/plain,abc\"),\"\\n\";\n$chunked=\"4\\r\\nWiki\\r\\n5\\r\\npedia\\r\\n0\\r\\n\\r\\n\";\necho \"dechunk=\",file_get_contents(\"php://filter/read=dechunk/resource=data://text/plain,\".rawurlencode($chunked)),\"\\n\";\necho \"qp=\",file_get_contents(\"php://filter/read=convert.quoted-printable-encode/resource=data://text/plain,\".rawurlencode(\"héllo\")),\"\\n\";\necho \"iconv=\",bin2hex(file_get_contents(\"php://filter/read=convert.iconv.utf-8%2Futf-16le/resource=data://text/plain,ab\")),\"\\n\";\n' 2>&1: b64enc=aGVsbG8gd29ybGQ= dec=hello rot=nop dechunk=Wikipedia qp=h=C3=A9llo iconv=61006200",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c431690acdcad0671d073d0c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:16:28.638Z",
+  "stored_at": "2026-08-14T14:16:28.639Z"
+}

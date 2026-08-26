@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "find /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps -type f -size +1M ! -newermt 2026-08-23 -delete 2>/dev/null; df -h /System/Volumes/Data",
+  "summary": "find /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps -type f -size +1M ! -newermt 2026-08-23 -delete 2>/dev/null; df -h /System/Volumes/Data: Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 418Gi 13Gi 97% 5.6M 139M 4% /Sy",
+  "text": "find /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps -type f -size +1M ! -newermt 2026-08-23 -delete 2>/dev/null; df -h /System/Volumes/Data: Filesystem Size Used Avail Capacity iused ifree %iused Mounted on /dev/disk3s5 460Gi 418Gi 13Gi 97% 5.6M 139M 4% /System/Volumes/Data",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b7bdedd5af95abbb71591f2a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:24:10.397Z",
+  "stored_at": "2026-08-23T13:24:10.397Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockmeta.php','w').write('''<?php\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nprint_r(stream_get_meta_data($pair[0]));\n$srv = stream_socket_server(\"tcp://127.0.0.1:0\");\nprint_r(stream_get_meta_data($srv));\n$name = stream_socket_get_name($srv, false);\n$cli = stream_socket_client(\"tcp://\" . $name);\nprint_r(stream_get_meta_data($cli));\nfclose($cli); fclose($srv); fclose($pair[0… [+49 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockmeta.php','w').write('''<?php\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nprint_r(stream_get_",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('sockmeta.php','w').write('''<?php\n$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);\nprint_r(stream_get_meta_data($pair[0]));\n$srv = stream_socket_server(\"tcp://127.0.0.1:0\");\nprint_r(stream_get_meta_data($srv));\n$name = stream_socket_get_name($srv, false);\n$cli = stream_socket_client(\"tcp://\" . $name);\nprint_r(stream_get_meta_data($cli));\nfclose($cli); fclose($srv); fclose($pair[0]); fclose($pair[1]);\n''')\nPY\nphp -n sockmeta.php: Array ( [timed_out] => [blocked] => 1 [eof] => [stream_type] => generic_socket [mode] => r+ [unread_bytes] => 0 [seekable] => ) Array ( [timed_out] => [blocked] => 1 [eof] => [stream_type] => tcp_socket/ssl [mode] => r+ [unread_bytes] => 0 [seekable] => [uri] => tcp://127.0.0.1:0 ) Array ( [timed_out] => [blocked] => 1 [eof] => [stream_type] => tcp_socket/ssl [mode] => r+ [unread_bytes] => 0 [seekable] => [uri] => tcp://127.0.0.1:50500 )",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0a537bd4be910f2598b81b70",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:11:18.681Z",
+  "stored_at": "2026-08-17T13:11:18.681Z"
+}

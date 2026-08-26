@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build --example gen_builtins 2>&1 | rg -i \"^error\" | head -3; python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -2; python3 scripts/docs/audit_builtins.py 2>&1 | tail -2",
+  "summary": "cargo build --example gen_builtins 2>&1 | rg -i \"^error\" | head -3; python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -2; python3 scripts/docs/audit_builtins.py 2>&1 | tail -2: Wrote 558 builtins to /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/d",
+  "text": "cargo build --example gen_builtins 2>&1 | rg -i \"^error\" | head -3; python3 scripts/docs/extract_builtins.py --render --force 2>&1 | tail -2; python3 scripts/docs/audit_builtins.py 2>&1 | tail -2: Wrote 558 builtins to /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/docs/builtin_registry.json Rendered: 1076 pages (0 kept hand-written). Master index at /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/docs/php/builtins.md Backend contract checks: 15 Errors: 0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e358b7d85acfa0796cc4001e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:41:58.209Z",
+  "stored_at": "2026-08-17T21:41:58.209Z"
+}

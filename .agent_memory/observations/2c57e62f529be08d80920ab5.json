@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"enum UnaryStringRuntime\" -A 30 src/ir/*.rs | head -34",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"enum UnaryStringRuntime\" -A 30 src/ir/*.rs | head -34: all.rs-162- /// Returns the stable backend-neutral spelling used by textual EIR and diagnostics. src/ir/runtime_call.rs-163- pub fn as_eir(self) -> &'static st",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"enum UnaryStringRuntime\" -A 30 src/ir/*.rs | head -34: all.rs-162- /// Returns the stable backend-neutral spelling used by textual EIR and diagnostics. src/ir/runtime_call.rs-163- pub fn as_eir(self) -> &'static str { src/ir/runtime_call.rs-164- match self { src/ir/runtime_call.rs-165- UnaryStringRuntime::AddSlashes => \"string.add_slashes\", src/ir/runtime_call.rs-166- UnaryStringRuntime::Base64Encode => \"string.base64_encode\", src/ir/runtime_call.rs-167- UnaryStringRuntime::BinToHex => \"string.bin_to_hex\", src/ir/runtime_call.rs-168- UnaryStringRuntime::HexToBin => \"string.hex_to_bin\", src/ir/runtime_call.rs-169- UnaryStringRuntime::HtmlEntityDecode => \"string.html_entity_decode\", src/ir/runtime_call.rs-170- UnaryStringRuntime::NlToBr => \"string.nl_to_br\", src/ir/runtime_call.rs-171- UnaryStringRuntime::QuoteMeta => \"string.quote_meta\", src/ir/runtime_call.rs-172- UnaryStringRuntime::QuotedPrintableEncode => \"string.quoted_printable_encode\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2c57e62f529be08d80920ab5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:49:22.877Z",
+  "stored_at": "2026-08-22T18:49:22.878Z"
+}

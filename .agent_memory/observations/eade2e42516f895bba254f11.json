@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_shapes.py 2>&1 | head -75",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_shapes.py 2>&1 | head -75:  error: Uncaught RuntimeException: boom in p.php:2 =============================================================",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_shapes.py 2>&1 | head -75:  error: Uncaught RuntimeException: boom in p.php:2 ========================================================================== method frame -- php -- Fatal error: Uncaught LogicException: boom in p.php:2 Stack trace: #0 p.php(3): C->m() #1 {main} thrown in p.php on line 2 -- elephc -- Fatal error: Uncaught LogicException: boom in p.php:2 ========================================================================== caught getTraceAsString -- php -- #0 p.php(3): f() #1 {main} -- elephc -- ========================================================================== caught getTrace count -- php -- 1 -- elephc -- 0 ========================================================================== constructed then thrown later -- php -- Fatal error: Uncaught RuntimeException: boom in p.php:2 Stack trace: #0 {main} thrown in p.php on line 2 -- elephc -- Fatal error: Uncaught RuntimeException: boom in p.php:2",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eade2e42516f895bba254f11",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:03:05.473Z",
+  "stored_at": "2026-08-22T12:03:05.474Z"
+}

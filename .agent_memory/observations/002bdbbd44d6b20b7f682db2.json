@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/strings/scanf.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/strings/scanf.rs: #[test]\nfn test_scanf_prelude_is_pay_for_use() {\n    let scanning = compile_source_to_asm(r#\"<?php print_r(sscanf(\"1\", \"%d\"));\"#);\n    assert!(\n        scanning -> #[test]\nfn test_scanf_pr",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/strings/scanf.rs: #[test]\nfn test_scanf_prelude_is_pay_for_use() {\n    let scanning = compile_source_to_asm(r#\"<?php print_r(sscanf(\"1\", \"%d\"));\"#);\n    assert!(\n        scanning -> #[test]\nfn test_scanf_prelude_is_pay_for_use() {\n    assert!(\n        user_asm(r#\"<?php print_r(sscanf(\"1\", \"%d\"));\"#).contains(\"__elephc_scanf\"),\n        \"a scanning program must carry the engine\"\n    );\n    assert!(\n        !user_asm(\n            r#\"<?php $h = fopen(\"/dev/null\", \"r\"); echo sprintf(\"%d\", strlen(\"abc\")); fgets($h);\"#\n        )\n        .contains(\"__elephc_scanf\"),\n        \"sprintf/strlen/fgets must not pull the scanf engine in\"\n    );\n}\n\n/// Compiles PHP sourc",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "002bdbbd44d6b20b7f682db2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:26:15.379Z",
+  "stored_at": "2026-08-16T16:26:15.380Z"
+}

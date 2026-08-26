@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/STREAMS_CAMPAIGN.md",
+  "summary": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/STREAMS_CAMPAIGN.md: ## Measured this pass, not yet fixed -> ## 🔴🔴 SILENT: a wrapper/filter class named NON-LITERALLY registers and then never works",
+  "text": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/STREAMS_CAMPAIGN.md: ## Measured this pass, not yet fixed -> ## 🔴🔴 SILENT: a wrapper/filter class named NON-LITERALLY registers and then never works\n```php\nclass MemWrapper { /* stream_open, stream_read, stream_eof, stream_stat */ }\nvar_dump(stream_wrapper_register('memw', MemWrapper::class));   // true, in BOTH\nvar_dump(in_array('memw', stream_get_wrappers()));              // true, in BOTH\nvar_dump(fopen('memw://x', 'r'));                               // php: resource — elephc: false\n```\n- `'MemWrapper'` (literal) works. `'Mem' . 'W",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "19ceb18726faec1a915dff2c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:45:03.150Z",
+  "stored_at": "2026-08-17T09:45:03.151Z"
+}

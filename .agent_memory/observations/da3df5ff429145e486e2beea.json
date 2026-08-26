@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"SELECT_CAST_UNREPRESENTABLE_MEMORY\" -B 12 -A 6 src/codegen_support/runtime/data/mod.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"SELECT_CAST_UNREPRESENTABLE_MEMORY\" -B 12 -A 6 src/codegen_support/runtime/data/mod.rs: ream of type user-space\", 262- \" as a select()able descriptor\\n\" 263-); 264- 265-/// The warning php raises for a `php://memory",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"SELECT_CAST_UNREPRESENTABLE_MEMORY\" -B 12 -A 6 src/codegen_support/runtime/data/mod.rs: ream of type user-space\", 262- \" as a select()able descriptor\\n\" 263-); 264- 265-/// The warning php raises for a `php://memory` stream handed to `stream_select()`. 266-/// 267-/// A MEMORY stream has no operating-system descriptor to poll, so php refuses it outright and 268-/// names the TYPE in the text. `php://temp` is not refused — it is backed by a real file once it 269-/// exists — and neither are `data:`, a plain file, or the standard streams. Measured on `php -n` 270-/// 8.5.6, where the refusal leaves nothing selectable and the `ValueError` follows. 271:pub(crate) const SELECT_CAST_UNREPRESENTABLE_MEMORY: &str = concat!( 272- \"Warning: stream_select(): Cannot represent a stream of type MEMORY\", 273- \" as a select()able descriptor\\n\" 274-); 275- 276-/// `stream_eof`'s tail, the only one that also reports what php assumed. 277-pub(crate) const WRAPPER_MISSING_HOOK_TAIL_EOF: &str =",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "da3df5ff429145e486e2beea",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:53:27.710Z",
+  "stored_at": "2026-08-22T20:53:27.711Z"
+}

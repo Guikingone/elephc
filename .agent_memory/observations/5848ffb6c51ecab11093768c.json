@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"GLOB_ONLYDIR\" src/ crates/ | head -10",
+  "summary": "grep -rn \"GLOB_ONLYDIR\" src/ crates/ | head -10: src/types/stream_constants.rs:217: (\"GLOB_ONLYDIR\", 1073741824),",
+  "text": "grep -rn \"GLOB_ONLYDIR\" src/ crates/ | head -10: src/types/stream_constants.rs:217: (\"GLOB_ONLYDIR\", 1073741824),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5848ffb6c51ecab11093768c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:57:09.426Z",
+  "stored_at": "2026-08-22T08:57:09.426Z"
+}

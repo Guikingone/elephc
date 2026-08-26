@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ctxshape.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ctxshape.php: <?php\n// php's stream_context_create() option-shape rules, case by case.\nfunction t(string $label, callable $fn): void {\n    echo",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ctxshape.php: <?php\n// php's stream_context_create() option-shape rules, case by case.\nfunction t(string $label, callable $fn): void {\n    echo str_pad($label, 40);\n    try { $fn(); echo \"OK\\n\"; }\n    catch (\\Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }\n}\n\nt(\"wrapper => array\",        fn() => stream_context_create(['http' => ['method' => 'POST']]));\nt(\"wrapper => string\",       fn() => stream_context_create(['ssl' => \"abc\"]));\nt(\"wrapper => int\",          fn() => stream_context_create(['ssl' => 1]));\nt(\"wrapper => null\",         fn() => stream_context_create(['ssl' => null]));\nt(\"INTE",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "421990806be0164182d0fb18",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T10:05:08.097Z",
+  "stored_at": "2026-08-17T10:05:08.099Z"
+}

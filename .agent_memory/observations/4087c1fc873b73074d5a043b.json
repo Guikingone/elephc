@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nullprop_test.py; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests objects::untyped_property 2>&1 | tail -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nullprop_test.py; CARGO_INCREMENTAL=0 RUST_MIN_S",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/nullprop_test.py; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests objects::untyped_property 2>&1 | tail -8: the null-sentinel routes are pinned test codegen::objects::untyped_property_defaults::test_untyped_property_explicit_null_default_assigned_array_later ... ok test codegen::objects::untyped_property_defaults::test_untyped_property_without_default_defaults_to_null ... ok test codegen::objects::untyped_property_defaults::test_untyped_static_property_assignment_expression_from_dynamic_parameter_returns_object ... ok test codegen::objects::untyped_property_defaults::test_untyped_static_property_explicit_null_default_assigned_string_later ... ok test codegen::objects::untyped_property_defaults::test_untyped_static_property_without_default_defaults_to_null ... ok test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 8871 filtered out; finished in 4.87s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4087c1fc873b73074d5a043b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:02:04.726Z",
+  "stored_at": "2026-08-23T09:02:04.727Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/stat_key_order.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/stat_key_order.py: \"\"\"`stat()` interleaved its two key sets where php lists one after the other.\n\nMEASURED on `php -n` 8.5.6, `stat()`, `lstat()` ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/stat_key_order.py: \"\"\"`stat()` interleaved its two key sets where php lists one after the other.\n\nMEASURED on `php -n` 8.5.6, `stat()`, `lstat()` and `fstat()` alike:\n\n    php:    0,1,2,3,4,5,6,7,8,9,10,11,12,dev,ino,mode,nlink,uid,gid,rdev,size,atime,mtime,ctime,blksize,blocks\n    elephc: 0,dev,1,ino,2,mode,3,nlink,4,uid,5,gid,6,rdev,7,size,8,atime,9,mtime,10,ctime,11,blksize,12,blocks\n\nThe doc comment above the builder spells php's order as `0/dev, 1/ino, 2/mode, ...`, which reads as\nPAIRS — and one loop inserting each field's numeric key followed by its string key is exactly what\nthat reading produces. php fi",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "802228ea17fed983b5af0104",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:19:16.268Z",
+  "stored_at": "2026-08-22T20:19:16.269Z"
+}

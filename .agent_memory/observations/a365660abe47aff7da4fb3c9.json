@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub\" src/types/call_args/plan.rs | head -30",
+  "summary": "grep -n \"pub\" src/types/call_args/plan.rs | head -30: ed_pos: Option<usize>, 27: pub(crate) prefix_has_dynamic_named_spread: bool, 28: pub(super) passthrough_args: Option<Vec<Expr>>, 33:pub(crate) enum PlannedRegularArg { 53:pub(crate) struct PlannedVariadicArg { 54: pub(crate) key: Option<String>, 55: pub(crate) expr:",
+  "text": "grep -n \"pub\" src/types/call_args/plan.rs | head -30: ed_pos: Option<usize>, 27: pub(crate) prefix_has_dynamic_named_spread: bool, 28: pub(super) passthrough_args: Option<Vec<Expr>>, 33:pub(crate) enum PlannedRegularArg { 53:pub(crate) struct PlannedVariadicArg { 54: pub(crate) key: Option<String>, 55: pub(crate) expr: Expr, 61:pub(crate) enum PlannedSourceValue { 79:pub(crate) struct SpreadBoundsCheck { 80: pub(crate) min_len: usize, 81: pub(crate) max_len: Option<usize>, 82: pub(crate) max_len_param_name: Option<String>, 87:pub(crate) enum CallArgPlanError { 114: pub(crate) fn has_spread_args(&self) -> bool { 124: pub(crate) fn normalized_args(&self) -> Vec<Expr> { 196: pub(crate) fn positional_prefix_expr(&self, call_span: Span) -> Option<Expr> { 211: pub(crate) fn source_index(&self) -> usize { 219: pub(crate) fn param_idx(&self) -> Option<usize> { 227: pub(crate) fn key(&self) -> Option<&str> { 235: pub(crate) fn expr(&self) -> &Expr {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a365660abe47aff7da4fb3c9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:12:41.713Z",
+  "stored_at": "2026-08-21T16:12:41.714Z"
+}

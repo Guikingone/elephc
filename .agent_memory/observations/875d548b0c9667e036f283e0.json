@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '250,262p' src/types/checker/driver/mod.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '250,262p' src/types/checker/driver/mod.rs: &mut class_map, &declared_traits, register_reflection, ) { errors.extend(error.flatten()); } checker.declared_classes = class_map.keys().cloned().collect(); checker.declared",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '250,262p' src/types/checker/driver/mod.rs: &mut class_map, &declared_traits, register_reflection, ) { errors.extend(error.flatten()); } checker.declared_classes = class_map.keys().cloned().collect(); checker.declared_interfaces = interface_map.keys().cloned().collect(); checker.declared_traits = declared_traits.clone(); checker.declared_trait_methods = declared_trait_methods; checker.declared_trait_constants = declared_trait_constants; // Enum names must resolve as types in member positions (property and // promoted-constructor-param types), which are checked during the class",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "875d548b0c9667e036f283e0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:27:44.682Z",
+  "stored_at": "2026-08-22T18:27:44.682Z"
+}

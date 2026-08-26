@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"^    [A-Z][A-Za-z]*\" src/parser/ast/expr.rs | sed -n '1,90p'",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"^    [A-Z][A-Za-z]*\" src/parser/ast/expr.rs | sed -n '1,90p': 238: MagicConstant(MagicConstant), src/parser/ast/expr.rs:239: Yield { src/parser/ast/expr.rs:243: YieldFrom(Box<Expr>), src/parser/ast/expr.rs:249: Dir",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"^    [A-Z][A-Za-z]*\" src/parser/ast/expr.rs | sed -n '1,90p': 238: MagicConstant(MagicConstant), src/parser/ast/expr.rs:239: Yield { src/parser/ast/expr.rs:243: YieldFrom(Box<Expr>), src/parser/ast/expr.rs:249: Dir, src/parser/ast/expr.rs:250: File, src/parser/ast/expr.rs:251: Function, src/parser/ast/expr.rs:252: Class, src/parser/ast/expr.rs:253: Method, src/parser/ast/expr.rs:254: Namespace, src/parser/ast/expr.rs:255: Trait, src/parser/ast/expr.rs:261: Int, src/parser/ast/expr.rs:262: Float, src/parser/ast/expr.rs:263: String, src/parser/ast/expr.rs:264: Bool, src/parser/ast/expr.rs:265: Array, src/parser/ast/expr.rs:271: Named(Name), src/parser/ast/expr.rs:272: Self_, src/parser/ast/expr.rs:273: Static, src/parser/ast/expr.rs:274: Parent, src/parser/ast/expr.rs:280: Name(Name), src/parser/ast/expr.rs:281: Expr(Box<Expr>), src/parser/ast/expr.rs:287: Function(Name), src/parser/ast/expr.rs:288: StaticMethod { src/parser/ast/expr.rs:292: Method {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a680d17631b4ceeeca54908f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:09:54.474Z",
+  "stored_at": "2026-08-23T13:09:54.475Z"
+}

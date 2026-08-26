@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_php_compare\" src/codegen/ | head -6",
+  "summary": "About to run: grep -rn \"__rt_php_compare\" src/codegen/ | head -6",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "78c986d7109c6929430a6261",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:14:11.456Z",
+  "stored_at": "2026-08-22T10:14:11.456Z"
+}

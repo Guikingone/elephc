@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/plural_quiet.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/plural_quiet.py: \"\"\"`stream_context_set_options()` carried the deprecation that exists to send callers TO it.\n\nMEASURED on `php -n` 8.5.6:\n\n    st",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/plural_quiet.py: \"\"\"`stream_context_set_options()` carried the deprecation that exists to send callers TO it.\n\nMEASURED on `php -n` 8.5.6:\n\n    stream_context_set_options($c, [\"http\" => [\"method\" => \"POST\"]]);   // php: silent\n    stream_context_set_option($c,  [\"http\" => [\"method\" => \"PUT\"]]);    // php: Deprecated: ... with 2 arguments\n\nelephc printed the singular's notice for BOTH, because the plural spelling reuses the singular's\nlowering and the lowering decided from the ARITY alone — which cannot tell the two names apart.\nEvery use of the recommended spelling therefore produced the notice telling the cal",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "69f90ffc4cdc37b9938f3092",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:07:07.492Z",
+  "stored_at": "2026-08-22T17:07:07.493Z"
+}

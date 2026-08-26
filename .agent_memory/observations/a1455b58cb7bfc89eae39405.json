@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn without_diagnostics\\|fn strip_diagnostics' tests/ir_backend_smoke_test.rs | head -3; grep -n '^fn compile_and_run_ir_backend' tests/ir_backend_smoke_test.rs | head -2",
+  "summary": "grep -n 'fn without_diagnostics\\|fn strip_diagnostics' tests/ir_backend_smoke_test.rs | head -3; grep -n '^fn compile_and_run_ir_backend' tests/ir_backend_smoke_test.rs | head -2: 6832:fn compile_and_run_ir_backend(name: &str, source: &str) -> String { 6837:fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, s",
+  "text": "grep -n 'fn without_diagnostics\\|fn strip_diagnostics' tests/ir_backend_smoke_test.rs | head -3; grep -n '^fn compile_and_run_ir_backend' tests/ir_backend_smoke_test.rs | head -2: 6832:fn compile_and_run_ir_backend(name: &str, source: &str) -> String { 6837:fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a1455b58cb7bfc89eae39405",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:38:46.704Z",
+  "stored_at": "2026-08-25T08:38:46.704Z"
+}

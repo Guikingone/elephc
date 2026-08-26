@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='src/codegen/lower_inst/builtins/io/stream_filters.rs'\ns=open(p).read()\nanchor = 'pub(crate) fn lower_stream_filter_register('\ni = s.index('/// Lowers `stream_filter_register')\nconsts = '''/// php-src's verbatim `ValueError` for an empty `stream_filter_register()` `$filter_name`.\nconst STREAM_FILTER_REGISTER_EMPTY_NAME_MESSAGE: &str =\n    \"stream_filter_register(): Argument #1 ($filter_name) must be a non-empty string\";\n\n/// php-src's verbatim `ValueError` for an empty `stream_filter_register()` `$class`.\nconst STREAM_FILTER_REGISTER_EMPTY_CLASS_MESSAGE: &str =\n    \"stream_f… [+425 chars truncated]",
+  "summary": "python3 - <<'PY'\np='src/codegen/lower_inst/builtins/io/stream_filters.rs'\ns=open(p).read()\nanchor = 'pub(crate) fn lower_stream_filter_register('\ni = s.index('/// Lowers `stream_filter_register')\nconsts = '''/// php-src's verbatim `ValueError` for an empty `stream_filter_register()` `$filter_name`.\nconst STREAM_FILTER_",
+  "text": "python3 - <<'PY'\np='src/codegen/lower_inst/builtins/io/stream_filters.rs'\ns=open(p).read()\nanchor = 'pub(crate) fn lower_stream_filter_register('\ni = s.index('/// Lowers `stream_filter_register')\nconsts = '''/// php-src's verbatim `ValueError` for an empty `stream_filter_register()` `$filter_name`.\nconst STREAM_FILTER_REGISTER_EMPTY_NAME_MESSAGE: &str =\n    \"stream_filter_register(): Argument #1 ($filter_name) must be a non-empty string\";\n\n/// php-src's verbatim `ValueError` for an empty `stream_filter_register()` `$class`.\nconst STREAM_FILTER_REGISTER_EMPTY_CLASS_MESSAGE: &str =\n    \"stream_filter_register(): Argument #2 ($class) must be a non-empty string\";\n\n'''\ns = s[:i] + consts + s[i:]\nopen(p,'w').write(s)\nprint(\"constants added\")\nPY\ncat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b0m9ejmue.output\" 2>/dev/null | tail -3; pgrep -f \"cargo test\" >/dev/null && echo TEST_RUNNING || echo TEST_DONE: constants added pin updated TEST_RUNNING",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b82b02c4f3e3ae145851135c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:39:57.060Z",
+  "stored_at": "2026-08-17T08:39:57.060Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('fdynprop.php','w').write('''<?php\nclass Tag extends php_user_filter {\n    public function onCreate(): bool {\n        $this->seen = 0;\n        return true;\n    }\n    public function filter($in, $out, &$consumed, $closing): int {\n        while ($bucket = stream_bucket_make_writeable($in)) {\n            $this->seen += $bucket->datalen;\n            $consumed += $bucket->datalen;\n            stream_buc… [+334 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('fdynprop.php','w').write('''<?php\nclass Tag extends php_user_filter {\n    public function onCreate(): bool {\n        $th",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('fdynprop.php','w').write('''<?php\nclass Tag extends php_user_filter {\n    public function onCreate(): bool {\n        $this->seen = 0;\n        return true;\n    }\n    public function filter($in, $out, &$consumed, $closing): int {\n        while ($bucket = stream_bucket_make_writeable($in)) {\n            $this->seen += $bucket->datalen;\n            $consumed += $bucket->datalen;\n            stream_bucket_append($out, $bucket);\n        }\n        return PSFS_PASS_ON;\n    }\n}\nstream_filter_register(\"tag\", \"Tag\");\n$h = fopen(\"php://memory\", \"w+\");\nfwrite($h, \"hello world\");\nrewind($h);\nstream_filter_append($h, \"tag\", STREAM_FILTER_READ);\nvar_dump(stream_get_contents($h));\nfclose($h);\n''')\nPY\nzsh difftests.sh fdynprop 2>&1 | head -20: fdynprop COMPILE FAILED: error[4:9]: Undefined property: Tag::seen error[9:18]: Undefined property: Tag::seen",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e0bed0ca92ab0e3b39e9849c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:15:01.215Z",
+  "stored_at": "2026-08-17T13:15:01.216Z"
+}

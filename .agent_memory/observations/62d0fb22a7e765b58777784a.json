@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"FILTER_PARAMS_OFFSET\" src/ | grep -v filter_params.rs | head -10",
+  "summary": "grep -rn \"FILTER_PARAMS_OFFSET\" src/ | grep -v filter_params.rs | head -10: src/codegen_support/runtime/resources/layout.rs:320:pub(crate) const FILTER_PARAMS_OFFSET: i64 = 48; src/codegen_support/runtime/resources/filter.rs:25: FILTER_OBJECT_OFFSET, FILTER_PARAMS_OFFSET, FILTER_PREV_OFFSET, FILTER_STATE_SIZE, src/code",
+  "text": "grep -rn \"FILTER_PARAMS_OFFSET\" src/ | grep -v filter_params.rs | head -10: src/codegen_support/runtime/resources/layout.rs:320:pub(crate) const FILTER_PARAMS_OFFSET: i64 = 48; src/codegen_support/runtime/resources/filter.rs:25: FILTER_OBJECT_OFFSET, FILTER_PARAMS_OFFSET, FILTER_PREV_OFFSET, FILTER_STATE_SIZE, src/codegen_support/runtime/resources/filter.rs:126: emitter.instruction(&format!(\"str x9, [x0, #{FILTER_PARAMS_OFFSET}]\")); // retained params value src/codegen_support/runtime/resources/filter.rs:807: emitter.instruction(&format!(\"mov QWORD PTR [rax + {FILTER_PARAMS_OFFSET}], r10\")); // retained params value",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "62d0fb22a7e765b58777784a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:41:41.262Z",
+  "stored_at": "2026-08-21T09:41:41.262Z"
+}

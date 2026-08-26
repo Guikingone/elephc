@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; cargo test -p elephc --lib 2>&1 | tail -4",
+  "summary": "About to run: export CARGO_INCREMENTAL=0; cargo test -p elephc --lib 2>&1 | tail -4",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a6f2dfc6e16ea05e3b18c940",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:36:23.763Z",
+  "stored_at": "2026-08-21T16:36:23.763Z",
+  "low_signal": true
+}

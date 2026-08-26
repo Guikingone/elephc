@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/flock2.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/flock2.php: <?php\n\n$cases = [\n    \"memory\"  => fopen(\"php://memory\", \"w+\"),\n    \"temp\"    => fopen(\"php://temp\", \"w+\"),\n    \"output\"  => fopen(\"ph",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/flock2.php: <?php\n\n$cases = [\n    \"memory\"  => fopen(\"php://memory\", \"w+\"),\n    \"temp\"    => fopen(\"php://temp\", \"w+\"),\n    \"output\"  => fopen(\"php://output\", \"w\"),\n    \"data\"    => fopen(\"data://text/plain,hello\", \"r\"),\n    \"file\"    => fopen(tempnam(sys_get_temp_dir(), \"fl\"), \"w+\"),\n];\n\nforeach ($cases as $name => $handle) {\n    echo $name, \" ex=\", var_export(flock($handle, LOCK_EX), true);\n    echo \" sh=\", var_export(flock($handle, LOCK_SH), true);\n    echo \" nb=\", var_export(flock($handle, LOCK_EX | LOCK_NB), true);\n    echo \" un=\", var_export(flock($handle, LOCK_UN), true), \"\\n\";\n}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3bfa2be98183bfcb7dec7443",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:37:14.607Z",
+  "stored_at": "2026-08-22T16:37:14.608Z"
+}

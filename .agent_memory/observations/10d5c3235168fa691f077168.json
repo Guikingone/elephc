@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "ToolSearch",
+  "path": "",
+  "command": "",
+  "summary": "About to run: ToolSearch",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "10d5c3235168fa691f077168",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:14:33.371Z",
+  "stored_at": "2026-08-17T09:14:33.372Z",
+  "low_signal": true
+}

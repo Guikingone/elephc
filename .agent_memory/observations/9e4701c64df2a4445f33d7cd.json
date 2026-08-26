@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests codegen::strings 2>&1 | tail -3; cargo test --test error_tests 2>&1 | rg \"^test result\" | head -2",
+  "summary": "cargo test --test codegen_tests codegen::strings 2>&1 | tail -3; cargo test --test error_tests 2>&1 | rg \"^test result\" | head -2: test result: ok. 327 passed; 0 failed; 0 ignored; 0 measured; 8107 filtered out; finished in 137.41s test result: ok. 1296 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished ",
+  "text": "cargo test --test codegen_tests codegen::strings 2>&1 | tail -3; cargo test --test error_tests 2>&1 | rg \"^test result\" | head -2: test result: ok. 327 passed; 0 failed; 0 ignored; 0 measured; 8107 filtered out; finished in 137.41s test result: ok. 1296 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 75.74s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9e4701c64df2a4445f33d7cd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:41:31.311Z",
+  "stored_at": "2026-08-17T21:41:31.312Z"
+}

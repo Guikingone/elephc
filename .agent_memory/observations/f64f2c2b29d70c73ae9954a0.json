@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub struct Function\\b\" -A 20 src/ir/function.rs 2>/dev/null | head -25 || grep -rn \"pub struct Function\\b\" -A 20 src/ir/ | head -25",
+  "summary": "grep -n \"pub struct Function\\b\" -A 20 src/ir/function.rs 2>/dev/null | head -25 || grep -rn \"pub struct Function\\b\" -A 20 src/ir/ | head -25: 53:pub struct Function { 54- pub id: FunctionId, 55- pub name: String, 56- pub params: Vec<FunctionParam>, 57- pub return_type: IrType, 58- pub return_php_type: PhpType, 59- pub ",
+  "text": "grep -n \"pub struct Function\\b\" -A 20 src/ir/function.rs 2>/dev/null | head -25 || grep -rn \"pub struct Function\\b\" -A 20 src/ir/ | head -25: 53:pub struct Function { 54- pub id: FunctionId, 55- pub name: String, 56- pub params: Vec<FunctionParam>, 57- pub return_type: IrType, 58- pub return_php_type: PhpType, 59- pub locals: Vec<LocalSlot>, 60- pub blocks: Vec<BasicBlock>, 61- pub values: Vec<Value>, 62- pub instructions: Vec<Instruction>, 63- pub entry: BlockId, 64- pub source_signature: Option<String>, 65- pub signature: Option<FunctionSig>, 66- pub attribute_names: Vec<String>, 67- pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>, 68- pub generator_source: Option<GeneratorSource>, 69- pub flags: FunctionFlags, 70- /// Slots the epilogue must never release: values this frame BORROWS rather than owns. 71- /// 72- /// The inliner transplants a callee's parameter slots (and its directly-returned slots) 73- /// into the host, where they hold a +0 borrow the host never acquired. It used to signal",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f64f2c2b29d70c73ae9954a0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:19:41.852Z",
+  "stored_at": "2026-08-18T15:19:41.853Z"
+}

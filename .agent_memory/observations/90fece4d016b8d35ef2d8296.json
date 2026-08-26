@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/file-scheme.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/file-scheme.php: <?php\nfile_put_contents(\"u.txt\", \"content\\n\");\n$abs = realpath(\"u.txt\");\n\necho \"1 \", var_export(file_get_contents(\"file",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/file-scheme.php: <?php\nfile_put_contents(\"u.txt\", \"content\\n\");\n$abs = realpath(\"u.txt\");\n\necho \"1 \", var_export(file_get_contents(\"file://$abs\"), true), \"\\n\";\n\n$h = @fopen(\"file://$abs\", \"r\");\necho \"2 \", var_export(is_resource($h), true), \"\\n\";\nif ($h) { echo \"3 \", var_export(fread($h, 100), true), \"\\n\"; fclose($h); }\n\necho \"4 \", var_export(@file_exists(\"file://$abs\"), true), \"\\n\";\necho \"5 \", var_export(@filesize(\"file://$abs\"), true), \"\\n\";\necho \"6 \", var_export(@is_file(\"file://$abs\"), true), \"\\n\";\necho \"7 \", var_export(@file(\"file://$abs\"), true), \"\\n\";\necho \"8 \", var_export(@copy(\"file://$abs\", \"copy.txt\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "90fece4d016b8d35ef2d8296",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:06:16.048Z",
+  "stored_at": "2026-08-24T18:06:16.049Z"
+}

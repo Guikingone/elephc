@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/codegen_support/runtime/io/fd_set_append.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/emitters/platform.rs src/codegen_support/platform/target.rs src/codegen/lower_inst/builtins/io/fopen_core.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/appendmsg.txt --no-verify 2>&1 | head -3",
+  "summary": "git add src/codegen_support/runtime/io/fd_set_append.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/emitters/platform.rs src/codegen_support/platform/target.rs src/codegen/lower_inst/builtins/io/fopen_core.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloul",
+  "text": "git add src/codegen_support/runtime/io/fd_set_append.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/emitters/platform.rs src/codegen_support/platform/target.rs src/codegen/lower_inst/builtins/io/fopen_core.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/appendmsg.txt --no-verify 2>&1 | head -3: [worktree-streams-csv-signature 1d659fc96] fix(streams): an `a` mode on php://memory silently overwrote instead of appending 6 files changed, 174 insertions(+) create mode 100644 src/codegen_support/runtime/io/fd_set_append.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d433fc9e89558bcc9c06874a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:07:54.774Z",
+  "stored_at": "2026-08-17T08:07:54.775Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '440,462p' src/codegen_support/runtime/objects/mixed_array_get.rs; echo \"--- frame:\"; sed -n '419,440p' src/codegen_support/runtime/objects/mixed_array_get.rs | grep -n \"rbp\\|sub rsp\" | head -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '440,462p' src/codegen_support/runtime/objects/mixed_array_get.rs; echo \"--- frame:\"; sed -n '419,440p' src/codegen_support/runtime/objects/mixed_array_get.rs | grep -n \"rbp\\|sub rsp\" | head -8: rt_mixed_array_get_nul",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '440,462p' src/codegen_support/runtime/objects/mixed_array_get.rs; echo \"--- frame:\"; sed -n '419,440p' src/codegen_support/runtime/objects/mixed_array_get.rs | grep -n \"rbp\\|sub rsp\" | head -8: rt_mixed_array_get_null\"); // any other payload → null // -- string receiver: `$s[$i]` reads one byte and answers a 1-character string -- // See the AArch64 half. Silent before this case existed, because `ord(null)` is 0. emitter.label(\"__rt_mixed_array_get_string\"); emitter.instruction(\"mov r10, QWORD PTR [rdi + 8]\"); // the string payload pointer emitter.instruction(\"mov r11, QWORD PTR [rdi + 16]\"); // and its length --- frame: 17: emitter.instruction(\"push rbp\"); // preserve the caller frame pointer 18: emitter.instruction(\"mov rbp, rsp\"); // establish a stable frame base 19: emitter.instruction(\"sub rsp, 32\"); // reserve slots for the 3 saved inputs (16-byte aligned) 20: emitter.instruction(\"mov QWORD PTR [rbp - 8], rdi\"); // save mixed_ptr 21: emitter.instruction(\"mov QWORD PTR [rbp - 16], rsi\"); // save key_lo 22: emitter.instruction(\"mov QWORD PTR [rbp - 24], rdx\"); // save key_hi",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0c94c3a3e4398f77b051b4a3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:54:44.181Z",
+  "stored_at": "2026-08-24T08:54:44.181Z"
+}

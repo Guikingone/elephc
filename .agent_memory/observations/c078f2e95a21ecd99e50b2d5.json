@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '10,45p' src/codegen_support/runtime/io/php_wrapper_open.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '10,45p' src/codegen_support/runtime/io/php_wrapper_open.rs: 's own descriptor, matching //! what the literal path already does: `fclose()` on the result must not close the real stdout. use crate::codegen_support::abi",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '10,45p' src/codegen_support/runtime/io/php_wrapper_open.rs: 's own descriptor, matching //! what the literal path already does: `fclose()` on the result must not close the real stdout. use crate::codegen_support::abi; use crate::codegen_support::runtime::io::PHP_FD_FORM; use crate::codegen_support::{emit::Emitter, platform::Arch}; /// Byte stride of one `_php_wrapper_schemes` record. const RECORD_STRIDE: i64 = 16; /// Offset of the name-length byte inside a record. const RECORD_LEN_OFFSET: i64 = 8; /// Offset of the action byte inside a record. const RECORD_ACTION_OFFSET: i64 = 9; /// Offset of the prefix-match flag inside a record. const RECORD_PREFIX_OFFSET: i64 = 10; /// Emits `__rt_php_wrapper_open`. pub fn emit_php_wrapper_open(emitter: &mut Emitter) { match emitter.target.arch { Arch::AArch64 => emit_aarch64(emitter), Arch::X86_64 => emit_x86_64(emitter), } } /// `__rt_php_wrapper_open(x0 = path, x1 = length) -> x0 = descriptor, or -1`. ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c078f2e95a21ecd99e50b2d5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:04:28.084Z",
+  "stored_at": "2026-08-24T13:04:28.085Z"
+}

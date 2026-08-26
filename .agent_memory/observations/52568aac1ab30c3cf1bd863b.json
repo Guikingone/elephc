@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '20,40p' src/codegen_support/runtime/io/builtin_filter_id.rs",
+  "summary": "sed -n '20,40p' src/codegen_support/runtime/io/builtin_filter_id.rs: am_apply_filter_chain` hands the id to /// `__rt_apply_stream_filter`, a byte-transform helper. `zlib.*`, `bzip2.*` and /// `convert.iconv.*` are not entries here and must not be added as such — they /// are per-call-site attach sequences that install",
+  "text": "sed -n '20,40p' src/codegen_support/runtime/io/builtin_filter_id.rs: am_apply_filter_chain` hands the id to /// `__rt_apply_stream_filter`, a byte-transform helper. `zlib.*`, `bzip2.*` and /// `convert.iconv.*` are not entries here and must not be added as such — they /// are per-call-site attach sequences that install a per-fd handle and a /// program-local helper thunk (`_zlib_fwrite_fn` and friends), which no /// run-time name lookup can reconstruct. Naming them here would mint a node /// carrying an id the chain then hands to a byte transform that does not exist /// for deflate: the attach would report success and filter nothing. /// /// `string.strip_tags` is absent for the opposite reason: php has no such /// filter since 8.0, so it must miss and warn. pub(crate) const BUILTIN_FILTER_NAMES: &[(&str, u8)] = &[ (\"string.toupper\", 1), (\"string.tolower\", 2), (\"string.rot13\", 3), (\"dechunk\", 5), (\"convert.base64-encode\", 6), (\"convert.base64-decode\", 7),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "52568aac1ab30c3cf1bd863b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T20:10:48.415Z",
+  "stored_at": "2026-08-17T20:10:48.416Z"
+}

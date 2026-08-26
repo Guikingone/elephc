@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests -- codegen::io::output_buffering::test_flags_gate_operations_with_notices codegen::io::output_buffering::test_no_buffer_operations_return_false codegen::io::output_buffering::test_ob_start_unknown_function_name_rejected codegen::io::streams::test_stream_wrapper_restore_reports_phps_three_cases --exact --nocapture 2>&1 | tail -45",
+  "summary": "cargo test --test codegen_tests -- codegen::io::output_buffering::test_flags_gate_operations_with_notices codegen::io::output_buffering::test_no_buffer_operations_return_false codegen::io::output_buffering::test_ob_start_unknown_function_name_rejected codegen::io::streams::test_stream_wrapper_restore_reports_phps_three",
+  "text": "cargo test --test codegen_tests -- codegen::io::output_buffering::test_flags_gate_operations_with_notices codegen::io::output_buffering::test_no_buffer_operations_return_false codegen::io::output_buffering::test_ob_start_unknown_function_name_rejected codegen::io::streams::test_stream_wrapper_restore_reports_phps_three_cases --exact --nocapture 2>&1 | tail -45:  `left == right` failed left: \"locked;Notice: ob_clean(): Failed to delete buffer of default output handler (0)\\nbool(false)bool(false)\\n\" right: \"locked;Notice: ob_clean(): Failed to delete buffer of default output handler (0)\\nbool(false)\\nNotice: ob_end_flush(): Failed to send buffer of default output handler (0)\\nbool(false)\\n\" test codegen::io::output_buffering::test_flags_gate_operations_with_notices ... FAILED failures: failures: codegen::io::output_buffering::test_flags_gate_operations_with_notices codegen::io::output_buffering::test_no_buffer_operations_return_false codegen::io::output_buffering::test_ob_start_unknown_function_name_rejected codegen::io::streams::test_stream_wrapper_restore_reports_phps_three_cases test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 8449 filtered out; finished in 2.56s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "734c1d0f42032339fd926fa5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T17:02:11.790Z",
+  "stored_at": "2026-08-19T17:02:11.790Z"
+}

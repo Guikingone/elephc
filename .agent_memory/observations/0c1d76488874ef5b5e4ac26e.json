@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git checkout -q 8db8271c4 -- src tests && git status --short | grep -v codebase-memory | head -3; echo \"--- how old is it? ---\"; git checkout -q 163bd5e3b -- src tests && export CARGO_INCREMENTAL=0 && cargo test -p elephc --test codegen_tests -- fibers::scenarios::test_suspended_fiber_recursion_budget 2>&1 | grep -E \"overflowed|test result\" | head -3",
+  "summary": "git checkout -q 8db8271c4 -- src tests && git status --short | grep -v codebase-memory | head -3; echo \"--- how old is it? ---\"; git checkout -q 163bd5e3b -- src tests && export CARGO_INCREMENTAL=0 && cargo test -p elephc --test codegen_tests -- fibers::scenarios::test_suspended_fiber_recursion_budget 2>&1 | grep -E \"o",
+  "text": "git checkout -q 8db8271c4 -- src tests && git status --short | grep -v codebase-memory | head -3; echo \"--- how old is it? ---\"; git checkout -q 163bd5e3b -- src tests && export CARGO_INCREMENTAL=0 && cargo test -p elephc --test codegen_tests -- fibers::scenarios::test_suspended_fiber_recursion_budget 2>&1 | grep -E \"overflowed|test result\" | head -3: ?? .agent_memory/ --- how old is it? ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0c1d76488874ef5b5e4ac26e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:52:49.230Z",
+  "stored_at": "2026-08-21T19:52:49.231Z"
+}

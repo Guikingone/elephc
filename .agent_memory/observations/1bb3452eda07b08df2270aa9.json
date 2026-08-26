@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git worktree list | grep -E \"aece3ab|a36e969\"",
+  "summary": "git worktree list | grep -E \"aece3ab|a36e969\": /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a36e969ace98e7e68 28ac32bc47 [worktree-agent-a36e969ace98e7e68] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-aece3ab327311a17d f3dd0f343e [worktree-agent-aece3ab32731",
+  "text": "git worktree list | grep -E \"aece3ab|a36e969\": /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-a36e969ace98e7e68 28ac32bc47 [worktree-agent-a36e969ace98e7e68] /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-aece3ab327311a17d f3dd0f343e [worktree-agent-aece3ab327311a17d]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1bb3452eda07b08df2270aa9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T06:55:30.810Z",
+  "stored_at": "2026-08-16T06:55:30.812Z"
+}

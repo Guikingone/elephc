@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'user_wrapper_stream_cast' src --include='*.rs' | grep -v 'user_wrapper_cast.rs'; echo \"=== stream_select runtime file ===\"; find src -name 'stream_select*'",
+  "summary": "grep -rn 'user_wrapper_stream_cast' src --include='*.rs' | grep -v 'user_wrapper_cast.rs'; echo \"=== stream_select runtime file ===\"; find src -name 'stream_select*': eam_select.rs:323: emitter.instruction(\"bl __rt_user_wrapper_stream_cast\"); // resolve to the wrapper's underlying stream src/codegen_support/runtime/io/",
+  "text": "grep -rn 'user_wrapper_stream_cast' src --include='*.rs' | grep -v 'user_wrapper_cast.rs'; echo \"=== stream_select runtime file ===\"; find src -name 'stream_select*': eam_select.rs:323: emitter.instruction(\"bl __rt_user_wrapper_stream_cast\"); // resolve to the wrapper's underlying stream src/codegen_support/runtime/io/stream_select.rs:413: // calls __rt_stream_fd for every entry (and __rt_user_wrapper_stream_cast for a src/codegen_support/runtime/io/stream_select.rs:550: emitter.instruction(\"call __rt_user_wrapper_stream_cast\"); // resolve to the wrapper's underlying stream (or -1) src/codegen_support/runtime/io/stream_select.rs:653: emitter.instruction(\"call __rt_user_wrapper_stream_cast\"); // resolve to the wrapper's underlying stream src/codegen_support/runtime/io/mod.rs:315:pub(crate) use user_wrapper_cast::emit_user_wrapper_stream_cast; src/codegen_support/runtime/emitters/platform.rs:125: io::emit_user_wrapper_stream_cast(emitter); === stream_select runtime file === src/builtins/io/stream_select.rs src/codegen_support/runtime/io/stream_select.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "67e6762f0120d947232e82b0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:13:13.634Z",
+  "stored_at": "2026-08-14T14:13:13.635Z"
+}

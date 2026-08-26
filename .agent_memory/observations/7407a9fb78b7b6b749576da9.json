@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/byref_stress.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/byref_stress.php: <?php\n// 1. two call sites with different element types on the same callee\nfunction twice(array &$a): void { foreach ($a as $",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/byref_stress.php: <?php\n// 1. two call sites with different element types on the same callee\nfunction twice(array &$a): void { foreach ($a as $k => $v) { $a[$k] = $v; } }\n$i = [1, 2]; twice($i); echo \"1a: \", implode(\",\", $i), \"\\n\";\n$s = [\"a\", \"b\"]; twice($s); echo \"1b: \", implode(\",\", $s), \"\\n\";\n\n// 2. the caller reads the array again after the call, several ways\nfunction bump(array &$a): void { foreach ($a as $k => $v) { $a[$k] = $v + 1; } }\n$r = [10, 20]; bump($r);\necho \"2: \", $r[0], \"|\", $r[1], \"|\", count($r), \"|\", json_encode($r), \"|\", array_sum($r), \"\\n\";\n\n// 3. nested: the callee passes its own by-ref par",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7407a9fb78b7b6b749576da9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:52:07.669Z",
+  "stored_at": "2026-08-16T19:52:07.670Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn is_supported_builtin_spl_method' -A 18 src/ir_lower/program/spl_discovery.rs | head -22; echo '--- metadata methods ---'; grep -rn 'fn push_builtin_spl_metadata_methods' -A 18 src/ir_lower/ | head -22",
+  "summary": "grep -n 'fn is_supported_builtin_spl_method' -A 18 src/ir_lower/program/spl_discovery.rs | head -22; echo '--- metadata methods ---'; grep -rn 'fn push_builtin_spl_metadata_methods' -A 18 src/ir_lower/ | head -22: let Some(name) = current { src/ir_lower/program/spl_metadata.rs-20- push_builtin_spl_interface_metadata_me",
+  "text": "grep -n 'fn is_supported_builtin_spl_method' -A 18 src/ir_lower/program/spl_discovery.rs | head -22; echo '--- metadata methods ---'; grep -rn 'fn push_builtin_spl_metadata_methods' -A 18 src/ir_lower/ | head -22: let Some(name) = current { src/ir_lower/program/spl_metadata.rs-20- push_builtin_spl_interface_metadata_methods(methods, module, name); src/ir_lower/program/spl_metadata.rs-21- for method_name in required_builtin_spl_metadata_methods(name) { src/ir_lower/program/spl_metadata.rs-22- let method_key = php_method_key(method_name); src/ir_lower/program/spl_metadata.rs-23- if is_supported_builtin_spl_method(name, &method_key) { src/ir_lower/program/spl_metadata.rs-24- methods.push((name.to_string(), method_key)); src/ir_lower/program/spl_metadata.rs-25- } src/ir_lower/program/spl_metadata.rs-26- } src/ir_lower/program/spl_metadata.rs-27- current = module src/ir_lower/program/spl_metadata.rs-28- .class_infos src/ir_lower/program/spl_metadata.rs-29- .get(name) src/ir_lower/program/spl_metadata.rs-30- .and_then(|class_info| class_info.parent.as_deref()); src/ir_lower/program/spl_metadata.rs-31- }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "68263a005834cf4bd9366b00",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:11:53.534Z",
+  "stored_at": "2026-08-25T12:11:53.534Z"
+}

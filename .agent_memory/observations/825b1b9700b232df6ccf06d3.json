@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/line_reads.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/line_reads.rs: //! Purpose:\n//! Integration tests for LINE reads on a buffered stream: `fgets()` and `stream_get_line()` take\n//! their bytes from the stream's own holding area, and the answers around them",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/line_reads.rs: //! Purpose:\n//! Integration tests for LINE reads on a buffered stream: `fgets()` and `stream_get_line()` take\n//! their bytes from the stream's own holding area, and the answers around them stay php's.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - A line reader cannot ask a descriptor for the bytes it wants, because it does not know how\n//!   many there are until it finds the newline. elephc therefore asked for ONE, and paid a\n//!   `read(2)` for it: MEASURED at 538 ms over a 900 KB file of 100 000 lines where php takes\n//!   4 ms. Filling the",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "825b1b9700b232df6ccf06d3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:34:44.965Z",
+  "stored_at": "2026-08-24T17:34:44.966Z"
+}

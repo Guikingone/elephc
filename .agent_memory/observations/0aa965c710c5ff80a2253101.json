@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/keep_both.py src/ir_lower/tests/exhaustive.rs 2>&1 | grep hunk; sed -n '/^<<<<<<</,/^>>>>>>>/p' src/types/checker/builtins/mod.rs; echo '=== top_level ==='; sed -n '/^<<<<<<</,/^>>>>>>>/p' src/types/checker/driver/top_level.rs | head -25",
+  "summary": "About to run: python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/merge/keep_both.py src/ir_lo",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0aa965c710c5ff80a2253101",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:13:25.833Z",
+  "stored_at": "2026-08-26T17:13:25.834Z"
+}

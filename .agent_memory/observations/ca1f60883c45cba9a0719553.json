@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_prelude_calls.py; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 3 1 2>&1 | head -40",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_prelude_calls.py; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signatur",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_prelude_calls.py; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 3 1 2>&1 | head -40: ed(ast, false, &mut prelude_inventory); >>>>>>> origin/main ########## tests/ir_backend_smoke_test.rs (1 hunk(s)) ########## --- lines 4828..4841 --- <<<<<<< HEAD /// Verifies indexed-array deduplication returns first occurrences without mutating the source. /// /// The survivors keep their SOURCE keys, as php does — `array_unique([1,2,1,3,2])` is /// `{0:1, 1:2, 3:3}` — so the third survivor is read at `[3]`, not at the `[2]` a reindexed /// result used to put it at. ======= /// Verifies indexed-array deduplication returns first occurrences without mutating the source, /// KEEPING each survivor's original key. /// /// The reads are `$b[0] . $b[1] . $b[3]`, not `[0][1][2]`: PHP preserves the key of every /// survivor, so de-duplicating `[1,2,1,3,2]` yields keys `0, 1, 3` and there is no key 2. The /// dense reading this test used to make is the divergence it recorded. >>>>>>> origin/main",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca1f60883c45cba9a0719553",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:33:38.834Z",
+  "stored_at": "2026-08-20T17:33:38.835Z"
+}

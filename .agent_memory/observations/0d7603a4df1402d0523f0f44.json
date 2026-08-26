@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh api /repos/Guikingone/elephc/actions/jobs/94808855025/logs 2>/dev/null | sed -n '/15:45:5[0-9]/p' | head -12",
+  "summary": "gh api /repos/Guikingone/elephc/actions/jobs/94808855025/logs 2>/dev/null | sed -n '/15:45:5[0-9]/p' | head -12: 2026-08-14T15:45:57.2134580Z \u001b[35;1mTRY 1 TRMNTG\u001b[0m [> 60.000s] (─────) \u001b[35;1melephc::codegen_tests\u001b[0m \u001b[36mcodegen::eval\u001b[0m\u001b[36m::\u001b[0m\u001b[34;1mtest_eval_declared_enum_marker_interface_inheritance\u001b[0m 2026",
+  "text": "gh api /repos/Guikingone/elephc/actions/jobs/94808855025/logs 2>/dev/null | sed -n '/15:45:5[0-9]/p' | head -12: 2026-08-14T15:45:57.2134580Z \u001b[35;1mTRY 1 TRMNTG\u001b[0m [> 60.000s] (─────) \u001b[35;1melephc::codegen_tests\u001b[0m \u001b[36mcodegen::eval\u001b[0m\u001b[36m::\u001b[0m\u001b[34;1mtest_eval_declared_enum_marker_interface_inheritance\u001b[0m 2026-08-14T15:45:57.2184030Z \u001b[35;1m TRY 1 TMT\u001b[0m [ 60.007s] (─────) \u001b[35;1melephc::codegen_tests\u001b[0m \u001b[36mcodegen::eval\u001b[0m\u001b[36m::\u001b[0m\u001b[34;1mtest_eval_declared_enum_marker_interface_inheritance\u001b[0m 2026-08-14T15:45:57.2229390Z \u001b[35;1m \u001b[0m \u001b[35;1mstdout\u001b[0m \u001b[35;1m───\u001b[0m 2026-08-14T15:45:57.2229840Z 2026-08-14T15:45:57.2230130Z running 1 test\u001b[0m 2026-08-14T15:45:57.2230430Z 2026-08-14T15:45:57.2230640Z (test \u001b[31;1mtimed out\u001b[0m) 2026-08-14T15:45:57.2231010Z",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0d7603a4df1402d0523f0f44",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T16:43:10.911Z",
+  "stored_at": "2026-08-14T16:43:10.912Z"
+}

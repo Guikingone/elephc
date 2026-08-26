@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/ ; echo \"=== sweep scripts ===\"; ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/ | grep -i sweep",
+  "summary": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/ ; echo \"=== sweep scripts ===\"; ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c",
+  "text": "ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/ ; echo \"=== sweep scripts ===\"; ls /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/ | grep -i sweep:  fix_file_labels.py fix_nullsafe.py fix_shortcircuit_test.py fix_slot_size.py flk.php hrh_cases hrh_diff hrh_real mark_unreconciled.py migrate_ob_tests.py migrate_restore_test.py move_probe_field.py msg_diag.txt msg_fixup.txt msg_merge.txt named_work named_work7 named_work8 obflags.php obj php-src phpt_sweep.py port_type_system_tests.py pre_merge_head.txt probe2 probe2.php propnull reorder_byref_checks.py resolve_emitters.py resolve_fixed.py resolve_fopen.py resolve_generated.sh resolve_hash_sort.py resolve_out_params.py resolve_phar_read.py resolve_prelude_calls.py resolve_prelude_tests.py resolve_side.py resolve_union.py resolve_zip.py rewrite_probe_test.py route_ob_notices.py sc.php size_conflicts.sh srv suite_batches.sh suite_verdicts.txt undef_matrix undef_shapes undef_why undefined_variables.rs undefvar untangle_stat_tests.py update_oom_card.py uv verify_tests === sweep scripts ===",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "095f7d2956bede3fdf86368f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:09:12.786Z",
+  "stored_at": "2026-08-23T07:09:12.786Z"
+}

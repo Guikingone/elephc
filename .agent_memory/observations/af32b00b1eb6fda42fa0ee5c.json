@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/manifest_provenance.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/manifest_provenance.py: \"\"\"Were the three target manifests captured on three hosts, or on one?\n\nIf the linux manifests were really produced by a gl",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/manifest_provenance.py: \"\"\"Were the three target manifests captured on three hosts, or on one?\n\nIf the linux manifests were really produced by a glibc php, then whatever they say about GLOB_*\nis the oracle and my memory of glob.h is worthless. If they are a macOS capture relabelled, the\nGLOB_* values are macOS values wearing a linux filename — and forwarding them to glibc's glob()\nwould mean something else entirely on the target CI actually runs.\n\nProvenance is decidable from the files themselves: two independent captures of different\nplatforms must disagree SOMEWHERE, and the places they disagree say which platform ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "af32b00b1eb6fda42fa0ee5c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:52:37.062Z",
+  "stored_at": "2026-08-22T08:52:37.063Z"
+}

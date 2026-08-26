@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"inject_if_used\" tests/codegen/support/compiler.rs",
+  "summary": "grep -n \"inject_if_used\" tests/codegen/support/compiler.rs: 239: elephc::pdo_prelude::inject_if_used_for_version(resolved, false, php_version); 240: let resolved = elephc::tz_prelude::inject_if_used(resolved, false); 241: let resolved = elephc::list_id_prelude::inject_if_used(resolved); 242: let resolved = elephc::var_",
+  "text": "grep -n \"inject_if_used\" tests/codegen/support/compiler.rs: 239: elephc::pdo_prelude::inject_if_used_for_version(resolved, false, php_version); 240: let resolved = elephc::tz_prelude::inject_if_used(resolved, false); 241: let resolved = elephc::list_id_prelude::inject_if_used(resolved); 242: let resolved = elephc::var_export_prelude::inject_if_used(resolved); 243: let resolved = elephc::image_prelude::inject_if_used(resolved, false); 244: let resolved = elephc::dir_prelude::inject_if_used(resolved); 245: let resolved = elephc::hash_prelude::inject_if_used(resolved, false); 246: let resolved = elephc::scanf_prelude::inject_if_used(resolved);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "efaf2346f915ccc90a90e4f9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:51:08.739Z",
+  "stored_at": "2026-08-16T17:51:08.740Z"
+}

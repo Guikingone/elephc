@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '555,575p' scripts/docs/elephc_builtins/extract.py; grep -n \"_precise_return_type\" -A25 scripts/docs/elephc_builtins/extract.py | head -30",
+  "summary": "sed -n '555,575p' scripts/docs/elephc_builtins/extract.py; grep -n \"_precise_return_type\" -A25 scripts/docs/elephc_builtins/extract.py | head -30: ) home_rel = home_map.get(canonical) if aot_support.get(\"kind\") == \"registry\" and home_rel is None: raise ValueError(f\"registry builtin {canonical!r} has no single-source ho",
+  "text": "sed -n '555,575p' scripts/docs/elephc_builtins/extract.py; grep -n \"_precise_return_type\" -A25 scripts/docs/elephc_builtins/extract.py | head -30: ) home_rel = home_map.get(canonical) if aot_support.get(\"kind\") == \"registry\" and home_rel is None: raise ValueError(f\"registry builtin {canonical!r} has no single-source home file\") return_type = _normalize_type(entry.get(\"returns\", \"mixed\")) # The registry types non-scalar returns as `Mixed`; recover the precise # type from the home file's `check` hook when possible. if return_type == \"mixed\" and home_rel: precise = parse_home_check_return(read(repo / home_rel), resolve_check_body) if precise: return_type = precise if canonical in RETURN_TYPE_OVERRIDES: return_type = RETURN_TYPE_OVERRIDES[canonical] if home_rel is not None: lowering = resolve_registry_lowering(repo, read, entry, home_rel) else: lowering = resolve_non_registry_lowering( repo, read, dispatch, lowering_dir, canonical, aot_support )",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f0e601b6088fad9aa492b584",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:06:04.040Z",
+  "stored_at": "2026-08-18T11:06:04.041Z"
+}

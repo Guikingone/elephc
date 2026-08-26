@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '92,145p' src/builtins/string/sscanf.rs",
+  "summary": "sed -n '92,145p' src/builtins/string/sscanf.rs: ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> { let operands = vec![call.operand(0)?, call.operand(1)?]; let name = ctx.intern_function_name(function); Ok(ctx.emit_value( Op::Call, operands, Some(Immediate::Data(name)), call.result_type.clone(), Op::Call.default_",
+  "text": "sed -n '92,145p' src/builtins/string/sscanf.rs: ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> { let operands = vec![call.operand(0)?, call.operand(1)?]; let name = ctx.intern_function_name(function); Ok(ctx.emit_value( Op::Call, operands, Some(Immediate::Data(name)), call.result_type.clone(), Op::Call.default_effects(), Some(call.span), )) } /// Refuses the `scanf` by-ref `$vars` output form for `sscanf()`/`fscanf()`. /// /// Shared by both builtins so the two stay on one wording. `arg_count` is the full argument /// count including the two leading required parameters, so anything past 2 is a `$vars` entry. pub(crate) fn reject_by_ref_vars( name: &str, arg_count: usize, span: crate::span::Span, ) -> Result<(), CompileError> { if arg_count <= 2 { return Ok(()); } Err(CompileError::new( span, &format!( \"{}(): the by-ref $vars output form is not supported; \\ call it with only the format and read the returned array\", name ), )) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "259d753b891633ef5e88959d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:25:45.596Z",
+  "stored_at": "2026-08-18T10:25:45.597Z"
+}

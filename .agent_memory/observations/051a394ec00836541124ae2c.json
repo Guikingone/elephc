@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_globals_array_alias_keeps_receiver_method_body\" -B 12 -A 30 tests/codegen/optimizer/declaration_reachability.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_globals_array_alias_keeps_receiver_method_body\" -B 12 -A 30 tests/codegen/optimizer/declaration_reachability.rs: ile_source_to_asm_with_options( 226- \"<?php 227- class A { public function foo(): string { ret",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_globals_array_alias_keeps_receiver_method_body\" -B 12 -A 30 tests/codegen/optimizer/declaration_reachability.rs: ile_source_to_asm_with_options( 226- \"<?php 227- class A { public function foo(): string { return 'A'; } } 228- class B extends A { public function foo(): string { return 'B'; } } 229- function later(): void { 230- $GLOBALS['receiver'] = new B(); 231- } 232- $receiver = new A(); 233- later(); 234- echo $receiver->foo(); 235- \", 236- &dir, 237- 8_388_608, 238- false, 239- false, 240- ); 241- assert!( 242- user_asm.contains(&elephc::names::method_symbol(\"B\", \"foo\")), 243- \"the `$GLOBALS` alias must retain B::foo even before runtime alias semantics are available\" 244- ); 245- let _ = fs::remove_dir_all(&dir); 246-} 247- 248-/// Verifies a by-ref callee can replace a differently named caller receiver safely. 249-#[test] 250-fn test_by_ref_parameter_keeps_runtime_receiver_method_body() { 251- let out = compile_and_run( 252- \"<?php 253- class A { public function foo(): string { return 'A'; } }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "051a394ec00836541124ae2c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T14:41:37.805Z",
+  "stored_at": "2026-08-23T14:41:37.806Z"
+}

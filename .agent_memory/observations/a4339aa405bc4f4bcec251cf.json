@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '28,45p' src/codegen_support/runtime/arrays/undefined_array_key_warning.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '28,45p' src/codegen_support/runtime/arrays/undefined_array_key_warning.rs: const OFFSET_ON_TRUE: &str = \"Warning: Trying to access array offset on true\\n\"; const OFFSET_ON_INT: &str = \"Warning: Trying to access array",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '28,45p' src/codegen_support/runtime/arrays/undefined_array_key_warning.rs: const OFFSET_ON_TRUE: &str = \"Warning: Trying to access array offset on true\\n\"; const OFFSET_ON_INT: &str = \"Warning: Trying to access array offset on int\\n\"; const OFFSET_ON_FLOAT: &str = \"Warning: Trying to access array offset on float\\n\"; const OFFSET_ON_RESOURCE: &str = \"Warning: Trying to access array offset on resource\\n\"; /// Emits `__rt_warn_undefined_array_key_int` for the active target. pub fn emit_undefined_array_key_warning(emitter: &mut Emitter) { if emitter.target.arch == Arch::X86_64 { emit_undefined_array_key_warning_x86_64(emitter); emit_undefined_array_key_string_warning_x86_64(emitter); emit_array_offset_on_null_warning_x86_64(emitter); return; } emitter.blank(); emitter.comment(\"--- runtime: undefined_array_key_warning ---\"); emitter.label_global(\"__rt_warn_undefined_array_key_int\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a4339aa405bc4f4bcec251cf",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:54:16.566Z",
+  "stored_at": "2026-08-24T08:54:16.566Z"
+}

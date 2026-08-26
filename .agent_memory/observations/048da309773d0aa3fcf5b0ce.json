@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"LOCK_EX\" -B 5 -A 5 src/types/checker/driver/init.rs | head -25",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"LOCK_EX\" -B 5 -A 5 src/types/checker/driver/init.rs | head -25: 84- constants.insert(\"FNM_CASEFOLD\".to_string(), PhpType::Int); 85- constants.insert(\"STDIN\".to_string(), PhpType::stream_resource()); 86- constants.in",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"LOCK_EX\" -B 5 -A 5 src/types/checker/driver/init.rs | head -25: 84- constants.insert(\"FNM_CASEFOLD\".to_string(), PhpType::Int); 85- constants.insert(\"STDIN\".to_string(), PhpType::stream_resource()); 86- constants.insert(\"STDOUT\".to_string(), PhpType::stream_resource()); 87- constants.insert(\"STDERR\".to_string(), PhpType::stream_resource()); 88- constants.insert(\"LOCK_SH\".to_string(), PhpType::Int); 89: constants.insert(\"LOCK_EX\".to_string(), PhpType::Int); 90- constants.insert(\"LOCK_UN\".to_string(), PhpType::Int); 91- constants.insert(\"LOCK_NB\".to_string(), PhpType::Int); 92- for (name, _value) in ARRAY_INT_CONSTANTS { 93- constants.insert((*name).to_string(), PhpType::Int); 94- }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "048da309773d0aa3fcf5b0ce",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:18:33.698Z",
+  "stored_at": "2026-08-23T09:18:33.698Z"
+}

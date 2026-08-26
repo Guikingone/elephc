@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"^__rt_sprintf:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rt_aarch64.s; grep -rn \"vsprintf\" src/codegen_support/runtime/strings/*.rs | grep -i \"sp\\b\\|stack\\|pop\\|clean\" | head -10",
+  "summary": "grep -n \"^__rt_sprintf:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rt_aarch64.s; grep -rn \"vsprintf\" src/codegen_support/runtime/strings/*.rs | grep -i \"sp\\b\\|stack\\|pop\\|clean\" | head -10: 11827",
+  "text": "grep -n \"^__rt_sprintf:\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rt_aarch64.s; grep -rn \"vsprintf\" src/codegen_support/runtime/strings/*.rs | grep -i \"sp\\b\\|stack\\|pop\\|clean\" | head -10: 11827:__rt_sprintf:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7c6af1ce0e27ecb4e801e0ee",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:58:57.627Z",
+  "stored_at": "2026-08-21T15:58:57.628Z"
+}

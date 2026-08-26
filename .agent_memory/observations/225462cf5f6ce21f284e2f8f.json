@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filter_remove_remainder.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filter_remove_remainder.py: \"\"\"After `stream_filter_remove()`, php serves the bytes the filter had already pulled. elephc serves none.\n\n    $h = fo",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/filter_remove_remainder.py: \"\"\"After `stream_filter_remove()`, php serves the bytes the filter had already pulled. elephc serves none.\n\n    $h = fopen(\"f.txt\", \"r\");              // \"abcdef\"\n    stream_filter_append($h, \"string.toupper\", STREAM_FILTER_READ);\n    fread($h, 3);                          // both: \"ABC\"\n    stream_filter_remove($f);              // both: true\n    fread($h, 3);                          // php: \"DEF\"   elephc: \"\"\n\nThe filter read the WHOLE file to produce three bytes, so three filtered bytes were left buffered.\nphp keeps that buffer across the removal; the question is whether elephc drops it, o",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "225462cf5f6ce21f284e2f8f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:01:57.860Z",
+  "stored_at": "2026-08-21T18:01:57.860Z"
+}

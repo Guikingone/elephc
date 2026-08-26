@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls src/codegen_support/runtime/arrays/",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls src/codegen_support/runtime/arrays/: oc.rs heap_debug_check_live.rs heap_debug_fail.rs heap_debug_report.rs heap_debug_validate_free_list.rs heap_free.rs heap_kind.rs in_array_mixed_int.rs incref.rs int_checked_binops.rs ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; ls src/codegen_support/runtime/arrays/: oc.rs heap_debug_check_live.rs heap_debug_fail.rs heap_debug_report.rs heap_debug_validate_free_list.rs heap_free.rs heap_kind.rs in_array_mixed_int.rs incref.rs int_checked_binops.rs int_pow_checked.rs iterable_unsupported_kind.rs iterable_write_stdout.rs min_max_container.rs mixed_abs.rs mixed_cast_array.rs mixed_cast_bool.rs mixed_cast_float.rs mixed_cast_int.rs mixed_cast_string.rs mixed_clone.rs mixed_count.rs mixed_free_deep.rs mixed_from_value.rs mixed_instanceof.rs mixed_intval_base.rs mixed_is_empty.rs mixed_numeric_binops.rs mixed_numeric_pow.rs mixed_strict_eq.rs mixed_unbox.rs mixed_write_stdout.rs mod.rs nan_bool_coercion_warning.rs natcmp.rs natsort.rs object_free_deep.rs random_u32.rs random_uniform.rs random_uniform64.rs range.rs refcount.rs shuffle.rs slice_bounds.rs sort_int.rs sort_mixed.rs sort_str.rs undefined_array_key_warning.rs usort.rs usort_str.rs value_error.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f34b2abbc71dbb9bbc611f0b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:47:39.295Z",
+  "stored_at": "2026-08-22T16:47:39.295Z"
+}

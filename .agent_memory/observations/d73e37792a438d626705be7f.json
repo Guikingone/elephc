@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='tests/ir_backend_smoke_test.rs'\ns=open(p).read()\nold = '        \"aa\\\\n|aa|FE|8|7|\"'\nnew = '        \"aa\\\\n|bb|FE|8|7|\"'\nassert s.count(old)==1\ns=s.replace(old,new)\nold2 = \"/// Verifies `SplFileObject` lightweight state getters and byte reads lower to EIR.\"\nnew2 = (\"/// Verifies `SplFileObject` lightweight state getters and byte reads lower to EIR.\\n\"\n        \"///\\n\"\n        \"/// The `fgetc()` pair reads `bb`, not `aa`: `getCurrentLine()` is php's ALIAS of `fgets()`\\n\"\n        \"/// and CONSUMES the first line. This assertion read `aa` while elephc answered the cached\\n\"… [+316 chars truncated]",
+  "summary": "python3 - <<'PY'\np='tests/ir_backend_smoke_test.rs'\ns=open(p).read()\nold = '        \"aa\\\\n|aa|FE|8|7|\"'\nnew = '        \"aa\\\\n|bb|FE|8|7|\"'\nassert s.count(old)==1\ns=s.replace(old,new)\nold2 = \"/// Verifies `SplFileObject` lightweight state getters and byte reads lower to EIR.\"\nnew2 = (\"/// Verifies `SplFileObject` lightw",
+  "text": "python3 - <<'PY'\np='tests/ir_backend_smoke_test.rs'\ns=open(p).read()\nold = '        \"aa\\\\n|aa|FE|8|7|\"'\nnew = '        \"aa\\\\n|bb|FE|8|7|\"'\nassert s.count(old)==1\ns=s.replace(old,new)\nold2 = \"/// Verifies `SplFileObject` lightweight state getters and byte reads lower to EIR.\"\nnew2 = (\"/// Verifies `SplFileObject` lightweight state getters and byte reads lower to EIR.\\n\"\n        \"///\\n\"\n        \"/// The `fgetc()` pair reads `bb`, not `aa`: `getCurrentLine()` is php's ALIAS of `fgets()`\\n\"\n        \"/// and CONSUMES the first line. This assertion read `aa` while elephc answered the cached\\n\"\n        \"/// current line without advancing the stream — measured on `php -n` 8.5.6, this exact\\n\"\n        \"/// program prints `aa\\\\n|bb|FE|8|7|`.\")\nassert s.count(old2)==1\ns=s.replace(old2,new2)\nopen(p,'w').write(s)\nprint('smoke test corrected')\nPY\ncargo build 2>&1 | rg \"^error|^warning\" -A6 | head -12; echo BUILD_DONE: smoke test corrected BUILD_DONE",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d73e37792a438d626705be7f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T18:42:04.878Z",
+  "stored_at": "2026-08-16T18:42:04.879Z"
+}

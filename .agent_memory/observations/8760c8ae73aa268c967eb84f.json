@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,40p' tests/codegen/io.rs",
+  "summary": "sed -n '1,40p' tests/codegen/io.rs: //! Purpose: //! Groups the I/O integration test submodules into the parent suite. //! //! Called from: //! - `cargo test` through Rust's test harness. //! //! Key details: //! - Submodules group focused fixtures for printing, files, streams, filesystem, misc, and related suites. use",
+  "text": "sed -n '1,40p' tests/codegen/io.rs: //! Purpose: //! Groups the I/O integration test submodules into the parent suite. //! //! Called from: //! - `cargo test` through Rust's test harness. //! //! Key details: //! - Submodules group focused fixtures for printing, files, streams, filesystem, misc, and related suites. use crate::support::*; #[path = \"io/printing.rs\"] mod printing; #[path = \"io/output_buffering.rs\"] mod output_buffering; #[path = \"io/files.rs\"] mod files; #[path = \"io/streams.rs\"] mod compress_wrapper; mod gz_streams; mod streams; #[path = \"io/filesystem.rs\"] mod filesystem; #[path = \"io/misc.rs\"] mod misc; #[path = \"io/stat_ext.rs\"] mod stat_ext; #[path = \"io/paths/mod.rs\"] mod paths; #[path = \"io/modify.rs\"] mod modify; #[path = \"io/streams_ext.rs\"] mod streams_ext; #[path = \"io/stream_context_propagation.rs\"] mod stream_context_propagation; #[path = \"io/symlinks.rs\"] mod symlinks;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8760c8ae73aa268c967eb84f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:23:41.605Z",
+  "stored_at": "2026-08-21T12:23:41.605Z"
+}

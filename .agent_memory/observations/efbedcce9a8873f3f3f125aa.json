@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git -c commit.gpgsign=false commit -q -F - <<'MSG'\nfix(io): `php://temp` is at EOF one read before every other stream, and elephc never was\n\nMEASURED on `php -n` 8.5.6 over `\"a\\nbb\\n\"`: the `fgets()` that returns the final `\"bb\\n\"`\nleaves `feof()` TRUE on `php://temp` and FALSE on `php://memory` and on a plain file.\n`stream_get_line()` agrees with `fgets()`. `fread()` and `fgetc()` never differ, on any of\nthe three. It is not a size effect either — a first line of 9001 bytes, well past the\nchunk, answers exactly the same way.\n\nThe reason is php-src's own plumbing rather than a rule about tempo… [+978 chars truncated]",
+  "summary": "About to run: git -c commit.gpgsign=false commit -q -F - <<'MSG' fix(io): `php://temp` is at EOF one read before every other stream, and elephc never was MEASURED on `php -n` 8.5.6 over `\"a\\nbb\\n\"`: the `fgets()` t",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "efbedcce9a8873f3f3f125aa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T14:37:19.037Z",
+  "stored_at": "2026-08-25T14:37:19.037Z"
+}

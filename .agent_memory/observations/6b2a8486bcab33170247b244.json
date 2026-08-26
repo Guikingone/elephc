@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; ./flock3 2>&1 | tail -4",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; ./flock3 2>&1 | tail -4: data wrapper=RFC2397 ex=false un=false zlib wrapper=ZLIB ex=true un=true stdout-c wrapper=PHP ex=false un=false filtered wr",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; ./flock3 2>&1 | tail -4: data wrapper=RFC2397 ex=false un=false zlib wrapper=ZLIB ex=true un=true stdout-c wrapper=PHP ex=false un=false filtered wrapper=plainfile ex=true un=true",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6b2a8486bcab33170247b244",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:30:34.811Z",
+  "stored_at": "2026-08-22T17:30:34.812Z",
+  "low_signal": true
+}

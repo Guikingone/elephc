@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub(super) fn\\|__rt_[a-z_]*wrapper\" src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs | head -20",
+  "summary": "grep -n \"pub(super) fn\\|__rt_[a-z_]*wrapper\" src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs | head -20: emitter, \"__rt_user_wrapper_url_stat\"); 251: abi::emit_call_label(ctx.emitter, \"__rt_user_wrapper_url_stat\"); 284:pub(super) fn lower_path_stat_with_wrapper( 300:/// The wrapper arm needs no boxing: `__rt_use",
+  "text": "grep -n \"pub(super) fn\\|__rt_[a-z_]*wrapper\" src/codegen/lower_inst/builtins/io/wrapper_dispatch.rs | head -20: emitter, \"__rt_user_wrapper_url_stat\"); 251: abi::emit_call_label(ctx.emitter, \"__rt_user_wrapper_url_stat\"); 284:pub(super) fn lower_path_stat_with_wrapper( 300:/// The wrapper arm needs no boxing: `__rt_user_wrapper_url_stat` already returns the boxed 319: abi::emit_call_label(ctx.emitter, \"__rt_user_wrapper_url_stat\"); 339: abi::emit_call_label(ctx.emitter, \"__rt_user_wrapper_url_stat\"); 362:pub(super) fn lower_filesize_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { 389:pub(super) fn lower_is_file_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { 405:pub(super) fn emit_is_file_wrapper_dispatch(ctx: &mut FunctionContext<'_>) { 411:/// `__rt_user_wrapper_path_op` serves unlink/rename/mkdir/rmdir and the whole `stream_metadata` 416:pub(super) fn emit_publish_missing_hook_message( 458:pub(super) fn emit_mkdir_wrapper_dispatch(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f777c45defdaaff7878c3381",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:51:48.694Z",
+  "stored_at": "2026-08-21T17:51:48.694Z"
+}

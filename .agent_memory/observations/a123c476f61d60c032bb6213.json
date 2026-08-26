@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "On en est où?",
+  "summary": "On en est où?",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a123c476f61d60c032bb6213",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T21:29:46.647Z",
+  "stored_at": "2026-08-14T21:29:46.647Z",
+  "low_signal": true
+}

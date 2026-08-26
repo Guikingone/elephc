@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/switch_paths.py",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/switch_paths.py: stat.rs: 9 stat_array.rs: 4 opendir.rs: 2 scandir.rs: 2 file_get_contents.rs: 2 file_put_contents.rs: 2 fs.rs: 13 stat_ext.rs: 7 mo",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/switch_paths.py: stat.rs: 9 stat_array.rs: 4 opendir.rs: 2 scandir.rs: 2 file_get_contents.rs: 2 file_put_contents.rs: 2 fs.rs: 13 stat_ext.rs: 7 modify.rs: 8 modify_x86_64.rs: 8 streams_ext.rs: 2 fopen.rs: 3 total 62",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "030f4005df8d8e4d11a4b6fe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:15:44.351Z",
+  "stored_at": "2026-08-24T18:15:44.352Z"
+}

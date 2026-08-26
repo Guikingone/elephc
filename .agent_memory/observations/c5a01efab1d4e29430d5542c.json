@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git show 4c3f18fc0 --stat -- src/codegen/lower_inst/builtins/arrays/sort_dispatch.rs tests/codegen/arrays/indexed/sorting.rs; echo \"--- what the merge did to the refusal ---\"; git show 4c3f18fc0 -- src/codegen/lower_inst/builtins/arrays/sort_dispatch.rs | grep -E \"^[+-].*krsort\" | head -20",
+  "summary": "git show 4c3f18fc0 --stat -- src/codegen/lower_inst/builtins/arrays/sort_dispatch.rs tests/codegen/arrays/indexed/sorting.rs; echo \"--- what the merge did to the refusal ---\"; git show 4c3f18fc0 -- src/codegen/lower_inst/builtins/arrays/sort_dispatch.rs | grep -E \"^[+-].*krsort\" | head -20: other side was kept. The res",
+  "text": "git show 4c3f18fc0 --stat -- src/codegen/lower_inst/builtins/arrays/sort_dispatch.rs tests/codegen/arrays/indexed/sorting.rs; echo \"--- what the merge did to the refusal ---\"; git show 4c3f18fc0 -- src/codegen/lower_inst/builtins/arrays/sort_dispatch.rs | grep -E \"^[+-].*krsort\" | head -20: other side was kept. The result was an undefined symbol at LINK time, invisible to `cargo check`, found by following a dead-code warning rather than silencing it. Counters are measured on the merged catalogue, not taken from either side: 14 non-registry contracts (ours said 15, main 13) and 544 AOT registry entries (ours 543, main 531) — one MORE than either, because main also promotes `get_object_vars` into the registry. Left deliberately unreconciled, and marked as such rather than deleted: both branches grew a full stat dispatcher, and `stat_ops.rs` routes to this one. Removing upstream's would revert its work exactly as silently as taking it would have reverted ours. .../lower_inst/builtins/arrays/sort_dispatch.rs | 109 ++++- tests/codegen/arrays/indexed/sorting.rs | 451 ++++++++++++++++++++- 2 files changed, 555 insertions(+), 5 deletions(-) --- what the merge did to the refusal ---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c5a01efab1d4e29430d5542c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:23:28.079Z",
+  "stored_at": "2026-08-21T07:23:28.080Z"
+}

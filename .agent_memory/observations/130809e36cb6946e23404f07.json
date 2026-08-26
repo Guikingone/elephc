@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/add_stat_copy_tests.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/add_stat_copy_tests.py: \"\"\"Pins php's stat key ORDER on both builders, and copy() from a wrapper source.\n\nThe order test walks the keys rather tha",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/add_stat_copy_tests.py: \"\"\"Pins php's stat key ORDER on both builders, and copy() from a wrapper source.\n\nThe order test walks the keys rather than asserting on values: the values are the filesystem's and\nchange every run, while the order is php's and does not.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path(\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n)\np = ROOT / 'tests/codegen/io/streams.rs'\n\nTESTS = r'''\n\n/// Verifies `stat()` lists every NUMERIC key before the named ones, as php does.\n///\n/// php fills all thirteen numeric keys first and only then the named ones. The",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "130809e36cb6946e23404f07",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:28:46.881Z",
+  "stored_at": "2026-08-22T20:28:46.882Z"
+}

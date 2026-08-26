@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "pgrep -fl cargo",
+  "summary": "pgrep -fl cargo: B NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'CARGO_BUILD_JOBS=1 cargo test --test ir_backend_smoke_test -j 1 2>&1 | grep -E \"^test result|FAILED|^error\" | head -3' < /dev/null && pwd -P >| /tmp/claude-3a",
+  "text": "pgrep -fl cargo: B NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'CARGO_BUILD_JOBS=1 cargo test --test ir_backend_smoke_test -j 1 2>&1 | grep -E \"^test result|FAILED|^error\" | head -3' < /dev/null && pwd -P >| /tmp/claude-3aee-cwd 65083 /Users/guillaumeloulier/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test --test ir_backend_smoke_test -j 1 65084 /bin/zsh -c source /Users/guillaumeloulier/.claude/shell-snapshots/snapshot-zsh-1786893353268-m636g5.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'CARGO_BUILD_JOBS=1 cargo test --test ir_backend_smoke_test -j 1 2>&1 | grep -E \"^test result|FAILED|^error\" | head -3' < /dev/null && pwd -P >| /tmp/claude-3aee-cwd",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "98548246471e35fdd283695b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:29:36.461Z",
+  "stored_at": "2026-08-16T15:29:36.462Z"
+}

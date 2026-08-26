@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps -o pid,etime,%cpu,comm -ax 2>/dev/null | grep \"streams-csv-signature.*codegen_tests\" | head -1; tail -20 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bvrw8toul.output 2>/dev/null",
+  "summary": "ps -o pid,etime,%cpu,comm -ax 2>/dev/null | grep \"streams-csv-signature.*codegen_tests\" | head -1; tail -20 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bvrw8toul.output 2>/dev/null: 25886 12:24 303.0 /User",
+  "text": "ps -o pid,etime,%cpu,comm -ax 2>/dev/null | grep \"streams-csv-signature.*codegen_tests\" | head -1; tail -20 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bvrw8toul.output 2>/dev/null: 25886 12:24 303.0 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/deps/codegen_tests-02c27ab574c0dc88",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e1ca821a445fc01e92b0156c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:09:56.042Z",
+  "stored_at": "2026-08-21T20:09:56.042Z"
+}

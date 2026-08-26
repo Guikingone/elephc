@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"false\\|Bool\" src/builtins/io/stream_get_line.rs | head -20",
+  "summary": "grep -rn \"false\\|Bool\" src/builtins/io/stream_get_line.rs | head -20: src/builtins/io/stream_get_line.rs:9://! which is how the registry spells PHP's `string|false`: the call reports false once the src/builtins/io/stream_get_line.rs:25:/// Validates the stream resource argument and returns `Mixed` for the `string|false",
+  "text": "grep -rn \"false\\|Bool\" src/builtins/io/stream_get_line.rs | head -20: src/builtins/io/stream_get_line.rs:9://! which is how the registry spells PHP's `string|false`: the call reports false once the src/builtins/io/stream_get_line.rs:25:/// Validates the stream resource argument and returns `Mixed` for the `string|false` EOF pattern.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "55640eb6f40d2cacf84fdb1e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:20:55.699Z",
+  "stored_at": "2026-08-14T14:20:55.699Z"
+}

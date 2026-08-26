@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"sscanf\" docs/php/builtins/string/sscanf.md 2>/dev/null | head -5; ls docs/php/builtins/string/sscanf.md docs/internals/builtins/string/sscanf.md 2>&1 | head",
+  "summary": "About to run: grep -rn \"sscanf\" docs/php/builtins/string/sscanf.md 2>/dev/null | head -5; ls docs/php/builtins/string/sscanf.md docs/internals/builtins/string/sscanf.md 2>&1 | head",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b717c4c71f7d04c94b97d00a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:33:58.445Z",
+  "stored_at": "2026-08-18T10:33:58.446Z"
+}

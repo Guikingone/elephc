@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nforeach ([\"convert.iconv.\", \"convert.iconv.UTF-8\", \"convert.iconv.UTF-8/\", \"convert.iconv./UTF-8\", \"convert.iconv.UTF-8/ISO-8859-1\", \"convert.iconv.nope/alsonope\"] as $n) {\\n  $h = fopen(\"php://memory\", \"w+\");\\n  $r = @stream_filter_append($h, $n, STREAM_FILTER_WRITE);\\n  echo $n, \" => \", var_export($r !== false, true), \"\\\\n\";\\n  fclose($h);\\n}\\n' > rm31.php && php -n rm31.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nforeach ([\"convert.iconv.\", \"convert.iconv.UTF-8\", \"convert.iconv.UTF-8/\", \"convert.iconv./UTF-8\", \"convert.iconv.UTF-8/ISO-8859",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nforeach ([\"convert.iconv.\", \"convert.iconv.UTF-8\", \"convert.iconv.UTF-8/\", \"convert.iconv./UTF-8\", \"convert.iconv.UTF-8/ISO-8859-1\", \"convert.iconv.nope/alsonope\"] as $n) {\\n  $h = fopen(\"php://memory\", \"w+\");\\n  $r = @stream_filter_append($h, $n, STREAM_FILTER_WRITE);\\n  echo $n, \" => \", var_export($r !== false, true), \"\\\\n\";\\n  fclose($h);\\n}\\n' > rm31.php && php -n rm31.php: convert.iconv. => false convert.iconv.UTF-8 => false convert.iconv.UTF-8/ => true convert.iconv./UTF-8 => true convert.iconv.UTF-8/ISO-8859-1 => true convert.iconv.nope/alsonope => false",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "deaabef53cf534bd8be6f8dc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:50:51.785Z",
+  "stored_at": "2026-08-18T09:50:51.786Z"
+}

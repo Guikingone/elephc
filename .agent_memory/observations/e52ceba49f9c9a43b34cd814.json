@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== php:\"; cat filterdata_p.txt; echo \"=== elephc (warnings stripped):\"; rtk proxy grep -v \"^Warning\" filterdata_e.txt",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== php:\"; cat filterdata_p.txt; echo \"=== elephc (warnings stripped):\"; rtk proxy grep -v \"^Warning\" filterdata_e.txt: === php: small qp",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && echo \"=== php:\"; cat filterdata_p.txt; echo \"=== elephc (warnings stripped):\"; rtk proxy grep -v \"^Warning\" filterdata_e.txt: === php: small qp-decode => len=3 small toupper => len=3 no filter => len=3 ghsa shape => len=8190 ghsa shape short => len=11 memory + filter => len=8190 === elephc (warnings stripped): small qp-decode => len=3 small toupper => len=3 no filter => FALSE ghsa shape => FALSE",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e52ceba49f9c9a43b34cd814",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T10:00:34.097Z",
+  "stored_at": "2026-08-17T10:00:34.097Z"
+}

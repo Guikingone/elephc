@@ -1426,6 +1426,10 @@ impl RuntimeFnId {
                 // back is independently owned and never aliases the source object's
                 // storage — the caller may release it like any other temporary.
                 | RuntimeFnId::ElephcObjectPropValue
+                // Both disk-space helpers box their float-or-false answer through
+                // `__rt_mixed_from_value`; the fresh cell cannot alias the directory string.
+                | RuntimeFnId::DiskFreeSpace
+                | RuntimeFnId::DiskTotalSpace
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents

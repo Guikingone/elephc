@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nfor rel in ('docs/php/streams.md', 'docs/php/system-and-io.md'):\n    p = ROOT / rel\n    t = p.read_text()\n    before = t\n    t = t.replace(r\"\"\"string $enclosure = '\\\"'\"\"\", \"\"\"string $enclosure = '\"'\"\"\")\n    t = t.replace(r'''string $eol = \\\"\\\\n\\\"''', r'''string $eol = \"\\n\"''')\n    if t != before:\n        p.write_text(t)\n        print(f'{rel}: escaping corrected')\n    else:\n        print(f'{rel}: nothing to correct')\nPY\ngrep -n \"fgetcsv()\" docs/php/s… [+70 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nfor rel in ('docs/php/streams.md', 'docs/php/system-and-io.md'):\n    p = ROOT / rel\n    t = p.read_text()\n    before = t\n    t = t.replace(r\"\"\"string $enclosure = '\\\"'\"\"\", \"",
+  "text": "python3 - <<'PY'\nimport pathlib\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\nfor rel in ('docs/php/streams.md', 'docs/php/system-and-io.md'):\n    p = ROOT / rel\n    t = p.read_text()\n    before = t\n    t = t.replace(r\"\"\"string $enclosure = '\\\"'\"\"\", \"\"\"string $enclosure = '\"'\"\"\")\n    t = t.replace(r'''string $eol = \\\"\\\\n\\\"''', r'''string $eol = \"\\n\"''')\n    if t != before:\n        p.write_text(t)\n        print(f'{rel}: escaping corrected')\n    else:\n        print(f'{rel}: nothing to correct')\nPY\ngrep -n \"fgetcsv()\" docs/php/streams.md | head -1; grep -n \"fputcsv()\" docs/php/streams.md | head -1: docs/php/streams.md: escaping corrected docs/php/system-and-io.md: nothing to correct 72:| `fgetcsv()` | `fgetcsv(mixed $stream, ?int $length = null, string $separator = ',', string $enclosure = '\"', string $escape = '\\\\\\\\'): array\\|false` | Read and parse one CSV line, or `false` at end of file — the arm that terminates the manual's `while (($row = fgetcsv($h)) !== false)` loop; an empty CSV line still returns an array. Custom separator, enclosure and escape are honored. User wrappers are read through `stream_read()`. | 73:| `fputcsv()` | `fputcsv(mixed $stream, array $fields, string $separator = ',', string $enclosure = '\"', string $escape = '\\\\\\\\', string $eol = \"\\n\"): int\\|false` | Format and write one CSV line with custom separator, enclosure, escape and end-of-line (PHP 8.1+ `$eol`). User wrappers are written through `stream_write()`. |",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "00a9dd82087d6ff34c15d74e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:40:43.019Z",
+  "stored_at": "2026-08-22T06:40:43.019Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 4000 python3 run.py dynamic-method-builtin 2>&1 | tail -12",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 4000 python3 run.py dynamic-method-builtin 2>&1 | tail -12: REFUSED 0 php parse 0 --- REFUSED --- --- DIFFERS --- ### dynamic-method-bui",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep && timeout 4000 python3 run.py dynamic-method-builtin 2>&1 | tail -12: REFUSED 0 php parse 0 --- REFUSED --- --- DIFFERS --- ### dynamic-method-builtin (exit php=0 elephc=1) php : getFilename='f.txt';getSize=4;getExtension='txt'; elephc: getFilename= php : count=3;getArrayCopy=[1,2,3]; elephc: <missing>",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "17120392aceab1a207a6d429",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:08:48.748Z",
+  "stored_at": "2026-08-25T12:08:48.748Z"
+}

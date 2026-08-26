@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - ✅✅ [CI 124/127; les DEUX bugs x86 CORRIGÉS](first-full-ci-verdict-two-x86-bugs.md) `4d4a58833b`+`ef9309a89a` — `__rt_incref` lit RAX (14 sites passaient rdi)  -> - ✅✅✅ [**CI 127/127 VERT** run 318384",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - ✅✅ [CI 124/127; les DEUX bugs x86 CORRIGÉS](first-full-ci-verdict-two-x86-bugs.md) `4d4a58833b`+`ef9309a89a` — `__rt_incref` lit RAX (14 sites passaient rdi)  -> - ✅✅✅ [**CI 127/127 VERT** run 31838427224 sur tree `4e5b8a3b86`](first-full-ci-verdict-two-x86-bugs.md) — PREMIER vert complet multi-plateforme de la branche (merge origin/main + 2 fixes x86 `4d4a58833b`+`ef9309a89a` + vague audit + smoke pin). `__rt_incref` lit RAX (14 sites passaient rdi) · box rendu dans rax = moitié de la paire chaîne x86.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3cd2c763e2d1e677d34ff0a8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T09:24:11.165Z",
+  "stored_at": "2026-08-15T09:24:11.165Z"
+}

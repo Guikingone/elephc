@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '305,332p' tests/codegen/objects/property_access/nullsafe.rs",
+  "summary": "sed -n '305,332p' tests/codegen/objects/property_access/nullsafe.rs: /// This asserted the warning WAS emitted until the `??` suppression was made to match `php -n`, /// which prints `fallback` and leaves stderr empty for this exact program. Written from the /// implementation, it pinned the divergence. #[test] fn test",
+  "text": "sed -n '305,332p' tests/codegen/objects/property_access/nullsafe.rs: /// This asserted the warning WAS emitted until the `??` suppression was made to match `php -n`, /// which prints `fallback` and leaves stderr empty for this exact program. Written from the /// implementation, it pinned the divergence. #[test] fn test_mixed_nullsafe_member_chain_coalesces_a_real_null_midpoint_without_warning() { let out = compile_and_run_capture( r#\"<?php class Leaf { public string $name = \"hit\"; } class Branch { public ?Leaf $leaf = null; } class Root { public ?Branch $branch = null; } $root = new Root(); $root->branch = new Branch(); echo $root?->branch->leaf->name ?? \"fallback\"; \"#, ); assert!(out.success, \"program failed: {}\", out.stderr); assert_eq!(out.stdout, \"fallback\"); assert!( out.diagnostics.contains(\"Warning: Attempt to read property \\\"name\\\" on null\"), \"{}\", out.diagnostics assert_eq!(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ec4daa37e2d012937954484c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:09:30.357Z",
+  "stored_at": "2026-08-20T18:09:30.358Z"
+}

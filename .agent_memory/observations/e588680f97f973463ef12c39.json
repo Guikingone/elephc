@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '85,100p' src/codegen_support/runtime/io/stream_get_meta_data.rs",
+  "summary": "sed -n '85,100p' src/codegen_support/runtime/io/stream_get_meta_data.rs: er, \"x10\", \"_meta_stype_stdio\"); // load page of the \"STDIO\" literal emitter.instruction(\"str x10, [sp, #56]\"); // save the stream_type pointer emitter.instruction(\"mov x10, #5\"); // length of \"STDIO\" emitter.instruction(\"str x10, [sp, #64]\"); // ",
+  "text": "sed -n '85,100p' src/codegen_support/runtime/io/stream_get_meta_data.rs: er, \"x10\", \"_meta_stype_stdio\"); // load page of the \"STDIO\" literal emitter.instruction(\"str x10, [sp, #56]\"); // save the stream_type pointer emitter.instruction(\"mov x10, #5\"); // length of \"STDIO\" emitter.instruction(\"str x10, [sp, #64]\"); // save the stream_type length emitter.label(\"__rt_sgmd_seek_done\"); // `stream_type` is a wrapper and backend identity in php-src, not a descriptor property. The // derivation above only knows whether `lseek` worked, which called `php://memory` STDIO and a // `popen()` pipe a socket; a stream that records an identity reports that instead. emitter.instruction(\"ldr x0, [sp, #0]\"); // the opaque stream handle emitter.instruction(\"bl __rt_stream_type_name\"); // x0 = name or 0, x1 = length emitter.instruction(\"cbz x0, __rt_sgmd_stype_kept\"); // nothing recorded: keep the derived name emitter.instruction(\"str x0, [sp, #56]\"); // report the recorded name",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e588680f97f973463ef12c39",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:45:19.124Z",
+  "stored_at": "2026-08-18T11:45:19.125Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"NormalizedBuiltinCall {\" -B25 src/ir_lower | grep -n \"operands\\|fn \" | head -15",
+  "summary": "grep -rn \"NormalizedBuiltinCall {\" -B25 src/ir_lower | grep -n \"operands\\|fn \" | head -15 completed",
+  "text": "grep -rn \"NormalizedBuiltinCall {\" -B25 src/ir_lower | grep -n \"operands\\|fn \" | head -15 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "17013b82b382fbb8319c7630",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:38:37.357Z",
+  "stored_at": "2026-08-18T10:38:37.357Z"
+}

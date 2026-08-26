@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn test_fopen_mode\\|fn test_.*_mode_\\|fopen(.*\\\"x\\\"\\|fopen(.*\\\"c\\\"\\|fopen(.*\\\"a+\\\"\\|fopen(.*\\\"x+\\\"\\|fopen(.*\\\"c+\\\"\" tests/codegen/io/streams.rs | head -30",
+  "summary": "grep -rn \"fn test_fopen_mode\\|fn test_.*_mode_\\|fopen(.*\\\"x\\\"\\|fopen(.*\\\"c\\\"\\|fopen(.*\\\"a+\\\"\\|fopen(.*\\\"x+\\\"\\|fopen(.*\\\"c+\\\"\" tests/codegen/io/streams.rs | head -30: tests/codegen/io/streams.rs:1638:$d = fopen(\"php://filter/only.bad/resource=php://temp\", \"x\"); tests/codegen/io/streams.rs:10165:fn test_stream_get_meta_d",
+  "text": "grep -rn \"fn test_fopen_mode\\|fn test_.*_mode_\\|fopen(.*\\\"x\\\"\\|fopen(.*\\\"c\\\"\\|fopen(.*\\\"a+\\\"\\|fopen(.*\\\"x+\\\"\\|fopen(.*\\\"c+\\\"\" tests/codegen/io/streams.rs | head -30: tests/codegen/io/streams.rs:1638:$d = fopen(\"php://filter/only.bad/resource=php://temp\", \"x\"); tests/codegen/io/streams.rs:10165:fn test_stream_get_meta_data_reports_the_mode_the_caller_passed() { tests/codegen/io/streams.rs:10232:fn test_fopen_c_mode_creates_without_truncating() { tests/codegen/io/streams.rs:10236:$h = fopen(\"c_mode.txt\", \"c\"); tests/codegen/io/streams.rs:10240:$fresh = fopen(\"c_mode_new.txt\", \"c\"); tests/codegen/io/streams.rs:10251:fn test_fopen_x_mode_refuses_an_existing_file() { tests/codegen/io/streams.rs:10254:$fresh = fopen(\"x_mode.txt\", \"x\"); tests/codegen/io/streams.rs:10258:$again = @fopen(\"x_mode.txt\", \"x\"); tests/codegen/io/streams.rs:10582:fn test_run_time_filter_warning_count_follows_the_open_mode_directions() { tests/codegen/io/streams.rs:10593:fclose(fopen($fresh, \"x\"));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "08fe3083a0197e8fa9b716aa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:22:42.853Z",
+  "stored_at": "2026-08-14T14:22:42.853Z"
+}

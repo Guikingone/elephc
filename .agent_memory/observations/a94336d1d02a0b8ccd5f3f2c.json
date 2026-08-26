@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"label_global(\\\"__rt_glob\\\")\" -A 20 src/codegen_support/runtime/ | grep -E \"bl_c|call |glob|flags|mov x1|mov esi\" | head -10",
+  "summary": "grep -rn \"label_global(\\\"__rt_glob\\\")\" -A 20 src/codegen_support/runtime/ | grep -E \"bl_c|call |glob|flags|mov x1|mov esi\" | head -10: src/codegen_support/runtime/io/glob.rs:31: emitter.label_global(\"__rt_glob\"); src/codegen_support/runtime/io/glob.rs-32- src/codegen_support/runtime/io/glob.rs-33- // -- set up stack fr",
+  "text": "grep -rn \"label_global(\\\"__rt_glob\\\")\" -A 20 src/codegen_support/runtime/ | grep -E \"bl_c|call |glob|flags|mov x1|mov esi\" | head -10: src/codegen_support/runtime/io/glob.rs:31: emitter.label_global(\"__rt_glob\"); src/codegen_support/runtime/io/glob.rs-32- src/codegen_support/runtime/io/glob.rs-33- // -- set up stack frame (128 bytes for glob_t + locals + frame) -- src/codegen_support/runtime/io/glob.rs-34- emitter.instruction(\"sub sp, sp, #176\"); // allocate 176 bytes on the stack src/codegen_support/runtime/io/glob.rs-35- emitter.instruction(\"stp x29, x30, [sp, #160]\"); // save frame pointer and return address src/codegen_support/runtime/io/glob.rs-36- emitter.instruction(\"add x29, sp, #160\"); // establish new frame pointer src/codegen_support/runtime/io/glob.rs-37- src/codegen_support/runtime/io/glob.rs-38- // -- null-terminate pattern -- src/codegen_support/runtime/io/glob.rs-39- emitter.instruction(\"bl __rt_cstr\"); // convert pattern to C string, x0=cstr src/codegen_support/runtime/io/glob.rs-40-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a94336d1d02a0b8ccd5f3f2c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T20:08:02.136Z",
+  "stored_at": "2026-08-21T20:08:02.136Z"
+}

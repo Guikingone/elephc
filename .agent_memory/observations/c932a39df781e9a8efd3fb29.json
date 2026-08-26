@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh sockmeta3 2>&1 | head -20",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh sockmeta3 2>&1 | head -20: sockmeta3 DIFF: 8,9c8 < < Warning: fsockopen(): Unable to connect to unix:///var/folders/xc/t6g4brv",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && zsh difftests.sh sockmeta3 2>&1 | head -20: sockmeta3 DIFF: 8,9c8 < < Warning: fsockopen(): Unable to connect to unix:///var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_nope.sock:-1 (No such file or directory) in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sockmeta3.php on line 18 --- > Warning: fsockopen(): Unable to connect to unix:///var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_nope.sock:-1 (No such file or directory)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c932a39df781e9a8efd3fb29",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:36:17.544Z",
+  "stored_at": "2026-08-17T13:36:17.544Z"
+}

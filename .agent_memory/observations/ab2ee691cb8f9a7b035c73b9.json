@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test -p elephc-magician --lib 2>&1 | grep -E \"test result|error\\[|^error\" | head -6",
+  "summary": "cargo test -p elephc-magician --lib 2>&1 | grep -E \"test result|error\\[|^error\" | head -6: test result: ok. 1191 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s",
+  "text": "cargo test -p elephc-magician --lib 2>&1 | grep -E \"test result|error\\[|^error\" | head -6: test result: ok. 1191 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ab2ee691cb8f9a7b035c73b9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T08:58:06.970Z",
+  "stored_at": "2026-08-16T08:58:06.970Z"
+}

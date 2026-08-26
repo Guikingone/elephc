@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'CallableDescriptorInvoke\\|Op::MethodCall' src/ir_lower/program/spl_discovery.rs | head -5; echo '--- receiver-based push ---'; sed -n '291,315p' src/ir_lower/program/spl_discovery.rs",
+  "summary": "grep -n 'CallableDescriptorInvoke\\|Op::MethodCall' src/ir_lower/program/spl_discovery.rs | head -5; echo '--- receiver-based push ---'; sed -n '291,315p' src/ir_lower/program/spl_discovery.rs: 116: Op::MethodCall | Op::NullsafeMethodCall => { --- receiver-based push --- pub(super) fn push_supported_builtin_spl_method_f",
+  "text": "grep -n 'CallableDescriptorInvoke\\|Op::MethodCall' src/ir_lower/program/spl_discovery.rs | head -5; echo '--- receiver-based push ---'; sed -n '291,315p' src/ir_lower/program/spl_discovery.rs: 116: Op::MethodCall | Op::NullsafeMethodCall => { --- receiver-based push --- pub(super) fn push_supported_builtin_spl_method_for_receiver( methods: &mut Vec<(String, String)>, module: &Module, class_name: &str, method_key: &str, ) { let mut current = Some(class_name); while let Some(name) = current { if is_supported_builtin_spl_method(name, method_key) { methods.push((name.to_string(), method_key.to_string())); return; } current = module .class_infos .get(name) .and_then(|class_info| class_info.parent.as_deref()); } } /// Returns the class-name immediate attached to an instruction. pub(in crate::ir_lower) fn class_data_name<'a>( module: &'a Module, inst: &crate::ir::Instruction, ) -> Option<&'a str> { let Some(Immediate::Data(data)) = inst.immediate else {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "13cf39d6516da76a968a8ec9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:11:38.769Z",
+  "stored_at": "2026-08-25T12:11:38.769Z"
+}

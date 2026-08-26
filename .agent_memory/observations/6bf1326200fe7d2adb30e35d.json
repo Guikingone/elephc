@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>b50obapea</task-id>\n<summary>Monitor event: \"CI head 262f2aec22 (tree 993efaa18f: readers+NAN+context options)\"</summary>\n<event>CI: queued</event>\n</task-notification>",
+  "summary": "<task-notification> <task-id>b50obapea</task-id> <summary>Monitor event: \"CI head 262f2aec22 (tree 993efaa18f: readers+NAN+context options)\"</summary> <event>CI: queued</event> </task-notification>",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6bf1326200fe7d2adb30e35d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T11:48:58.829Z",
+  "stored_at": "2026-08-16T11:48:58.830Z",
+  "low_signal": true
+}

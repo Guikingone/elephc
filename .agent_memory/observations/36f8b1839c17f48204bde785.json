@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stat_result_type\" src/ --include \"*.rs\" | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stat_result_type\" src/ --include \"*.rs\" | head: _result_type` helper that returns the normalized PHP return src/builtins/io/stat_support.rs:28:pub(crate) fn stat_result_type(checker: &Checker) -> PhpType { src/buil",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"stat_result_type\" src/ --include \"*.rs\" | head: _result_type` helper that returns the normalized PHP return src/builtins/io/stat_support.rs:28:pub(crate) fn stat_result_type(checker: &Checker) -> PhpType { src/builtins/io/lstat.rs:8://! - `check` returns `assoc-array<mixed, int>|bool` via `stat_result_type`, reflecting src/builtins/io/lstat.rs:29: Ok(crate::builtins::io::stat_support::stat_result_type(cx.checker)) src/builtins/io/fstat.rs:10://! `stat_result_type`. PHP's `fstat` returns the stat buffer array on success or src/builtins/io/fstat.rs:32:/// compatible stream type, then returns the stat result type via `stat_result_type`. src/builtins/io/fstat.rs:40: Ok(crate::builtins::io::stat_support::stat_result_type(cx.checker)) src/builtins/io/stat.rs:8://! - `check` returns `assoc-array<mixed, int>|bool` via `stat_result_type`, reflecting src/builtins/io/stat.rs:28: Ok(crate::builtins::io::stat_support::stat_result_type(cx.checker))",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "36f8b1839c17f48204bde785",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T10:35:23.247Z",
+  "stored_at": "2026-08-23T10:35:23.248Z"
+}

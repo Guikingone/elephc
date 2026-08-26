@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/undef_why.sh",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/undef_why.sh: #!/bin/zsh\n# Tests ONE hypothesis: a function whose signature is already resolved (because a call site needed\n# it) is skipped by `resol",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/undef_why.sh: #!/bin/zsh\n# Tests ONE hypothesis: a function whose signature is already resolved (because a call site needed\n# it) is skipped by `resolve_unchecked_functions`, so its body's undefined-variable error never\n# reaches the error list — and lowering proceeds on a variable with no slot.\n# Prediction: every shape where the function is REACHED BY A CALL EXPRESSION compiles; the ones\n# never called are refused.\nBASE=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad\nELEPHC=/Users/guillaumel",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eb4bead8c3467908a775b9b8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T16:03:41.639Z",
+  "stored_at": "2026-08-18T16:03:41.640Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"STREAM_CLIENT_CONNECT\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/src/types/stream_constants.rs | head -3; echo \"=== ours ===\"; git log -1 --format=\"%h %s\"; git status --short | head -5",
+  "summary": "grep -n \"STREAM_CLIENT_CONNECT\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/src/types/stream_constants.rs | head -3; echo \"=== ours ===\"; git log -1 --format=\"%h %s\"; git status --short | head -5: 21: (\"STREAM_CLIENT_CONNECT\", 4), 155: .find(|(name, _)| *name == \"STREAM_C",
+  "text": "grep -n \"STREAM_CLIENT_CONNECT\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle/src/types/stream_constants.rs | head -3; echo \"=== ours ===\"; git log -1 --format=\"%h %s\"; git status --short | head -5: 21: (\"STREAM_CLIENT_CONNECT\", 4), 155: .find(|(name, _)| *name == \"STREAM_CLIENT_CONNECT\") 156: .expect(\"STREAM_CLIENT_CONNECT defined\"); === ours === 034ac07936 chore(builtins): satisfy the EIR boundary audit the merge imported M .codebase-memory/artifact.json M .codebase-memory/graph.db.zst ?? .agent_memory/",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6d8223e616cdd162be12fa1f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:17:11.416Z",
+  "stored_at": "2026-08-14T14:17:11.417Z"
+}

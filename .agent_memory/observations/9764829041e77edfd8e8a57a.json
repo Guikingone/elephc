@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/bound_by_mentioned_names.py && cargo build --lib 2>&1 | grep -E \"^error\" -A 8 | head -25; cargo build --lib 2>&1 | tail -2",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/bound_by_mentioned_names.py && cargo build --lib 2>&1 | grep -E \"^error\" -A 8 | head -25; cargo build --lib 2>&1 | tail -2: callables.rs: the lad",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/bound_by_mentioned_names.py && cargo build --lib 2>&1 | grep -E \"^error\" -A 8 | head -25; cargo build --lib 2>&1 | tail -2: callables.rs: the ladder is bounded by the names the program mentions callables.rs: the mentioned-name set the ladder is bounded by mentioned names Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.62s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9764829041e77edfd8e8a57a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:11:33.835Z",
+  "stored_at": "2026-08-22T11:11:33.835Z"
+}

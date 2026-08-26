@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && printf '<?php\\necho NAN, \"|\";\\nvar_dump(NAN);\\necho \"end\\\\n\";\\n' > nan.php && php -n nan.php; echo \"[exit $?]\"; echo \"--- stderr only:\"; php -n nan.php 2>&1 1>/dev/null",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && printf '<?php\\necho NAN, \"|\";\\nvar_dump(NAN);\\necho \"end\\\\n\";\\n' > nan.php && php -n nan.php; echo \"[exit $?]\"; echo \"--- stderr only:\"; php -n nan.ph",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && printf '<?php\\necho NAN, \"|\";\\nvar_dump(NAN);\\necho \"end\\\\n\";\\n' > nan.php && php -n nan.php; echo \"[exit $?]\"; echo \"--- stderr only:\"; php -n nan.php 2>&1 1>/dev/null: Warning: unexpected NAN value was coerced to string in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/nan.php on line 2 NAN|float(NAN) end [exit 0] --- stderr only:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "24c8ce98abe117ccf72f3612",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:48:54.966Z",
+  "stored_at": "2026-08-18T20:48:54.966Z"
+}

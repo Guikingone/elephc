@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build --bin elephc 2>&1 | tail -2 && python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_probe.py 2>&1 | tail -13",
+  "summary": "cargo build --bin elephc 2>&1 | tail -2 && python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_probe.py 2>&1 | tail -13: Compiling elephc v0.26.5 (/Users/guillaumeloulier/PhpstormProj",
+  "text": "cargo build --bin elephc 2>&1 | tail -2 && python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/eval_constant_probe.py 2>&1 | tail -13: Compiling elephc v0.26.5 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `dev` profile [unoptimized + debuginfo] target(s) in 22.49s constant php elephc eval SEEK_SET 0 0 FILE_APPEND 8 8 STREAM_FILTER_READ 1 1 SCANDIR_SORT_DESCENDING 1 1 E_ALL 30719 32767 <-- DIFFERS ENT_QUOTES 3 3 ZLIB_ENCODING_GZIP 31 31 LOCK_EX 2 2 GLOB_MARK 8 8 8/9 resolve identically",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3a6a1a0e1688a7953043a962",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:52:35.061Z",
+  "stored_at": "2026-08-22T09:52:35.062Z"
+}

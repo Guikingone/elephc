@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '1,60p' src/builtins/types/is_null.rs; echo \"=== BuiltinLowerFn ===\"; rtk proxy rg -n \"pub type BuiltinLowerFn\" -A5 src/builtins/semantics.rs",
+  "summary": "rtk proxy sed -n '1,60p' src/builtins/types/is_null.rs; echo \"=== BuiltinLowerFn ===\"; rtk proxy rg -n \"pub type BuiltinLowerFn\" -A5 src/builtins/semantics.rs: lected is_null requires a statically represented source value\", ), lowering: BuiltinLowering::Eir(lower), }, } /// Returns the conservative effect contract of t",
+  "text": "rtk proxy sed -n '1,60p' src/builtins/types/is_null.rs; echo \"=== BuiltinLowerFn ===\"; rtk proxy rg -n \"pub type BuiltinLowerFn\" -A5 src/builtins/semantics.rs: lected is_null requires a statically represented source value\", ), lowering: BuiltinLowering::Eir(lower), }, } /// Returns the conservative effect contract of the reusable EIR null predicate. fn effects(_input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects { Op::IsNull.default_effects() } /// Lowers `is_null` to the reusable EIR null predicate. fn lower( ctx: &mut dyn BuiltinLoweringContext, call: &NormalizedBuiltinCall<'_>, ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> { Ok(ctx.emit_value( Op::IsNull, vec![call.operand(0)?], None, call.result_type.clone(), Op::IsNull.default_effects(), Some(call.span), )) } === BuiltinLowerFn === 318:pub type BuiltinLowerFn = for<'a> fn( 319- &mut dyn BuiltinLoweringContext, 320- &NormalizedBuiltinCall<'a>, 321-) -> Result<LoweredBuiltinValue, BuiltinLoweringError>; 322- 323-/// Selects the active lowering path for a registry-backed builtin.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d9d645c09dd84831baed60a2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:05:17.082Z",
+  "stored_at": "2026-08-16T16:05:17.082Z"
+}

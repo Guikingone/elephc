@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"ValueError\" src/codegen/lower_inst/builtins/io/stream_options.rs src/builtins/io/stream_select.rs 2>/dev/null | head -10; echo \"=== how stream_* throws ValueError:\"; rg -rn \"must be greater than|ValueError\" src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null | head -8",
+  "summary": "rg -n \"ValueError\" src/codegen/lower_inst/builtins/io/stream_options.rs src/builtins/io/stream_select.rs 2>/dev/null | head -10; echo \"=== how stream_* throws ValueError:\"; rg -rn \"must be greater than|ValueError\" src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null | head -8: contents()` `$length`. src/codegen/lower_in",
+  "text": "rg -n \"ValueError\" src/codegen/lower_inst/builtins/io/stream_options.rs src/builtins/io/stream_select.rs 2>/dev/null | head -10; echo \"=== how stream_* throws ValueError:\"; rg -rn \"must be greater than|ValueError\" src/codegen/lower_inst/builtins/io/*.rs 2>/dev/null | head -8: contents()` `$length`. src/codegen/lower_inst/builtins/io/phar_read.rs: \"file_get_contents(): Argument #5 ($length) n or equal to 0\"; src/codegen/lower_inst/builtins/io/phar_read.rs:/// The negative-`$length` `n` is raised BEFORE the read, exactly like php-src, so a src/codegen/lower_inst/builtins/io/phar_read.rs: /// Raises php-src's negative-`$length` `n` before the read is attempted. src/codegen/lower_inst/builtins/io/stream_copy_queries.rs:/// php-src's verbatim `n` wording for `stream_get_line()` with a negative `$length`. src/codegen/lower_inst/builtins/io/stream_copy_queries.rs: \"stream_get_line(): Argument #2 ($length) n or equal to 0\"; src/codegen/lower_inst/builtins/io/stream_options.rs:/// php-src's verbatim `n` wording for a non-positive `stream_set_chunk_size()` `$size`. src/codegen/lower_inst/builtins/io/stream_options.rs: \"stream_set_chunk_size(): Argument #2 ($size) n 0\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "400219031de3cfa2bd9af791",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:28:17.822Z",
+  "stored_at": "2026-08-17T06:28:17.822Z"
+}

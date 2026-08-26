@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"mod dir_prelude\" src/lib.rs src/main.rs 2>/dev/null",
+  "summary": "grep -rn \"mod dir_prelude\" src/lib.rs src/main.rs 2>/dev/null: src/main.rs:21:mod dir_prelude; src/lib.rs:32:pub mod dir_prelude;",
+  "text": "grep -rn \"mod dir_prelude\" src/lib.rs src/main.rs 2>/dev/null: src/main.rs:21:mod dir_prelude; src/lib.rs:32:pub mod dir_prelude;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b1d5ebcf2a6f52fb1f5203b8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:33:22.119Z",
+  "stored_at": "2026-08-21T11:33:22.120Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/out_params_variadic.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/out_params_variadic.py: p = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/builtins/ou",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/out_params_variadic.py: p = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/types/checker/builtins/out_params.rs'\ns = open(p).read()\n\nold = \"\"\"        let Some(written) = param.and_then(|param| param.writes) else {\n            continue;\n        };\"\"\"\nnew = \"\"\"        // Past the fixed parameters the argument belongs to the variadic TAIL, which carries\n        // its own write-only declaration: `sscanf($s, '%d %s', $n, $w)` fills both variables and\n        // neither has to exist beforehand.\n        let written = match param {\n            Some(param) => param.writes,\n  ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c79a7ea44805455579aa47c6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:28:50.526Z",
+  "stored_at": "2026-08-18T10:28:50.527Z"
+}

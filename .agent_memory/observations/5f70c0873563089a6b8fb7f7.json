@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"runtime_builtin_wrapper_supported\" src/ | grep -v callable_dispatch.rs | head -8",
+  "summary": "grep -rn \"runtime_builtin_wrapper_supported\" src/ | grep -v callable_dispatch.rs | head -8: src/codegen/lower_inst/callables.rs:748: || !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty)",
+  "text": "grep -rn \"runtime_builtin_wrapper_supported\" src/ | grep -v callable_dispatch.rs | head -8: src/codegen/lower_inst/callables.rs:748: || !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f70c0873563089a6b8fb7f7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:02:46.042Z",
+  "stored_at": "2026-08-22T11:02:46.042Z"
+}

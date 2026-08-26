@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_scalar_test.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_scalar_test.py: \"\"\"Pins php's TypeError for a scalar options value, per type.\n\nKimi K3 named this arm in round 4 and it was right: the unbox ze",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_scalar_test.py: \"\"\"Pins php's TypeError for a scalar options value, per type.\n\nKimi K3 named this arm in round 4 and it was right: the unbox zeroed anything that was not a\ncontainer, and a zero candidate reads to the shape guard as \"no options\" — so a string was\naccepted in silence where php raises.\n\nphp composes the tail from the VALUE, not just its type: a bool reports `true` or `false`. That is\nwhy the test names both, and why `null` is here too — `?array` accepts it, so it must NOT raise.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2a7c4f1ff0b90cc58ed059ba",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:05:14.276Z",
+  "stored_at": "2026-08-22T16:05:14.276Z"
+}

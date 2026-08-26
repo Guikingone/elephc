@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls -la && cat CLAUDE.md 2>/dev/null | head -100",
+  "summary": "ls -la && cat CLAUDE.md 2>/dev/null | head -100: -rw-r--r--@ 1 guillaumeloulier staff 53705 Aug 14 14:06 README.md -rw-r--r--@ 1 guillaumeloulier staff 173276 Aug 12 17:19 ROADMAP.md drwxr-xr-x@ 4 guillaumeloulier staff 128 Aug 7 09:20 assets drwxr-xr-x@ 6 guillaumeloulier staff 192 Aug 7 09:20 benchmarks drwxr-xr-x@ 1",
+  "text": "ls -la && cat CLAUDE.md 2>/dev/null | head -100: -rw-r--r--@ 1 guillaumeloulier staff 53705 Aug 14 14:06 README.md -rw-r--r--@ 1 guillaumeloulier staff 173276 Aug 12 17:19 ROADMAP.md drwxr-xr-x@ 4 guillaumeloulier staff 128 Aug 7 09:20 assets drwxr-xr-x@ 6 guillaumeloulier staff 192 Aug 7 09:20 benchmarks drwxr-xr-x@ 12 guillaumeloulier staff 384 Aug 14 14:06 crates drwxr-xr-x@ 10 guillaumeloulier staff 320 Aug 14 14:06 docs drwxr-xr-x@ 208 guillaumeloulier staff 6656 Aug 14 14:06 examples -rw-r--r--@ 1 guillaumeloulier staff 187 Aug 7 09:20 rustfmt.toml drwxr-xr-x@ 11 guillaumeloulier staff 352 Aug 14 14:06 scripts drwxr-xr-x@ 10 guillaumeloulier staff 320 Aug 7 09:20 showcases drwxr-xr-x@ 69 guillaumeloulier staff 2208 Aug 14 15:29 src drwxr-xr-x@ 57 guillaumeloulier staff 1824 Aug 14 14:06 tests drwxr-xr-x@ 4 guillaumeloulier staff 128 Aug 14 14:07 tools drwxr-xr-x@ 3 guillaumeloulier staff 96 Aug 9 09:18 vendor Refer to @AGENTS.md.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5e4284223c8ff4ed7d95d26b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:10:38.088Z",
+  "stored_at": "2026-08-14T14:10:38.089Z"
+}

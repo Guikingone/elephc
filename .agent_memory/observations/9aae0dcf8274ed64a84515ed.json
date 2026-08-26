@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 run_named8.py > round8_probes7.txt 2>&1; head -4 round8_probes7.txt",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 run_named8.py > round8_probes7.txt 2>&1; head -4 round8_probes7.txt: IDENTICAL 166 DIFFERS 13 elephc REFUSED 4 php parse err 0 (fragments, n",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; python3 run_named8.py > round8_probes7.txt 2>&1; head -4 round8_probes7.txt: IDENTICAL 166 DIFFERS 13 elephc REFUSED 4 php parse err 0 (fragments, not programs)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9aae0dcf8274ed64a84515ed",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:41:42.778Z",
+  "stored_at": "2026-08-23T12:41:42.778Z"
+}

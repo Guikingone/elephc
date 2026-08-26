@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn allows_effect_refinement\" -A 30 src/ir/instr.rs",
+  "summary": "grep -n \"fn allows_effect_refinement\" -A 30 src/ir/instr.rs: 797: pub fn allows_effect_refinement(self) -> bool { 798- matches!( 799- self, 800- Op::IDiv 801- | Op::ISDiv 802- | Op::ISMod 803- | Op::FDiv 804- | Op::IShl 805- | Op::IShrA 806- | Op::Call 807- | Op::FunctionVariantCall 808- | Op::ClosureBind 809- | Op::La",
+  "text": "grep -n \"fn allows_effect_refinement\" -A 30 src/ir/instr.rs: 797: pub fn allows_effect_refinement(self) -> bool { 798- matches!( 799- self, 800- Op::IDiv 801- | Op::ISDiv 802- | Op::ISMod 803- | Op::FDiv 804- | Op::IShl 805- | Op::IShrA 806- | Op::Call 807- | Op::FunctionVariantCall 808- | Op::ClosureBind 809- | Op::LanguageConstructCall 810- | Op::EvalLiteralCall 811- | Op::EvalFunctionCall 812- | Op::EvalFunctionCallArray 813- | Op::EvalObjectNew 814- | Op::EvalStaticMethodCall 815- | Op::RuntimeCall 816- | Op::ExternCall 817- | Op::MethodCall 818- | Op::StaticMethodCall 819- | Op::PropGet 820- | Op::NullsafePropGet 821- | Op::DynamicPropGet 822- | Op::ClosureCall 823- | Op::ExprCall 824- | Op::CallableDescriptorInvoke 825- | Op::PipeCall 826- | Op::IteratorMethodCall 827- | Op::SplRuntimeCall",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3f0025c4c0d4cec833b3588c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:53:49.100Z",
+  "stored_at": "2026-08-18T20:53:49.100Z"
+}

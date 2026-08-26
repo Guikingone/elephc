@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test -p elephc --lib file_reports_a_failed_read_as_null_on_every_target 2>&1 | grep -E \"panicked|assertion|left|right|----\" | cut -c1-300 | head -10",
+  "summary": "cargo test -p elephc --lib file_reports_a_failed_read_as_null_on_every_target 2>&1 | grep -E \"panicked|assertion|left|right|----\" | cut -c1-300 | head -10: ---- codegen_support::runtime::io::file::tests::file_reports_a_failed_read_as_null_on_every_target stdout ---- thread 'codegen_support::runtime::io::file::tests::fi",
+  "text": "cargo test -p elephc --lib file_reports_a_failed_read_as_null_on_every_target 2>&1 | grep -E \"panicked|assertion|left|right|----\" | cut -c1-300 | head -10: ---- codegen_support::runtime::io::file::tests::file_reports_a_failed_read_as_null_on_every_target stdout ---- thread 'codegen_support::runtime::io::file::tests::file_reports_a_failed_read_as_null_on_every_target' (30554445) panicked at src/codegen_support/runtime/io/file.rs:363:13:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c87ee9daa93a6f32b45a0f22",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:42:44.994Z",
+  "stored_at": "2026-08-20T20:42:44.994Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bsykopflu.output",
+  "summary": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bsykopflu.output: precation_is_gated_by_php_version codegen::io::streams::test_csv_family_deprecates_an_omitted_escape_argument codegen::io::streams::test_ht",
+  "text": "cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bsykopflu.output: precation_is_gated_by_php_version codegen::io::streams::test_csv_family_deprecates_an_omitted_escape_argument codegen::io::streams::test_http_meta_data_carries_the_response_headers codegen::io::streams::test_iconv_filter_refusal_uses_the_create_or_locate_wording codegen::io::streams::test_out_of_range_offset_on_a_boxed_string_warns_and_reads_as_absent codegen::io::streams::test_path_readers_name_themselves_in_unresolvable_filter_warnings codegen::io::streams::test_run_time_filter_warning_count_follows_the_open_mode_directions codegen::io::streams::test_stream_filter_strip_tags_is_not_a_php_filter codegen::io::streams::test_stream_select_explains_an_uncastable_stream codegen::io::streams::test_stream_select_refuses_a_memory_stream codegen::io::streams::test_unresolvable_host_warns_twice_like_php codegen::io::streams::test_zip_wrapper_reads_entries_and_refuses_like_php [exited with code 0]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c202f5c32fa751461c8ec252",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:01:45.695Z",
+  "stored_at": "2026-08-18T15:01:45.696Z"
+}

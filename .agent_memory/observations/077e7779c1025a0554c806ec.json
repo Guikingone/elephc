@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bx518buxk.output\" 2>/dev/null | tail -6; pgrep -f \"cargo build\" >/dev/null && echo BUILDING || echo BUILD_DONE",
+  "summary": "cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bx518buxk.output\" 2>/dev/null | tail -6; pgrep -f \"cargo build\" >/dev/null && echo BUILDING || echo BUILD_DONE: BUILDING",
+  "text": "cat \"/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bx518buxk.output\" 2>/dev/null | tail -6; pgrep -f \"cargo build\" >/dev/null && echo BUILDING || echo BUILD_DONE: BUILDING",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "077e7779c1025a0554c806ec",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:45:00.575Z",
+  "stored_at": "2026-08-17T12:45:00.576Z"
+}

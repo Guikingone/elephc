@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/types/checker/driver/init.rs src/types/checker/functions.rs src/types/checker/functions/resolution/mod.rs src/types/checker/functions/resolution/signature.rs src/types/checker/functions/resolution/specialization.rs src/types/checker/inference/expr/effects.rs src/types/checker/inference/objects/methods.rs src/types/checker/method_pass.rs src/types/checker/mod.rs src/ir_lower/expr/call_arg_coercion.rs tests/codegen/arrays/by_ref_params.rs",
+  "summary": "git add src/types/checker/driver/init.rs src/types/checker/functions.rs src/types/checker/functions/resolution/mod.rs src/types/checker/functions/resolution/signature.rs src/types/checker/functions/resolution/specialization.rs src/types/checker/inference/expr/effects.rs src/types/checker/inference/objects/methods.rs sr",
+  "text": "git add src/types/checker/driver/init.rs src/types/checker/functions.rs src/types/checker/functions/resolution/mod.rs src/types/checker/functions/resolution/signature.rs src/types/checker/functions/resolution/specialization.rs src/types/checker/inference/expr/effects.rs src/types/checker/inference/objects/methods.rs src/types/checker/method_pass.rs src/types/checker/mod.rs src/ir_lower/expr/call_arg_coercion.rs tests/codegen/arrays/by_ref_params.rs completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "910a41d7492ca66842bb0f85",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:22:03.755Z",
+  "stored_at": "2026-08-17T06:22:03.756Z"
+}

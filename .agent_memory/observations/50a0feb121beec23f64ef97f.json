@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps -o etime,command -A | rg \"cargo-nextest\" | head -2 | cut -c1-100",
+  "summary": "ps -o etime,command -A | rg \"cargo-nextest\" | head -2 | cut -c1-100: 23:27 /Users/guillaumeloulier/.cargo/bin/cargo-nextest nextest run -E binary(codegen_tests) --no- 00:00 /bin/zsh -c source /Users/guillaumeloulier/.claude/shell-snapshots/snapshot-zsh-17869477012",
+  "text": "ps -o etime,command -A | rg \"cargo-nextest\" | head -2 | cut -c1-100: 23:27 /Users/guillaumeloulier/.cargo/bin/cargo-nextest nextest run -E binary(codegen_tests) --no- 00:00 /bin/zsh -c source /Users/guillaumeloulier/.claude/shell-snapshots/snapshot-zsh-17869477012",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "50a0feb121beec23f64ef97f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:45:21.055Z",
+  "stored_at": "2026-08-17T06:45:21.056Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/codegen/types/static_property_hash.rs\")\ns = p.read_text()\nold = '''foreach (S::$store as $key => $value) { echo $key, \"=\", $value, \";\"; }\necho \"\\\\n\";\nunset(S::$store[\"a\"]);\nvar_dump(count(S::$store), array_keys(S::$store));\n\"#,'''\nnew = '''foreach (S::$store as $key => $value) { echo $key, \"=\", $value, \";\"; }\necho \"\\\\n\";\nvar_dump(array_keys(S::$store), array_values(S::$store));\n\"#,'''\nassert s.count(old) == 1\ns = s.replace(old, new)\nold = '''         a=over;b=2;\\\\n\\\\\n         int(1)\\\\n\\\\\n         array(1) {\\\\n  [0]=>\\\\n  string(1) \\\\\"b\\\\\"… [+483 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path(\"tests/codegen/types/static_property_hash.rs\") s = p.read_text() old = '''foreach (S::$store as $key => $value) { echo $key, \"=\", $value, \";\"; } echo \"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3cb91c64fcafbb8e57d5db49",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:24:51.883Z",
+  "stored_at": "2026-08-26T08:24:51.884Z"
+}

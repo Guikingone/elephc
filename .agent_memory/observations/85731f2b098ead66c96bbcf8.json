@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/allow_echo_refine.py\ncargo test --test codegen_tests -- codegen::math::functions::test_fmod_preserves_negative_zero_like_php codegen::numeric_scalars::test_echo_float_uses_php_precision_14_gcvt_layout codegen::type_builtins::float_checks::test_nan_constant --exact 2>&1 | tail -14",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/allow_echo_refine.py\ncargo test --test codegen_tests -- codegen::math::functions::test_fmod_preserves_negative_zero_like_php codegen::numeric_scalar",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/allow_echo_refine.py\ncargo test --test codegen_tests -- codegen::math::functions::test_fmod_preserves_negative_zero_like_php codegen::numeric_scalars::test_echo_float_uses_php_precision_14_gcvt_layout codegen::type_builtins::float_checks::test_nan_constant --exact 2>&1 | tail -14: EchoValue opts into effect refinement Compiling elephc v0.26.3 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `test` profile [unoptimized + debuginfo] target(s) in 24.17s Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-16c45d69d5f633ba) running 3 tests test codegen::numeric_scalars::test_echo_float_uses_php_precision_14_gcvt_layout ... ok test codegen::math::functions::test_fmod_preserves_negative_zero_like_php ... ok test codegen::type_builtins::float_checks::test_nan_constant ... ok test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 8450 filtered out; finished in 1.76s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "85731f2b098ead66c96bbcf8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:54:45.861Z",
+  "stored_at": "2026-08-18T20:54:45.862Z"
+}

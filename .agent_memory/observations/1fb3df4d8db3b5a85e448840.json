@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/appendmsg.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/appendmsg.txt: fix(streams): an `a` mode on php://memory silently overwrote instead of appending\n\n```php\n$fp = fopen(\"php://temp\", \"a+\");\nfwrite($fp, ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/appendmsg.txt: fix(streams): an `a` mode on php://memory silently overwrote instead of appending\n\n```php\n$fp = fopen(\"php://temp\", \"a+\");\nfwrite($fp, \"hello\");\nfseek($fp, 0, SEEK_SET);\nfwrite($fp, \"world\");\necho stream_get_contents($fp, -1, 0);\n```\n\nphp answers `helloworld`. elephc answered `world` — the first write was gone, in\nsilence, on a stream php guarantees can only grow. php's `a` modes send every\nwrite to the END whatever `fseek()` did, which is the entire point of asking for\none, and code that seeks around an append-mode buffer therefore lost data rather\nthan accumulating it.\n\nA real FILE was alrea",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1fb3df4d8db3b5a85e448840",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:07:47.759Z",
+  "stored_at": "2026-08-17T08:07:47.760Z"
+}

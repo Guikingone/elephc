@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_generated.sh",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_generated.sh: #!/bin/zsh\n# Clears the conflict markers in GENERATED files by taking one side wholesale.\n#\n# Which side is irrelevant: `extract",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/resolve_generated.sh: #!/bin/zsh\n# Clears the conflict markers in GENERATED files by taking one side wholesale.\n#\n# Which side is irrelevant: `extract_builtins.py --render --force` rewrites every one of these\n# from the registry, so the merged content is discarded either way. What matters is that they\n# stop carrying markers, because a marker in a .json or .md is not a merge decision — it is a\n# syntax error waiting for the next tool that reads the file.\ncd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature || exit 1\nn=0\ngit status --short \\\n  | grep '^UU' \\\n  | sed 's/^.. /",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1f4e226eaf30d541e7da394e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:34:43.460Z",
+  "stored_at": "2026-08-20T17:34:43.460Z"
+}

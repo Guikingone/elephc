@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h / | tail -1; echo \"--- memory pressure ---\"; memory_pressure 2>/dev/null | tail -3 || vm_stat | head -4",
+  "summary": "df -h / | tail -1; echo \"--- memory pressure ---\"; memory_pressure 2>/dev/null | tail -3 || vm_stat | head -4: /dev/disk3s1s1 460Gi 12Gi 3.1Gi 80% 459k 32M 1% / --- memory pressure --- Pageouts: 18050095 System-wide memory free percentage: 56%",
+  "text": "df -h / | tail -1; echo \"--- memory pressure ---\"; memory_pressure 2>/dev/null | tail -3 || vm_stat | head -4: /dev/disk3s1s1 460Gi 12Gi 3.1Gi 80% 459k 32M 1% / --- memory pressure --- Pageouts: 18050095 System-wide memory free percentage: 56%",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6a94948ad8bf45dd0af0df23",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:34:02.569Z",
+  "stored_at": "2026-08-22T09:34:02.569Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo fmt --all 2>&1|head -3; cargo fmt --check 2>&1|head -3; echo FMT_OK; git add -A src/ tests/ && git status --short | grep '^[AM]'",
+  "summary": "cargo fmt --all 2>&1|head -3; cargo fmt --check 2>&1|head -3; echo FMT_OK; git add -A src/ tests/ && git status --short | grep '^[AM]': FMT_OK M src/ir_lower/stmt/static_property_writes.rs M src/types/checker/stmt_check/assignments/locals.rs M src/types/checker/stmt_check/assignments/properties.rs M src/types/checker/s",
+  "text": "cargo fmt --all 2>&1|head -3; cargo fmt --check 2>&1|head -3; echo FMT_OK; git add -A src/ tests/ && git status --short | grep '^[AM]': FMT_OK M src/ir_lower/stmt/static_property_writes.rs M src/types/checker/stmt_check/assignments/locals.rs M src/types/checker/stmt_check/assignments/properties.rs M src/types/checker/stmt_check/assignments/static_properties.rs M tests/codegen/types.rs A tests/codegen/types/static_property_hash.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b271f8e8e698169ac63f4cc6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:25:19.464Z",
+  "stored_at": "2026-08-26T08:25:19.464Z"
+}

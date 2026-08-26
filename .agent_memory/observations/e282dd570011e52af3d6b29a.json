@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_refuse.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_refuse.txt: fix(streams): a $params the filter could not read was accepted in silence\n\nphp's four `convert.*` filters parse `$params` as an ARRAY ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_refuse.txt: fix(streams): a $params the filter could not read was accepted in silence\n\nphp's four `convert.*` filters parse `$params` as an ARRAY and reject anything\nelse: `stream_filter_append($h, \"convert.base64-encode\", STREAM_FILTER_WRITE,\nnull)` raises `Stream filter (convert.base64-encode): invalid filter parameter`,\nthen `Unable to create or locate filter \"convert.base64-encode\"`, and answers\n`false`. elephc attached a working filter and said nothing.\n\nThe refusal is theirs alone. Measured across ten filters on `php -n` 8.5.6,\n`string.toupper`, `string.tolower`, `string.rot13`, `dechunk`, `zlib.def",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e282dd570011e52af3d6b29a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:51:39.404Z",
+  "stored_at": "2026-08-17T14:51:39.405Z"
+}

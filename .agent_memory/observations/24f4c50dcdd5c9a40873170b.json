@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/ 2>/dev/null | head -30; find . -name 'run_named8.py' -not -path './target/*' 2>/dev/null | head",
+  "summary": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/ 2>/dev/null | head -30; find . -name 'run_named8.py' -not -path './target/*' 2>/dev/null | head: audit_builtin_eir_boundary.py benchmark_magician.py benchmark_suite.py check_asm_comments.py check_pdo_dblib_symbols.sh",
+  "text": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/scripts/ 2>/dev/null | head -30; find . -name 'run_named8.py' -not -path './target/*' 2>/dev/null | head: audit_builtin_eir_boundary.py benchmark_magician.py benchmark_suite.py check_asm_comments.py check_pdo_dblib_symbols.sh ci docs test-linux-arm64.sh test-linux-x86_64.sh test-pdo-gss.sh",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "24f4c50dcdd5c9a40873170b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:07:33.111Z",
+  "stored_at": "2026-08-24T17:07:33.112Z"
+}

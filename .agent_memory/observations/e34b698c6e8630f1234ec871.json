@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/run_named.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/run_named.py: \"\"\"Runs every probe the auditors named against BOTH php and elephc, and reports the disagreements.\n\nEach probe runs in its OWN direc",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/run_named.py: \"\"\"Runs every probe the auditors named against BOTH php and elephc, and reports the disagreements.\n\nEach probe runs in its OWN directory: php and elephc sharing one working directory has already\nfaked a write path green once in this campaign.\n\"\"\"\nimport pathlib\nimport shutil\nimport subprocess\n\nHERE = pathlib.Path(__file__).parent\nSRC = HERE / 'named_probes'\nWORK = HERE.parent / 'named_work'\nELEPHC = (\n    '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/'\n    'streams-csv-signature/target/debug/elephc'\n)\n\nshutil.rmtree(WORK, ignore_errors=True)\nWORK.mkdir(parents=True)\n\ni",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e34b698c6e8630f1234ec871",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:50:43.864Z",
+  "stored_at": "2026-08-22T16:50:43.864Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg43.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg43.txt: feat(types): a scalar reassignment widens the local instead of being refused\n\n    $x = 42;\n    $x = \"hello\";   // Type error: cannot rea",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg43.txt: feat(types): a scalar reassignment widens the local instead of being refused\n\n    $x = 42;\n    $x = \"hello\";   // Type error: cannot reassign $x from int to string\n\nThat is ordinary php — `php -n` 8.5.6 prints `string(5) \"hello\"` — and elephc refused it.\n`docs/internals/the-type-checker.md` described the refusal as intentional: it let the compiler\nknow exactly what `$x` was at every point, without needing runtime type tags. The trade is now\nmade per SLOT rather than per program. Only a local actually reassigned across scalar types\ncarries a tag; every other local keeps its concrete representat",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f44fd02a71cd18a2f2874aaa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:10:44.312Z",
+  "stored_at": "2026-08-22T15:10:44.313Z"
+}

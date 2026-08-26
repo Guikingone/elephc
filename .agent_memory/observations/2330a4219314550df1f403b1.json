@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 26,148p src/codegen_support/runtime/io/user_filter.rs",
+  "summary": "sed -n 26,148p src/codegen_support/runtime/io/user_filter.rs: estore frame pointer and return address emitter.instruction(\"add sp, sp, #48\"); // release the frame emitter.instruction(\"mov x0, #1\"); // return true for a successful registration emitter.instruction(\"b __rt_sfr_ret\"); // share the common epilogue emitter.l",
+  "text": "sed -n 26,148p src/codegen_support/runtime/io/user_filter.rs: estore frame pointer and return address emitter.instruction(\"add sp, sp, #48\"); // release the frame emitter.instruction(\"mov x0, #1\"); // return true for a successful registration emitter.instruction(\"b __rt_sfr_ret\"); // share the common epilogue emitter.label(\"__rt_sfr_full\"); emitter.instruction(\"ldp x29, x30, [sp, #32]\"); // restore frame pointer and return address emitter.instruction(\"add sp, sp, #48\"); // release the frame emitter.instruction(\"mov x0, #0\"); // return false when the registry is full emitter.label(\"__rt_sfr_ret\"); emitter.instruction(\"ldp x29, x30, [sp, #0]\"); // restore frame pointer and return address emitter.instruction(\"add sp, sp, #48\"); // release the helper frame emitter.instruction(\"ret\"); // return to the caller } /// Emits the Linux x86_64 stream runtime helper for stream filter register. fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2330a4219314550df1f403b1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:39:18.917Z",
+  "stored_at": "2026-08-21T15:39:18.917Z"
+}

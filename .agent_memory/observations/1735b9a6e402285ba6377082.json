@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '60,99p' src/dir_prelude.rs && echo \"=== detect ===\" && cat src/dir_prelude/detect.rs",
+  "summary": "sed -n '60,99p' src/dir_prelude.rs && echo \"=== detect ===\" && cat src/dir_prelude/detect.rs: helper(dir(\"/tmp\")); }\"# ))); } /// The neighbouring directory builtins stay native: none of them injects the prelude. This is /// the reason the function set is matched as a whole segment rather than by a `dir` substring. #[t",
+  "text": "sed -n '60,99p' src/dir_prelude.rs && echo \"=== detect ===\" && cat src/dir_prelude/detect.rs: helper(dir(\"/tmp\")); }\"# ))); } /// The neighbouring directory builtins stay native: none of them injects the prelude. This is /// the reason the function set is matched as a whole segment rather than by a `dir` substring. #[test] fn ignores_neighbouring_directory_builtins() { assert!(!program_uses_directory(&parse( r#\"<?php echo dirname(\"/a/b\");\"# ))); assert!(!program_uses_directory(&parse( r#\"<?php var_dump(is_dir(\"/tmp\"));\"# ))); assert!(!program_uses_directory(&parse( r#\"<?php $h = opendir(\"/tmp\"); readdir($h); rewinddir($h); closedir($h);\"# ))); assert!(!program_uses_directory(&parse( r#\"<?php print_r(scandir(\"/tmp\"));\"# ))); } /// Mentions of the names only inside string literals and variable names do not trigger /// detection. #[test] fn ignores_non_call_mentions() { assert!(!program_uses_directory(&parse( r#\"<?php $dirNote = \"call dir first\"; echo $dirNote;\"# ))); } /// A progra",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1735b9a6e402285ba6377082",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:40:52.317Z",
+  "stored_at": "2026-08-21T10:40:52.318Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 200,230p src/optimize/reachability/usage/expressions.rs",
+  "summary": "sed -n 200,230p src/optimize/reachability/usage/expressions.rs: gs: &[Expr]) { let key = self.record_callable(name); self.record_builtin_requirements(name, args); self.scan_builtin_callback_arguments(&key, args); self.scan_declaration_arguments(&key, args); self.scan_function_signature_arguments(&key, args); // The bac",
+  "text": "sed -n 200,230p src/optimize/reachability/usage/expressions.rs: gs: &[Expr]) { let key = self.record_callable(name); self.record_builtin_requirements(name, args); self.scan_builtin_callback_arguments(&key, args); self.scan_declaration_arguments(&key, args); self.scan_function_signature_arguments(&key, args); // The backend lowering calls this private PDOStatement method directly. Keep the // reachability edge next to that lowering contract until it becomes registry metadata. if key == \"__elephc_initialize_pdo_statement\" { let class = self.record_class(\"PDOStatement\"); self.usage.methods.insert(( class, php_symbol_key(\"__elephcInitialize\"), false, )); } let normalized = self.normalized_function_arguments(&key, args); let first = normalized.first().map(unwrap_named_arg); match key.as_str() { \"count\" => { if let Some(receiver) = first { self.record_protocol_methods(receiver, &[\"count\"]); } } \"iterator_apply\" | \"iterator_count\" | \"iterator_to_array\" => {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e789272d12e0b9659ce0a2e8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:31:14.275Z",
+  "stored_at": "2026-08-21T16:31:14.275Z"
+}

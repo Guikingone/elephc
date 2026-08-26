@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_order.py; sed -n '295,320p' src/codegen_support/runtime/io/streams_ext.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_order.py; sed -n '295,320p' src/codegen_",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_order.py; sed -n '295,320p' src/codegen_support/runtime/io/streams_ext.rs: mitter.instruction(\"ret\"); // return -1 // The named entry point: the same helper with the unlink skipped. emitter.blank(); emitter.raw(\" .p2align 2\"); emitter.comment(\"--- runtime: tmpfile, keeping the file its URI names ---\"); emitter.label_global(\"__rt_tmpfile_named\"); emitter.instruction(&format!(\"sub sp, sp, #{}\", tmpl_frame)); // allocate frame + template buffer emitter.instruction(&format!(\"stp x29, x30, [sp, #{}]\", tmpl_save)); // save frame pointer and return address emitter.instruction(&format!(\"add x29, sp, #{}\", tmpl_save)); // establish new frame pointer abi::emit_symbol_address(emitter, \"x9\", \"_tmpfile_template\"); emitter.instruction(\"ldp x10, x11, [x9]\"); emitter.instruction(\"stp x10, x11, [sp]\"); emitter.instruction(\"ldr x10, [x9, #16]\"); emitter.instruction(\"str x10, [sp, #16]\"); emitter.instruction(\"add x0, sp, #0\"); // mkstemp template argument emitter.bl_c(\"mkstemp\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d25187914d655e0d887ef505",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:20:21.699Z",
+  "stored_at": "2026-08-23T08:20:21.700Z"
+}

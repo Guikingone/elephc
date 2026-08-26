@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"__rt_file_failed\\|__rt_file_out\\|xor eax, eax\\|mov x0, xzr\" src/codegen_support/runtime/io/file.rs | head -10",
+  "summary": "grep -n \"__rt_file_failed\\|__rt_file_out\\|xor eax, eax\\|mov x0, xzr\" src/codegen_support/runtime/io/file.rs | head -10: 75: emitter.instruction(\"cbz x1, __rt_file_failed\"); 77: emitter.instruction(\"cbz x1, __rt_file_failed\"); // a null payload is a FAILED read, which PHP reports as false 138: emitter.label(\"__rt_file_f",
+  "text": "grep -n \"__rt_file_failed\\|__rt_file_out\\|xor eax, eax\\|mov x0, xzr\" src/codegen_support/runtime/io/file.rs | head -10: 75: emitter.instruction(\"cbz x1, __rt_file_failed\"); 77: emitter.instruction(\"cbz x1, __rt_file_failed\"); // a null payload is a FAILED read, which PHP reports as false 138: emitter.label(\"__rt_file_failed\"); 143: emitter.label(\"__rt_file_out\"); 151: emitter.label(\"__rt_file_failed\"); 153: emitter.instruction(\"b __rt_file_out\"); 229: emitter.instruction(\"jz __rt_file_failed_x\"); 233: emitter.instruction(\"jz __rt_file_failed\"); // answer null rather than the empty array an EMPTY file produces 285: emitter.label(\"__rt_file_out_x\"); 290: emitter.label(\"__rt_file_failed\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "27616985e29d39318a4064aa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:26:03.360Z",
+  "stored_at": "2026-08-20T17:26:03.361Z"
+}

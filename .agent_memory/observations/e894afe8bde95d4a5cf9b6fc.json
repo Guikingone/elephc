@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'scanf_prelude\\|needs_scanf' src/*.rs src/types/*.rs 2>/dev/null | grep -v 'src/scanf_prelude.rs' | head -8",
+  "summary": "grep -rn 'scanf_prelude\\|needs_scanf' src/*.rs src/types/*.rs 2>/dev/null | grep -v 'src/scanf_prelude.rs' | head -8: src/lib.rs:82:pub mod scanf_prelude; src/main.rs:56:mod scanf_prelude; src/pipeline.rs:351: let ast = crate::scanf_prelude::inject_if_used(ast, &mut prelude_inventory); src/pipeline.rs:357: .contains_ke",
+  "text": "grep -rn 'scanf_prelude\\|needs_scanf' src/*.rs src/types/*.rs 2>/dev/null | grep -v 'src/scanf_prelude.rs' | head -8: src/lib.rs:82:pub mod scanf_prelude; src/main.rs:56:mod scanf_prelude; src/pipeline.rs:351: let ast = crate::scanf_prelude::inject_if_used(ast, &mut prelude_inventory); src/pipeline.rs:357: .contains_key(crate::scanf_prelude::PRELUDE_GROUP_ID) src/pipeline.rs:359: forced_groups.insert(crate::scanf_prelude::PRELUDE_GROUP_ID.to_string());",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e894afe8bde95d4a5cf9b6fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:34:07.901Z",
+  "stored_at": "2026-08-25T12:34:07.902Z"
+}

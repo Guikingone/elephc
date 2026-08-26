@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"^impl |^}\" src/types/checker/inference/expr/effects.rs | head -6",
+  "summary": "rtk proxy rg -n \"^impl |^}\" src/types/checker/inference/expr/effects.rs | head -6: 21:impl Checker { 540:} 549:} 563:} 571:} 582:}",
+  "text": "rtk proxy rg -n \"^impl |^}\" src/types/checker/inference/expr/effects.rs | head -6: 21:impl Checker { 540:} 549:} 563:} 571:} 582:}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "89858f745737906fb87a2bc2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T19:54:41.415Z",
+  "stored_at": "2026-08-16T19:54:41.416Z"
+}

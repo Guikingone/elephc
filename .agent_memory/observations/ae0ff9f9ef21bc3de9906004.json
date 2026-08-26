@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/residual_four.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/residual_four.py: \"\"\"Are the four remaining sweep rows about NULL at all?\n\nA row that differs with an explicit null proves nothing on its own — the",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/residual_four.py: \"\"\"Are the four remaining sweep rows about NULL at all?\n\nA row that differs with an explicit null proves nothing on its own — the same call with the\nargument OMITTED may differ too, in which case the null is incidental and the defect is somewhere\nelse entirely. Each pair below runs the null spelling and the omitted spelling, so the four are\nclassified rather than assumed.\n\"\"\"\nimport pathlib, subprocess\n\nD = pathlib.Path(__file__).parent / 'residual'\nD.mkdir(parents=True, exist_ok=True)\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signat",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ae0ff9f9ef21bc3de9906004",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:11:26.889Z",
+  "stored_at": "2026-08-21T11:11:26.889Z"
+}

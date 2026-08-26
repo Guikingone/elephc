@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad; ls | head -40; echo \"=== dirs with php programs ===\"; find . -maxdepth 2 -type d -name \"*surface*\" -o -maxdepth 2 -type d -name \"*whole*\" | head",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad; ls | head -40; echo \"=== dirs with php programs ===\"; find . -maxdepth 2 -type d -name \"*surface*\" -o -maxdepth 2 -type d -name \"*whole*\" | head: add_pr",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad; ls | head -40; echo \"=== dirs with php programs ===\"; find . -maxdepth 2 -type d -name \"*surface*\" -o -maxdepth 2 -type d -name \"*whole*\" | head: add_probe_silence.py add_probe_test.py check_braces.py check_markers.sh clean_warnings.py clean_warnings2.py count_remaining.sh counters_todo.txt dedupe_type_error.py diff1_work drop_dup_count_test.py drop_truncated_stat.py drop_unreachable.py dump_conflicts.py eval_chunks.sh eval_verdicts.txt extend_spec.py find_seams.py find_subsystem.sh fix_file_labels.py fix_nullsafe.py fix_shortcircuit_test.py fix_slot_size.py flk.php hrh_cases hrh_diff hrh_real mark_unreconciled.py migrate_ob_tests.py migrate_restore_test.py move_probe_field.py msg_diag.txt msg_fixup.txt msg_merge.txt named_work named_work7 named_work8 obflags.php obj php-src === dirs with php programs === ./uv/surface ./uv/unregsurface",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5222fd0d9de8becdf71396da",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:09:34.889Z",
+  "stored_at": "2026-08-23T07:09:34.890Z"
+}

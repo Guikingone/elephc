@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"wrapper\" src/codegen_support/runtime/io/stream_meta_state.rs src/codegen_support/runtime/io/stream_registry.rs 2>/dev/null | head -20; echo \"=== which file defines the wrapper id slot:\"; rg -ln \"_meta_wrapper_plainfile|wrapper_id|WRAPPER_\" src/codegen_support/runtime/io/*.rs | head -12",
+  "summary": "About to run: rg -n \"wrapper\" src/codegen_support/runtime/io/stream_meta_state.rs src/codegen_support/runtime/io/stream_registry.rs 2>/dev/null | head -20; echo \"=== which file defines the wrapper id slot:\"; rg -ln",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "79c2f4d901d30e910d2e5328",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:11:45.554Z",
+  "stored_at": "2026-08-17T13:11:45.555Z"
+}

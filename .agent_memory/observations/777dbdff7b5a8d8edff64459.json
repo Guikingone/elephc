@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"struct PreludeInventory\" -A 40 src/optimize/reachability/ | head -50",
+  "summary": "grep -rn \"struct PreludeInventory\" -A 40 src/optimize/reachability/ | head -50: ize/reachability/inventory.rs-48- } src/optimize/reachability/inventory.rs-49- src/optimize/reachability/inventory.rs-50- /// Records every declaration in one parsed prelude using its lexical namespace context. src/optimize/reachability/inv",
+  "text": "grep -rn \"struct PreludeInventory\" -A 40 src/optimize/reachability/ | head -50: ize/reachability/inventory.rs-48- } src/optimize/reachability/inventory.rs-49- src/optimize/reachability/inventory.rs-50- /// Records every declaration in one parsed prelude using its lexical namespace context. src/optimize/reachability/inventory.rs-51- pub fn record_program(&mut self, id: &str, prelude: &[Stmt]) { src/optimize/reachability/inventory.rs-52- let group = self.group_mut(id); src/optimize/reachability/inventory.rs-53- record_statements(group, prelude, None); src/optimize/reachability/inventory.rs-54- } src/optimize/reachability/inventory.rs-55- src/optimize/reachability/inventory.rs-56- /// Marks one compiler-owned method whose dynamic-call syntax only invokes closures created internally. src/optimize/reachability/inventory.rs-57- pub fn record_internal_callable_method( src/optimize/reachability/inventory.rs-58- &mut self, src/optimize/reachability/inventory.rs-59- id: &str,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "777dbdff7b5a8d8edff64459",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:31:34.652Z",
+  "stored_at": "2026-08-21T16:31:34.653Z"
+}

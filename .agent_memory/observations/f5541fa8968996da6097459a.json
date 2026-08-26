@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'fn spl_file_object_construct\\|SplFileObject.*construct\\|fn file_object_' src/types/checker/builtin_spl_classes/filesystem.rs | head -12",
+  "summary": "grep -n 'fn spl_file_object_construct\\|SplFileObject.*construct\\|fn file_object_' src/types/checker/builtin_spl_classes/filesystem.rs | head -12: 730:fn file_object_flags_expr() -> Expr { 837:fn file_object_valid_expr() -> Expr { 860:fn spl_file_object_construct_body(path: Expr, mode: Expr) -> Vec<Stmt> { 865:fn spl_fi",
+  "text": "grep -n 'fn spl_file_object_construct\\|SplFileObject.*construct\\|fn file_object_' src/types/checker/builtin_spl_classes/filesystem.rs | head -12: 730:fn file_object_flags_expr() -> Expr { 837:fn file_object_valid_expr() -> Expr { 860:fn spl_file_object_construct_body(path: Expr, mode: Expr) -> Vec<Stmt> { 865:fn spl_file_object_construct_body_with_backing(path: Expr, backing_path: Expr, mode: Expr) -> Vec<Stmt> { 890:fn file_object_load_lines_body(path: Expr) -> Vec<Stmt> {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f5541fa8968996da6097459a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:07:44.021Z",
+  "stored_at": "2026-08-24T20:07:44.022Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub struct ClassInfo\" -A 28 src/types/ 2>/dev/null | head -32",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub struct ClassInfo\" -A 28 src/types/ 2>/dev/null | head -32: rs-272- /// PHP 8.3 declared types for constants declared directly on this class-like symbol. src/types/schema.rs-273- pub constant_types: HashMap<Stri",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub struct ClassInfo\" -A 28 src/types/ 2>/dev/null | head -32: rs-272- /// PHP 8.3 declared types for constants declared directly on this class-like symbol. src/types/schema.rs-273- pub constant_types: HashMap<String, TypeExpr>, src/types/schema.rs-274- /// Class constant visibilities keyed by case-sensitive constant name. src/types/schema.rs-275- pub constant_visibilities: HashMap<String, Visibility>, src/types/schema.rs-276- /// Class constants declared with PHP 8.1+ `final`, keyed by constant name. src/types/schema.rs-277- pub final_constants: HashSet<String>, src/types/schema.rs-278- /// Names of PHP 8 attributes attached to this class declaration, in src/types/schema.rs-279- /// source order. Name resolution stores canonical class-like text without src/types/schema.rs-280- /// a synthetic leading backslash, matching `ReflectionAttribute::getName()`. src/types/schema.rs-281- /// Reflection helpers read this list during codegen when materializing",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fac7142bcd53dde2bf24fa39",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:25:52.200Z",
+  "stored_at": "2026-08-22T18:25:52.200Z"
+}

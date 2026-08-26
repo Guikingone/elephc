@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 1 3 2>&1 | head -80",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 1 3 2>&1 | head -80: untime success flag set? ctx.emitter.instruction(&format!(\"jz {}\", false_label)); // box PHP false when it is",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 1 3 2>&1 | head -80: untime success flag set? ctx.emitter.instruction(&format!(\"jz {}\", false_label)); // box PHP false when it is not ctx.emitter.instruction(\"movq rdi, xmm0\"); // the IEEE-754 bits are the Mixed low payload word ctx.emitter.instruction(\"xor esi, esi\"); // float Mixed payloads do not use a high word ctx.emitter.instruction(\"mov eax, 2\"); // select runtime tag 2 for a float Mixed value abi::emit_call_label(ctx.emitter, \"__rt_mixed_from_value\"); ctx.emitter.instruction(&format!(\"jmp {}\", done_label)); ctx.emitter.label(&false_label); ctx.emitter.instruction(\"xor edi, edi\"); // use zero as the false payload ctx.emitter.instruction(\"xor esi, esi\"); ctx.emitter.instruction(\"mov eax, 3\"); // select runtime tag 3 for boolean false abi::emit_call_label(ctx.emitter, \"__rt_mixed_from_value\"); ctx.emitter.label(&done_label); } } } /// Boxes a raw INDEXED array pointer into PHP `array|false` Mixed form.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "81f3eb3df7a7b1de85e656a5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:10:24.795Z",
+  "stored_at": "2026-08-20T17:10:24.795Z"
+}

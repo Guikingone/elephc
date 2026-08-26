@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"functions:\" -B3 -A3 src/types/checker/mod.rs | head -20; rtk proxy rg -n \"pub\\(crate\\) functions|pub functions\" -g '*.rs' src/types/checker/ | head -5",
+  "summary": "rtk proxy rg -n \"functions:\" -B3 -A3 src/types/checker/mod.rs | head -20; rtk proxy rg -n \"pub\\(crate\\) functions|pub functions\" -g '*.rs' src/types/checker/ | head -5: y use their provisional signature, but must not re-specialize the same 73- /// declaration while it is in flight. 74: pub resolving_functions: HashSet<",
+  "text": "rtk proxy rg -n \"functions:\" -B3 -A3 src/types/checker/mod.rs | head -20; rtk proxy rg -n \"pub\\(crate\\) functions|pub functions\" -g '*.rs' src/types/checker/ | head -5: y use their provisional signature, but must not re-specialize the same 73- /// declaration while it is in flight. 74: pub resolving_functions: HashSet<String>, 75- /// Top-level constant types indexed by canonical name. 76- pub constants: HashMap<String, PhpType>, 77- /// Tracks the return type of closures assigned to variables, keyed by variable name. -- 145- /// closure can be bound to an object later via `Closure::bind` / `bindTo`. 146- pub closure_depth: usize, 147- /// Extern function declarations (e.g. `extern \"C\" { function foo(): void; }`). 148: pub extern_functions: HashMap<String, ExternFunctionSig>, 149- /// Extern class (C struct) declarations keyed by canonical name. 150- pub extern_classes: HashMap<String, ExternClassInfo>, 151- /// Packed layout-only records (`packed class`), keyed by canonical name. src/types/checker/mod.rs:69: pub functions: HashMap<String, FunctionSig>,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d51c66231d9458a918847a58",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:37:40.346Z",
+  "stored_at": "2026-08-16T17:37:40.347Z"
+}

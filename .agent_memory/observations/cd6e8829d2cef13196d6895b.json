@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probes.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probes.py: \"\"\"Extracts every PHP program the round-6 auditors named, so each one can actually be run.\n\nA probe an auditor names is worth more than",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/probes.py: \"\"\"Extracts every PHP program the round-6 auditors named, so each one can actually be run.\n\nA probe an auditor names is worth more than the paragraph around it — but only if it is run. This\npulls the fenced php blocks out of the three answers and writes them to disk, numbered by model.\n\"\"\"\nimport pathlib\nimport re\n\nHERE = pathlib.Path(__file__).parent\nOUT = HERE / 'named_probes'\nOUT.mkdir(exist_ok=True)\n\nfor path in sorted((HERE / 'audit').glob('round6-*.md')):\n    model = path.stem.replace('round6-', '')\n    text = re.sub(r'\\x1b\\[[0-9]*[A-Za-z]', '', path.read_text())\n    blocks = re.findall(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cd6e8829d2cef13196d6895b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:50:22.604Z",
+  "stored_at": "2026-08-22T16:50:22.605Z"
+}

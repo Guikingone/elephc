@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"php_fd_open\" src/codegen_support/runtime/io/*.rs | head -8",
+  "summary": "grep -rn \"php_fd_open\" src/codegen_support/runtime/io/*.rs | head -8: src/codegen_support/runtime/io/mod.rs:30:mod php_fd_open; src/codegen_support/runtime/io/mod.rs:291:pub(crate) use php_fd_open::{ src/codegen_support/runtime/io/mod.rs:292: emit_php_fd_open, PHP_FD_DUP_HEAD, PHP_FD_DUP_MIDDLE, PHP_FD_DUP_TAIL, PHP_FD",
+  "text": "grep -rn \"php_fd_open\" src/codegen_support/runtime/io/*.rs | head -8: src/codegen_support/runtime/io/mod.rs:30:mod php_fd_open; src/codegen_support/runtime/io/mod.rs:291:pub(crate) use php_fd_open::{ src/codegen_support/runtime/io/mod.rs:292: emit_php_fd_open, PHP_FD_DUP_HEAD, PHP_FD_DUP_MIDDLE, PHP_FD_DUP_TAIL, PHP_FD_RANGE_HEAD, src/codegen_support/runtime/io/php_fd_open.rs:2://! Emits `__rt_php_fd_open`, the `php://fd/N` opener — the one php:// sub-wrapper whose refusal src/codegen_support/runtime/io/php_fd_open.rs:62:/// Emits `__rt_php_fd_open`. src/codegen_support/runtime/io/php_fd_open.rs:63:pub fn emit_php_fd_open(emitter: &mut Emitter) { src/codegen_support/runtime/io/php_fd_open.rs:70:/// `__rt_php_fd_open(x0 = requested descriptor, x1 = URL pointer, x2 = URL length) -> x0 = fd|-1`. src/codegen_support/runtime/io/php_fd_open.rs:78: emitter.label_global(\"__rt_php_fd_open\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "965bb1cab38d193d3f179981",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T13:02:22.325Z",
+  "stored_at": "2026-08-16T13:02:22.325Z"
+}

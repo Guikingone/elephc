@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scts_warnings.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scts_warnings.py: \"\"\"`stream_copy_to_stream()` refused a seek in silence where php says why, twice.\n\nMEASURED on `php -n` 8.5.6, two wrappers that",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/scts_warnings.py: \"\"\"`stream_copy_to_stream()` refused a seek in silence where php says why, twice.\n\nMEASURED on `php -n` 8.5.6, two wrappers that differ only in whether the class defines the method:\n\n    a class with NO stream_seek        a stream_seek that returns false\n    Warning: ...Stream does not support seeking\n    Warning: ...Failed to seek to position 2 in the stream\n                                       Warning: ...Failed to seek to position 2 in the stream\n    bool(false)                        bool(false)\n\nSo the first line is about the OP being absent and the second about the seek failing, and on",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aad2d05c6acea16f9e59ea2e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T20:49:22.688Z",
+  "stored_at": "2026-08-22T20:49:22.688Z"
+}

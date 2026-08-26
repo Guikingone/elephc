@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/implode-mixed-array-float-and-hash-still-segfault.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/implode-mixed-array-float-and-hash-still-segfault.md: ---\nname: implode-mixed-array-float-and-hash-still-segfault\ndescription: OUVERT — implode() sur un tableau `mixed` de FLOATS ou un HASH segfaute encore; int/boo",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/implode-mixed-array-float-and-hash-still-segfault.md: ---\nname: implode-mixed-array-float-and-hash-still-segfault\ndescription: OUVERT — implode() sur un tableau `mixed` de FLOATS ou un HASH segfaute encore; int/bool corrigés par 304145bd03\nmetadata:\n  type: project\n---\n\n`implode()`/`join()` choisissait son rendu d'après le type de COMPILATION. Un opérande `Mixed` n'en a pas ⇒ il recevait `__rt_implode`, qui parcourt des slots chaîne de 16 octets `{ptr,len}` : la charge utile `1` d'un tableau d'entiers était déréférencée comme un POINTEUR. Corrigé (`304145bd03`) par `__rt_implode_dyn`, qui branche à l'EXÉCUTION sur le tag `value_type` déjà présent",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "55b7fa69aee7d71fa1726532",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T21:05:38.125Z",
+  "stored_at": "2026-08-15T21:05:38.126Z"
+}

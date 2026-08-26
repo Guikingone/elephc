@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"program_may_reference_spl\" src | head -4",
+  "summary": "grep -rln \"program_may_reference_spl\" src | head -4: src/types/checker/builtin_spl_classes.rs src/types/checker/driver/mod.rs src/types/checker/builtin_spl_classes/registry.rs src/codegen_support/emitted_classes.rs",
+  "text": "grep -rln \"program_may_reference_spl\" src | head -4: src/types/checker/builtin_spl_classes.rs src/types/checker/driver/mod.rs src/types/checker/builtin_spl_classes/registry.rs src/codegen_support/emitted_classes.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e77ee544ffd8f580e4543dae",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:15:55.183Z",
+  "stored_at": "2026-08-21T15:15:55.184Z"
+}

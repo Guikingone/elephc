@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git status --short | head -30; echo \"--- HEAD:\"; git log -1 --format=\"%h %s\"",
+  "summary": "git status --short | head -30; echo \"--- HEAD:\"; git log -1 --format=\"%h %s\": a/fixed.rs M src/codegen_support/runtime/data/mod.rs M src/codegen_support/runtime/diagnostics.rs M tests/codegen/arrays/indexed/oob_reads.rs M tests/codegen/arrays/mixed_append_autovivify.rs M tests/codegen/arrays/nested_autovivify.rs M test",
+  "text": "git status --short | head -30; echo \"--- HEAD:\"; git log -1 --format=\"%h %s\": a/fixed.rs M src/codegen_support/runtime/data/mod.rs M src/codegen_support/runtime/diagnostics.rs M tests/codegen/arrays/indexed/oob_reads.rs M tests/codegen/arrays/mixed_append_autovivify.rs M tests/codegen/arrays/nested_autovivify.rs M tests/codegen/callables/constants_and_system.rs M tests/codegen/control_flow/functions.rs M tests/codegen/control_flow/nulls.rs M tests/codegen/eval.rs M tests/codegen/exceptions.rs M tests/codegen/io/files.rs M tests/codegen/io/filesystem.rs M tests/codegen/io/misc.rs M tests/codegen/io/printing.rs M tests/codegen/io/streams.rs M tests/codegen/objects/nullable_dispatch.rs M tests/codegen/objects/property_access/nullsafe.rs M tests/codegen/regressions/arrays.rs M tests/codegen/support/runner.rs M tests/codegen/types/iterable/foreach.rs ?? .agent_memory/ --- HEAD: 14f6580b8 fix(streams): a compress.zlib:// URL built at run time could not reach the wrapper",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ef14d07379e525620e2c50de",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T18:55:46.431Z",
+  "stored_at": "2026-08-18T18:55:46.432Z"
+}

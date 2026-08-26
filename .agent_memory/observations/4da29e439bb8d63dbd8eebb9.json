@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_empty_on_declared_instance_property\" -A 22 tests/codegen/objects/property_access/nullsafe.rs | head -26",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_empty_on_declared_instance_property\" -A 22 tests/codegen/objects/property_access/nullsafe.rs | head -26: 685:fn test_empty_on_declared_instance_property() { 686- let out = compile_and_run( 687- r#\"<?php 688-",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn test_empty_on_declared_instance_property\" -A 22 tests/codegen/objects/property_access/nullsafe.rs | head -26: 685:fn test_empty_on_declared_instance_property() { 686- let out = compile_and_run( 687- r#\"<?php 688-class C { public int $p; public int $q = 5; public mixed $m; } 689-function mk() { return new C(); } 690-$o = new C(); 691-var_dump(empty($o->p)); 692-var_dump(empty($o->q)); 693-var_dump(empty($o->m)); 694-unset($o->q); 695-var_dump(empty($o->q)); 696-var_dump(empty(mk()->p)); 697-\"#, 698- ); 699- assert_eq!( 700- out, 701- \"bool(true)\\nbool(false)\\nbool(true)\\nbool(true)\\nbool(true)\\n\" 702- ); 703-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4da29e439bb8d63dbd8eebb9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T11:48:29.064Z",
+  "stored_at": "2026-08-23T11:48:29.064Z"
+}

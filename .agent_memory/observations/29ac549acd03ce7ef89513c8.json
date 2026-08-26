@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "./target/debug/deps/codegen_tests-16c45d69d5f633ba --list 2>/dev/null | grep '^codegen::eval' | sed 's/^codegen::eval//' | sed 's/::.*//' | sort | uniq -c | sort -rn | head -12",
+  "summary": "./target/debug/deps/codegen_tests-16c45d69d5f633ba --list 2>/dev/null | grep '^codegen::eval' | sed 's/^codegen::eval//' | sed 's/::.*//' | sort | uniq -c | sort -rn | head -12: 972 49 _callables 24 _builtin_parity 12 _closures 12 _callable_ref_errors 10 _constructors 2 _reflection_invocation",
+  "text": "./target/debug/deps/codegen_tests-16c45d69d5f633ba --list 2>/dev/null | grep '^codegen::eval' | sed 's/^codegen::eval//' | sed 's/::.*//' | sort | uniq -c | sort -rn | head -12: 972 49 _callables 24 _builtin_parity 12 _closures 12 _callable_ref_errors 10 _constructors 2 _reflection_invocation",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "29ac549acd03ce7ef89513c8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T07:18:15.173Z",
+  "stored_at": "2026-08-18T07:18:15.173Z"
+}

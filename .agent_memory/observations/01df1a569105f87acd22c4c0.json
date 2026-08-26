@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py \"closed stream\" 2>&1 | head -20",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py \"closed stream\" 2>&1 | head -20: DIFF operations on a closed stream php: fgets => TypeError: fgets(): Argument #1 ($st",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py \"closed stream\" 2>&1 | head -20: DIFF operations on a closed stream php: fgets => TypeError: fgets(): Argument #1 ($stream) must be an open stream resource elephc: Fatal error: Call to undefined function <dynamic>() php: feof => TypeError: feof(): Argument #1 ($stream) must be an open stream resource elephc: <none> php: ftell => TypeError: ftell(): Argument #1 ($stream) must be an open stream resource elephc: <none> php: fclose => TypeError: fclose(): Argument #1 ($stream) must be an open stream resource elephc: <none> 0 same, 1 differ, 0 do not build, of 1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "01df1a569105f87acd22c4c0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:28:54.187Z",
+  "stored_at": "2026-08-21T18:28:54.187Z"
+}

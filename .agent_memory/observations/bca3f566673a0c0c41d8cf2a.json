@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '70,84p' src/ir_lower/tests/mod.rs",
+  "summary": "rtk proxy sed -n '70,84p' src/ir_lower/tests/mod.rs: &defines, ) .expect(\"autoload failed\"); // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between // `autoload::run` and constant folding. Without it an example using those functions // reaches the checker as an undefined call, so the corpus",
+  "text": "rtk proxy sed -n '70,84p' src/ir_lower/tests/mod.rs: &defines, ) .expect(\"autoload failed\"); // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between // `autoload::run` and constant folding. Without it an example using those functions // reaches the checker as an undefined call, so the corpus would fail on valid PHP. let ast = crate::func_args::desugar(ast).expect(\"func_args desugar failed\"); let ast = crate::optimize::fold_constants(ast); let check_result = crate::types::check_with_target(&ast, target).expect(\"type check failed\"); let ast = crate::optimize::propagate_constants(ast); let ast = crate::optimize::prune_constant_control_flow(ast); let ast = crate::optimize::normalize_control_flow(ast); let ast = crate::optimize::eliminate_dead_code(ast); crate::ir_lower::lower_program(&ast, &check_result, target, false).unwrap_or_else(|error| { panic!(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bca3f566673a0c0c41d8cf2a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T18:18:41.291Z",
+  "stored_at": "2026-08-16T18:18:41.292Z"
+}

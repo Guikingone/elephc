@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"usort\" src/codegen_support/runtime/arrays/mod.rs | head -8; echo \"--- gating ---\"; grep -rn \"emit_usort\\b\" src/codegen_support/runtime/ | grep -v \"arrays/usort.rs\" | head -5",
+  "summary": "grep -rn \"usort\" src/codegen_support/runtime/arrays/mod.rs | head -8; echo \"--- gating ---\"; grep -rn \"emit_usort\\b\" src/codegen_support/runtime/ | grep -v \"arrays/usort.rs\" | head -5: src/codegen_support/runtime/arrays/mod.rs:189:mod usort; src/codegen_support/runtime/arrays/mod.rs:190:mod usort_str; src/codegen_suppo",
+  "text": "grep -rn \"usort\" src/codegen_support/runtime/arrays/mod.rs | head -8; echo \"--- gating ---\"; grep -rn \"emit_usort\\b\" src/codegen_support/runtime/ | grep -v \"arrays/usort.rs\" | head -5: src/codegen_support/runtime/arrays/mod.rs:189:mod usort; src/codegen_support/runtime/arrays/mod.rs:190:mod usort_str; src/codegen_support/runtime/arrays/mod.rs:536:pub use usort::emit_usort; src/codegen_support/runtime/arrays/mod.rs:538:pub use usort_str::emit_usort_str; --- gating --- src/codegen_support/runtime/arrays/mod.rs:536:pub use usort::emit_usort; src/codegen_support/runtime/emitters/managed.rs:186: arrays::emit_usort(emitter);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bb85971671e872393b09531a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:15:19.332Z",
+  "stored_at": "2026-08-22T10:15:19.332Z"
+}

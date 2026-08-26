@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln 'lower_referenced_builtin.*methods\\|referenced_builtin_spl' src/ir_lower/ | head -5; echo ---; grep -rn 'fn lower_referenced' src/ir_lower/*.rs | head -8",
+  "summary": "grep -rln 'lower_referenced_builtin.*methods\\|referenced_builtin_spl' src/ir_lower/ | head -5; echo ---; grep -rn 'fn lower_referenced' src/ir_lower/*.rs | head -8: src/ir_lower/builtin_datetime.rs src/ir_lower/reflection.rs src/ir_lower/program.rs src/ir_lower/program/spl_discovery.rs --- src/ir_lower/builtin_datetime",
+  "text": "grep -rln 'lower_referenced_builtin.*methods\\|referenced_builtin_spl' src/ir_lower/ | head -5; echo ---; grep -rn 'fn lower_referenced' src/ir_lower/*.rs | head -8: src/ir_lower/builtin_datetime.rs src/ir_lower/reflection.rs src/ir_lower/program.rs src/ir_lower/program/spl_discovery.rs --- src/ir_lower/builtin_datetime.rs:68:pub(crate) fn lower_referenced_builtin_datetime_methods( src/ir_lower/reflection.rs:44:pub(super) fn lower_referenced_builtin_methods(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ccc150cd70a69c5391f441cc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:10:54.486Z",
+  "stored_at": "2026-08-25T12:10:54.486Z"
+}

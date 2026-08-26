@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_fopen_maybe_phar\" src/codegen_support/runtime/ | head -3",
+  "summary": "About to run: grep -rn \"__rt_fopen_maybe_phar\" src/codegen_support/runtime/ | head -3",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8d22298ab72feeb8a2513683",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:09:39.502Z",
+  "stored_at": "2026-08-22T08:09:39.502Z"
+}

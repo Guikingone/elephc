@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_test.py && RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams::test_a_context_built_from_an_empty 2>&1 | grep -E \"^test |test result|left|right\" | head -6",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_test.py && RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams::test_a_context_built_from_an_empty 2>&1 | grep -E \"^test |tes",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_test.py && RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::streams::test_a_context_built_from_an_empty 2>&1 | grep -E \"^test |test result|left|right\" | head -6: streams.rs: the empty-options context is pinned test codegen::io::streams::test_a_context_built_from_an_empty_options_array_accepts_set_option ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8850 filtered out; finished in 0.97s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8ca31a67a0d3adaa0fc68a8b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:25:07.909Z",
+  "stored_at": "2026-08-22T15:25:07.909Z"
+}

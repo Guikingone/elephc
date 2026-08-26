@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add crates/elephc-builtin-contract && git commit -m \"test(contract): the three surface-count assertions learn the ten builtins this branch adds\n\ncatalog_is_valid_and_complete_for_all_contract_surfaces, every_contract_has_a\n_backend_support_record and every_eval_binding_has_a_documented_execution_route\npin exact counts (contracts 544, eval/aot registry 474/530, interpreter\nadapters 453). The merge's ten new catalog entries (str_getcsv, fputs, the\nsocket_* aliases, diskfreespace, set_file_buffer, stream_register_wrapper,\nstream_context_set_options) moved every one of them by ten; the support… [+558 chars truncated]",
+  "summary": "git add crates/elephc-builtin-contract && git commit -m \"test(contract): the three surface-count assertions learn the ten builtins this branch adds\n\ncatalog_is_valid_and_complete_for_all_contract_surfaces, every_contract_has_a\n_backend_support_record and every_eval_binding_has_a_documented_execution_route\npin exact cou",
+  "text": "git add crates/elephc-builtin-contract && git commit -m \"test(contract): the three surface-count assertions learn the ten builtins this branch adds\n\ncatalog_is_valid_and_complete_for_all_contract_surfaces, every_contract_has_a\n_backend_support_record and every_eval_binding_has_a_documented_execution_route\npin exact counts (contracts 544, eval/aot registry 474/530, interpreter\nadapters 453). The merge's ten new catalog entries (str_getcsv, fputs, the\nsocket_* aliases, diskfreespace, set_file_buffer, stream_register_wrapper,\nstream_context_set_options) moved every one of them by ten; the support and\nexecution derivations were already correct, so only the expected counts\nchange. Red on all three CI platforms in run 31805290178 (6835/6838), green\nlocally at 15/15 after.\n\nThe earlier local run that reported '0 passed; 0 filtered' for this crate was\nthe test harness compiling without running — a tail-truncated verdict, exactly\nthe trap the memory warns about.\" 2>&1 | tail -1 && git push fork HEAD:refs/heads/feat/streams-csv-signatures --force-with-lease=refs/heads/feat/streams-csv-signatures:034ac079366a01c81f8ada37e6493e11e33ef94d 2>&1 | tail -1: 2 files changed, 4 insertions(+), 4 deletions(-) error: failed to push some refs to 'github.com:Guikingone/elephc.git'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bfc7bc079b14b39667b2f45c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:59:53.420Z",
+  "stored_at": "2026-08-14T14:59:53.421Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"\\\"isset\\\"\\|\\\"empty\\\"\" src/ir_lower/ | head -20",
+  "summary": "grep -rn \"\\\"isset\\\"\\|\\\"empty\\\"\" src/ir_lower/ | head -20: src/ir_lower/expr/native_isset.rs:150: \"isset\", src/ir_lower/expr/lazy_isset.rs:19: if php_symbol_key(name.trim_start_matches('\\\\')) != \"isset\" { src/ir_lower/expr/lazy_isset.rs:128: if php_symbol_key(name.trim_start_matches('\\\\')) != \"empty\" { src/ir_lower/expr",
+  "text": "grep -rn \"\\\"isset\\\"\\|\\\"empty\\\"\" src/ir_lower/ | head -20: src/ir_lower/expr/native_isset.rs:150: \"isset\", src/ir_lower/expr/lazy_isset.rs:19: if php_symbol_key(name.trim_start_matches('\\\\')) != \"isset\" { src/ir_lower/expr/lazy_isset.rs:128: if php_symbol_key(name.trim_start_matches('\\\\')) != \"empty\" { src/ir_lower/expr/mod.rs:505: \"isset\", src/ir_lower/expr/mod.rs:568: \"isset\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "92c761e41e3f295684de2fa3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:16:11.198Z",
+  "stored_at": "2026-08-20T19:16:11.198Z"
+}

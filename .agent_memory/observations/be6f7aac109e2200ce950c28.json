@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"glob\" tests/codegen/eval_builtin_parity.rs | head -5; echo \"--- shape of a test there ---\"; sed -n 1,40p tests/codegen/eval_builtin_parity.rs",
+  "summary": "About to run: grep -n \"glob\" tests/codegen/eval_builtin_parity.rs | head -5; echo \"--- shape of a test there ---\"; sed -n 1,40p tests/codegen/eval_builtin_parity.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "be6f7aac109e2200ce950c28",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:30:45.833Z",
+  "stored_at": "2026-08-22T09:30:45.834Z"
+}

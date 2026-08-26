@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn emit_throwable_creation_line_unknown' -A 25 src/codegen_support/ | head -35",
+  "summary": "grep -rn 'fn emit_throwable_creation_line_unknown' -A 25 src/codegen_support/ | head -35: )] src/codegen_support/sentinels.rs-302-mod tests { src/codegen_support/sentinels.rs-303- use super::*; src/codegen_support/sentinels.rs-304- src/codegen_support/sentinels.rs-305- /// Locks the canonical null sentinel bit pattern ",
+  "text": "grep -rn 'fn emit_throwable_creation_line_unknown' -A 25 src/codegen_support/ | head -35: )] src/codegen_support/sentinels.rs-302-mod tests { src/codegen_support/sentinels.rs-303- use super::*; src/codegen_support/sentinels.rs-304- src/codegen_support/sentinels.rs-305- /// Locks the canonical null sentinel bit pattern shared by every producer and consumer. src/codegen_support/sentinels.rs-306- #[test] src/codegen_support/sentinels.rs-307- fn null_sentinel_constant_value() { src/codegen_support/sentinels.rs-308- assert_eq!(NULL_SENTINEL, 0x7fff_ffff_ffff_fffe_u64 as i64); src/codegen_support/sentinels.rs-309- assert_eq!(NULL_SENTINEL, i64::MAX - 1); src/codegen_support/sentinels.rs-310- } src/codegen_support/sentinels.rs-311- src/codegen_support/sentinels.rs-312- /// Locks the float reading of the null sentinel: it must be a quiet NaN (so no ordinary src/codegen_support/sentinels.rs-313- /// arithmetic result collides with it) and it must differ from PHP's `NAN` constant (so a",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cc60a4560c3145d7ee371513",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:35:23.724Z",
+  "stored_at": "2026-08-25T13:35:23.725Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w29 $S/e29; mkdir -p $S/w29 $S/e29; cp $S/probes2/php-temp-uri.php $S/w29/p.php; cp $S/probes2/php-temp-uri.php $S/e29/p.php; cd $S/w29 && php -n p.php; echo \"=== elephc ===\"; cd $S/e29 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php >/dev/null 2>&1 && ./p; echo \"exit=$?\"",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w29 $S/e29; mkdir -p $S/w29 $S/e29; cp $S/probes2/php-temp-uri.php $S/w29/p.php; cp $S/probes2/php-temp-uri.php $S/e29/p.php; cd $S/w29 &",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w29 $S/e29; mkdir -p $S/w29 $S/e29; cp $S/probes2/php-temp-uri.php $S/w29/p.php; cp $S/probes2/php-temp-uri.php $S/e29/p.php; cd $S/w29 && php -n p.php; echo \"=== elephc ===\"; cd $S/e29 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php >/dev/null 2>&1 && ./p; echo \"exit=$?\": temp true eof false maxmem true eof false read 'hi ' dyn true eof false === elephc === temp true eof false maxmem true eof false read 'hi ' dyn true eof false exit=0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8370547a8d3da5ac9514a04c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:47:55.580Z",
+  "stored_at": "2026-08-24T20:47:55.580Z"
+}

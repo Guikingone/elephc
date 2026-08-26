@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/ir_backend_smoke_test.rs\")\ns = p.read_text()\nold = '''        compile_and_run_ir_backend(\"spl_file_object_foreach\", source),\n        \"0:one\\\\n;1:two\\\\n;\"'''\nnew = '''        compile_and_run_ir_backend(\"spl_file_object_foreach\", source),\n        // MEASURED on `php -n` 8.5.6: a file whose last byte is a newline yields ONE MORE\n        // element — php drives the iteration from the stream, which is not at end of file after\n        // the last `\\\\n`. The old expectation was written from elephc's line array.\n        \"0:one\\\\n;1:two\\\\n;2:;\"'''… [+270 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/ir_backend_smoke_test.rs\")\ns = p.read_text()\nold = '''        compile_and_run_ir_backend(\"spl_file_object_foreach\", source),\n        \"0:one\\\\n;1:two\\\\n;\"'''\nnew = '''        compile_and_run_ir_backend(\"spl_file_object_foreach\", source),\n        // MEASURED on `php",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/ir_backend_smoke_test.rs\")\ns = p.read_text()\nold = '''        compile_and_run_ir_backend(\"spl_file_object_foreach\", source),\n        \"0:one\\\\n;1:two\\\\n;\"'''\nnew = '''        compile_and_run_ir_backend(\"spl_file_object_foreach\", source),\n        // MEASURED on `php -n` 8.5.6: a file whose last byte is a newline yields ONE MORE\n        // element — php drives the iteration from the stream, which is not at end of file after\n        // the last `\\\\n`. The old expectation was written from elephc's line array.\n        \"0:one\\\\n;1:two\\\\n;2:;\"'''\nassert s.count(old) == 1, s.count(old)\np.write_text(s.replace(old, new))\nprint(\"expectation remeasured\")\nPY\nCARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test ir_backend_handles_spl_file_object_foreach 2>&1 | tail -3: expectation remeasured test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 256 filtered out; finished in 3.28s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dc25412aaf5636de567a8c75",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:25:53.623Z",
+  "stored_at": "2026-08-25T08:25:53.623Z"
+}

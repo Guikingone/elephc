@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub global_names\" -B 12 -A 12 src/ir/*.rs | head -35",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub global_names\" -B 12 -A 12 src/ir/*.rs | head -35: terministic literal/name pool used by IR immediates and printer output. src/ir/module.rs-166-#[derive(Debug, Clone, Default)] src/ir/module.rs-167-pub struct Da",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"pub global_names\" -B 12 -A 12 src/ir/*.rs | head -35: terministic literal/name pool used by IR immediates and printer output. src/ir/module.rs-166-#[derive(Debug, Clone, Default)] src/ir/module.rs-167-pub struct DataPool { src/ir/module.rs-168- pub strings: Vec<String>, src/ir/module.rs-169- pub float_literals: Vec<f64>, src/ir/module.rs:170: pub global_names: Vec<String>, src/ir/module.rs-171- pub function_names: Vec<String>, src/ir/module.rs-172- pub class_names: Vec<String>, src/ir/module.rs-173- pub method_names: Vec<String>, src/ir/module.rs-174- pub property_names: Vec<String>, src/ir/module.rs-175-} src/ir/module.rs-176- src/ir/module.rs-177-impl DataPool { src/ir/module.rs-178- /// Interns a string literal and returns its stable data identifier. src/ir/module.rs-179- pub fn intern_string(&mut self, value: &str) -> DataId { src/ir/module.rs-180- intern_string_vec(&mut self.strings, value) src/ir/module.rs-181- } src/ir/module.rs-182-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9dbaf6bb8acf1859dc4c0468",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T18:24:16.034Z",
+  "stored_at": "2026-08-22T18:24:16.035Z"
+}

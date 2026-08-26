@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests objects::gc_aliasing::test_gc_array_filter_borrowed_array_survives_unset 2>&1 | grep -E \"panicked|left|right|assert\" -A 3 | head -12",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests objects::gc_aliasing::test_gc_array_filter_borrowed_array_survives_unset 2>&1 | grep -E \"panicked|left|right|assert\" -A 3 | head -12: thread 'codegen::objects::gc_aliasing::test_gc_array_filter_borrowed_array_survives_unset' (41027418) panicked at tests/codegen/ob",
+  "text": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests objects::gc_aliasing::test_gc_array_filter_borrowed_array_survives_unset 2>&1 | grep -E \"panicked|left|right|assert\" -A 3 | head -12: thread 'codegen::objects::gc_aliasing::test_gc_array_filter_borrowed_array_survives_unset' (41027418) panicked at tests/codegen/objects/gc_aliasing.rs:380:5: assertion `left == right` failed left: \"|10\" right: \"11|2\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fcc6b3da16b7bff12b38bac3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:24:21.608Z",
+  "stored_at": "2026-08-22T13:24:21.609Z"
+}

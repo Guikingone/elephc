@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_isset_hash_found_null_check_aarch64\" -A 45 src/codegen/lower_inst/builtins/isset.rs | head -55",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_isset_hash_found_null_check_aarch64\" -A 45 src/codegen/lower_inst/builtins/isset.rs | head -55: make isset return false 306- ctx.emitter.instruction(\"cmp rcx, 7\"); // tag 7 means value_lo points to an alread",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn emit_isset_hash_found_null_check_aarch64\" -A 45 src/codegen/lower_inst/builtins/isset.rs | head -55: make isset return false 306- ctx.emitter.instruction(\"cmp rcx, 7\"); // tag 7 means value_lo points to an already-boxed Mixed cell 307- ctx.emitter.instruction(&format!(\"jne {}\", concrete_non_null)); // every other concrete runtime tag is non-null 308- ctx.emitter.instruction(\"mov rax, rdi\"); // pass the boxed Mixed hash value to the unbox helper 309- abi::emit_call_label(ctx.emitter, \"__rt_mixed_unbox\"); 310- ctx.emitter.instruction(\"cmp rax, 8\"); // runtime tag 8 means the found hash value is PHP null 311- ctx.emitter.instruction(&format!(\"je {}\", missing)); // null hash values make isset return false 312- ctx.emitter.label(&concrete_non_null); 313- return Ok(()); 314- } 315- ctx.emitter.instruction(\"cmp rcx, 8\"); // runtime tag 8 means the found hash value is PHP null 316- ctx.emitter.instruction(&format!(\"je {}\", missing)); // null hash values make isset return false 317- Ok(()) 318-}",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "82edc287749bfadd8600d379",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:47:37.240Z",
+  "stored_at": "2026-08-23T08:47:37.240Z"
+}

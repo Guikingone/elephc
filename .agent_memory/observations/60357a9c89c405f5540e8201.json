@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ps aux | grep -c \"[c]argo\\|[r]ustc\"; du -sh /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target 2>/dev/null; du -sh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature 2>/dev/null",
+  "summary": "About to run: ps aux | grep -c \"[c]argo\\|[r]ustc\"; du -sh /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target 2>/dev/null; du -sh /private/tmp/claude-501/-Users-guilla",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "60357a9c89c405f5540e8201",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:51:04.050Z",
+  "stored_at": "2026-08-22T17:51:04.051Z"
+}

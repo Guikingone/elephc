@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -i '' 's/ctor 2 main.php/ctor 2 test.php/' tests/codegen/spl/exception_location.rs && CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests spl::exception_location 2>&1 | tail -3",
+  "summary": "About to run: sed -i '' 's/ctor 2 main.php/ctor 2 test.php/' tests/codegen/spl/exception_location.rs && CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests spl::exception",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0ae03593c075899011f1b274",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T12:56:49.199Z",
+  "stored_at": "2026-08-25T12:56:49.199Z"
+}

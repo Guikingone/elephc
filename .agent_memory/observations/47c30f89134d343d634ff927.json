@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/ir_lower/stmt/mod.rs\")\ns = p.read_text()\nold = \"mod static_property_helpers;\"\nnew = \"pub(crate) mod static_property_helpers;\"\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nprint(\"module exposed\")\nPY\nCARGO_PROFILE_DEV_DEBUG=false cargo build -p elephc 2>&1 | grep -E '^error' -A 8 | head -20; echo BUILD_DONE",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/ir_lower/stmt/mod.rs\")\ns = p.read_text()\nold = \"mod static_property_helpers;\"\nnew = \"pub(crate) mod static_property_helpers;\"\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nprint(\"module exposed\")\nPY\nCARGO_PROFILE_DEV_DEBUG=false cargo build -p elephc 2>",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/ir_lower/stmt/mod.rs\")\ns = p.read_text()\nold = \"mod static_property_helpers;\"\nnew = \"pub(crate) mod static_property_helpers;\"\nassert s.count(old) == 1\np.write_text(s.replace(old, new))\nprint(\"module exposed\")\nPY\nCARGO_PROFILE_DEV_DEBUG=false cargo build -p elephc 2>&1 | grep -E '^error' -A 8 | head -20; echo BUILD_DONE: module exposed BUILD_DONE",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "47c30f89134d343d634ff927",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:28:48.834Z",
+  "stored_at": "2026-08-26T08:28:48.835Z"
+}

@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"return\" tools/gen_builtins.rs | head -12",
+  "summary": "grep -n \"return\" tools/gen_builtins.rs | head -12: 55: return; 127: \"returns\": type_name(contract.returns), 128: \"by_ref_return\": contract.by_ref_return, 203: return json!({ 223: return json!({",
+  "text": "grep -n \"return\" tools/gen_builtins.rs | head -12: 55: return; 127: \"returns\": type_name(contract.returns), 128: \"by_ref_return\": contract.by_ref_return, 203: return json!({ 223: return json!({",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7b2c0f594662c2337e1a9e3e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:05:26.044Z",
+  "stored_at": "2026-08-18T11:05:26.045Z",
+  "low_signal": true
+}

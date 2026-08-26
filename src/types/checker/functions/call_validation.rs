@@ -566,21 +566,24 @@ impl Checker {
                 continue;
             }
             if param_idx < regular_param_count {
-                if sig.ref_params.get(param_idx).copied().unwrap_or(false)
-                    && !self.is_by_ref_argument_lvalue(arg, caller_env, false)?
-                {
-                    let param_name = sig
-                        .params
-                        .get(param_idx)
-                        .map(|(name, _)| name.as_str())
-                        .unwrap_or("arg");
-                    return Err(CompileError::new(
-                        arg.span,
-                        &format!(
-                            "{} parameter ${} must be passed a variable",
-                            callee_desc, param_name
-                        ),
-                    ));
+                if sig.ref_params.get(param_idx).copied().unwrap_or(false) {
+                    // The callee holds a reference to this local from here on, and it can
+                    // escape, so the local is never kill/retype eligible in this body.
+                    self.record_reference_alias_root(arg);
+                    if !self.is_by_ref_argument_lvalue(arg, caller_env, false)? {
+                        let param_name = sig
+                            .params
+                            .get(param_idx)
+                            .map(|(name, _)| name.as_str())
+                            .unwrap_or("arg");
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "{} parameter ${} must be passed a variable",
+                                callee_desc, param_name
+                            ),
+                        ));
+                    }
                 }
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
                     if sig.declared_params.get(param_idx).copied().unwrap_or(false)
@@ -627,26 +630,42 @@ impl Checker {
                         )?;
                     }
                 }
-            } else if let (Some(vname), Some(expected_ty)) =
-                (sig.variadic.as_ref(), variadic_elem_ty.as_ref())
-            {
-                // The variadic occupies the last `declared_params` slot, so gating on it keeps
-                // the strict rejection off builtin variadics, whose registry-derived parameter
-                // types the checker does not otherwise consume.
-                if sig.declared_params.last().copied().unwrap_or(false) {
-                    self.require_strict_types_param_binding(
+            } else {
+                // An argument collected by a by-REFERENCE variadic (`&...$xs`) is bound by
+                // reference exactly like a regular by-ref parameter's, so the local it names is
+                // aliased for the rest of the body. The variadic's flag sits at
+                // `regular_param_count` in `ref_params` (it is the signature's last slot).
+                // Recorded outside the element-type check below because that one only runs when
+                // the element type is a known array, which has nothing to do with aliasing.
+                if sig
+                    .ref_params
+                    .get(regular_param_count)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    self.record_reference_alias_root(arg);
+                }
+                if let (Some(vname), Some(expected_ty)) =
+                    (sig.variadic.as_ref(), variadic_elem_ty.as_ref())
+                {
+                    // The variadic occupies the last `declared_params` slot, so gating on it
+                    // keeps the strict rejection off builtin variadics, whose registry-derived
+                    // parameter types the checker does not otherwise consume.
+                    if sig.declared_params.last().copied().unwrap_or(false) {
+                        self.require_strict_types_param_binding(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} variadic parameter ${}", callee_desc, vname),
+                        )?;
+                    }
+                    self.require_compatible_arg_type(
                         expected_ty,
                         &actual_ty,
                         arg.span,
                         &format!("{} variadic parameter ${}", callee_desc, vname),
                     )?;
                 }
-                self.require_compatible_arg_type(
-                    expected_ty,
-                    &actual_ty,
-                    arg.span,
-                    &format!("{} variadic parameter ${}", callee_desc, vname),
-                )?;
             }
             param_idx += 1;
         }

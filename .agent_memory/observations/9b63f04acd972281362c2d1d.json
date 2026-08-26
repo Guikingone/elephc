@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -c \"^=== \" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/suite_verdicts.txt; echo \"--- verdicts so far:\"; grep -E \"^=== |^test result\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/suite_verdicts.txt",
+  "summary": "grep -c \"^=== \" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/suite_verdicts.txt; echo \"--- verdicts so far:\"; grep -E \"^=== |^test result\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjec",
+  "text": "grep -c \"^=== \" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/suite_verdicts.txt; echo \"--- verdicts so far:\"; grep -E \"^=== |^test result\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/suite_verdicts.txt: 2 --- verdicts so far: === exceptions fibers buffers preprocessor namespaces null_sentinel case_insensitive_symbols === test result: ok. 248 passed; 0 failed; 3 ignored; 0 measured; 8202 filtered out; finished in 147.26s === cli strict_php lfc echo_vars php_tags === test result: ok. 65 passed; 0 failed; 0 ignored; 0 measured; 8388 filtered out; finished in 154.01s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9b63f04acd972281362c2d1d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-19T17:37:14.083Z",
+  "stored_at": "2026-08-19T17:37:14.084Z"
+}

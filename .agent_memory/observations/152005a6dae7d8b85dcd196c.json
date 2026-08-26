@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/emitters/frame_balance_tests.rs')\nt = p.read_text()\nt = t.replace('    Unanalysable,\\n}', '    Unanalysable(String),\\n}')\nt = t.replace('    let mut unanalysable = false;\\n', '    let mut unanalysable: Option<String> = None;\\n')\nt = t.replace('                    if previous != delta {\\n                        unanalysable = true;\\n                    }',\n              '                    if previous != delta {\\n… [+1551 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/emitters/frame_balance_tests.r",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "152005a6dae7d8b85dcd196c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:04:31.027Z",
+  "stored_at": "2026-08-21T16:04:31.027Z"
+}

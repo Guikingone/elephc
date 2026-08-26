@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"fgetcsv\" -B25 -A10 src/ir_lower/program/spl_support.rs | head -55",
+  "summary": "rtk proxy rg -n \"fgetcsv\" -B25 -A10 src/ir_lower/program/spl_support.rs | head -55: 49- method_key, 50- \"__construct\" 51- | \"current\" 52- | \"key\" 53- | \"next\" 54- | \"rewind\" 55- | \"valid\" 56- | \"seek\" 57- | \"haschildren\" 58- | \"getchildren\" 59- | \"eof\" 60- | \"fgets\" 61- | \"getcurrentline\" 62- | \"fgetc\" 63- | \"fread\" 64",
+  "text": "rtk proxy rg -n \"fgetcsv\" -B25 -A10 src/ir_lower/program/spl_support.rs | head -55: 49- method_key, 50- \"__construct\" 51- | \"current\" 52- | \"key\" 53- | \"next\" 54- | \"rewind\" 55- | \"valid\" 56- | \"seek\" 57- | \"haschildren\" 58- | \"getchildren\" 59- | \"eof\" 60- | \"fgets\" 61- | \"getcurrentline\" 62- | \"fgetc\" 63- | \"fread\" 64- | \"fwrite\" 65- | \"ftruncate\" 66- | \"ftell\" 67- | \"fseek\" 68- | \"getflags\" 69- | \"setflags\" 70- | \"getmaxlinelen\" 71- | \"setmaxlinelen\" 72- | \"setcsvcontrol\" 73- | \"getcsvcontrol\" 74: | \"fgetcsv\" 75- | \"fputcsv\" 76- // The READ_CSV record builder. A prelude body that is DECLARED but missing 77- // from this list is never lowered, and its vtable slot stays null: the call 78- // branches to address 0 rather than failing to compile, so an omission here 79- // shows up as a segfault at the first call and nowhere earlier. 80- | \"__elephccsvbuild\" 81- | \"__elephccsvskipblank\" 82- ), 83- \"SplTempFileObject\" => matches!( 84- method_key,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e469fb6242a73ddfecc6d408",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:42:03.485Z",
+  "stored_at": "2026-08-16T17:42:03.486Z"
+}

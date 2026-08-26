@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"MEMORY_STREAM|memory_stream|MemoryStream|PHP_MEMORY|is_memory\" src/codegen_support/runtime/io/*.rs | head -15; echo \"=== fd mask constants:\"; rg -n \"0x40000000|MEMORY|0x20000000\" src/codegen_support/runtime/io/stream_fd.rs 2>/dev/null | head -10",
+  "summary": "rg -n \"MEMORY_STREAM|memory_stream|MemoryStream|PHP_MEMORY|is_memory\" src/codegen_support/runtime/io/*.rs | head -15; echo \"=== fd mask constants:\"; rg -n \"0x40000000|MEMORY|0x20000000\" src/codegen_support/runtime/io/stream_fd.rs 2>/dev/null | head -10: === fd mask constants:",
+  "text": "rg -n \"MEMORY_STREAM|memory_stream|MemoryStream|PHP_MEMORY|is_memory\" src/codegen_support/runtime/io/*.rs | head -15; echo \"=== fd mask constants:\"; rg -n \"0x40000000|MEMORY|0x20000000\" src/codegen_support/runtime/io/stream_fd.rs 2>/dev/null | head -10: === fd mask constants:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cfb809ebfb23e6cbca4016c4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:26:35.928Z",
+  "stored_at": "2026-08-17T06:26:35.929Z"
+}

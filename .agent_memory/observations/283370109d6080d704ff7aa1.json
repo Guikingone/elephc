@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/rl5.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/rl5.php: <?php\nfile_put_contents(\"real.txt\", \"x\");\nsymlink(\"gone.txt\", \"dangling.txt\");\n$show = fn($v) => $v === false ? \"false\" : \"abs\";\n\necho \"",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/eofp/rl5.php: <?php\nfile_put_contents(\"real.txt\", \"x\");\nsymlink(\"gone.txt\", \"dangling.txt\");\n$show = fn($v) => $v === false ? \"false\" : \"abs\";\n\necho \"cold           : \", $show(@realpath(\"dangling.txt\")), \"\\n\";\n@filesize(\"dangling.txt\");\necho \"after filesize : \", $show(@realpath(\"dangling.txt\")), \"\\n\";\n@file_get_contents(\"dangling.txt\");\necho \"after get      : \", $show(@realpath(\"dangling.txt\")), \"\\n\";\n@readlink(\"dangling.txt\");\necho \"after readlink : \", $show(@realpath(\"dangling.txt\")), \"\\n\";\n@is_file(\"dangling.txt\");\n@file_exists(\"dangling.txt\");\necho \"after exists   : \", $show(@realpath(\"dangling.txt\")), ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "283370109d6080d704ff7aa1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:55:23.170Z",
+  "stored_at": "2026-08-26T08:55:23.171Z"
+}

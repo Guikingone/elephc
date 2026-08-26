@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '313,345p' src/codegen_support/runtime/io/fs.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '313,345p' src/codegen_support/runtime/io/fs.rs: on-negative byte count is success emitter.instruction(\"movzx rax, al\"); // widen the boolean success byte into the canonical integer result register emitter.instruction",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '313,345p' src/codegen_support/runtime/io/fs.rs: on-negative byte count is success emitter.instruction(\"movzx rax, al\"); // widen the boolean success byte into the canonical integer result register emitter.instruction(\"add rsp, 32\"); // release the aligned stack locals used by copy() emitter.instruction(\"pop rbp\"); // restore the caller frame pointer before returning the copy() success predicate emitter.instruction(\"ret\"); // return the copy() success predicate to the caller } /// Emits a leaf helper for single-path libc filesystem functions on x86_64. /// /// Takes an optional setup instruction string inserted before the libc call to populate /// extra arguments (e.g., mode for `mkdir`). The C path is passed via `__rt_cstr` /// output in `rax`; the libc result is compared against 0 and returned as 1 (success) or /// 0 (failure) in `rax`. /// Emits the x86_64 `__rt_mkdir` body: honours `$permissions` and creates parents when asked. ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "19e1bfe1daabf64228227a7d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T19:56:03.209Z",
+  "stored_at": "2026-08-22T19:56:03.210Z"
+}

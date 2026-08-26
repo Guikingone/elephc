@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/array_to_string.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/array_to_string.rs: assert!(out.success, \"program failed: {}\", out.stderr);\n    assert_eq!(out.stdout, \"23\\n\");\n    assert_eq!(\n        out.located_diagnostics,\n        \"Warning: A -> assert!(out.success, \"",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/array_to_string.rs: assert!(out.success, \"program failed: {}\", out.stderr);\n    assert_eq!(out.stdout, \"23\\n\");\n    assert_eq!(\n        out.located_diagnostics,\n        \"Warning: A -> assert!(out.success, \"program failed: {}\", out.stderr);\n    assert_eq!(out.stdout, \"25\\n\");\n    assert_eq!(\n        out.located_diagnostics,\n        \"Warning: Array to string conversion in test.php on line 3\\n\\\n         Warning: Array to string conversion in test.php on line 5\\n\"\n    );",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "29d283cdfaa65abe8f2d27db",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:49:43.258Z",
+  "stored_at": "2026-08-23T16:49:43.259Z"
+}

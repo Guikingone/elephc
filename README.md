@@ -116,6 +116,27 @@ still audits every physical `.php` file while included or autoloaded `.lfc`
 files keep their extension-enabled profile. See
 [LFC source files](docs/beyond-php/lfc-source-files.md).
 
+Compiled programs profile at the PHP level, with **one command that does not
+change with the environment**. Build with `--with-monitoring` and `elephc
+monitor` reads the binary you ran, or the service already serving traffic at
+`https://host:9411`.
+
+A program you *launch* is measured from inside: exact time, allocations, retained
+objects, I/O wait, SQL queries and call counts, so an N+1 is a certainty rather
+than a suspicion. A service you *connect to* answers from its sample ring by
+default — CPU-time shares, sharp enough to name a hotspot — and `elephc monitor
+<addr> --exact` returns the measured per-function table for one completed request,
+which is the same kind of answer a laptop run gives. A `--web` service also
+answers a signed `X-Elephc-Query` header, which measures that one request exactly
+and leaves the rest untouched. The capability
+is dormant until asked, and asking takes the build key — a control channel for a
+program you launch, a mutual handshake for one you connect to, a signed
+`X-Elephc-Query` header for a single production request. A project's performance
+budget lives in a `.elephc` file and fails the build when it is exceeded, and
+every profile carries a W3C Trace Context identity, so it joins whatever
+distributed trace its caller already belongs to. See
+[Profiling](docs/beyond-php/profiling.md).
+
 The compiler is experimental and evolving. Not everything PHP supports is implemented, and you will find bugs. But as the DOOM showcase demonstrates, you can build real, non-trivial programs with it today.
 
 If you want to contribute, you're welcome. Mi casa es tu casa.
@@ -235,11 +256,29 @@ elephc --heap-debug heavy.php
 # Print allocation/free counters to stderr while debugging GC behavior
 elephc --gc-stats heavy.php
 
+# Profile a program at the PHP level: bar table on stdout (runtime helper time
+# translated to causes like heap allocation or Mixed cell boxing), Speedscope
+# profile on disk, inlined calls recovered as virtual frames (macOS)
+elephc monitor hot.php
+
+# Top-style live view of a running program and its worker children
+elephc monitor --attach <pid> --live
+
+# Embed the profiling capability (dormant until asked); the .key sidecar it
+# writes lets `elephc monitor <host:port>` profile the service in production
+elephc --with-monitoring app.php
+
+# Embed exact per-function call counters (printed to stderr at exit)
+elephc --counters app.php
+
 # Enable compile-time feature branches
 elephc --define DEBUG app.php
 
 # Reject elephc extensions in every physical PHP file (.lfc stays extension-enabled)
 elephc --strict-php app.php
+
+# Make an incompatible local retype a compile error instead of a warning
+elephc --strict-locals app.php
 
 # Print per-phase compiler timings
 elephc --timings hello.php
@@ -527,7 +566,7 @@ The static type system tracks these runtime shapes at compile time:
 
 The checker also carries the internal `False` subtype and the two-word `TaggedScalar` codegen shape used by the default tagged null representation.
 
-A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other.
+A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other. An untyped local may also change type outright, in three shapes. `unset()` then reassign ENDS the binding — the name is unbound afterwards and the next assignment binds it fresh at any type, with no diagnostic in either mode. A straight-line reassignment and a branch-divergent assignment (boxed as `Mixed` storage) are a warning rather than an error by default, and `--strict-locals` makes those two an error again. A typed local, a type-hinted parameter, or a class property always stays strict. See [`--strict-locals`](docs/compiling/cli-reference.md#strict-locals-mode).
 
 ## Error messages
 
@@ -535,8 +574,9 @@ Errors include line and column numbers, and the compiler tries to recover far en
 
 ```
 error[3:1]: Undefined variable: $x
-error[5:7]: Type error: cannot reassign $x from Int to Str
+error[5:7]: Type error: cannot reassign $x from int to string
 error[2:1]: Required file not found: 'missing.php'
+warning[6:1]: $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
 warning[9:5]: Unused variable: $tmp
 warning[14:9]: Unreachable code
 ```

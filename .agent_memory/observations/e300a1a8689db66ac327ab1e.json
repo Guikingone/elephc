@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn emit_filter_create_x86_64\" -A 45 src/codegen_support/runtime/resources/filter.rs | sed -n '18,48p'",
+  "summary": "grep -n \"fn emit_filter_create_x86_64\" -A 45 src/codegen_support/runtime/resources/filter.rs | sed -n '18,48p': {FILTER_OBJECT_OFFSET}], r10\")); // php_user_filter instance 746- emitter.instruction(\"mov r10, QWORD PTR [rbp - 24]\"); 747- emitter.instruction(&format!(\"mov QWORD PTR [rax + {FILTER_DIRECTION_OFFSET}], r10\"",
+  "text": "grep -n \"fn emit_filter_create_x86_64\" -A 45 src/codegen_support/runtime/resources/filter.rs | sed -n '18,48p': {FILTER_OBJECT_OFFSET}], r10\")); // php_user_filter instance 746- emitter.instruction(\"mov r10, QWORD PTR [rbp - 24]\"); 747- emitter.instruction(&format!(\"mov QWORD PTR [rax + {FILTER_DIRECTION_OFFSET}], r10\")); // direction bits 748- emitter.instruction(\"mov r10, QWORD PTR [rbp - 32]\"); 749- emitter.instruction(&format!(\"mov QWORD PTR [rax + {FILTER_PARAMS_OFFSET}], r10\")); // retained params value 750- 751- // -- register the filter as an owned resource -- 752- emitter.instruction(\"mov rsi, rax\"); // stable state pointer 753- emitter.instruction(&format!(\"mov rdi, {RESOURCE_KIND_FILTER}\")); // resource kind 754- emitter.instruction(\"mov rdx, 1\"); // RESOURCE_FLAG_OWNS_STATE 755- emitter.instruction(\"call __rt_resource_alloc\"); // rax = opaque filter handle (0 on failure) 756- emitter.instruction(\"leave\"); // restore rbp + rsp 757- emitter.instruction(\"ret\"); // return the filter handle",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e300a1a8689db66ac327ab1e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:59:23.065Z",
+  "stored_at": "2026-08-17T13:59:23.066Z"
+}

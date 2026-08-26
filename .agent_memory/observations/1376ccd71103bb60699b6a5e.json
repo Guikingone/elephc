@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '20,60p' src/superglobals.rs; sed -n '82,110p' src/superglobals.rs",
+  "summary": "About to run: sed -n '20,60p' src/superglobals.rs; sed -n '82,110p' src/superglobals.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1376ccd71103bb60699b6a5e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:45:16.377Z",
+  "stored_at": "2026-08-20T19:45:16.378Z"
+}

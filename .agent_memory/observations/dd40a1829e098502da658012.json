@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -rn \"PSFS_ERR_FATAL\\|PSFS_PASS_ON\\|psfs\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter_brigade.rs | head -8",
+  "summary": "rtk proxy grep -rn \"PSFS_ERR_FATAL\\|PSFS_PASS_ON\\|psfs\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter_brigade.rs | head -8: aumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime",
+  "text": "rtk proxy grep -rn \"PSFS_ERR_FATAL\\|PSFS_PASS_ON\\|psfs\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter_brigade.rs | head -8: aumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter_brigade.rs:191: abi::emit_symbol_address(emitter, \"x9\", \"_user_filter_last_psfs\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter_brigade.rs:286: // -- PSFS_ERR_FATAL: return empty (the stream layer treats this as a filter error) -- /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter_brigade.rs:440: abi::emit_symbol_address(emitter, \"r10\", \"_user_filter_last_psfs\"); /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter_brigade.rs:534: // -- PSFS_ERR_FATAL: return empty (the stream layer treats this as a filter error) --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dd40a1829e098502da658012",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:53:11.037Z",
+  "stored_at": "2026-08-17T09:53:11.037Z"
+}

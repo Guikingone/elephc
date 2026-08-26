@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fgetcsv.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fgetcsv.rs: // -- state 3: AfterEscape (esc mode only) --\n    emitter.label(\"__rt_fgetcsv_st3\");\n    emitter.instruction(\"cmp w0, w27\");                                     -> // -- state 3",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fgetcsv.rs: // -- state 3: AfterEscape (esc mode only) --\n    emitter.label(\"__rt_fgetcsv_st3\");\n    emitter.instruction(\"cmp w0, w27\");                                     -> // -- state 3: AfterEscape (esc mode only) --\n    //\n    // The escape byte is KEPT, whatever it precedes. php never unescapes on read: all the escape\n    // character does is stop the next byte from closing the field, and both bytes land in the\n    // value. `\"a\\\"b\"` reads back as `a\\\"b`, four bytes, on `php -n` 8.5.6 — the same string\n    // `fputcsv()` wrote. Dropping it before the enclosure, as this did, silently shortened every\n    // round trip through a quoted field th",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "074b82f39207f8d41f08feef",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:16:35.025Z",
+  "stored_at": "2026-08-18T09:16:35.026Z"
+}

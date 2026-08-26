@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --lib frame_balance 2>&1 | grep -E \"^test .*frame|test result: ok|panicked|assert\" | head -5; cargo build --bin elephc 2>&1 | tail -2",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --lib frame_balance 2>&1 | grep -E \"^test .*frame|test result: ok|panicked|assert\" | head -5; cargo build --bin elephc 2>&1 | tail -2: test codegen_support::runtime::emitters::frame_balance_tests::every_runtime_helper_returns_on_a_balanced_stack ... ok test result: ok. 1 passed; 0 fai",
+  "text": "RUST_MIN_STACK=33554432 cargo test --lib frame_balance 2>&1 | grep -E \"^test .*frame|test result: ok|panicked|assert\" | head -5; cargo build --bin elephc 2>&1 | tail -2: test codegen_support::runtime::emitters::frame_balance_tests::every_runtime_helper_returns_on_a_balanced_stack ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1531 filtered out; finished in 0.33s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s Compiling elephc v0.26.5 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.93s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0ef1c73fd1edc70325ade346",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:18:18.514Z",
+  "stored_at": "2026-08-22T10:18:18.514Z"
+}

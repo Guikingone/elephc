@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fgetcsv.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fgetcsv.rs: emitter.label(\"__rt_fgetcsv_x_st4_data\");\n    emitter.instruction(\"movzx ecx, BYTE PTR [rbp - 16]\");                      // load enc\n    emitter.instruction(\"m -> emitter.label",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fgetcsv.rs: emitter.label(\"__rt_fgetcsv_x_st4_data\");\n    emitter.instruction(\"movzx ecx, BYTE PTR [rbp - 16]\");                      // load enc\n    emitter.instruction(\"m -> emitter.label(\"__rt_fgetcsv_x_st4_data\");\n    // See the AArch64 counterpart: the closing enclosure is consumed, never written back.\n    emitter.instruction(\"mov BYTE PTR [r15], al\");                              // *write_ptr = c\n    emitter.instruction(\"add r15, 1\");                                          // write_ptr++",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3404a370d042a72b9599d937",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:18:46.072Z",
+  "stored_at": "2026-08-18T09:18:46.073Z"
+}

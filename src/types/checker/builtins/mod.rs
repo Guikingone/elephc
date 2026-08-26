@@ -127,15 +127,31 @@ impl Checker {
             // builtins used to hand-roll this check, which is a catalogue: the ones nobody
             // wrote it for silently accepted a literal and ran, where PHP raises an Error.
             for (index, arg) in args.iter().enumerate() {
+                if !def.ref_params.get(index).copied().unwrap_or(false) {
+                    continue;
+                }
                 // A slot normalization filled is a parameter the call OMITTED, which php accepts
                 // — `f(error_message: $why)` skips `$error_code` and is not an error. Only what
                 // the program actually wrote is checked, so an explicit `null` there is still
                 // refused, exactly as php refuses it.
-                if defaulted_slots.get(index).copied().unwrap_or(false)
-                    || matches!(arg.kind, ExprKind::Spread(_))
-                    || !def.ref_params.get(index).copied().unwrap_or(false)
-                    || self.is_builtin_by_ref_argument_lvalue(arg)
-                {
+                //
+                // Ahead of the alias record below: a slot the caller never wrote names no local,
+                // so there is nothing there to alias.
+                if defaulted_slots.get(index).copied().unwrap_or(false) {
+                    continue;
+                }
+                // `sort($a)`, `preg_match(..., $m)` and friends reach this local through its
+                // storage, so the local is never kill/retype eligible in this body.
+                //
+                // Recorded BEFORE the spread bail-out below, not after it. `sort(...$args)` hands
+                // the callee the very same by-reference parameter, so `$args` is aliased just as
+                // surely; only the LVALUE-SHAPE diagnostic underneath has nothing to say about a
+                // spread, which is what that bail-out is for.
+                self.record_reference_alias_root(arg);
+                if matches!(arg.kind, ExprKind::Spread(_)) {
+                    continue;
+                }
+                if self.is_builtin_by_ref_argument_lvalue(arg) {
                     continue;
                 }
                 let param_name = def

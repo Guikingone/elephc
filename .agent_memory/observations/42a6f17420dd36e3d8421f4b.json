@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "On continue sur ce qui reste en divergences / refus",
+  "summary": "On continue sur ce qui reste en divergences / refus",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "42a6f17420dd36e3d8421f4b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:02:55.201Z",
+  "stored_at": "2026-08-24T07:02:55.201Z",
+  "low_signal": true
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"exceptions\" src/codegen/lower_inst/builtins.rs | head -5",
+  "summary": "grep -rn \"exceptions\" src/codegen/lower_inst/builtins.rs | head -5: src/codegen/lower_inst/builtins.rs:27: class_implements_interface, exceptions, expect_data, expect_operand,",
+  "text": "grep -rn \"exceptions\" src/codegen/lower_inst/builtins.rs | head -5: src/codegen/lower_inst/builtins.rs:27: class_implements_interface, exceptions, expect_data, expect_operand,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0f40e5fe71c2e961f7026301",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:59:41.832Z",
+  "stored_at": "2026-08-21T17:59:41.833Z"
+}

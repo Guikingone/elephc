@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_wrapper_unbox_int\" src/ | head -8",
+  "summary": "grep -rn \"__rt_wrapper_unbox_int\" src/ | head -8: rt_wrapper_unbox_int\"); // rax = the boolean, reference released src/codegen_support/runtime/io/user_wrapper_path_op.rs:435: emitter.instruction(\"bl __rt_wrapper_unbox_int\"); // x0 = the boolean, reference released src/codegen_support/runtime/io/user_wrapper_path_op.rs:",
+  "text": "grep -rn \"__rt_wrapper_unbox_int\" src/ | head -8: rt_wrapper_unbox_int\"); // rax = the boolean, reference released src/codegen_support/runtime/io/user_wrapper_path_op.rs:435: emitter.instruction(\"bl __rt_wrapper_unbox_int\"); // x0 = the boolean, reference released src/codegen_support/runtime/io/user_wrapper_path_op.rs:564: emitter.instruction(\"call __rt_wrapper_unbox_int\"); // rax = the boolean, reference released src/codegen_support/runtime/io/user_wrapper_dir.rs:147: emitter.instruction(\"bl __rt_wrapper_unbox_int\"); // x0 = the boolean, reference released src/codegen_support/runtime/io/user_wrapper_dir.rs:278: emitter.instruction(\"call __rt_wrapper_unbox_int\"); // rax = the boolean, reference released src/codegen_support/runtime/io/user_wrapper_unbox.rs:2://! Emits `__rt_wrapper_unbox_int`, the scalar counterpart of the boxed-result src/codegen_support/runtime/io/user_wrapper_unbox.rs:28:/// Emits `__rt_wrapper_unbox_int(box) -> int`.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1d07e11a4be41cf3edb525c9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:46:35.090Z",
+  "stored_at": "2026-08-21T09:46:35.090Z"
+}

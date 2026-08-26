@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'fn codegen_repr' -A 30 src/types/model.rs | head -40",
+  "summary": "grep -rn 'fn codegen_repr' -A 30 src/types/model.rs | head -40: based builtins accept such indexed inputs by converting them to integer-keyed src/types/model.rs-216- /// hashes; scalar elements are copied by value, so the converted temporaries are safe to src/types/model.rs-217- /// free. String/heap element indexed in",
+  "text": "grep -rn 'fn codegen_repr' -A 30 src/types/model.rs | head -40: based builtins accept such indexed inputs by converting them to integer-keyed src/types/model.rs-216- /// hashes; scalar elements are copied by value, so the converted temporaries are safe to src/types/model.rs-217- /// free. String/heap element indexed inputs are a follow-up (they hit x86-specific converter src/types/model.rs-218- /// and clone-shallow issues), so the checker restricts indexed inputs to scalar elements. src/types/model.rs-219- pub fn is_scalar_indexed_array(&self) -> bool { src/types/model.rs-220- matches!( src/types/model.rs-221- self, src/types/model.rs-222- PhpType::Array(elem) src/types/model.rs-223- if matches!(**elem, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False) src/types/model.rs-224- ) src/types/model.rs-225- } src/types/model.rs-226- src/types/model.rs-227- /// Returns the hash key type this array type contributes: `Int` for an indexed array,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6bc61fd84db9ea93f5556db0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:09:20.760Z",
+  "stored_at": "2026-08-24T19:09:20.760Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: ## Active work — WASM\n- 🎯 **89 compilent / 82 identiques /202** — [PLAFOND ~139](wasm-achievable-ceiling-is-139-not-202.md) · [chaque exemple = UN sous-système] -> ## Active work — WASM\n- 🎯 **89 compil",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: ## Active work — WASM\n- 🎯 **89 compilent / 82 identiques /202** — [PLAFOND ~139](wasm-achievable-ceiling-is-139-not-202.md) · [chaque exemple = UN sous-système] -> ## Active work — WASM\n- 🎯 **89 compilent / 82 identiques /202** — [PLAFOND ~139](wasm-achievable-ceiling-is-139-not-202.md) · [chaque exemple = UN sous-système](wasm-per-example-cost-is-now-a-subsystem.md) · [CHOISIR la cible](wasm-target-selection-is-blockers-not-families.md) · [les « differs » ne sont PAS des bugs wasm](wasm-differs-are-not-wasm-bugs.md) · [fonctions chargées par include](wasm-include-loaded-functions-landing.md).\n- 🔴🔴 JAMAIS `tail`/`head` une sortie multi-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ce7b53915dcf43c38ac435b8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:39:22.489Z",
+  "stored_at": "2026-08-23T13:39:22.490Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn current_builtin_frame\" -A 30 src/codegen/ | head -36",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn current_builtin_frame\" -A 30 src/codegen/ | head -36: n None; src/codegen/context.rs-424- } src/codegen/context.rs-425- target.as_eir() src/codegen/context.rs-426- } src/codegen/context.rs-427- _ => return None,",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn current_builtin_frame\" -A 30 src/codegen/ | head -36: n None; src/codegen/context.rs-424- } src/codegen/context.rs-425- target.as_eir() src/codegen/context.rs-426- } src/codegen/context.rs-427- _ => return None, src/codegen/context.rs-428- }; src/codegen/context.rs-429- Some((name, line, inst.operands.clone())) src/codegen/context.rs-430- } src/codegen/context.rs-431- src/codegen/context.rs-432- /// Returns the frame flag that records whether this slot currently stores a cell pointer. src/codegen/context.rs-433- pub(super) fn ref_cell_state_offset(&self, slot: LocalSlotId) -> Option<usize> { src/codegen/context.rs-434- self.ref_cell_state_offsets.get(&slot).copied() src/codegen/context.rs-435- } src/codegen/context.rs-436- src/codegen/context.rs-437- /// Returns the required runtime representation flag offset for one dynamic local slot. src/codegen/context.rs-438- fn dynamic_ref_cell_state_offset(&self, slot: LocalSlotId) -> Result<usize> {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "df5eb08f702cf6a7389ee1c5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T14:52:50.750Z",
+  "stored_at": "2026-08-24T14:52:50.750Z"
+}

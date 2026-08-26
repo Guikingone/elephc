@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -i '' 's/    emit_stream_pending_clear, emit_stream_pending_put, emit_stream_pending_take,/    emit_stream_pending_clear, emit_stream_pending_held, emit_stream_pending_put,\\n    emit_stream_pending_take,/' src/codegen_support/runtime/io/mod.rs; sed -i '' 's/    io::emit_stream_pending_clear(emitter);/    io::emit_stream_pending_clear(emitter);\\n    io::emit_stream_pending_held(emitter);/' src/codegen_support/runtime/emitters/platform.rs; sed -n '284,290p' src/codegen_support/runtime/io/mod.rs; s… [+63 chars truncated]",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -i '' 's/ emit_stream_pending_clear, emit_stream_pending_put, emit_stream_pending_take,/ emit_stream",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "edbf805e06380e1b2977eedb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T19:10:22.403Z",
+  "stored_at": "2026-08-23T19:10:22.403Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"reject_by_ref_vars\" -A25 src/builtins/string/sscanf.rs | head -40",
+  "summary": "grep -n \"reject_by_ref_vars\" -A25 src/builtins/string/sscanf.rs | head -40: cs::BuiltinSemanticInput<'_>, 78-) -> crate::ir::Effects { 79- Op::Call.default_effects() 80-} 81- 82-/// Returns `array|null`, php's result for a scan that may hit end of input. 83-/// 84-/// Shared with `fscanf()`, which adds `false` for a st",
+  "text": "grep -n \"reject_by_ref_vars\" -A25 src/builtins/string/sscanf.rs | head -40: cs::BuiltinSemanticInput<'_>, 78-) -> crate::ir::Effects { 79- Op::Call.default_effects() 80-} 81- 82-/// Returns `array|null`, php's result for a scan that may hit end of input. 83-/// 84-/// Shared with `fscanf()`, which adds `false` for a stream already at EOF. 85-pub(crate) fn scanf_result_type() -> PhpType { 86- PhpType::Union(vec![ 87- PhpType::Array(Box::new(PhpType::Mixed)), 88- PhpType::Void, 89- ]) 90-} 91- 92-/// Lowers `sscanf(string, format)` to a direct call into the injected scanf prelude. 93-fn lower( -- 125:pub(crate) fn reject_by_ref_vars( 126- name: &str, 127- arg_count: usize, 128- span: crate::span::Span, 129-) -> Result<(), CompileError> { 130- if arg_count <= 2 { 131- return Ok(()); 132- } 133- Err(CompileError::new( 134- span, 135- &format!( 136- \"{}(): the by-ref $vars output form is not supported; \\ 137- call it with only the format and read the returned array\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "40327ba4d2efe4ccd4d959d6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:24:57.746Z",
+  "stored_at": "2026-08-18T09:24:57.746Z"
+}

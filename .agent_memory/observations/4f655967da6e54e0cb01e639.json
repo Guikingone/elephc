@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"FToStr\" src/ir/instr.rs",
+  "summary": "grep -n \"FToStr\" src/ir/instr.rs: 324: FToStr, 650: IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate 900: FToStr => \"f_to_str\",",
+  "text": "grep -n \"FToStr\" src/ir/instr.rs: 324: FToStr, 650: IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate 900: FToStr => \"f_to_str\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4f655967da6e54e0cb01e639",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T20:50:04.349Z",
+  "stored_at": "2026-08-18T20:50:04.349Z"
+}

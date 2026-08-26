@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo nextest list -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' --partition hash:14/16 2>/dev/null | rg \"zip|phar|scanf\" | head -30",
+  "summary": "About to run: cargo nextest list -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' --partition hash:14/16 2>/dev/null | rg \"zip|phar|scanf\" | head -30",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2bc98f58c959870e4c96b016",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:32:34.641Z",
+  "stored_at": "2026-08-16T16:32:34.641Z"
+}

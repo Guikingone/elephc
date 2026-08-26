@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'creation_line\\|CREATION_LINE' src/codegen_support/runtime/ | head -10",
+  "summary": "grep -rn 'creation_line\\|CREATION_LINE' src/codegen_support/runtime/ | head -10: e/objects/object_not_array.rs:146: emit_throwable_creation_line_unknown(emitter, \"rax\"); src/codegen_support/runtime/exceptions/uncaught_report.rs:23://! payload at `THROWABLE_CREATION_LINE_OFFSET` by whichever emitter allocated it, and th",
+  "text": "grep -rn 'creation_line\\|CREATION_LINE' src/codegen_support/runtime/ | head -10: e/objects/object_not_array.rs:146: emit_throwable_creation_line_unknown(emitter, \"rax\"); src/codegen_support/runtime/exceptions/uncaught_report.rs:23://! payload at `THROWABLE_CREATION_LINE_OFFSET` by whichever emitter allocated it, and the file src/codegen_support/runtime/exceptions/uncaught_report.rs:65:use crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET; src/codegen_support/runtime/exceptions/uncaught_report.rs:188: THROWABLE_CREATION_LINE_OFFSET src/codegen_support/runtime/exceptions/uncaught_report.rs:209: THROWABLE_CREATION_LINE_OFFSET src/codegen_support/runtime/exceptions/uncaught_report.rs:250: emitter.instruction(&format!(\"ldr x0, [x9, #{}]\", THROWABLE_CREATION_LINE_OFFSET)); src/codegen_support/runtime/exceptions/uncaught_report.rs:347: THROWABLE_CREATION_LINE_OFFSET src/codegen_support/runtime/exceptions/uncaught_report.rs:373: THROWABLE_CREATION_LINE_OFFSET",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5261a12be32288026e29e76d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:35:19.656Z",
+  "stored_at": "2026-08-25T13:35:19.657Z"
+}

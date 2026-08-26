@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/harness_split.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/harness_split.py: root = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n\np = f'{root}/tests/codegen/sup",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/harness_split.py: root = '/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature'\n\np = f'{root}/tests/codegen/support/runner.rs'\ns = open(p).read()\nold = '''    pub(crate) exit_code: Option<i32>,\n}'''\nnew = '''    pub(crate) exit_code: Option<i32>,\n    // The php diagnostics the program printed, in order, one per line and without the blank\n    // line php separates them with. php CLI writes these to STDOUT — `ob_start()` captures them\n    // like any echo — so they arrive mixed into the program's own output and are split back out\n    // here. A test that cares about them ass",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "87f046653912207fee4d9fbe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:58:49.464Z",
+  "stored_at": "2026-08-18T13:58:49.464Z"
+}

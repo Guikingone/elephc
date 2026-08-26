@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '375,420p' src/codegen_support/runtime/io/stream_select.rs",
+  "summary": "sed -n '375,420p' src/codegen_support/runtime/io/stream_select.rs: roseconds → compute from us emitter.instruction(\"str xzr, [sp, #2112]\"); // timeout = 0 (non-blocking poll) emitter.instruction(\"b __rt_stream_select_ts_done\"); // timeout computed emitter.label(\"__rt_stream_select_ts_us_only\"); emitter.instruction(\"mov",
+  "text": "sed -n '375,420p' src/codegen_support/runtime/io/stream_select.rs: roseconds → compute from us emitter.instruction(\"str xzr, [sp, #2112]\"); // timeout = 0 (non-blocking poll) emitter.instruction(\"b __rt_stream_select_ts_done\"); // timeout computed emitter.label(\"__rt_stream_select_ts_us_only\"); emitter.instruction(\"mov x9, #1000\"); // millisecond divisor emitter.instruction(\"udiv x0, x4, x9\"); // microseconds / 1000 = ms emitter.instruction(\"str x0, [sp, #2112]\"); // store the timeout emitter.instruction(\"b __rt_stream_select_ts_done\"); // timeout computed emitter.label(\"__rt_stream_select_ts_pos\"); emitter.instruction(\"tbnz x3, #63, __rt_stream_select_ts_inf\"); // negative seconds → infinite emitter.instruction(\"mov x9, #0x7fffffff\"); // sentinel threshold emitter.instruction(\"cmp x3, x9\"); // seconds >= sentinel? emitter.instruction(\"b.ge __rt_stream_select_ts_inf\"); // treat as infinite emitter.instruction(\"mov x9, #1000\"); // seconds → ms multiplier",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "20c5429b79857333d5adaf40",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:21:39.680Z",
+  "stored_at": "2026-08-18T11:21:39.681Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn '_rt_current_line\\|current_line' src/codegen_support/runtime/data/fixed.rs | head -5; grep -rn 'fn emit_publish_line\\|publish_line\\|_rt_throw_line' src/codegen/ | head -10",
+  "summary": "grep -rn '_rt_current_line\\|current_line' src/codegen_support/runtime/data/fixed.rs | head -5; grep -rn 'fn emit_publish_line\\|publish_line\\|_rt_throw_line' src/codegen/ | head -10 completed",
+  "text": "grep -rn '_rt_current_line\\|current_line' src/codegen_support/runtime/data/fixed.rs | head -5; grep -rn 'fn emit_publish_line\\|publish_line\\|_rt_throw_line' src/codegen/ | head -10 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a90a6d74f2ca35ed59388a89",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:34:36.644Z",
+  "stored_at": "2026-08-25T13:34:36.644Z"
+}

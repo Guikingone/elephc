@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -30 /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/unset-property-array-element-not-lowered.md 2>/dev/null",
+  "summary": "head -30 /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/unset-property-array-element-not-lowered.md 2>/dev/null: eature: unset target shape with 1 lowered operands in function 'Symfony\\Component\\Cache\\Adapter\\AbstractAdapter::deleteItems' at line 158, column 13 ``` S",
+  "text": "head -30 /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/unset-property-array-element-not-lowered.md 2>/dev/null: eature: unset target shape with 1 lowered operands in function 'Symfony\\Component\\Cache\\Adapter\\AbstractAdapter::deleteItems' at line 158, column 13 ``` Source : `symfony/cache/Traits/AbstractAdapterTrait.php:158` — `unset($this->deferred[$key]);` (voisin identique ligne 322, `unset($keys[$id])`, celui-là passe : c'est une variable). ## ★★ Ce n'est PAS une garde de codegen `codegen/lower_inst/builtins/types.rs::lower_unset_builtin` **ne fait QUE refuser** — son doc dit « Rejects `unset()` calls that were not converted into direct EIR unbind operations ». Le vrai trou est en amont, dans **`ir_lower/expr/mod.rs::lower_unset_array_access` (5851)** : ```rust if let ExprKind::Variable(name) = &array.kind { // ← SEUL le cas VARIABLE est traité match ctx.local_type(name).codegen_repr() { AssocArray => lower_unset_hash_element(...) Array(elem) => lower_unset_indexed_element(...) // Never → Mixed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee73a7f48115886ef0815c56",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:49:55.117Z",
+  "stored_at": "2026-08-26T08:49:55.118Z"
+}

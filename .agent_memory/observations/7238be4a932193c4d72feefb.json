@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls src/ir_lower/expr/",
+  "summary": "ls src/ir_lower/expr/: _calls.rs closures.rs comparisons.rs constants.rs descriptor_args.rs descriptor_calls.rs descriptor_invoke.rs eval_barriers.rs function_calls.rs generators.rs indexed_array_literals.rs instanceof_coercions.rs lazy_branches.rs lazy_isset.rs match_expr.rs merge_temps.rs method_calls.rs method_metad",
+  "text": "ls src/ir_lower/expr/: _calls.rs closures.rs comparisons.rs constants.rs descriptor_args.rs descriptor_calls.rs descriptor_invoke.rs eval_barriers.rs function_calls.rs generators.rs indexed_array_literals.rs instanceof_coercions.rs lazy_branches.rs lazy_isset.rs match_expr.rs merge_temps.rs method_calls.rs method_metadata.rs mod.rs named_args.rs named_spreads.rs native_isset.rs nullable_method_calls.rs nullsafe_chain.rs numeric_binary.rs object_construction.rs pipe.rs positional_spreads.rs property_access.rs property_fetch_for_write.rs ref_place_args ref_place_args.rs reflection_class_calls.rs reflection_constructors.rs reflection_filters.rs reflection_method_calls.rs reflection_new_instance.rs reflection_property_calls.rs reflection_static_properties.rs scalar_literals.rs scoped_values.rs static_array_callbacks.rs static_method_calls.rs string_concat.rs ternary_cast.rs unary_logic.rs unset.rs variadic_args.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7238be4a932193c4d72feefb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:16:04.411Z",
+  "stored_at": "2026-08-20T19:16:04.411Z"
+}

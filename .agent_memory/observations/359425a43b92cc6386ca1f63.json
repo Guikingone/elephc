@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"pub(super) fn emit_value_error\\b\" -A 25 src/codegen/lower_inst/builtins/exceptions.rs 2>/dev/null | head -30 || grep -rn \"fn emit_value_error\\b\" -A 20 src/codegen/lower_inst/builtins/ | head -25",
+  "summary": "About to run: grep -rn \"pub(super) fn emit_value_error\\b\" -A 25 src/codegen/lower_inst/builtins/exceptions.rs 2>/dev/null | head -30 || grep -rn \"fn emit_value_error\\b\" -A 20 src/codegen/lower_inst/builtins/ | head",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "359425a43b92cc6386ca1f63",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:58:11.959Z",
+  "stored_at": "2026-08-21T17:58:11.960Z"
+}

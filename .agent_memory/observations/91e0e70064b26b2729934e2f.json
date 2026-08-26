@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_diag.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_diag.txt: fix(diagnostics): warnings went to stderr, where php writes none of them\n\nphp's CLI writes `Warning:`, `Notice:` and `Deprecated:` to ST",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_diag.txt: fix(diagnostics): warnings went to stderr, where php writes none of them\n\nphp's CLI writes `Warning:`, `Notice:` and `Deprecated:` to STDOUT, through the\noutput buffer. MEASURED on `php -n` 8.5.6:\n\n  php -n w.php 2>&1 1>/dev/null      -> EMPTY\n  ob_start(fn($s) => \"[[$s]]\"); ...  -> the warning comes back wrapped in [[ ]]\n\nSo a program that captures its own output sees its warnings, and one that\nredirects stderr sees nothing. elephc wrote them to fd 2 by raw `write(2)`,\nwhich is the opposite on both counts: `ob_get_clean()` returned a string php\nfills, and `2>/dev/null` hid what php keeps.\n\n`_",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "91e0e70064b26b2729934e2f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:37:36.700Z",
+  "stored_at": "2026-08-18T15:37:36.701Z"
+}

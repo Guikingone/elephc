@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/filter_params.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/filter_params.rs: //! Purpose:\n//! Emits `__rt_filter_absorb_params` and `__rt_asf_params_load`, which carry the built-in stream\n//! filter parameters from a PHP `$params` array to the encode",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/filter_params.rs: //! Purpose:\n//! Emits `__rt_filter_absorb_params` and `__rt_asf_params_load`, which carry the built-in stream\n//! filter parameters from a PHP `$params` array to the encoders that honour them.\n//!\n//! Called from:\n//! - `crate::codegen_support::runtime::resources::filter`, once per attach and once per buffer.\n//! - `crate::codegen_support::runtime::io::{fread, fwrite}`, which reset them on the legacy\n//!   per-descriptor path.\n//!\n//! Key details:\n//! - php's built-in filters DO read `$params`. `convert.base64-encode` and\n//!   `convert.quoted-printable-encode` take `line-length` and `line-br",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "47a34d24a0dfb708e00c4811",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:56:54.798Z",
+  "stored_at": "2026-08-17T13:56:54.799Z"
+}

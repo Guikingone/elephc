@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n '\"glob\"' -A 14 crates/elephc-builtin-contract/src/catalog_data.rs | head -20",
+  "summary": "grep -n '\"glob\"' -A 14 crates/elephc-builtin-contract/src/catalog_data.rs | head -20: 8076: id: BuiltinId::from_canonical_name(\"glob\"), 8077: name: \"glob\", 8078- area: Area::Io, 8079- kind: BuiltinKind::Function, 8080- params: &[ 8081- ParamSpec { 8082- name: \"pattern\", 8083- ty: TypeSpec::Str, 8084- default: None, 808",
+  "text": "grep -n '\"glob\"' -A 14 crates/elephc-builtin-contract/src/catalog_data.rs | head -20: 8076: id: BuiltinId::from_canonical_name(\"glob\"), 8077: name: \"glob\", 8078- area: Area::Io, 8079- kind: BuiltinKind::Function, 8080- params: &[ 8081- ParamSpec { 8082- name: \"pattern\", 8083- ty: TypeSpec::Str, 8084- default: None, 8085- by_ref: false, 8086-writes: None, 8087- }, 8088- ], 8089- variadic: None, 8090- variadic_writes: None, 8091- min_args: None,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7c7c7aae61c495cde6b2c01b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:58:31.042Z",
+  "stored_at": "2026-08-22T08:58:31.042Z"
+}

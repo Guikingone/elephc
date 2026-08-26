@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"SplFileObject\" src/spl_prelude*.rs 2>/dev/null | head -3; ls src/ | grep -i prelude | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"SplFileObject\" src/spl_prelude*.rs 2>/dev/null | head -3; ls src/ | grep -i prelude | head -20: (eval):1: no matches found: src/spl_prelude*.rs dir_prelude dir_prelude.rs gz_prelude gz_prelude.rs hash_prelude hash_",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"SplFileObject\" src/spl_prelude*.rs 2>/dev/null | head -3; ls src/ | grep -i prelude | head -20: (eval):1: no matches found: src/spl_prelude*.rs dir_prelude dir_prelude.rs gz_prelude gz_prelude.rs hash_prelude hash_prelude.rs image_prelude image_prelude.rs list_id_prelude list_id_prelude.rs mysqli_prelude mysqli_prelude.rs opcache_prelude opcache_prelude.rs pdo_prelude pdo_prelude.rs prelude_prune prelude_prune.rs scanf_prelude scanf_prelude.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "85efd16bb9de4a5945f1285c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:00:09.143Z",
+  "stored_at": "2026-08-24T08:00:09.144Z"
+}

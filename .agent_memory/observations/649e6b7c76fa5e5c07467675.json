@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/types/static_property_hash.rs",
+  "summary": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/types/static_property_hash.rs: //! Purpose:\n//! Integration tests for writing a STRING key into a `static array` property.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key deta",
+  "text": "wrote /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/types/static_property_hash.rs: //! Purpose:\n//! Integration tests for writing a STRING key into a `static array` property.\n//!\n//! Called from:\n//! - `cargo test` through Rust's test harness.\n//!\n//! Key details:\n//! - `public static array $store = []` refused `self::$store[$k] = $v` outright — `Array index\n//!   must be integer` — while the INSTANCE property one line away accepted the same write and\n//!   promoted the property to hash storage. php runs both, so the static path was rejecting\n//!   ordinary code: the shape came out of php's own userspace stream-wrapper idiom, where a\n//!   wrapper keeps its bodies in a stati",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "649e6b7c76fa5e5c07467675",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T08:22:57.027Z",
+  "stored_at": "2026-08-26T08:22:57.027Z"
+}

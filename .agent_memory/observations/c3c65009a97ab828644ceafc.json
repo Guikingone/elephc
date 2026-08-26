@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'wrapper' src/codegen_support/runtime/io/stream_get_meta_data.rs | sed -n '1,30p'",
+  "summary": "grep -rn 'wrapper' src/codegen_support/runtime/io/stream_get_meta_data.rs | sed -n '1,30p': r `memory` but not for src/codegen_support/runtime/io/stream_get_meta_data.rs:467:/// `temp`, and `data:` never answers it. The php:// sub-wrapper is told apart by the byte after src/codegen_support/runtime/io/stream_get_meta_da",
+  "text": "grep -rn 'wrapper' src/codegen_support/runtime/io/stream_get_meta_data.rs | sed -n '1,30p': r `memory` but not for src/codegen_support/runtime/io/stream_get_meta_data.rs:467:/// `temp`, and `data:` never answers it. The php:// sub-wrapper is told apart by the byte after src/codegen_support/runtime/io/stream_get_meta_data.rs:469:/// else. A stream with no recorded state keeps the flags, which is what every other wrapper does. src/codegen_support/runtime/io/stream_get_meta_data.rs:479: emitter.instruction(&format!(\"ldr x9, [x0, #{STREAM_WRAPPER_ID_OFFSET}]\")); // which wrapper opened it src/codegen_support/runtime/io/stream_get_meta_data.rs:483: emitter.instruction(\"b.ne __rt_smaf_yes\"); // every other wrapper answers src/codegen_support/runtime/io/stream_get_meta_data.rs:503:/// Reads the StreamState wrapper id and loads the matching wrapper-type string src/codegen_support/runtime/io/stream_get_meta_data.rs:507:/// A socket has NO wrapper: php-src reaches every transport through",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c3c65009a97ab828644ceafc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:43:59.674Z",
+  "stored_at": "2026-08-25T13:43:59.675Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/callback_builtin_name.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/callback_builtin_name.py: \"\"\"A builtin named as a callback string is a defined function.\n\nMEASURED on `php -n` 8.5.6 against elephc: `call_user_fun",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/callback_builtin_name.py: \"\"\"A builtin named as a callback string is a defined function.\n\nMEASURED on `php -n` 8.5.6 against elephc: `call_user_func(\"strtoupper\", …)` and\n`is_callable(\"strtoupper\")` work, and so do closures, first-class callables and user-function\nnames — but `array_map(\"strtoupper\", $a)`, `array_filter($a, \"boolval\")`, `usort($a, \"strcmp\")`\nand `array_walk($a, \"var_dump\")` are all refused at the CHECKER with `Undefined function:\nstrtoupper`. That is one of the most ordinary things written in php.\n\nThe cause is one lookup: the callable-return resolver consults `checker.functions`, which holds\nUSER func",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fffc3dcb84a4f6edd98766e8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:15:31.192Z",
+  "stored_at": "2026-08-22T11:15:31.192Z"
+}

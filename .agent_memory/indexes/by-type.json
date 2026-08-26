@@ -1,0 +1,9 @@
+{
+  "repo_map": [
+    "repo:streams-csv-signature:repo_map:streams-csv-signature-repo-overview-auto-overview",
+    "repo:streams-csv-signature:repo_map:streams-csv-signature-repo-structure-auto-structure"
+  ],
+  "workflow": [
+    "repo:streams-csv-signature:workflow:change-memory-worktree-streams-csv-signature"
+  ]
+}

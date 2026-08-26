@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Agent",
+  "path": "",
+  "command": "",
+  "summary": "Agent: async_launched a0b672809d41ad53a TDD: zip:// wrapper + ZipArchive claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `42a4b0f3bd` ; sinon `git fetch` puis `git reset --hard 42a4b0f3bd` AVANT tou",
+  "text": "async_launched a0b672809d41ad53a TDD: zip:// wrapper + ZipArchive claude-opus-5[1m] Tu travailles sur elephc (compilateur AOT PHP→natif, Rust) dans TON worktree isolé. ⚠️ VÉRIFIE D'ABORD ta base : `git log -1` doit montrer `42a4b0f3bd` ; sinon `git fetch` puis `git reset --hard 42a4b0f3bd` AVANT tout (13 agents sur 13 ont reçu une base erronée — systématique). Chemins absolus ; ne pousse RIEN ; pas de Co-Authored-By ; jamais `.codebase-memory/*` stagé. ⚠️ RESSOURCES (l'utilisateur insiste sur les OOM) : ~45 GiB libres mais la RAM est la contrainte. UN SEUL cargo à la fois, JAMAIS deux builds en parallèle, builds debug uniquement, PAS de docker. Sur `exit 137` ou OOM : relance le binaire de test DÉJÀ BÂTI (`target/debug/deps/codegen_tests-<hash> <filtre> --test-threads=2`) — c'est le BUILD qui mange la RAM. Purge `$TMPDIR/elephc_*` de +2h avant et pendant. Timeout nextest 60 s pile = faux rouge → rejoue isolé via `cargo test`. ⚠️ PORTES avant commit : `cargo test -p elephc-builtin-contract` · `cargo test --test builtin_parity_tests` · `cargo nextest run --test ir_backend_smoke_test`. Catalogue/classe touché ⇒ compteurs épinglés (registry.rs `contracts().len()`, support.rs eval_regis",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "69284668823be13033145ba2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T13:38:51.981Z",
+  "stored_at": "2026-08-16T13:38:51.982Z"
+}

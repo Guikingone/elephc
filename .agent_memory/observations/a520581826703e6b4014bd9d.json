@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo build --bin elephc 2>&1 | tail -1; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_shapes.py 2>&1 | head -22",
+  "summary": "cargo build --bin elephc 2>&1 | tail -1; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_shapes.py 2>&1 | head -22: Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.35s ===",
+  "text": "cargo build --bin elephc 2>&1 | tail -1; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/trace_shapes.py 2>&1 | head -22: Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.35s ========================================================================== top-level throw -- php -- Fatal error: Uncaught RuntimeException: boom in p.php:2 Stack trace: #0 {main} thrown in p.php on line 2 -- elephc -- Fatal error: Uncaught RuntimeException: boom in p.php:2 ========================================================================== top-level builtin throw -- php -- Fatal error: Uncaught ValueError: Path must not be empty in p.php:2 Stack trace: #0 p.php(2): fopen('', 'r') #1 {main} thrown in p.php on line 2 -- elephc -- Fatal error: Uncaught ValueError: Path must not be empty in p.php:2 ========================================================================== one user frame -- php --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a520581826703e6b4014bd9d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:32:53.794Z",
+  "stored_at": "2026-08-22T12:32:53.794Z"
+}

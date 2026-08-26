@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"array_push_int\" -A8 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_socket_pair.rs | head -20",
+  "summary": "rtk proxy grep -n \"array_push_int\" -A8 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_socket_pair.rs | head -20: et\"); // return the opaque-handle pair array 95- 96- // -- rollback after registry adoption failures -- 97- emitter.label(\"_",
+  "text": "rtk proxy grep -n \"array_push_int\" -A8 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_socket_pair.rs | head -20: et\"); // return the opaque-handle pair array 95- 96- // -- rollback after registry adoption failures -- 97- emitter.label(\"__rt_ssp_first_adopt_fail\"); 98- emitter.instruction(\"ldr w0, [sp, #4]\"); // load the peer descriptor not consumed by failed adoption 99- emitter.syscall(6); -- 166: emitter.instruction(\"call __rt_array_push_int\"); // transfer the first owned handle into the raw array 167- emitter.instruction(\"mov rdi, rax\"); // array pointer argument 168- emitter.instruction(\"mov rsi, QWORD PTR [rbp - 24]\"); // load the second opaque handle 169: emitter.instruction(\"call __rt_array_push_int\"); // transfer the second owned handle into the raw array 170- emitter.instruction(\"add rsp, 32\"); // release descriptor and handle scratch storage 171- emitter.instruction(\"pop rbp\"); // restore the caller frame pointer 172- emitter.instruction(\"ret\"); // return the opaque-handle pair array 173-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fbe32b386773706ebc574f09",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:34:04.145Z",
+  "stored_at": "2026-08-17T12:34:04.145Z"
+}

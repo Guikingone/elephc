@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn coerce_null_operands_to_builtin_params\" -A 45 src/ | head -55",
+  "summary": "grep -rn \"fn coerce_null_operands_to_builtin_params\" -A 45 src/ | head -55: xpr/array_builtin_args.rs-382- if param.by_ref src/ir_lower/expr/array_builtin_args.rs-383- || !matches!(param.default, Some(crate::builtins::spec::DefaultSpec::Null)) src/ir_lower/expr/array_builtin_args.rs-384- || !matches!( src/ir_lower/expr",
+  "text": "grep -rn \"fn coerce_null_operands_to_builtin_params\" -A 45 src/ | head -55: xpr/array_builtin_args.rs-382- if param.by_ref src/ir_lower/expr/array_builtin_args.rs-383- || !matches!(param.default, Some(crate::builtins::spec::DefaultSpec::Null)) src/ir_lower/expr/array_builtin_args.rs-384- || !matches!( src/ir_lower/expr/array_builtin_args.rs-385- crate::builtins::convert::type_spec_to_php(&param.ty), src/ir_lower/expr/array_builtin_args.rs-386- PhpType::Int | PhpType::Str | PhpType::Float | PhpType::Bool src/ir_lower/expr/array_builtin_args.rs-387- ) src/ir_lower/expr/array_builtin_args.rs-388- { src/ir_lower/expr/array_builtin_args.rs-389- break; src/ir_lower/expr/array_builtin_args.rs-390- } src/ir_lower/expr/array_builtin_args.rs-391- if !matches!(ctx.builder.value_php_type(values[last]), PhpType::Void) { src/ir_lower/expr/array_builtin_args.rs-392- break; src/ir_lower/expr/array_builtin_args.rs-393- } src/ir_lower/expr/array_builtin_args.rs-394- values.pop();",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9c7bf080a31b5d2e73416a7d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:49:40.954Z",
+  "stored_at": "2026-08-21T16:49:40.955Z"
+}

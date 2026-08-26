@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 20,60p src/codegen_support/runtime/exceptions/uncaught_report.rs",
+  "summary": "sed -n 20,60p src/codegen_support/runtime/exceptions/uncaught_report.rs: ugh `x9` — the very register holding it. The helper is entered by a TAIL JUMP from //! `__rt_throw_current`, so there is no frame to spill into either; `_exc_value` is still //! published throughout, which makes the global the cheapest place to ke",
+  "text": "sed -n 20,60p src/codegen_support/runtime/exceptions/uncaught_report.rs: ugh `x9` — the very register holding it. The helper is entered by a TAIL JUMP from //! `__rt_throw_current`, so there is no frame to spill into either; `_exc_value` is still //! published throughout, which makes the global the cheapest place to keep it. The x86_64 arm //! re-reads in the same places purely to keep the two listings comparable: SysV `syscall` clobbers //! only `rcx`/`r11`, so `r8` would in fact have survived. //! //! - Stack alignment across `__rt_itoa` was checked rather than assumed. Because this helper is //! reached by a tail jump, `rsp` arrives 16-aligned or 8-off depending on whether the throwing //! site `call`ed or `jmp`ed into `__rt_throw_current`, so the call cannot guarantee SysV's //! entry invariant. It does not need to: the x86_64 `__rt_itoa` body is `push rbp` … `pop rbp` //! with no SSE operand, no `sub rsp`, and no nested call, so nothing there faults on a",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f13ac061875f7fc9e9c4767",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:56:38.727Z",
+  "stored_at": "2026-08-22T11:56:38.727Z"
+}

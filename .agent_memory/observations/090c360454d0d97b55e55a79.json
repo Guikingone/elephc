@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>bgs7vtx3p</task-id>\n<tool-use-id>toolu_01WimcxSuXmGjS27RcSFVZhY</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bgs7vtx3p.output</output-file>\n<status>failed</status>\n<summary>Background command \"Run the io suite with both new test modules\" failed with exit code 101</summary>\n</task-notification>",
+  "summary": "<task-notification> <task-id>bgs7vtx3p</task-id> <tool-use-id>toolu_01WimcxSuXmGjS27RcSFVZhY</tool-use-id> <output-file>/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8db",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "090c360454d0d97b55e55a79",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:41:28.733Z",
+  "stored_at": "2026-08-21T12:41:28.734Z",
+  "low_signal": true
+}

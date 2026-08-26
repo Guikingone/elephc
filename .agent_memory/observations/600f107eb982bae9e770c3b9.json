@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && sed -n '740,770p' Zend/zend_exceptions.c",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && sed -n '740,770p' Zend/zend_exceptions.c: ecked(0, \"%S and defined\", message); zend_string_release_ex(message, 0); message = real_message; } z",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/php-src && sed -n '740,770p' Zend/zend_exceptions.c: ecked(0, \"%S and defined\", message); zend_string_release_ex(message, 0); message = real_message; } zend_string *tmp_trace = (Z_TYPE(trace) == IS_STRING && Z_STRLEN(trace)) ? zend_string_copy(Z_STR(trace)) : ZSTR_INIT_LITERAL(\"#0 {main}\\n\", false); zend_string *name = Z_OBJCE_P(exception)->name; if (ZSTR_LEN(message) > 0) { zval message_zv; ZVAL_STR(&message_zv, message); str = zend_strpprintf_unchecked(0, \"%S: %S in %S:\" ZEND_LONG_FMT \"\\nStack trace:\\n%S%s%S\", name, message, file, line, tmp_trace, ZSTR_LEN(prev_str) ? \"\\n\\nNext \" : \"\", prev_str); } else { str = zend_strpprintf_unchecked(0, \"%S in %S:\" ZEND_LONG_FMT \"\\nStack trace:\\n%S%s%S\", name, file, line, tmp_trace, ZSTR_LEN(prev_str) ? \"\\n\\nNext \" : \"\", prev_str); } zend_string_release_ex(tmp_trace, false); zend_string_release_ex(prev_str, 0); zend_string_release_ex(message, 0); zend_string_release_ex(file, 0); zval_ptr_dtor(&trace);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "600f107eb982bae9e770c3b9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:45:00.898Z",
+  "stored_at": "2026-08-18T15:45:00.898Z"
+}

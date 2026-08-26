@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '372,392p' src/types/checker/builtin_spl_classes/common.rs; grep -n \"pub(super) fn or_expr\\|fn or_expr\\|BinOp::Or\" src/types/checker/builtin_spl_classes/common.rs | head -3",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '372,392p' src/types/checker/builtin_spl_classes/common.rs; grep -n \"pub(super) fn or_expr\\|fn or_expr\\|BinOp::Or\" src/types/checker/builtin_spl_classes/common.rs | head -3: expr(ExprKind::PropertyAccess { object: Box",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '372,392p' src/types/checker/builtin_spl_classes/common.rs; grep -n \"pub(super) fn or_expr\\|fn or_expr\\|BinOp::Or\" src/types/checker/builtin_spl_classes/common.rs | head -3: expr(ExprKind::PropertyAccess { object: Box::new(object), property: property.to_string(), }) } /// Provides the Array access helper used by the common module. pub(super) fn array_access(array: Expr, index: Expr) -> Expr { expr(ExprKind::ArrayAccess { array: Box::new(array), index: Box::new(index), }) } /// Builds the AST statement for assign. pub(super) fn assign_stmt(name: &str, value: Expr) -> Stmt { Stmt::new( StmtKind::Assign { name: name.to_string(), value, },",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4a94b9f5b9b3a45cfd693040",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:02:02.012Z",
+  "stored_at": "2026-08-24T08:02:02.012Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -c \"^\" crates/elephc-phar/src/zip_read.rs; echo \"--- fonctions présentes après le conflit:\"; grep -n \"^pub(super) fn \\|^fn \\|^<<<<<<<\\|^=======\\|^>>>>>>>\" crates/elephc-phar/src/zip_read.rs | head -30",
+  "summary": "grep -c \"^\" crates/elephc-phar/src/zip_read.rs; echo \"--- fonctions présentes après le conflit:\"; grep -n \"^pub(super) fn \\|^fn \\|^<<<<<<<\\|^=======\\|^>>>>>>>\" crates/elephc-phar/src/zip_read.rs | head -30: (data: &[u8]) -> Option<Archive> { 126:pub(super) fn parse_zip_archive_with_public_key( 132:>>>>>>> origin/main 1",
+  "text": "grep -c \"^\" crates/elephc-phar/src/zip_read.rs; echo \"--- fonctions présentes après le conflit:\"; grep -n \"^pub(super) fn \\|^fn \\|^<<<<<<<\\|^=======\\|^>>>>>>>\" crates/elephc-phar/src/zip_read.rs | head -30: (data: &[u8]) -> Option<Archive> { 126:pub(super) fn parse_zip_archive_with_public_key( 132:>>>>>>> origin/main 191:pub(super) fn zip_entry_payload(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> { 215:pub(super) fn dos_to_unix_time(dos_date: u16, dos_time: u16) -> i64 { 269:pub(super) fn zip_stat_records(data: &[u8]) -> Option<Vec<u8>> { 305:pub(super) fn parse_zip_archive(data: &[u8]) -> Option<Archive> { 339:pub(super) fn zip_compression_from_method(method: u16) -> Option<PharCompression> { 348:pub(super) fn find_zip_eocd(data: &[u8]) -> Option<usize> { 362:pub(super) fn zip_eocd_info(data: &[u8]) -> Option<(usize, usize)> { 382:pub(super) fn read_zip64_eocd(data: &[u8], eocd: usize) -> Option<(usize, usize)> { 400:pub(super) fn apply_zip64_central_extra( 437:pub(super) fn zip_entry_crypto(data: &[u8], central_off: usize) -> Option<(bool, u8)> { 455:pub(super) fn decode_zip_local_entry(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d1336d0fa1e78cb630f18b0d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:01:01.947Z",
+  "stored_at": "2026-08-20T17:01:01.947Z"
+}

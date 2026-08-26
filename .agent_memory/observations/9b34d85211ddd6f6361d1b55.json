@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"located_diagnostics\" tests/codegen/ | head -5",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"located_diagnostics\" tests/codegen/ | head -5: tests/codegen/undefined_variables.rs:199: out.located_diagnostics, tests/codegen/exceptions.rs:902:/// so they stay in `stdout` while the `Fatal error:` line moves to ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"located_diagnostics\" tests/codegen/ | head -5: tests/codegen/undefined_variables.rs:199: out.located_diagnostics, tests/codegen/exceptions.rs:902:/// so they stay in `stdout` while the `Fatal error:` line moves to `located_diagnostics`. tests/codegen/exceptions.rs:956: output.located_diagnostics.contains(\"Uncaught RuntimeException: boom\"), tests/codegen/exceptions.rs:958: output.located_diagnostics tests/codegen/io/streams.rs:9485: out.located_diagnostics,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9b34d85211ddd6f6361d1b55",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T16:48:19.332Z",
+  "stored_at": "2026-08-23T16:48:19.332Z"
+}

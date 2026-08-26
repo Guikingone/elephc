@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('fdlong.php','w').write('''<?php\n$input = str_repeat('A', 8189) . \"X=\\\\r\";\n$url = \"php://filter/convert.quoted-printable-decode/resource=data:,\" . urlencode($input);\n$out = @file_get_contents($url);\nvar_dump($out === false ? 'FALSE' : strlen($out));\necho \"survived\\\\n\";\n''')\nopen('fdlong2.php','w').write('''<?php\n$input = str_repeat('A', 8189) . \"X=\\\\r\";\n$url = \"data:,\" . urlencode($input);\n$out = @… [+164 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('fdlong.php','w').write('''<?php\n$input = str_repeat('A', 8189) . \"X=\\\\r\";\n$url = \"php://filter/convert.quoted-printable-",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('fdlong.php','w').write('''<?php\n$input = str_repeat('A', 8189) . \"X=\\\\r\";\n$url = \"php://filter/convert.quoted-printable-decode/resource=data:,\" . urlencode($input);\n$out = @file_get_contents($url);\nvar_dump($out === false ? 'FALSE' : strlen($out));\necho \"survived\\\\n\";\n''')\nopen('fdlong2.php','w').write('''<?php\n$input = str_repeat('A', 8189) . \"X=\\\\r\";\n$url = \"data:,\" . urlencode($input);\n$out = @file_get_contents($url);\nvar_dump($out === false ? 'FALSE' : strlen($out));\necho \"survived\\\\n\";\n''')\nprint(\"written\")\nPY\nzsh bisect.sh fdlong fdlong2 2>&1 | head -6: written fdlong elephc_exit=0 elephc=[string(5) \"FALSE\" survived ] php=[int(8190) survived ] fdlong2 elephc_exit=0 elephc=[string(5) \"FALSE\" survived ] php=[int(8192) survived ]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "362700cb8882b7c933cae154",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T10:01:26.816Z",
+  "stored_at": "2026-08-17T10:01:26.817Z"
+}

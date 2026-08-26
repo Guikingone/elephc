@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"probe_spine_depth\" src/ir_lower/context.rs | head; echo \"--- structures:\"; grep -n \"^pub struct LoweringContext\\|^struct .*Snapshot\\|^pub(crate) struct\" src/ir_lower/context.rs | head -5",
+  "summary": "grep -n \"probe_spine_depth\" src/ir_lower/context.rs | head; echo \"--- structures:\"; grep -n \"^pub struct LoweringContext\\|^struct .*Snapshot\\|^pub(crate) struct\" src/ir_lower/context.rs | head -5: 112: probe_spine_depth: usize, 310: probe_spine_depth: 0, 756: self.probe_spine_depth += 1; 761: self.probe_spine_depth = s",
+  "text": "grep -n \"probe_spine_depth\" src/ir_lower/context.rs | head; echo \"--- structures:\"; grep -n \"^pub struct LoweringContext\\|^struct .*Snapshot\\|^pub(crate) struct\" src/ir_lower/context.rs | head -5: 112: probe_spine_depth: usize, 310: probe_spine_depth: 0, 756: self.probe_spine_depth += 1; 761: self.probe_spine_depth = self.probe_spine_depth.saturating_sub(1); 1154: self.probe_spine_depth == 0 --- structures: 31:pub(crate) struct LoweredValue { 38:pub(crate) struct LoopFrame { 51:pub(crate) struct LoopCleanup { 58:pub(crate) struct FinallyFrame { 93:pub(crate) struct ClosureCapture {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c53820b9075e4d5c7eae9d47",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:02:57.434Z",
+  "stored_at": "2026-08-20T19:02:57.434Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_named.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_named.py: \"\"\"`tmpfile()` named a file that did not exist.\n\nMEASURED on `php -n` 8.5.6, with the handle still open and four bytes written t",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/tmpfile_named.py: \"\"\"`tmpfile()` named a file that did not exist.\n\nMEASURED on `php -n` 8.5.6, with the handle still open and four bytes written through it:\n\n    file_exists(uri)  php true   elephc false\n    is_file(uri)      php true   elephc false\n    filesize(uri)     php 4      elephc false\n    fopen(uri, 'r')   php reads back \"seed\"   elephc \"Failed to open stream\"\n\nphp keeps the temp file linked until the stream closes and unlinks it then; elephc unlinked it the\nmoment `mkstemp` returned, which is the right trick for the ANONYMOUS temp files `data:` and the\nhttps reader use — and wrong for the one whose p",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "af8766d568ca9b0bc516e8f6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:00:00.450Z",
+  "stored_at": "2026-08-23T08:00:00.451Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs')\nTEST = r'''\n/// Verifies `stream_filter_remove()` leaves the bytes the filter had already produced.\n///\n/// A read filter reads its whole input to produce a few bytes, so removing it mid-read leaves a\n/// remainder on the stream. php serves it; `ftell()` stays where the READER is, not where the\n/// filter drove the descriptor; and `feof()` stays false until a read ATTEMPT comes back empty.\n/// MEASURED end to end on `php -n`… [+2615 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/streams.rs') TEST = r''' /// Verifies `st",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2cd0163d55e36d2c1ad97d49",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:52:19.231Z",
+  "stored_at": "2026-08-21T18:52:19.231Z"
+}

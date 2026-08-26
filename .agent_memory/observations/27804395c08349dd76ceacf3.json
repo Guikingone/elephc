@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"fn lower_stream_select\" -A60 src/codegen/lower_inst/builtins/io/stream_options.rs | head -75",
+  "summary": "rg -n \"fn lower_stream_select\" -A60 src/codegen/lower_inst/builtins/io/stream_options.rs | head -75: emit_pop_reg(ctx.emitter, \"x3\"); 340- abi::emit_pop_reg(ctx.emitter, \"x2\"); 341- abi::emit_pop_reg(ctx.emitter, \"x1\"); 342- abi::emit_pop_reg(ctx.emitter, \"x0\"); 343- } 344- Arch::X86_64 => { 345- ctx.emitter.instructio",
+  "text": "rg -n \"fn lower_stream_select\" -A60 src/codegen/lower_inst/builtins/io/stream_options.rs | head -75: emit_pop_reg(ctx.emitter, \"x3\"); 340- abi::emit_pop_reg(ctx.emitter, \"x2\"); 341- abi::emit_pop_reg(ctx.emitter, \"x1\"); 342- abi::emit_pop_reg(ctx.emitter, \"x0\"); 343- } 344- Arch::X86_64 => { 345- ctx.emitter.instruction(\"mov r8, rax\"); // pass microseconds as the fifth runtime argument 346- abi::emit_pop_reg(ctx.emitter, \"rcx\"); 347- abi::emit_pop_reg(ctx.emitter, \"rdx\"); 348- abi::emit_pop_reg(ctx.emitter, \"rsi\"); 349- abi::emit_pop_reg(ctx.emitter, \"rdi\"); 350- } 351- } 352- abi::emit_call_label(ctx.emitter, \"__rt_stream_select\"); 353- // php-src answers `int|false`: the ready-descriptor count, or `false` when the underlying 354- // `poll`/`select` itself failed. `__rt_stream_select` reports that failure as a negative 355- // count, so the sign picks the branch. 356- let false_label = ctx.next_label(\"stream_select_failed\"); 357- let boxed_label = ctx.next_label(\"stream_select_boxed\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "27804395c08349dd76ceacf3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:38:24.064Z",
+  "stored_at": "2026-08-17T06:38:24.065Z"
+}

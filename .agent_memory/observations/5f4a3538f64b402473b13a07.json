@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "du -sh /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_* 2>/dev/null | tail -1; du -shc /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_* 2>/dev/null | tail -1",
+  "summary": "du -sh /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_* 2>/dev/null | tail -1; du -shc /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_* 2>/dev/null | tail -1: 72K /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_zz_temp_probe_6168_178766351399299500",
+  "text": "du -sh /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_* 2>/dev/null | tail -1; du -shc /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_* 2>/dev/null | tail -1: 72K /private/var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_ir_backend_zz_temp_probe_6168_1787663513992995000 1.8G total",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5f4a3538f64b402473b13a07",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T06:38:24.413Z",
+  "stored_at": "2026-08-26T06:38:24.414Z"
+}

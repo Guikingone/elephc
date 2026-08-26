@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='src/types/checker/functions/resolution/signature.rs'\ns=open(p).read()\nold = \"\"\"    /// again and reports that error with its original span and ordering.\n    /// Returns the parameter list re-typed for a body that WIDENED a by-reference array\"\"\"\nnew = \"\"\"    /// again and reports that error with its original span and ordering.\n    fn provisional_return_type_doc_anchor() {}\n\n    /// Returns the parameter list re-typed for a body that WIDENED a by-reference array\"\"\"\nassert s.count(old)==1\nopen(p,'w').write(s.replace(old,new))\nprint('placeholder inserted (will be replaced)')\nPY… [+107 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' p='src/types/checker/functions/resolution/signature.rs' s=open(p).read() old = \"\"\" /// again and reports that error with its original span and ordering. /// Returns the parameter list",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2cef75035e6473ad203d9d1e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:50:18.972Z",
+  "stored_at": "2026-08-16T20:50:18.973Z"
+}

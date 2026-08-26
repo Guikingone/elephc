@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && mkdir -p scsnull && printf 'one\\ntwo\\nthree\\n' > scsnull/src.txt && printf '<?php $a = fopen(\"src.txt\",\"r\"); $b = fopen(\"dst.txt\",\"w\"); var_dump(stream_copy_to_stream($a, $b, null)); fclose($a); fclose($b); var_dump(file_get_contents(\"dst.txt\"));\\n' > scsnull/t.php && php -n scsnull/t.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && mkdir -p scsnull && printf 'one\\ntwo\\nthree\\n' > scsnull/src.txt && printf '<?php $a = fopen(\"src.txt\",\"r\"); $b = fopen(\"dst.txt\",\"w\"); var_dump(st",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && mkdir -p scsnull && printf 'one\\ntwo\\nthree\\n' > scsnull/src.txt && printf '<?php $a = fopen(\"src.txt\",\"r\"); $b = fopen(\"dst.txt\",\"w\"); var_dump(stream_copy_to_stream($a, $b, null)); fclose($a); fclose($b); var_dump(file_get_contents(\"dst.txt\"));\\n' > scsnull/t.php && php -n scsnull/t.php failed: mProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scsnull/t.php on line 1 Fatal error: Uncaught TypeError: stream_copy_to_stream(): Argument #1 ($from) must be of type resource, false given in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scsnull/t.php:1 Stack trace: #0 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scsnull/t.php(1): stream_copy_to_stream(false, Resource id #5, NULL) #1 {main} thrown in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scsnull/t.php on line 1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9ae78af31a9eec7d3b023b83",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T10:47:31.741Z",
+  "stored_at": "2026-08-21T10:47:31.741Z"
+}

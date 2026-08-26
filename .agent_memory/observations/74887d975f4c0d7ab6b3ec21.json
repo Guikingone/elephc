@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "tail -3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b7724u9cc.output 2>/dev/null; pgrep -c \"codegen_tests\" 2>/dev/null || echo \"none\"",
+  "summary": "tail -3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b7724u9cc.output 2>/dev/null; pgrep -c \"codegen_tests\" 2>/dev/null || echo \"none\": none",
+  "text": "tail -3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b7724u9cc.output 2>/dev/null; pgrep -c \"codegen_tests\" 2>/dev/null || echo \"none\": none",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "74887d975f4c0d7ab6b3ec21",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T07:17:53.935Z",
+  "stored_at": "2026-08-18T07:17:53.936Z"
+}

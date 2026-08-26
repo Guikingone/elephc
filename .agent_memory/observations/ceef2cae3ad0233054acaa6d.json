@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/codegen/spl.rs\")\ns = p.read_text()\na = '#[path = \"spl/file_object_open.rs\"]\\nmod file_object_open;\\n'\nassert s.count(a) == 1\np.write_text(s.replace(a, a + '#[path = \"spl/file_object_bounds.rs\"]\\nmod file_object_bounds;\\n'))\nprint(\"registered\")\nPY\nCARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests spl::file_object_bounds 2>&1 | tail -10",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/codegen/spl.rs\")\ns = p.read_text()\na = '#[path = \"spl/file_object_open.rs\"]\\nmod file_object_open;\\n'\nassert s.count(a) == 1\np.write_text(s.replace(a, a + '#[path = \"spl/file_object_bounds.rs\"]\\nmod file_object_bounds;\\n'))\nprint(\"registered\")\nPY\nCARGO_PROFILE_DEV",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"tests/codegen/spl.rs\")\ns = p.read_text()\na = '#[path = \"spl/file_object_open.rs\"]\\nmod file_object_open;\\n'\nassert s.count(a) == 1\np.write_text(s.replace(a, a + '#[path = \"spl/file_object_bounds.rs\"]\\nmod file_object_bounds;\\n'))\nprint(\"registered\")\nPY\nCARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test codegen_tests spl::file_object_bounds 2>&1 | tail -10: registered Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-711c2df818d88011) running 4 tests test codegen::spl::file_object_bounds::file_put_contents_drains_a_stream_argument ... ok test codegen::spl::file_object_bounds::a_stat_backed_getter_throws_for_a_path_it_cannot_stat ... ok test codegen::spl::file_object_bounds::seek_refuses_a_negative_line_and_clamps_past_the_end ... ok test codegen::spl::file_object_bounds::the_trailing_element_depends_on_skip_empty_and_read_ahead ... ok test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 8958 filtered out; finished in 1.83s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ceef2cae3ad0233054acaa6d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T10:02:22.759Z",
+  "stored_at": "2026-08-25T10:02:22.759Z"
+}

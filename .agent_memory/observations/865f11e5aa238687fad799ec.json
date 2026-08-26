@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,30p' src/codegen_support/runtime/strings/str_eq.rs",
+  "summary": "sed -n '1,30p' src/codegen_support/runtime/strings/str_eq.rs: ABI pointer/length pairs for generated call sites. use crate::codegen_support::emit::Emitter; use crate::codegen_support::platform::Arch; /// Emits the `__rt_str_eq` runtime helper for byte-string equality. /// Dispatches to the x86_64 Linux variant when tar",
+  "text": "sed -n '1,30p' src/codegen_support/runtime/strings/str_eq.rs: ABI pointer/length pairs for generated call sites. use crate::codegen_support::emit::Emitter; use crate::codegen_support::platform::Arch; /// Emits the `__rt_str_eq` runtime helper for byte-string equality. /// Dispatches to the x86_64 Linux variant when targeting that architecture; otherwise /// emits a portable ARM64 implementation. /// ABI: ARM64 calling convention — x1=ptr_a, x2=len_a, x3=ptr_b, x4=len_b → x0=result (1=equal, 0=different). pub fn emit_str_eq(emitter: &mut Emitter) { if emitter.target.arch == Arch::X86_64 { emit_str_eq_linux_x86_64(emitter); return; } emitter.blank(); emitter.comment(\"--- runtime: str_eq ---\"); emitter.label_global(\"__rt_str_eq\"); // -- quick length check: different lengths means not equal -- emitter.instruction(\"cmp x2, x4\"); // compare lengths of both strings emitter.instruction(\"b.ne __rt_str_eq_false\"); // if lengths differ, strings can't be equal",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "865f11e5aa238687fad799ec",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:46:12.040Z",
+  "stored_at": "2026-08-18T09:46:12.040Z"
+}

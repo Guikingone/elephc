@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "AskUserQuestion",
+  "path": "",
+  "command": "",
+  "summary": "About to run: AskUserQuestion",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8cd39e62fa644e68f9c7f77d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T16:06:05.380Z",
+  "stored_at": "2026-08-18T16:06:05.381Z",
+  "low_signal": true
+}

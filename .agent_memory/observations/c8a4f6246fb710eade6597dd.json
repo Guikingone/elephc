@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/csv_tests.rs",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/csv_tests.rs: /// Verifies the CSV reader KEEPS the escape byte, which php never removes.\n///\n/// `\"a\\\"b\"` reads back as `a\\\"b` on `php -n` 8.5.6 — fo",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/csv_tests.rs: /// Verifies the CSV reader KEEPS the escape byte, which php never removes.\n///\n/// `\"a\\\"b\"` reads back as `a\\\"b` on `php -n` 8.5.6 — four bytes, exactly what `fputcsv()` wrote.\n/// All the escape character does is stop the next byte from closing the field; both bytes land in\n/// the value. The parser dropped it when it preceded the ENCLOSURE and kept it everywhere else,\n/// so every round trip through a quoted field containing one silently lost a byte. The three\n/// other rows pin the cases that already worked, so the fix cannot be a swap of which byte is\n/// lost. `str_getcsv()` shares the s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c8a4f6246fb710eade6597dd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:29:15.648Z",
+  "stored_at": "2026-08-18T09:29:15.649Z"
+}

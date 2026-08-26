@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'expected fread TypeError\\|expected fstat TypeError\\|expected ftruncate TypeError\\|String::from_utf8(run.stderr)' tests/ir_backend_smoke_test.rs | head -10",
+  "summary": "grep -n 'expected fread TypeError\\|expected fstat TypeError\\|expected ftruncate TypeError\\|String::from_utf8(run.stderr)' tests/ir_backend_smoke_test.rs | head -10: 969: let stderr = String::from_utf8(run.stderr).expect(\"fatal stderr should be utf8\"); 1591: let stderr = String::from_utf8(run.stderr).unwrap(); 1607: let",
+  "text": "grep -n 'expected fread TypeError\\|expected fstat TypeError\\|expected ftruncate TypeError\\|String::from_utf8(run.stderr)' tests/ir_backend_smoke_test.rs | head -10: 969: let stderr = String::from_utf8(run.stderr).expect(\"fatal stderr should be utf8\"); 1591: let stderr = String::from_utf8(run.stderr).unwrap(); 1607: let stderr = String::from_utf8(run.stderr).unwrap(); 1623: let stderr = String::from_utf8(run.stderr).unwrap(); 1997: let stderr = String::from_utf8(run.stderr).expect(\"fatal stderr should be utf8\"); 2311: let stderr = String::from_utf8(run.stderr).expect(\"fatal stderr should be utf8\"); 2518: let stderr = String::from_utf8(run.stderr).expect(\"fatal stderr should be utf8\"); 4046: let stderr = String::from_utf8(run.stderr).expect(\"fatal stderr should be utf8\"); 4141: String::from_utf8(run.stderr).expect(\"intdiv stderr should be utf8\"), 5983: let stderr = String::from_utf8(run.stderr).expect(\"stream TypeError should be utf8\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a6672b0522622ddab1ecc148",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T08:33:57.032Z",
+  "stored_at": "2026-08-25T08:33:57.033Z"
+}

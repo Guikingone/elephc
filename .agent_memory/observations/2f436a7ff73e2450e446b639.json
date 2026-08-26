@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub(crate) fn mark_local_initialized\\|pub(crate) fn store_local\\|fn store_into_local\\|pub(crate) fn define_local\" -A6 src/ir_lower/context.rs | head -40",
+  "summary": "grep -n \"pub(crate) fn mark_local_initialized\\|pub(crate) fn store_local\\|fn store_into_local\\|pub(crate) fn define_local\" -A6 src/ir_lower/context.rs | head -40: 765: pub(crate) fn mark_local_initialized(&mut self, name: &str) { 766- if let Some(slot) = self.local_slots.get(name) { 767- self.initialized_slots.insert(*",
+  "text": "grep -n \"pub(crate) fn mark_local_initialized\\|pub(crate) fn store_local\\|fn store_into_local\\|pub(crate) fn define_local\" -A6 src/ir_lower/context.rs | head -40: 765: pub(crate) fn mark_local_initialized(&mut self, name: &str) { 766- if let Some(slot) = self.local_slots.get(name) { 767- self.initialized_slots.insert(*slot); 768- } 769- } 770- 771- /// Captures the definitely-initialized local slots at a control-flow split. -- 1459: pub(crate) fn store_local( 1460- &mut self, 1461- name: &str, 1462- value: LoweredValue, 1463- php_type: PhpType, 1464- span: Option<Span>, 1465- ) -> LoweredValue {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2f436a7ff73e2450e446b639",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:32:49.966Z",
+  "stored_at": "2026-08-20T19:32:49.966Z"
+}

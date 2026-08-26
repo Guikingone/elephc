@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests io::streams 2>&1 | tail -20",
+  "summary": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests io::streams 2>&1 | tail -20: ty_is_still_deprecated codegen::io::streams::test_an_untyped_context_property_receives_its_context codegen::io::streams::test_fopen_false_stream_use_is_type_error codegen::io::streams::test_fopen_user_wrapper_fscanf_reads",
+  "text": "export CARGO_INCREMENTAL=0; cargo test -p elephc --test codegen_tests io::streams 2>&1 | tail -20: ty_is_still_deprecated codegen::io::streams::test_an_untyped_context_property_receives_its_context codegen::io::streams::test_fopen_false_stream_use_is_type_error codegen::io::streams::test_fopen_user_wrapper_fscanf_reads_through_stream_read codegen::io::streams::test_fscanf_float_via_shared_sscanf_engine codegen::io::streams::test_fscanf_reads_and_parses_line_by_line codegen::io::streams::test_line_readers_apply_the_read_filter_chain codegen::io::streams::test_stream_context_set_option_refuses_phps_invalid_shapes codegen::io::streams::test_stream_select_microseconds_require_seconds codegen::io::streams::test_stream_type_error_reports_runtime_string_type codegen::io::streams::test_wrapper_scheme_acceptance_matches_php test result: FAILED. 604 passed; 11 failed; 8 ignored; 0 measured; 8159 filtered out; finished in 176.57s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "22384efb9df2f45280a41bf9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:28:19.645Z",
+  "stored_at": "2026-08-21T16:28:19.646Z"
+}

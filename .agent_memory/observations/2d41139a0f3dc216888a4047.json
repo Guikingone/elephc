@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"dump_x86_runtime\" src tests crates 2>/dev/null | head -5; echo \"---emit fns---\"; grep -rn \"pub fn emit_runtime\\|fn emit_all_runtime\\|emit_runtime_support\" src/codegen_support/ | head -5",
+  "summary": "grep -rn \"dump_x86_runtime\" src tests crates 2>/dev/null | head -5; echo \"---emit fns---\"; grep -rn \"pub fn emit_runtime\\|fn emit_all_runtime\\|emit_runtime_support\" src/codegen_support/ | head -5: ---emit fns---",
+  "text": "grep -rn \"dump_x86_runtime\" src tests crates 2>/dev/null | head -5; echo \"---emit fns---\"; grep -rn \"pub fn emit_runtime\\|fn emit_all_runtime\\|emit_runtime_support\" src/codegen_support/ | head -5: ---emit fns---",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2d41139a0f3dc216888a4047",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:40:18.839Z",
+  "stored_at": "2026-08-21T15:40:18.840Z"
+}

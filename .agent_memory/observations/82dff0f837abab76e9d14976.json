@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/st1; mkdir -p $S/st1; cp $S/probes2/warn-shapes.php $S/st1/p.php; cd $S/st1 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php >/dev/null 2>&1; cd $S/st1 && ./p 2>/dev/null > out.txt; grep -c Warning out.txt",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/st1; mkdir -p $S/st1; cp $S/probes2/warn-shapes.php $S/st1/p.php; cd $S/st1 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claud",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/st1; mkdir -p $S/st1; cp $S/probes2/warn-shapes.php $S/st1/p.php; cd $S/st1 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php >/dev/null 2>&1; cd $S/st1 && ./p 2>/dev/null > out.txt; grep -c Warning out.txt: 11",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "82dff0f837abab76e9d14976",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T19:34:14.199Z",
+  "stored_at": "2026-08-24T19:34:14.200Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_version_prelude_harness.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_version_prelude_harness.py: \"\"\"The parity gate's first run found two more preludes the harness never injected.\n\n`version_prelude` supplies `zen",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_version_prelude_harness.py: \"\"\"The parity gate's first run found two more preludes the harness never injected.\n\n`version_prelude` supplies `zend_version()`, `php_sapi_name()` and `ini_restore()` — php-visible\nfunctions the codegen suite therefore could not test at all. It takes three arguments the harness\nalready has, so it is wired in.\n\n`opcache_prelude` is excluded instead, and the exclusion says why: its injection takes an opcache\nmanifest, preload symbols and preload statistics that the harness has no source for. The\nconsequence is stated rather than hidden — the functions it supplies are not covered by this suite.\n\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "942978cb65c2fb3e4b4627f3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:44:05.841Z",
+  "stored_at": "2026-08-21T12:44:05.841Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests -- codegen::undefined_variables 2>&1 | grep -E \"^test |test result|assertion|left|right\" | head -40",
+  "summary": "cargo test --test codegen_tests -- codegen::undefined_variables 2>&1 | grep -E \"^test |test result|assertion|left|right\" | head -40: efined_variables::test_undefined_variable_in_arithmetic_is_null ... FAILED test codegen::undefined_variables::test_called_and_uncalled_functions_agree_on_an_undefined_read ... FAILED test",
+  "text": "cargo test --test codegen_tests -- codegen::undefined_variables 2>&1 | grep -E \"^test |test result|assertion|left|right\" | head -40: efined_variables::test_undefined_variable_in_arithmetic_is_null ... FAILED test codegen::undefined_variables::test_called_and_uncalled_functions_agree_on_an_undefined_read ... FAILED test codegen::undefined_variables::test_parameters_captures_and_loop_bindings_are_not_undefined ... FAILED test codegen::undefined_variables::test_undefined_variable_read_warns_and_yields_null ... FAILED test codegen::undefined_variables::test_self_read_assignment_warns_once_and_starts_from_null ... FAILED test codegen::undefined_variables::test_undefined_variable_in_a_concat_inside_a_function_does_not_crash ... FAILED test codegen::undefined_variables::test_suppression_operator_silences_the_undefined_read ... FAILED test codegen::undefined_variables::test_the_undefined_read_warning_names_its_line ... FAILED test result: FAILED. 0 passed; 10 failed; 0 ignored; 0 measured; 8695 filtered out; finished in 0.56s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0429ef851614ab0fb8afb0db",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:14:14.995Z",
+  "stored_at": "2026-08-20T18:14:14.995Z"
+}

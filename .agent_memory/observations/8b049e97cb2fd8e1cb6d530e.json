@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -o \"sp, #2[0-9][0-9][0-9]\" src/codegen_support/runtime/io/stream_select.rs | sort -u",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -o \"sp, #2[0-9][0-9][0-9]\" src/codegen_support/runtime/io/stream_select.rs | sort -u: sp, #2048 sp, #2056 sp, #2064 sp, #2072 sp, #2080 sp, #2088 sp, #2096 sp, #2104 sp, #2112 sp, #2120 sp, #2128 sp, #2136 sp, #2144 sp,",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -o \"sp, #2[0-9][0-9][0-9]\" src/codegen_support/runtime/io/stream_select.rs | sort -u: sp, #2048 sp, #2056 sp, #2064 sp, #2072 sp, #2080 sp, #2088 sp, #2096 sp, #2104 sp, #2112 sp, #2120 sp, #2128 sp, #2136 sp, #2144 sp, #2152 sp, #2160 sp, #2168 sp, #2176 sp, #2184 sp, #2192 sp, #2256 sp, #2304",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8b049e97cb2fd8e1cb6d530e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:19:47.632Z",
+  "stored_at": "2026-08-23T07:19:47.632Z"
+}

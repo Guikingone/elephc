@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn regex_first_match_body\" -A45 src/types/checker/builtin_spl_classes/regex.rs",
+  "summary": "grep -n \"fn regex_first_match_body\" -A45 src/types/checker/builtin_spl_classes/regex.rs: ), 500- ))); 501- body.push(return_stmt(var_expr(\"firstMatch\"))); 502- body 503-} 504- 505-/// Builds the synthetic all-matches array body. 506-fn regex_all_matches_body() -> Vec<Stmt> { 507- let mut body = vec![assign_stmt(\"pregFl",
+  "text": "grep -n \"fn regex_first_match_body\" -A45 src/types/checker/builtin_spl_classes/regex.rs: ), 500- ))); 501- body.push(return_stmt(var_expr(\"firstMatch\"))); 502- body 503-} 504- 505-/// Builds the synthetic all-matches array body. 506-fn regex_all_matches_body() -> Vec<Stmt> { 507- let mut body = vec![assign_stmt(\"pregFlags\", regex_preg_flags_expr())]; 508- body.push(if_stmt( 509- preg_flag_enabled_expr(\"pregFlags\", PREG_SET_ORDER), 510- vec![if_stmt( 511- preg_flag_enabled_expr(\"pregFlags\", PREG_OFFSET_CAPTURE), 512- regex_all_matches_set_order_body(true), 513- Some(regex_all_matches_set_order_body(false)), 514- )], 515- Some(vec![if_stmt( 516- preg_flag_enabled_expr(\"pregFlags\", PREG_OFFSET_CAPTURE), 517- regex_all_matches_pattern_order_body(true), 518- Some(regex_all_matches_pattern_order_body(false)), 519- )]), 520- )); 521- body 522-} 523- 524-/// Builds the ALL_MATCHES branch for PREG_SET_ORDER. 525-fn regex_all_matches_set_order_body(offset_capture: bool) -> Vec<Stmt> {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "29a543a7d05ea9254d27dd4e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:38:32.458Z",
+  "stored_at": "2026-08-20T20:38:32.458Z"
+}

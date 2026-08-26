@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '13,40p' src/ir_lower/expr/native_isset.rs",
+  "summary": "sed -n '13,40p' src/ir_lower/expr/native_isset.rs: pub(super) fn lower_native_isset_offset_probe( ctx: &mut LoweringContext<'_, '_>, array: &Expr, index: &Expr, expr: &Expr, ) -> LoweredValue { let array_value = lower_subscript_receiver_silently(ctx, array); if value_is_nullable(ctx, array_value.value) { return lower_n",
+  "text": "sed -n '13,40p' src/ir_lower/expr/native_isset.rs: pub(super) fn lower_native_isset_offset_probe( ctx: &mut LoweringContext<'_, '_>, array: &Expr, index: &Expr, expr: &Expr, ) -> LoweredValue { let array_value = lower_subscript_receiver_silently(ctx, array); if value_is_nullable(ctx, array_value.value) { return lower_nullable_native_isset_offset_probe(ctx, array_value, index, expr); } lower_native_isset_offset_probe_from_value(ctx, array_value, index, expr) } /// Lowers nullable native array/hash `isset` without evaluating the offset on null receivers. pub(super) fn lower_nullable_native_isset_offset_probe( ctx: &mut LoweringContext<'_, '_>, array_value: LoweredValue, index: &Expr, expr: &Expr, ) -> LoweredValue { let is_null = ctx.emit_value( Op::IsNull, vec![array_value.value], None, PhpType::Bool, Op::IsNull.default_effects(), Some(expr.span), );",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "54f773c62e1cfbe9a817ebbc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:01:35.325Z",
+  "stored_at": "2026-08-20T19:01:35.325Z"
+}

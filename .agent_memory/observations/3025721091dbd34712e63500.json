@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add -A src tests && git commit -q -m \"WIP: stack trace subsystem (temporary)\" && git log --oneline -1 | cat && git checkout -q ab65a74cc 2>&1 | tail -2 && git log --oneline -1 | cat",
+  "summary": "git add -A src tests && git commit -q -m \"WIP: stack trace subsystem (temporary)\" && git log --oneline -1 | cat && git checkout -q ab65a74cc 2>&1 | tail -2 && git log --oneline -1 | cat: 50a3ff1da WIP: stack trace subsystem (temporary) ab65a74cc fix(arrays): array_filter() renumbered the survivors, where php keeps thei",
+  "text": "git add -A src tests && git commit -q -m \"WIP: stack trace subsystem (temporary)\" && git log --oneline -1 | cat && git checkout -q ab65a74cc 2>&1 | tail -2 && git log --oneline -1 | cat: 50a3ff1da WIP: stack trace subsystem (temporary) ab65a74cc fix(arrays): array_filter() renumbered the survivors, where php keeps their keys",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3025721091dbd34712e63500",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:46:31.649Z",
+  "stored_at": "2026-08-22T12:46:31.650Z"
+}

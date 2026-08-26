@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/io/mod.rs\")\ns = p.read_text()\nold = \"\"\"    emit_stream_pending_clear, emit_stream_pending_consume, emit_stream_pending_held,\n    emit_stream_pending_put, emit_stream_pending_take,\n};\"\"\"\nnew = \"\"\"    emit_stream_pending_clear, emit_stream_pending_consume, emit_stream_pending_fill,\n    emit_stream_pending_held, emit_stream_pending_put, emit_stream_pending_take,\n};\"\"\"\nassert s.count(old) == 1, s.count(old)\np.write_text(s.replace(old, new))\n\np = pathlib.Path(\"src/codegen_support/runtime/emitters/platform.rs\")\ns = p.read_… [+254 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/io/mod.rs\")\ns = p.read_text()\nold = \"\"\"    emit_stream_pending_clear, emit_stream_pending_consume, emit_stream_pending_held,\n    emit_stream_pending_put, emit_stream_pending_take,\n};\"\"\"\nnew = \"\"\"    emit_stream_pending_clear, emit_stream_pend",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/codegen_support/runtime/io/mod.rs\")\ns = p.read_text()\nold = \"\"\"    emit_stream_pending_clear, emit_stream_pending_consume, emit_stream_pending_held,\n    emit_stream_pending_put, emit_stream_pending_take,\n};\"\"\"\nnew = \"\"\"    emit_stream_pending_clear, emit_stream_pending_consume, emit_stream_pending_fill,\n    emit_stream_pending_held, emit_stream_pending_put, emit_stream_pending_take,\n};\"\"\"\nassert s.count(old) == 1, s.count(old)\np.write_text(s.replace(old, new))\n\np = pathlib.Path(\"src/codegen_support/runtime/emitters/platform.rs\")\ns = p.read_text()\nold = \"    io::emit_stream_pending_consume(emitter);\"\nnew = \"    io::emit_stream_pending_consume(emitter);\\n    io::emit_stream_pending_fill(emitter);\"\nassert s.count(old) == 1, s.count(old)\np.write_text(s.replace(old, new))\nprint(\"registered\")\nPY: registered",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "771319e025ad0bd9d604c835",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:06:04.402Z",
+  "stored_at": "2026-08-24T17:06:04.402Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git show origin/main:src/types/checker/type_compat/unions.rs | grep -n 'resource_types_compatible' -A 22 | head -28",
+  "summary": "git show origin/main:src/types/checker/type_compat/unions.rs | grep -n 'resource_types_compatible' -A 22 | head -28:  fn union_contains_void(ty: &PhpType) -> bool { 132- matches!(ty, PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Void)) 133- } 134- 135- /// Removes `PhpType::Void` from a uni",
+  "text": "git show origin/main:src/types/checker/type_compat/unions.rs | grep -n 'resource_types_compatible' -A 22 | head -28:  fn union_contains_void(ty: &PhpType) -> bool { 132- matches!(ty, PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Void)) 133- } 134- 135- /// Removes `PhpType::Void` from a union type, re-normalizing the result. 136- /// If all members are removed, returns `PhpType::Never`. If only one member remains, 137- /// returns it directly without wrapping in a union. 138- pub(crate) fn strip_void_from_union(&self, ty: &PhpType) -> PhpType { 139- match ty { 140- PhpType::Union(members) => { 141- let filtered: Vec<PhpType> = members 142- .iter() 143- .filter(|member| **member != PhpType::Void) 144- .cloned() 145- .collect(); 146- self.normalize_union_type(filtered) 147- } -- 282: if PhpType::resource_types_compatible(existing, new_ty) { 283- return Some(match (existing, new_ty) { 284- (PhpType::Resource(Some(left)), PhpType::Resource(Some(right))) 285- if left == right =>",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c94d3db927b5e6e24e785e0e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:11:44.641Z",
+  "stored_at": "2026-08-26T17:11:44.641Z"
+}

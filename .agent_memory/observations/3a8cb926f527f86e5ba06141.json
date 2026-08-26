@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git merge origin/main --no-commit 2>&1 | tail -5; echo \"--- statut:\"; git status --short | grep -c \"^UU\\|^AA\\|^DU\\|^UD\\|^DD\\|^AU\\|^UA\"",
+  "summary": "About to run: git merge origin/main --no-commit 2>&1 | tail -5; echo \"--- statut:\"; git status --short | grep -c \"^UU\\|^AA\\|^DU\\|^UD\\|^DD\\|^AU\\|^UA\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3a8cb926f527f86e5ba06141",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T16:56:03.846Z",
+  "stored_at": "2026-08-20T16:56:03.846Z"
+}

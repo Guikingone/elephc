@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='src/codegen_support/runtime/strings/resource_type_name.rs'\ns=open(p).read()\nold='''        assert_eq!(\n            asm.matches(\"    ldr x30, [sp, #8]\\\\n\").count(),\n            2,\n            \"both post-lookup arms must restore the link register:\\\\n{asm}\"\n        );'''\nnew='''        assert_eq!(\n            asm.matches(\"    ldr x30, [sp, #8]\\\\n\").count(),\n            3,\n            \"all three post-lookup arms must restore the link register:\\\\n{asm}\"\n        );'''\nassert s.count(old)==1\ns=s.replace(old,new)\nold2='''        assert_eq!(\n            asm.matches(\"    sub sp, sp,… [+245 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' p='src/codegen_support/runtime/strings/resource_type_name.rs' s=open(p).read() old=''' assert_eq!( asm.matches(\" ldr x30, [sp, #8]\\\\n\").count(), 2, \"both post-lookup arms must restore",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5d77cdce4c6f407686e3bcc4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:20:57.915Z",
+  "stored_at": "2026-08-17T08:20:57.918Z"
+}

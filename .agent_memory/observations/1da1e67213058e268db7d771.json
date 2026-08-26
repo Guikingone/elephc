@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w22 $S/e22; mkdir -p $S/w22 $S/e22; cp $S/probes2/splfileobject-open.php $S/w22/p.php; cp $S/probes2/splfileobject-open.php $S/e22/p.php; cd $S/w22 && php -n p.php 2>&1; echo \"=== elephc ===\"; cd $S/e22 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php >/dev/null 2>&1 && ./p 2>&1",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w22 $S/e22; mkdir -p $S/w22 $S/e22; cp $S/probes2/splfileobject-open.php $S/w22/p.php; cp $S/probes2/splfileobject-open.php $S/e22/p.php;",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w22 $S/e22; mkdir -p $S/w22 $S/e22; cp $S/probes2/splfileobject-open.php $S/w22/p.php; cp $S/probes2/splfileobject-open.php $S/e22/p.php; cd $S/w22 && php -n p.php 2>&1; echo \"=== elephc ===\"; cd $S/e22 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php >/dev/null 2>&1 && ./p 2>&1: acab9ca56/scratchpad/sweep/e22/p.php on line 2 write-nodir no throw ok ok.txt Warning: fopen(nope.txt): Failed to open stream: No such file or directory in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/e22/p.php on line 16 Warning: file(nope.txt): Failed to open stream: No such file or directory in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/e22/p.php on line 16 Warning: foreach() argument must be of type array|object, false given in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/e22/p.php on line 16 info-missing no throw",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1da1e67213058e268db7d771",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:07:32.476Z",
+  "stored_at": "2026-08-24T20:07:32.476Z"
+}

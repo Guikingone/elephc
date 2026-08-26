@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"_meta_wrapper\\|_meta_type\\|ascii\" src/codegen_support/runtime/io/stream_type_name.rs | head -30; echo \"=== data section names ===\"; grep -rn \"_meta_wrapper_\\|_meta_stream_\" src/codegen_support/runtime/data/*.rs | head -30",
+  "summary": "grep -n \"_meta_wrapper\\|_meta_type\\|ascii\" src/codegen_support/runtime/io/stream_type_name.rs | head -30; echo \"=== data section names ===\"; grep -rn \"_meta_wrapper_\\|_meta_stream_\" src/codegen_support/runtime/data/*.rs | head -30: t.push_str(\".globl _meta_wrapper_phar\\n_meta_wrapper_phar:\\n .ascii \\\"phar\\\"\\n\"); src/co",
+  "text": "grep -n \"_meta_wrapper\\|_meta_type\\|ascii\" src/codegen_support/runtime/io/stream_type_name.rs | head -30; echo \"=== data section names ===\"; grep -rn \"_meta_wrapper_\\|_meta_stream_\" src/codegen_support/runtime/data/*.rs | head -30: t.push_str(\".globl _meta_wrapper_phar\\n_meta_wrapper_phar:\\n .ascii \\\"phar\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs:1496: out.push_str(\".globl _meta_wrapper_php\\n_meta_wrapper_php:\\n .ascii \\\"PHP\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs:1497: out.push_str(\".globl _meta_wrapper_data\\n_meta_wrapper_data:\\n .ascii \\\"RFC2397\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs:1498: out.push_str(\".globl _meta_wrapper_zlib\\n_meta_wrapper_zlib:\\n .ascii \\\"compress.zlib\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs:1499: out.push_str(\".globl _meta_wrapper_bzip2\\n_meta_wrapper_bzip2:\\n .ascii \\\"compress.bzip2\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs:1500: out.push_str(\".globl _meta_wrapper_glob\\n_meta_wrapper_glob:\\n .ascii \\\"glob\\\"\\n\"); src/codegen_support/runtime/data/fixed.rs:1501: out.push_str(\".globl _meta_wrapper_user\\n_meta_wrapper_user:\\n .ascii \\\"user-space\\\"\\n\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "511115dde8f4e047e98f82c8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:52.873Z",
+  "stored_at": "2026-08-14T14:15:52.873Z"
+}

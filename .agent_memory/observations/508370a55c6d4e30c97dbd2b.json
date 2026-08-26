@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_contract.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_contract.py: \"\"\"php's glob flag values move to the one crate the compiler and the eval interpreter share.\n\nThey are php's own numbers — ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_flags_contract.py: \"\"\"php's glob flag values move to the one crate the compiler and the eval interpreter share.\n\nThey are php's own numbers — php 8.5 ships its own glob — so both engines must agree on them, and\nthey must agree with the libc translation table each one applies. Keeping a second copy in the\neval interpreter would be a silent drift waiting to happen, and the eval surface is already the\nplace where this repo has found compiled/eval divergences before.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\nMODULE = '''//!",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "508370a55c6d4e30c97dbd2b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:15:24.928Z",
+  "stored_at": "2026-08-22T09:15:24.928Z"
+}

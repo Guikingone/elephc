@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg \"^=== DIFF\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/results.txt | rg -o \"DIFF .*\" | head -50",
+  "summary": "rg \"^=== DIFF\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/results.txt | rg -o \"DIFF .*\" | head -50: g72221 DIFF bug72857 DIFF bug74267 DIFF bug74556 DIFF bug75031 DIFF bug76857 DIFF bug76943 DIF",
+  "text": "rg \"^=== DIFF\" /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/results.txt | rg -o \"DIFF .*\" | head -50: g72221 DIFF bug72857 DIFF bug74267 DIFF bug74556 DIFF bug75031 DIFF bug76857 DIFF bug76943 DIFF bug78506 DIFF bug79467 DIFF bug79468 DIFF convert DIFF gh17067 DIFF gh20286 DIFF gh20370 DIFF gh20370_no_stream_property DIFF ghsa_r977_prxv_hc43 DIFF object_init_failure DIFF object_init_failure_2 DIFF oss_fuzz_385993744 DIFF php_user_filter_onCreate_failure DIFF set_file_buffer DIFF stream_context_create_error DIFF stream_context_get_params_001 DIFF stream_context_set_option_basic DIFF stream_context_set_option_error DIFF stream_context_set_options_basic DIFF stream_context_set_params_notification_error DIFF stream_context_set_params_notification_valid_then_invalid DIFF stream_filter_remove_error DIFF stream_get_line_nb DIFF stream_get_meta_data_dir_basic DIFF stream_get_meta_data_file_variation2 DIFF stream_get_meta_data_socket_basic DIFF stream_read_object_return DIFF stream_set_chunk_size",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f366908bddefc0e8407f928f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:47:39.039Z",
+  "stored_at": "2026-08-17T06:47:39.040Z"
+}

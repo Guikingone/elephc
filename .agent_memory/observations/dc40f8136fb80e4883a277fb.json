@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '745,765p' src/codegen_support/runtime/data/fixed.rs",
+  "summary": "sed -n '745,765p' src/codegen_support/runtime/data/fixed.rs: _exc_in\\n_uncaught_exc_in:\\n .ascii \\\" in \\\"\\n\"); out.push_str(\".globl _uncaught_exc_colon\\n_uncaught_exc_colon:\\n .ascii \\\":\\\"\\n\"); out.push_str(\".globl _uncaught_exc_nl\\n_uncaught_exc_nl:\\n .ascii \\\"\\\\n\\\"\\n\"); // Printed only when `__rt_exception_matches` w",
+  "text": "sed -n '745,765p' src/codegen_support/runtime/data/fixed.rs: _exc_in\\n_uncaught_exc_in:\\n .ascii \\\" in \\\"\\n\"); out.push_str(\".globl _uncaught_exc_colon\\n_uncaught_exc_colon:\\n .ascii \\\":\\\"\\n\"); out.push_str(\".globl _uncaught_exc_nl\\n_uncaught_exc_nl:\\n .ascii \\\"\\\\n\\\"\\n\"); // Printed only when `__rt_exception_matches` walks into the \"metadata never emitted\" // sentinel, which no correct build should reach — see that helper for why it aborts there // instead of answering \"no match\". out.push_str(&format!( \".globl {symbol}\\n{symbol}:\\n .ascii {message:?}\\n\", symbol = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE_SYMBOL, message = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE, )); out.push_str(\".globl _instanceof_target_type_msg\\n_instanceof_target_type_msg:\\n .ascii \\\"Fatal error: Class name must be a valid object or a string\\\\n\\\"\\n\"); // The composer copies exactly `STRING_OFFSET_PREFIX.len()` bytes from here, so the text",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "dc40f8136fb80e4883a277fb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:45:32.608Z",
+  "stored_at": "2026-08-24T17:45:32.608Z"
+}

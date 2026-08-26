@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '125,140p' src/ir_lower/expr/method_calls.rs; echo \"--- static ---\"; grep -n \"lower_args_with_signature\" src/ir_lower/expr/static_method_calls.rs src/ir_lower/expr/closure_calls.rs src/ir_lower/expr/nullable_method_calls.rs 2>/dev/null",
+  "summary": "sed -n '125,140p' src/ir_lower/expr/method_calls.rs; echo \"--- static ---\"; grep -n \"lower_args_with_signature\" src/ir_lower/expr/static_method_calls.rs src/ir_lower/expr/closure_calls.rs src/ir_lower/expr/nullable_method_calls.rs 2>/dev/null: , object.value, dispatch_method); promote_pdo_binding_ref_argument(ctx, obje",
+  "text": "sed -n '125,140p' src/ir_lower/expr/method_calls.rs; echo \"--- static ---\"; grep -n \"lower_args_with_signature\" src/ir_lower/expr/static_method_calls.rs src/ir_lower/expr/closure_calls.rs src/ir_lower/expr/nullable_method_calls.rs 2>/dev/null: , object.value, dispatch_method); promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args); let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args); operands.extend(arg_values.iter().copied()); let data = ctx.intern_string(dispatch_method); let call = ctx.emit_value( op, --- static --- src/ir_lower/expr/nullable_method_calls.rs:135: let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args); src/ir_lower/expr/static_method_calls.rs:50: let operands = lower_args_with_signature(ctx, None, args); src/ir_lower/expr/static_method_calls.rs:67: let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args); src/ir_lower/expr/static_method_calls.rs:252: operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args)); src/ir_lower/expr/closure_calls.rs:42: operands.extend(lower_args_with_signature(ctx, instance_signature.as_ref(), args));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1cd2fa68978e38e0ef6d5324",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:04:26.488Z",
+  "stored_at": "2026-08-20T20:04:26.489Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"CallbackParameters\\|callback_parameters\" src/types/checker/ | head -5; grep -rn \"array_map\" src/types/checker/builtins/*.rs | head -6",
+  "summary": "About to run: grep -rln \"CallbackParameters\\|callback_parameters\" src/types/checker/ | head -5; grep -rn \"array_map\" src/types/checker/builtins/*.rs | head -6",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0af8a5358ed5cde1b5611f4f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:16:52.809Z",
+  "stored_at": "2026-08-22T11:16:52.809Z"
+}

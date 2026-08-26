@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/segv && printf '<?php\\n$p = sys_get_temp_dir() . \"/segv_sel.txt\";\\nfile_put_contents($p, \"x\");\\n$f = fopen($p, \"r\");\\nfclose($f);\\n$r = [$f]; $w = null; $e = null;\\n$n = stream_select($r, $w, $e, 0);\\nvar_dump($n);\\n' > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/segv/s.php && cat /private/tmp/claude-501/-… [+149 chars truncated]",
+  "summary": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/segv && printf '<?php\\n$p = sys_get_temp_dir() . \"/segv_sel.txt\";\\nfile_put_contents($p, \"x\");\\n$f = fopen($p, \"r\");\\nfclose($f);\\n$r = [$f]; $w = ",
+  "text": "mkdir -p /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/segv && printf '<?php\\n$p = sys_get_temp_dir() . \"/segv_sel.txt\";\\nfile_put_contents($p, \"x\");\\n$f = fopen($p, \"r\");\\nfclose($f);\\n$r = [$f]; $w = null; $e = null;\\n$n = stream_select($r, $w, $e, 0);\\nvar_dump($n);\\n' > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/segv/s.php && cat /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/segv/s.php: <?php $p = sys_get_temp_dir() . \"/segv_sel.txt\"; file_put_contents($p, \"x\"); $f = fopen($p, \"r\"); fclose($f); $r = [$f]; $w = null; $e = null; $n = stream_select($r, $w, $e, 0); var_dump($n);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "997929aa6ed00c55e08cd07c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:38:42.925Z",
+  "stored_at": "2026-08-17T06:38:42.926Z"
+}

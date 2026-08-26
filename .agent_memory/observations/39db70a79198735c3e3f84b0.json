@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('ssel.php','w').write('''<?php\nclass W {\n    public $context;\n    public function stream_open($p, $m, $o, &$op) { return true; }\n    public function stream_read($n) { return \"\"; }\n    public function stream_write($d) { return strlen($d); }\n    public function stream_eof() { return true; }\n    public function stream_tell() { return 0; }\n    public function stream_seek($o, $w) { return false; }\n    p… [+335 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('ssel.php','w').write('''<?php\nclass W {\n    public $context;\n    public function stream_open($p, $m, $o, &$op) { return ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('ssel.php','w').write('''<?php\nclass W {\n    public $context;\n    public function stream_open($p, $m, $o, &$op) { return true; }\n    public function stream_read($n) { return \"\"; }\n    public function stream_write($d) { return strlen($d); }\n    public function stream_eof() { return true; }\n    public function stream_tell() { return 0; }\n    public function stream_seek($o, $w) { return false; }\n    public function stream_stat() { return []; }\n    public function stream_close() {}\n}\nstream_wrapper_register(\"nocast\", \"W\");\n$h = fopen(\"nocast://x\", \"rb\");\n$r = [$h];\n$w = null;\n$e = null;\n$n = stream_select($r, $w, $e, 0, 0);\nvar_dump($n, $r);\nfclose($h);\n''')\nPY\nzsh difftests.sh ssel 2>&1 | head -20; echo \"=== php:\"; cat ssel_p.txt: riptor in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ssel.php on line 18 Fatal error: Uncaught ValueError: No stream arrays were passed in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ssel.php:18 Stack trace: #0 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ssel.php(18): stream_select(Array, NULL, NULL, 0, 0) #1 {main} thrown in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/ssel.php on line 18",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "39db70a79198735c3e3f84b0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T17:54:42.754Z",
+  "stored_at": "2026-08-17T17:54:42.754Z"
+}

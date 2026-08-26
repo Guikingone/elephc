@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -c \"^\" crates/elephc-phar/src/zip_read.rs; echo \"--- fonctions présentes après le conflit:\"; grep -n \"^pub(super) fn \\|^fn \\|^<<<<<<<\\|^=======\\|^>>>>>>>\" crates/elephc-phar/src/zip_read.rs | head -30",
+  "summary": "About to run: grep -c \"^\" crates/elephc-phar/src/zip_read.rs; echo \"--- fonctions présentes après le conflit:\"; grep -n \"^pub(super) fn \\|^fn \\|^<<<<<<<\\|^=======\\|^>>>>>>>\" crates/elephc-phar/src/zip_read.rs | hea",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "85bf881af20552099969d2e6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:01:01.440Z",
+  "stored_at": "2026-08-20T17:01:01.441Z"
+}

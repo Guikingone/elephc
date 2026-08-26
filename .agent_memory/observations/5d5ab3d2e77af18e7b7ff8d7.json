@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8; head -12 kimi-k3-16.php; echo \"=== 56 ===\"; head -12 kimi-k3-56.php; echo \"=== 27 ===\"; head -10 kimi-k3-27.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8; head -12 kimi-k3-16.php; echo \"=== 56 ===\"; head -12 kimi-k3-56.php; echo \"=== 27 ===\"; head -10 kimi-k3-27.php: <?php $a = fopen(\"php",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8; head -12 kimi-k3-16.php; echo \"=== 56 ===\"; head -12 kimi-k3-56.php; echo \"=== 27 ===\"; head -10 kimi-k3-27.php: <?php $a = fopen(\"php://memory\",\"r\"); $b = fopen(\"php://temp\",\"r\"); var_dump($a, $b); // resource(2)? numbering fclose($a); $c = fopen(\"php://memory\",\"r\"); var_dump($c); // id reuse: php reuses freed id? === 56 === <?php file_put_contents(\"big.txt\", str_repeat(\"abcdefgh\\n\", 100000)); $h = fopen(\"big.txt\", \"r\"); $t = microtime(true); $n = 0; while (($c = fgetc($h)) !== false) $n++; printf(\"%d %.3f\\n\", $n, microtime(true) - $t); === 27 === <?php $it = new DirectoryIterator(\"dtest\"); $n = 0; foreach ($it as $f) { if (!$f->isDot()) $n++; } var_dump($n); // 1 (x.txt) var_dump(iterator_to_array($it) === iterator_to_array($it)); // hmm",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5d5ab3d2e77af18e7b7ff8d7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:32:04.035Z",
+  "stored_at": "2026-08-23T09:32:04.038Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests test_pdo_begin_after_raw_begin_throws 2>&1 | grep \"test result\"; git log --format=\"%h\" -1 --all --oneline 2>/dev/null | head -1",
+  "summary": "cargo test --test codegen_tests test_pdo_begin_after_raw_begin_throws 2>&1 | grep \"test result\"; git log --format=\"%h\" -1 --all --oneline 2>/dev/null | head -1: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8304 filtered out; finished in 34.74s 84a15fc046 fix(streams): the stat builtins warned for no miss",
+  "text": "cargo test --test codegen_tests test_pdo_begin_after_raw_begin_throws 2>&1 | grep \"test result\"; git log --format=\"%h\" -1 --all --oneline 2>/dev/null | head -1: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8304 filtered out; finished in 34.74s 84a15fc046 fix(streams): the stat builtins warned for no missing url_stat, and filesize never reported a failed stat",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9d8b372abdd6eb19255ee67b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T18:57:08.925Z",
+  "stored_at": "2026-08-14T18:57:08.925Z"
+}

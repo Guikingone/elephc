@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo check -p elephc-phar 2>&1 | grep -E \"^error\" -A 4 | head -20",
+  "summary": "cargo check -p elephc-phar 2>&1 | grep -E \"^error\" -A 4 | head -20 completed",
+  "text": "cargo check -p elephc-phar 2>&1 | grep -E \"^error\" -A 4 | head -20 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e4ecdc027d8a7d9277024e5e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:38:41.889Z",
+  "stored_at": "2026-08-20T17:38:41.889Z",
+  "low_signal": true
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"fn test_fscanf_float_via_shared_sscanf_engine\" -A16 tests/codegen/io/streams.rs | head -20",
+  "summary": "About to run: rtk proxy rg -n \"fn test_fscanf_float_via_shared_sscanf_engine\" -A16 tests/codegen/io/streams.rs | head -20",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "af899a93c1d98842c27ff326",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:51:27.155Z",
+  "stored_at": "2026-08-16T17:51:27.155Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"ArrayInternalPointer\" src/ | grep -v \"^src/ir_lower/expr/array_builtin_args.rs\" | head -10",
+  "summary": "grep -rn \"ArrayInternalPointer\" src/ | grep -v \"^src/ir_lower/expr/array_builtin_args.rs\" | head -10: src/ir_lower/array_pointer_scan.rs:269: crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(_) src/ir_lower/expr/mod.rs:1188:/// `BuiltinArgumentLowering::ArrayInternalPointer(op)` descriptor, nev",
+  "text": "grep -rn \"ArrayInternalPointer\" src/ | grep -v \"^src/ir_lower/expr/array_builtin_args.rs\" | head -10: src/ir_lower/array_pointer_scan.rs:269: crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(_) src/ir_lower/expr/mod.rs:1188:/// `BuiltinArgumentLowering::ArrayInternalPointer(op)` descriptor, never by matching the src/ir_lower/expr/mod.rs:1212: Some(crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(op)) => op, src/builtins/docs.rs:155: BuiltinArgumentLowering::ArrayInternalPointer(_) => \"array_internal_pointer\", src/builtins/semantics.rs:183: ArrayInternalPointer(ArrayPointerOp), src/builtins/semantics.rs:451:/// `BuiltinArgumentLowering::ArrayInternalPointer`, which resolves the receiver to a src/builtins/semantics.rs:475: argument_lowering: BuiltinArgumentLowering::ArrayInternalPointer(op),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4d37844f9fe43ec036eca1bb",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:39:20.430Z",
+  "stored_at": "2026-08-21T07:39:20.430Z"
+}

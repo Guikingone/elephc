@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git stash list | head -3; git status --short | grep -v codebase-memory | grep -v agent_memory | wc -l",
+  "summary": "git stash list | head -3; git status --short | grep -v codebase-memory | grep -v agent_memory | wc -l: stash@{0}: On reconcile/dirname-symfony: batchC-wip-1785481981 stash@{1}: On padawan/dom-routes-minimax: padawan-dom-dtd-pre-fef80e8d54 stash@{2}: On feat/windows-pe: windows-final-pre-rebase-20260722 18",
+  "text": "git stash list | head -3; git status --short | grep -v codebase-memory | grep -v agent_memory | wc -l: stash@{0}: On reconcile/dirname-symfony: batchC-wip-1785481981 stash@{1}: On padawan/dom-routes-minimax: padawan-dom-dtd-pre-fef80e8d54 stash@{2}: On feat/windows-pe: windows-final-pre-rebase-20260722 18",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ab4869c99344b174e3edf067",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:08:45.670Z",
+  "stored_at": "2026-08-22T10:08:45.670Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/io/wrapper_chunk_reads.rs",
+  "command": "",
+  "summary": "About to run: Edit",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "437d75c45a60b2c1e205e6c7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T14:16:19.458Z",
+  "stored_at": "2026-08-21T14:16:19.458Z",
+  "low_signal": true
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '36,52p' src/builtins/array/array_unique.rs",
+  "summary": "sed -n '36,52p' src/builtins/array/array_unique.rs: let ty = cx.checker.infer_type(&cx.args[0], cx.env)?; // An `array|false` union (scandir, glob, file) reads through to its array member; // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`. let ty = ty.array_or_false_member().cloned().",
+  "text": "sed -n '36,52p' src/builtins/array/array_unique.rs: let ty = cx.checker.infer_type(&cx.args[0], cx.env)?; // An `array|false` union (scandir, glob, file) reads through to its array member; // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`. let ty = ty.array_or_false_member().cloned().unwrap_or(ty); if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) { return Err(CompileError::new( cx.span, \"array_unique() argument must be array\", )), } Ok(key_preserving_set_op_result(ty)) } /// Maps a value set operation's first-operand type onto the key-preserving result php returns. /// /// The survivors keep their source keys, so an indexed `array<T>` answers /// `AssocArray { key: Int, value: T }`; an already-associative source keeps its own shape.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b0c9736f60ed181703a89960",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:38:19.150Z",
+  "stored_at": "2026-08-20T17:38:19.150Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'STREAM_EOF\\|_eof_flag\\|eof_off' src/codegen_support/runtime/resources/layout.rs | head -20",
+  "summary": "About to run: grep -rn 'STREAM_EOF\\|_eof_flag\\|eof_off' src/codegen_support/runtime/resources/layout.rs | head -20",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "03b61d4c1fd07bcd49a0fc52",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:43:38.471Z",
+  "stored_at": "2026-08-25T13:43:38.472Z"
+}

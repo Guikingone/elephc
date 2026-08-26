@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "gh run list -R Guikingone/elephc --branch ci/streams-csv-fullci -L 5 --json databaseId,workflowName,headSha,status,conclusion,createdAt",
+  "summary": "gh run list -R Guikingone/elephc --branch ci/streams-csv-fullci -L 5 --json databaseId,workflowName,headSha,status,conclusion,createdAt: \",\"createdAt\":\"2026-08-16T15:21:00Z\",\"databaseId\":31955378087,\"headSha\":\"75eb6d965f5cc774403dd061a59a81fcb13ef1e0\",\"status\":\"in_progress\",\"workflowName\":\"PDO Live Databases\"},{\"conclu",
+  "text": "gh run list -R Guikingone/elephc --branch ci/streams-csv-fullci -L 5 --json databaseId,workflowName,headSha,status,conclusion,createdAt: \",\"createdAt\":\"2026-08-16T15:21:00Z\",\"databaseId\":31955378087,\"headSha\":\"75eb6d965f5cc774403dd061a59a81fcb13ef1e0\",\"status\":\"in_progress\",\"workflowName\":\"PDO Live Databases\"},{\"conclusion\":\"failure\",\"createdAt\":\"2026-08-16T15:21:00Z\",\"databaseId\":31955378083,\"headSha\":\"75eb6d965f5cc774403dd061a59a81fcb13ef1e0\",\"status\":\"completed\",\"workflowName\":\"CI Image\"},{\"conclusion\":\"\",\"createdAt\":\"2026-08-16T15:21:00Z\",\"databaseId\":31955378116,\"headSha\":\"75eb6d965f5cc774403dd061a59a81fcb13ef1e0\",\"status\":\"queued\",\"workflowName\":\"CI\"},{\"conclusion\":\"success\",\"createdAt\":\"2026-08-16T15:20:58Z\",\"databaseId\":31955376949,\"headSha\":\"75eb6d965f5cc774403dd061a59a81fcb13ef1e0\",\"status\":\"completed\",\"workflowName\":\"PR labels\"},{\"conclusion\":\"failure\",\"createdAt\":\"2026-08-16T13:37:10Z\",\"databaseId\":31950331555,\"headSha\":\"100656041f8c40805bc1f42fc32cd1b32b9cbbef\",\"status\":\"completed\",\"workflowName\":\"CI Image\"}]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "427547b37ddef1580359e32a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:29:09.005Z",
+  "stored_at": "2026-08-16T15:29:09.005Z",
+  "low_signal": true
+}

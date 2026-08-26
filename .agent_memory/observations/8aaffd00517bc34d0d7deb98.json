@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"data://\" tests/codegen/io/*.rs tests/codegen/io/**/*.rs 2>/dev/null | head -30; echo \"=== count data uri tests ===\"; grep -rc \"data://\" tests/codegen/io/*.rs 2>/dev/null",
+  "summary": "About to run: grep -rn \"data://\" tests/codegen/io/*.rs tests/codegen/io/**/*.rs 2>/dev/null | head -30; echo \"=== count data uri tests ===\"; grep -rc \"data://\" tests/codegen/io/*.rs 2>/dev/null",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8aaffd00517bc34d0d7deb98",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:13:26.203Z",
+  "stored_at": "2026-08-14T14:13:26.204Z"
+}

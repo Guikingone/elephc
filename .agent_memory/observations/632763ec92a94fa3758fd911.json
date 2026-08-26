@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls tests/*.rs | head -20",
+  "summary": "ls tests/*.rs | head -20: tests/array_flip_assoc_tests.rs tests/array_map_result_heap_tests.rs tests/array_result_type_tests.rs tests/array_set_op_key_preservation_tests.rs tests/builtin_parity_tests.rs tests/cdylib_tests.rs tests/codegen_tests.rs tests/compiler_determinism_tests.rs tests/error_class_hierarchy_tests.rs",
+  "text": "ls tests/*.rs | head -20: tests/array_flip_assoc_tests.rs tests/array_map_result_heap_tests.rs tests/array_result_type_tests.rs tests/array_set_op_key_preservation_tests.rs tests/builtin_parity_tests.rs tests/cdylib_tests.rs tests/codegen_tests.rs tests/compiler_determinism_tests.rs tests/error_class_hierarchy_tests.rs tests/error_tests.rs tests/eval_object_handle_tests.rs tests/eval_resource_id_tests.rs tests/eval_string_interpolation_tests.rs tests/extension_loaded_tests.rs tests/foreach_non_iterable_tests.rs tests/fresh_result_ownership_leak_tests.rs tests/function_exists_tests.rs tests/inlined_callee_local_leak_tests.rs tests/ir_backend_smoke_test.rs tests/lexer_tests.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "632763ec92a94fa3758fd911",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:04:21.148Z",
+  "stored_at": "2026-08-17T21:04:21.148Z"
+}

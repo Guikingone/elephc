@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n ctxfam.php > php_ctxfam.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o ctxfam ctxfam.php 2>&1|tail -2; ./ctxfam > el_ctxfam.txt 2>&1; diff php_ctxfam.txt el_ctxfam.txt | head -60",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n ctxfam.php > php_ctxfam.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/el",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj; php -n ctxfam.php > php_ctxfam.txt 2>&1; /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -o ctxfam ctxfam.php 2>&1|tail -2; ./ctxfam > el_ctxfam.txt 2>&1; diff php_ctxfam.txt el_ctxfam.txt | head -60: t_set_default(): Argument #1 ($options) must be of type array, Thing given < user-obj/get_default => TypeError: stream_context_get_default(): Argument #1 ($options) must be of type ?array, Thing given < list/set_options => ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value < list/set_default => ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value < list/get_default => ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value < map/set_options => ok < map/set_default => ok < map/get_default => ok --- > > Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options() instead in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/ctxfam.php on line 24",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "11dfe056dcc4dbcfb4183d7c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:51:58.517Z",
+  "stored_at": "2026-08-22T16:51:58.517Z"
+}

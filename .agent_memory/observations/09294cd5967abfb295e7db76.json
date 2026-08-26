@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg21.txt <<'EOF'\nfix(streams): stream_filter_register released its frame, then released it again\n\nEvery `stream_filter_register()` call SIGSEGVs. Not on a stream, not through a filter, not with a\nwrapper — on its own:\n\n    class CustomFilter {}\n    var_dump(stream_filter_register(\"custom.filter\", \"CustomFilter\"));\n\nphp prints `bool(true)`; elephc dies with signal 11 before printing anything. Two of the three\nexits restore… [+1660 chars truncated]",
+  "summary": "About to run: cat > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg21.txt <<'EOF' fix(strea",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "09294cd5967abfb295e7db76",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T15:52:31.785Z",
+  "stored_at": "2026-08-21T15:52:31.785Z"
+}

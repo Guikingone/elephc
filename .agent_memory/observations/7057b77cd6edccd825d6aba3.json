@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/spl-throw-line.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/spl-throw-line.php: <?php\nfunction show(string $label, callable $f): void {\n    try {\n        $f();\n        echo $label, \" no throw\\n\";\n",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/spl-throw-line.php: <?php\nfunction show(string $label, callable $f): void {\n    try {\n        $f();\n        echo $label, \" no throw\\n\";\n    } catch (Throwable $e) {\n        echo $label, \" \", get_class($e), \" line=\", $e->getLine(),\n             \" file=\", basename($e->getFile()), \"\\n\";\n    }\n}\n\nshow(\"DirectoryIterator\", function () { new DirectoryIterator(\"nope\"); });\nshow(\"SplFileObject\", function () { new SplFileObject(\"nope.txt\"); });\nshow(\"SplFixedArray\", function () { new SplFixedArray(-1); });\nshow(\"ArrayObject-get\", function () { $a = new ArrayObject([1]); $a->offsetGet(99); });\nshow(\"intdiv\", function () { ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7057b77cd6edccd825d6aba3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:06:02.703Z",
+  "stored_at": "2026-08-24T20:06:02.704Z"
+}

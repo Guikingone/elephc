@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'STREAM_WRAPPER_ID_OFFSET' -A 5 -B 5 src/codegen_support/runtime/resources/layout.rs | head -20; grep -rn 'WRAPPER_ID_TEMP\\|wrapper_id.*temp\\|TEMP.*= *[0-9]' src/codegen_support/runtime/resources/*.rs | head -10",
+  "summary": "About to run: grep -n 'STREAM_WRAPPER_ID_OFFSET' -A 5 -B 5 src/codegen_support/runtime/resources/layout.rs | head -20; grep -rn 'WRAPPER_ID_TEMP\\|wrapper_id.*temp\\|TEMP.*= *[0-9]' src/codegen_support/runtime/resour",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cabe1934be73a7a874c453af",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:43:46.909Z",
+  "stored_at": "2026-08-25T13:43:46.909Z"
+}

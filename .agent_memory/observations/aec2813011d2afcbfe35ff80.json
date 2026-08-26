@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"Undefined variable\" tests/ | sed 's|^tests/||' | head -30",
+  "summary": "grep -rn \"Undefined variable\" tests/ | sed 's|^tests/||' | head -30: 19: \"Undefined variable in use(): $undefined\", error_tests/type_system.rs:942:/// \"Undefined variable: $s\" that appeared because the spread's failure left the error_tests/type_system.rs:1019:/// Verifies the `Undefined variable` diagnostic still fires",
+  "text": "grep -rn \"Undefined variable\" tests/ | sed 's|^tests/||' | head -30: 19: \"Undefined variable in use(): $undefined\", error_tests/type_system.rs:942:/// \"Undefined variable: $s\" that appeared because the spread's failure left the error_tests/type_system.rs:1019:/// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe error_tests/type_system.rs:1023: expect_error(\"<?php echo $neverDefined;\", \"Undefined variable: $neverDefined\"); error_tests/type_system.rs:1030: expect_error(\"<?php var_dump(isset($a[$b]));\", \"Undefined variable: $b\"); error_tests/type_system.rs:1054: \"Undefined variable: $cfg\", codegen/misc.rs:346:/// without \"Undefined variable: $_GET\" — i.e. the superglobal is type-recognized at codegen/io/streams.rs:8970:/// Warning: Undefined variable $http_response_header in /path/test.php on line 3 codegen/io/streams.rs:8978:/// KNOWN GAP, deliberately not asserted: php also raises `Warning: Undefined variable",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aec2813011d2afcbfe35ff80",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T16:05:28.136Z",
+  "stored_at": "2026-08-18T16:05:28.146Z"
+}

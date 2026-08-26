@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/adding-a-php-prelude-checklist.md')\nt = p.read_text()\nold = '''3. `src/lib.rs` + `src/main.rs` (`mod`), `src/pipeline.rs` et `src/ir_lower/tests/mod.rs`\n   (`inject_if_used`, après résolution des includes, avant résolution des noms).'''\nnew = '''3. `src/lib.rs` + `src/main.rs`… [+854 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memo",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv && python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/adding-a-php-prelude-checklist.md')\nt = p.read_text()\nold = '''3. `src/lib.rs` + `src/main.rs` (`mod`), `src/pipeline.rs` et `src/ir_lower/tests/mod.rs`\n   (`inject_if_used`, après résolution des includes, avant résolution des noms).'''\nnew = '''3. `src/lib.rs` + `src/main.rs` (`mod`), puis **TROIS** listes d'injection qui doivent s'accorder,\n   sans que rien ne le dise : `src/pipeline.rs`, `src/ir_lower/tests/mod.rs` et surtout\n   **`tests/codegen/support/compiler.rs`**, qui RECOPIE À LA MAIN la séquence du pipeline. Oublier\n   la 3e = tous les tests de la famille échouent en « Undefined function », un symptôme répété une\n   fois par test et qui ne nomme pas la cause. 🛠️ PORTE ajoutée :\n   `tests/codegen/prelude_injection_parity.rs` lit les deux fichiers comme du TEXTE et compare les\n   ensembles ; elle a trouvé 2 autres préludes dès sa 1re exécution (`version_prelude` — donc\n   `zend_version`/`php_sapi_name`/`ini_restore` n'étaient PAS testables ; `opcache_prelude`,\n   exclu avec sa raison).'''\nassert t.count(old) == 1\np.write_text(t.replace(old, new))\nprint('checklist updated with the third injection list')\nPY: checklist updated with the third injection list",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0bff9253eadd21345266df32",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T12:47:37.118Z",
+  "stored_at": "2026-08-21T12:47:37.119Z"
+}

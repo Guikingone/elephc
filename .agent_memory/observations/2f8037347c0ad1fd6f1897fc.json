@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '283,330p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter.rs",
+  "summary": "rtk proxy sed -n '283,330p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter.rs: resolve filter name → id -- // The name is preserved so an unknown user filter can still be matched // against the built-in table. The lowering only reco",
+  "text": "rtk proxy sed -n '283,330p' /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/user_filter.rs: resolve filter name → id -- // The name is preserved so an unknown user filter can still be matched // against the built-in table. The lowering only recognises built-ins when the // name is a literal, so `stream_filter_append($s, $name)` used to attach // nothing at all for e.g. \"string.toupper\". emitter.instruction(\"str x1, [sp, #32]\"); // save name_ptr for the built-in fallback emitter.instruction(\"str x2, [sp, #40]\"); // save name_len for the built-in fallback emitter.instruction(\"mov x0, x1\"); // move name_ptr into the resolver's first arg emitter.instruction(\"mov x1, x2\"); // move name_len into the resolver's second arg emitter.instruction(\"bl __rt_resolve_user_filter_id\"); // x0 = id (>=128) or 0 emitter.instruction(\"cbz x0, __rt_sfau_try_builtin\"); // not a user filter: try the built-in table emitter.instruction(\"str x0, [sp, #24]\"); // save the resolved id across __rt_new_by_name",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2f8037347c0ad1fd6f1897fc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:07:34.708Z",
+  "stored_at": "2026-08-17T09:07:34.708Z"
+}

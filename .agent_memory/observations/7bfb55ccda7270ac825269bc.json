@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"\\\"str_replace\\\"\" crates/elephc-builtin-contract/src/catalog_data.rs | head -2; rg -rn \"fn lower_str_replace\" src/ | head -2; rg -rn \"str_replace string coercion\" src/ | head -2",
+  "summary": "rg -n \"\\\"str_replace\\\"\" crates/elephc-builtin-contract/src/catalog_data.rs | head -2; rg -rn \"fn lower_str_replace\" src/ | head -2; rg -rn \"str_replace string coercion\" src/ | head -2: 14822: id: BuiltinId::from_canonical_name(\"str_replace\"), 14823: name: \"str_replace\",",
+  "text": "rg -n \"\\\"str_replace\\\"\" crates/elephc-builtin-contract/src/catalog_data.rs | head -2; rg -rn \"fn lower_str_replace\" src/ | head -2; rg -rn \"str_replace string coercion\" src/ | head -2: 14822: id: BuiltinId::from_canonical_name(\"str_replace\"), 14823: name: \"str_replace\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7bfb55ccda7270ac825269bc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:25:15.786Z",
+  "stored_at": "2026-08-17T21:25:15.787Z"
+}

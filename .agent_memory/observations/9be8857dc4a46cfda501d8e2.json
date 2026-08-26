@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git checkout origin/main -- src/types/checker/type_compat/unions.rs && grep -n 'reassignment_widens_to_mixed\\|EXPERIMENT' src/types/checker/type_compat/unions.rs | head -3; echo \"restored to main's version\"",
+  "summary": "git checkout origin/main -- src/types/checker/type_compat/unions.rs && grep -n 'reassignment_widens_to_mixed\\|EXPERIMENT' src/types/checker/type_compat/unions.rs | head -3; echo \"restored to main's version\": restored to main's version",
+  "text": "git checkout origin/main -- src/types/checker/type_compat/unions.rs && grep -n 'reassignment_widens_to_mixed\\|EXPERIMENT' src/types/checker/type_compat/unions.rs | head -3; echo \"restored to main's version\": restored to main's version",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9be8857dc4a46cfda501d8e2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:12:10.323Z",
+  "stored_at": "2026-08-26T17:12:10.324Z"
+}

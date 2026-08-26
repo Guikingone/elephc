@@ -73,7 +73,12 @@ pub(crate) use return_alias::{
     collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,
 };
 pub(crate) use result::LoopStorageTypes;
-pub use result::{check_with_target, CheckResult, ThrowAccessInfo, ThrowAccessKind};
+pub use checker::CheckOptions;
+// `check_with_target` is superseded by `check_with_target_and_options` on the
+// production compile path; it stays public for tests that don't need `CheckOptions`.
+#[allow(unused_imports)]
+pub use result::check_with_target;
+pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
@@ -93,6 +98,16 @@ pub fn check(
     program: &crate::parser::ast::Program,
 ) -> Result<CheckResult, crate::errors::CompileError> {
     result::check(program)
+}
+
+/// Type checks the program on the host platform with explicit `CheckOptions`
+/// (e.g. `--strict-locals`). See `check` for the default-options behavior.
+#[allow(dead_code)]
+pub fn check_with_options(
+    program: &crate::parser::ast::Program,
+    options: CheckOptions,
+) -> Result<CheckResult, crate::errors::CompileError> {
+    result::check_with_options(program, options)
 }
 
 /// Returns the stable checker/EIR scope key for a closure nested at `span`.

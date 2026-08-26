@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '495,570p' src/codegen/lower_inst/builtins/io/fopen_core.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '495,570p' src/codegen/lower_inst/builtins/io/fopen_core.rs: open_context_scope(ctx); store_if_result(ctx, inst)?; abi::emit_jump(ctx.emitter, done); ctx.emitter.label(&not_php); Ok(()) } /// Refuses a runtime `glob:/",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '495,570p' src/codegen/lower_inst/builtins/io/fopen_core.rs: open_context_scope(ctx); store_if_result(ctx, inst)?; abi::emit_jump(ctx.emitter, done); ctx.emitter.label(&not_php); Ok(()) } /// Refuses a runtime `glob://` filename the way php does, falling through when it is not one. /// /// php-src registers `glob` with NO `stream_opener` at all, so the generic caller reports the /// absence itself and no filesystem is ever consulted: /// `Warning: fopen(glob://*.php): Failed to open stream: wrapper does not support stream open` /// Without this the URL reached the file opener, which answered `No such file or directory` about /// a path nothing had looked for. `glob://` still opens as a DIRECTORY; only `fopen()` is refused. /// /// The line is assembled from three interned fragments rather than a run-time composition: only /// the URL varies, and it is already in the string registers here. fn emit_dynamic_glob_branch( ctx: &mut FunctionContext<'_>,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c03d8c12df1620297c3cbae1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:02:49.028Z",
+  "stored_at": "2026-08-23T07:02:49.028Z"
+}

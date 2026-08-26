@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log -1 --format='%h %ci %s'; echo \"=== candle ===\"; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle && git log -1 --format='%h %ci %s'; git status --short | head -5; echo \"=== popcorn ===\"; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn && git log -1 --format='%h %ci %s'",
+  "summary": "About to run: git log -1 --format='%h %ci %s'; echo \"=== candle ===\"; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle && git log -1 --format='%h %ci %s'; git status --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "23210175c904085dd607e887",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:29.105Z",
+  "stored_at": "2026-08-14T14:11:29.106Z"
+}

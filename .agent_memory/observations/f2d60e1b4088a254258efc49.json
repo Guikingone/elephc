@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \"\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/file_get_contents.rs')\ns = p.read_text()\nold = 'use crate::codegen_support::runtime::data::{FGC_READ_FAILED_HEAD, FGC_READ_FAILED_MID};'\nnew = old + '''\n\n/// The extra bytes php asks for on top of the size \\`stat\\` reported.\n///\n/// php's \\`_php_stream_copy_to_mem\\` allocates \\`st_size + CHUNK\\` so ONE read can also see the end\n/// o… [+424 chars truncated]",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 -c \" import pathlib p = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claud",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f2d60e1b4088a254258efc49",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:48:46.527Z",
+  "stored_at": "2026-08-24T13:48:46.527Z"
+}

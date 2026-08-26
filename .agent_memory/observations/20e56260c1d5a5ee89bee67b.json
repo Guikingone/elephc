@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '150,200p' src/codegen/lower_inst/builtins/io/phar_read.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '150,200p' src/codegen/lower_inst/builtins/io/phar_read.rs: e filter route above // only fires for a `php://filter/...` URL, and `__rt_file_get_contents_maybe_url` knows only // http/https/ftp/ftps before falling back",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '150,200p' src/codegen/lower_inst/builtins/io/phar_read.rs: e filter route above // only fires for a `php://filter/...` URL, and `__rt_file_get_contents_maybe_url` knows only // http/https/ftp/ftps before falling back to a FILE read — so `file_get_contents(\"data:,\" . // $payload)` looked for a file of that name and answered false, while the same URL written as // a literal (decoded at compile time) and `fopen()` on it both worked. // A filename assembled at run time may name one of php's OWN sub-streams. `fopen()` has // resolved those through `__rt_php_wrapper_open` for a while; the reader below is `open(2)` // and can only take `php://temp` for a filename — which is what `new SplFileObject($path)` // hit, since the constructor's argument is never a literal by the time it reaches here. let php_substream_done = if path_literal.is_none() { Some(emit_dynamic_php_substream_read_route(ctx)) } else { None }; let data_done = if path_literal.is_none() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "20e56260c1d5a5ee89bee67b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T07:34:04.664Z",
+  "stored_at": "2026-08-24T07:34:04.665Z"
+}

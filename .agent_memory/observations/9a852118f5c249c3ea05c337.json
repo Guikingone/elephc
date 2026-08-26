@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "head -20 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/cases/stream_get_line_nb.php 2>/dev/null",
+  "summary": "head -20 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/cases/stream_get_line_nb.php 2>/dev/null: <?php /** * Tests that stream_get_line() behaves as documented on non-blocking streams: * Never retu",
+  "text": "head -20 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/phpt/cases/stream_get_line_nb.php 2>/dev/null: <?php /** * Tests that stream_get_line() behaves as documented on non-blocking streams: * Never return incomplete lines, except on documented conditions: * length bytes have been read, the string specified by ending is found, EOF. */ $sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0); var_dump($sockets); stream_set_blocking($sockets[1], 0); $eol = '<EOL>'; fwrite($sockets[0], \"line start\"); var_dump(stream_get_line($sockets[1], 8192, $eol)); // Does not returns incomplete line (EOL not found) var_dump(stream_get_line($sockets[1], 8192, $eol)); fwrite($sockets[0], \", line end\"); fwrite($sockets[0], \", $eol\"); var_dump(stream_get_line($sockets[1], 8192, $eol)); // Returns full line (EOL found)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9a852118f5c249c3ea05c337",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:23:01.145Z",
+  "stored_at": "2026-08-17T09:23:01.145Z"
+}

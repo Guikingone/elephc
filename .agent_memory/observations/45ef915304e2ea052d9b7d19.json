@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "php -n -r '\n$m=fopen(\"php://memory\",\"w+\");\nstream_filter_append($m,\"convert.base64-encode\",STREAM_FILTER_WRITE);\nfwrite($m,\"hello world\"); rewind($m); echo \"b64enc=\",stream_get_contents($m),\"\\n\";\necho \"dec=\",file_get_contents(\"php://filter/read=convert.base64-decode/resource=data://text/plain,aGVsbG8=\"),\"\\n\";\necho \"rot=\",file_get_contents(\"php://filter/read=string.rot13/resource=data://text/plain,abc\"),\"\\n\";\n$chunked=\"4\\r\\nWiki\\r\\n5\\r\\npedia\\r\\n0\\r\\n\\r\\n\";\necho \"dechunk=\",file_get_contents(\"php://filter/read=dechunk/resource=data://text/plain,\".rawurlencode($chunked)),\"\\n\";\necho \"qp=\",file_get… [+254 chars truncated]",
+  "summary": "About to run: php -n -r ' $m=fopen(\"php://memory\",\"w+\"); stream_filter_append($m,\"convert.base64-encode\",STREAM_FILTER_WRITE); fwrite($m,\"hello world\"); rewind($m); echo \"b64enc=\",stream_get_contents($m),\"\\n\"; echo",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "45ef915304e2ea052d9b7d19",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:16:25.953Z",
+  "stored_at": "2026-08-14T14:16:25.954Z"
+}

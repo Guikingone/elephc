@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests objects::property_access::nullsafe::test_empty_on_declared_instance_property 2>&1 | grep -E \"left:|right:\" | head -3; sed -n '/fn test_empty_on_declared_instance_property/,/assert_eq/p' tests/codegen/objects/property_access/nullsafe.rs | head -18",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests objects::property_access::nullsafe::test_empty_on_declared_instance_property 2>&1 | grep -E \"left:|right:\" | head -3; sed -n '/fn test_empty_on_declared_instance_property/,/assert_eq/p' tests/codegen/objects/property_access/nullsafe.rs | head -18: fn test_empty_on",
+  "text": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests objects::property_access::nullsafe::test_empty_on_declared_instance_property 2>&1 | grep -E \"left:|right:\" | head -3; sed -n '/fn test_empty_on_declared_instance_property/,/assert_eq/p' tests/codegen/objects/property_access/nullsafe.rs | head -18: fn test_empty_on_declared_instance_property() { let out = compile_and_run( r#\"<?php class C { public int $p; public int $q = 5; public mixed $m; } function mk() { return new C(); } $o = new C(); var_dump(empty($o->p)); var_dump(empty($o->q)); var_dump(empty($o->m)); unset($o->q); var_dump(empty($o->q)); var_dump(empty(mk()->p)); \"#, ); assert_eq!(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1a24121dfc38b219c2c02ee0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T15:37:32.818Z",
+  "stored_at": "2026-08-22T15:37:32.818Z"
+}

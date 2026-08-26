@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"Input\\|Output\" src/codegen_support/runtime/strings/itoa.rs src/codegen_support/runtime/strings/ftoa.rs | head -8; grep -rn \"fn emit_object_class_name\\|__rt_object_class_name\\|class_name_of\" src/codegen_support/runtime/ | grep label_global | head -4",
+  "summary": "About to run: grep -n \"Input\\|Output\" src/codegen_support/runtime/strings/itoa.rs src/codegen_support/runtime/strings/ftoa.rs | head -8; grep -rn \"fn emit_object_class_name\\|__rt_object_class_name\\|class_name_of\" s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "46875bf2257aae2bbe8d1fc8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:12:08.464Z",
+  "stored_at": "2026-08-22T12:12:08.464Z"
+}

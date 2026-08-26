@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn type_spec_to_php\" -A 25 src/builtins/convert.rs | head -30",
+  "summary": "grep -rn \"fn type_spec_to_php\" -A 25 src/builtins/convert.rs | head -30: ltins/convert.rs-40-/// Every variant uses `Span::dummy()` to match the convention used by `null_lit()`, src/builtins/convert.rs-41-/// `int_lit()`, `bool_lit()`, `string_lit()`, and the inline array/float literals src/builtins/convert.rs-42-/// i",
+  "text": "grep -rn \"fn type_spec_to_php\" -A 25 src/builtins/convert.rs | head -30: ltins/convert.rs-40-/// Every variant uses `Span::dummy()` to match the convention used by `null_lit()`, src/builtins/convert.rs-41-/// `int_lit()`, `bool_lit()`, `string_lit()`, and the inline array/float literals src/builtins/convert.rs-42-/// in the legacy signature table. The result is structurally identical to what src/builtins/convert.rs-43-/// those helpers return. src/builtins/convert.rs-44-pub fn default_spec_to_expr(d: &DefaultSpec) -> Expr { src/builtins/convert.rs-45- match d { src/builtins/convert.rs-46- DefaultSpec::Null => Expr::new(ExprKind::Null, Span::dummy()), src/builtins/convert.rs-47- DefaultSpec::Int(n) => Expr::new(ExprKind::IntLiteral(*n), Span::dummy()), src/builtins/convert.rs-48- DefaultSpec::Bool(b) => Expr::new(ExprKind::BoolLiteral(*b), Span::dummy()), src/builtins/convert.rs-49- DefaultSpec::Float(f) => Expr::new(ExprKind::FloatLiteral(*f), Span::dummy()),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3c904f57163ff0503f65313a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:51:25.902Z",
+  "stored_at": "2026-08-21T16:51:25.903Z"
+}

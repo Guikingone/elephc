@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs: ctx.emitter.instruction(\"call lseek\");                              // query the current stream position\n            ctx.emitter.instruction(&format!(\"jmp {}\", ",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs: ctx.emitter.instruction(\"call lseek\");                              // query the current stream position\n            ctx.emitter.instruction(&format!(\"jmp {}\",  -> ctx.emitter.instruction(\"call lseek\");                              // query the current stream position\n            // See the AArch64 counterpart: only the descriptor runs ahead of php's position.\n            emit_subtract_pending_held(ctx, stream)?;\n            ctx.emitter.instruction(&format!(\"jmp {}\", after_dispatch_label));  // skip wrapper stream_tell after the native probe",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "78dd5e600c8bb5468f231b4c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T19:19:18.727Z",
+  "stored_at": "2026-08-23T19:19:18.727Z"
+}

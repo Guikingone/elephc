@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"Property access requires an object or typed pointer\" src/ | head -5; echo \"---\"; grep -rn \"Cannot index non-array\" src/ | head -5",
+  "summary": "grep -rn \"Property access requires an object or typed pointer\" src/ | head -5; echo \"---\"; grep -rn \"Cannot index non-array\" src/ | head -5: src/types/checker/driver/top_level.rs:162: | \"Property access requires an object or typed pointer\" src/types/checker/inference/objects/access.rs:116: \"Property access requires an ",
+  "text": "grep -rn \"Property access requires an object or typed pointer\" src/ | head -5; echo \"---\"; grep -rn \"Cannot index non-array\" src/ | head -5: src/types/checker/driver/top_level.rs:162: | \"Property access requires an object or typed pointer\" src/types/checker/inference/objects/access.rs:116: \"Property access requires an object or typed pointer\", src/types/checker/inference/objects/access.rs:192: \"Property access requires an object or typed pointer\", --- src/types/checker/driver/top_level.rs:161: | \"Cannot index non-array\" src/types/checker/inference/expr/basic.rs:233: Err(CompileError::new(expr.span, \"Cannot index non-array\")) src/types/checker/inference/expr/basic.rs:298: first_index_error.unwrap_or(\"Cannot index non-array\"), src/types/checker/inference/expr/basic.rs:301: Err(CompileError::new(expr.span, \"Cannot index non-array\")) src/types/checker/inference/expr/basic.rs:329: _ => Err(CompileError::new(expr.span, \"Cannot index non-array\")),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f9bef9010621c5fcb6ef7b75",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T21:11:26.808Z",
+  "stored_at": "2026-08-20T21:11:26.808Z"
+}

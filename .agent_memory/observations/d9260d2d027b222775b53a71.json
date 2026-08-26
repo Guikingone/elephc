@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh resarr resarr2 sockpair 2>&1 | head -16",
+  "summary": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh resarr resarr2 sockpair 2>&1 | head -16: resarr DIFF: 3c3 < resource(6) of type (stream) --- > resource(5) of type (stream) 5c5 < re",
+  "text": "zsh /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/difftests.sh resarr resarr2 sockpair 2>&1 | head -16: resarr DIFF: 3c3 < resource(6) of type (stream) --- > resource(5) of type (stream) 5c5 < resource(7) of type (stream) --- > resource(6) of type (stream) 9c9 < resource(6) of type (stream) --- > resource(5) of type (stream) resarr2 DIFF: 3c3 < resource(6) of type (stream)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d9260d2d027b222775b53a71",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:46:32.603Z",
+  "stored_at": "2026-08-17T12:46:32.604Z"
+}

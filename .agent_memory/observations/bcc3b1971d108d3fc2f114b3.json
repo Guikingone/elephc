@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/codegen/lower_inst/builtins/io/stream_context.rs src/codegen/lower_inst/builtins/io/stream_read_helpers.rs src/codegen/lower_inst/builtins/io/string_validation.rs src/codegen/lower_inst/call_operands.rs src/ir_lower/expr/array_builtin_args.rs tests/codegen/io/stat_ext.rs tests/codegen/nullable_builtin_arguments.rs",
+  "summary": "git add src/codegen/lower_inst/builtins/io/stream_context.rs src/codegen/lower_inst/builtins/io/stream_read_helpers.rs src/codegen/lower_inst/builtins/io/string_validation.rs src/codegen/lower_inst/call_operands.rs src/ir_lower/expr/array_builtin_args.rs tests/codegen/io/stat_ext.rs tests/codegen/nullable_builtin_argum",
+  "text": "git add src/codegen/lower_inst/builtins/io/stream_context.rs src/codegen/lower_inst/builtins/io/stream_read_helpers.rs src/codegen/lower_inst/builtins/io/string_validation.rs src/codegen/lower_inst/call_operands.rs src/ir_lower/expr/array_builtin_args.rs tests/codegen/io/stat_ext.rs tests/codegen/nullable_builtin_arguments.rs completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bcc3b1971d108d3fc2f114b3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:36:41.395Z",
+  "stored_at": "2026-08-21T11:36:41.395Z"
+}

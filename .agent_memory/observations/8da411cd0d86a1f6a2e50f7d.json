@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"stream_filter_append\" tests/codegen/io/streams.rs | grep -v '\"' | head -10",
+  "summary": "grep -rn \"stream_filter_append\" tests/codegen/io/streams.rs | grep -v '\"' | head -10:  the compression level tests/codegen/io/streams.rs:3903: var_export(is_resource(@stream_filter_append($h, $n, STREAM_FILTER_WRITE, null)), true), tests/codegen/io/streams.rs:3904: var_export(is_resource(@stream_filter_append($h, $n, S",
+  "text": "grep -rn \"stream_filter_append\" tests/codegen/io/streams.rs | grep -v '\"' | head -10:  the compression level tests/codegen/io/streams.rs:3903: var_export(is_resource(@stream_filter_append($h, $n, STREAM_FILTER_WRITE, null)), true), tests/codegen/io/streams.rs:3904: var_export(is_resource(@stream_filter_append($h, $n, STREAM_FILTER_WRITE, 7)), true), tests/codegen/io/streams.rs:3905: var_export(is_resource(stream_filter_append($h, $n, STREAM_FILTER_WRITE)), true), tests/codegen/io/streams.rs:3906: var_export(is_resource(stream_filter_append($h, $n, STREAM_FILTER_WRITE, [])), true)); tests/codegen/io/streams.rs:3942: stream_filter_append($h, $filter, STREAM_FILTER_WRITE, $params); tests/codegen/io/streams.rs:11437: // stream_filter_append on an unknown user-filter name resolves the tests/codegen/io/streams.rs:11526: // false, the filter is refused and stream_filter_append returns false. tests/codegen/io/streams.rs:14022: stream_filter_append($f, $name, STREAM_FILTER_WRITE);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8da411cd0d86a1f6a2e50f7d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:03:00.484Z",
+  "stored_at": "2026-08-18T10:03:00.485Z"
+}

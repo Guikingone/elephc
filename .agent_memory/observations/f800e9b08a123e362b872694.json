@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,60p' src/ir_lower/expr/call_arg_coercion.rs",
+  "summary": "sed -n '1,60p' src/ir_lower/expr/call_arg_coercion.rs: . pub(super) fn coerce_scalar_arg_to_param_storage( ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, index: usize, value: LoweredValue, arg: &Expr, ) -> LoweredValue { let Some((_, param_ty)) = sig.params.get(index) else { return value; }; // A by-reference pa",
+  "text": "sed -n '1,60p' src/ir_lower/expr/call_arg_coercion.rs: . pub(super) fn coerce_scalar_arg_to_param_storage( ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, index: usize, value: LoweredValue, arg: &Expr, ) -> LoweredValue { let Some((_, param_ty)) = sig.params.get(index) else { return value; }; // A by-reference parameter must receive the caller's storage, not a converted temporary, // so declared-parameter scalar binding never applies to one. The checker keeps those on // the strict path for the same reason. let bindable = sig.declared_params.get(index).copied().unwrap_or(false) && !sig.ref_params.get(index).copied().unwrap_or(false); let param_ty = param_ty.codegen_repr(); if value.ir_type == IrType::I64 && param_ty == PhpType::Float { return coerce_to_float(ctx, value, arg); } let source_ty = ctx.builder.value_php_type(value.value).codegen_repr(); if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f800e9b08a123e362b872694",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:12:11.795Z",
+  "stored_at": "2026-08-18T10:12:11.796Z"
+}

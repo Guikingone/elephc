@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn lowers_examples_corpus\" -B10 -A40 src/ir_lower/tests/corpus.rs | head -70",
+  "summary": "grep -rn \"fn lowers_examples_corpus\" -B10 -A40 src/ir_lower/tests/corpus.rs | head -70: line adds during a src/ir_lower/tests/corpus.rs-49-/// real compile. Those profiles have dedicated tests, so their examples are skipped src/ir_lower/tests/corpus.rs-50-/// rather than treated as failures in default-profile lowering.",
+  "text": "grep -rn \"fn lowers_examples_corpus\" -B10 -A40 src/ir_lower/tests/corpus.rs | head -70: line adds during a src/ir_lower/tests/corpus.rs-49-/// real compile. Those profiles have dedicated tests, so their examples are skipped src/ir_lower/tests/corpus.rs-50-/// rather than treated as failures in default-profile lowering. src/ir_lower/tests/corpus.rs-51-fn example_main_files(root: &Path) -> Vec<PathBuf> { src/ir_lower/tests/corpus.rs-52- let examples = root.join(\"examples\"); src/ir_lower/tests/corpus.rs-53- std::fs::read_dir(&examples) src/ir_lower/tests/corpus.rs-54- .expect(\"examples directory should exist\") src/ir_lower/tests/corpus.rs-55- .filter_map(|entry| { src/ir_lower/tests/corpus.rs-56- let directory = entry.expect(\"example entry\").path(); src/ir_lower/tests/corpus.rs-57- [\"main.php\", \"main.lfc\"] src/ir_lower/tests/corpus.rs-58- .into_iter() src/ir_lower/tests/corpus.rs-59- .map(|name| directory.join(name)) src/ir_lower/tests/corpus.rs-60- .find(|path| path.exists())",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e242e6e9acca1b5c05982960",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:32:49.887Z",
+  "stored_at": "2026-08-20T20:32:49.887Z"
+}

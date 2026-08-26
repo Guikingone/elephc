@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -m3 -n \"^version\" Cargo.toml; git log -1 --format=\"%h %ad %s\" --date=short -- tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json; git log -1 --format=\"%h %ad %s\" --date=short -- src/types/stream_constants.rs; git log -1 --format=\"%h %ad %s\" --date=short",
+  "summary": "grep -m3 -n \"^version\" Cargo.toml; git log -1 --format=\"%h %ad %s\" --date=short -- tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json; git log -1 --format=\"%h %ad %s\" --date=short -- src/types/stream_constants.rs; git log -1 --format=\"%h %ad %s\" --date=short: 3:version = \"0.26.3\" c815dc3912 2026-0",
+  "text": "grep -m3 -n \"^version\" Cargo.toml; git log -1 --format=\"%h %ad %s\" --date=short -- tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json; git log -1 --format=\"%h %ad %s\" --date=short -- src/types/stream_constants.rs; git log -1 --format=\"%h %ad %s\" --date=short: 3:version = \"0.26.3\" c815dc3912 2026-07-29 feat(streams): add php-src Gate 0 oracle 1d931119fb 2026-08-13 feat(scandir): answer array|false and sort like php, with the family accepting the union 034ac07936 2026-08-14 chore(builtins): satisfy the EIR boundary audit the merge imported",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f851cec237a6ea41f8358db4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:35.445Z",
+  "stored_at": "2026-08-14T14:15:35.445Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg16.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg16.txt: fix(streams): a user wrapper's read buffer was written and never read back\n\nTwo silent defects, both reachable only through a stream a p",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg16.txt: fix(streams): a user wrapper's read buffer was written and never read back\n\nTwo silent defects, both reachable only through a stream a program registers itself, and both\nfound by logging what `stream_read($count)` is actually asked for.\n\n`fgets($h, 6)` answered the WHOLE line — 34 bytes where `php -n` 8.5.6 answers `\"one t\"`, five,\nits `$length - 1`. The wrapper's line loop appends until a newline or EOF and never consulted the\ncaller's bound, which the prologue preserves and nothing downstream read. The same call on a plain\nfile and on `php://memory` was always right, and `fgets($h)` unbounde",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fdbf93d309b5d0fd8c1f12e6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:15:38.414Z",
+  "stored_at": "2026-08-21T13:15:38.414Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '95,140p' src/codegen/lower_inst/objects/throwable_new.rs",
+  "summary": "sed -n '95,140p' src/codegen/lower_inst/objects/throwable_new.rs: llocate and stamp the compact Throwable payload -- ctx.emitter.instruction( &format!(\"mov x0, #{}\", THROWABLE_COMPACT_PAYLOAD_SIZE) ); // request compact Throwable payload storage abi::emit_call_label(ctx.emitter, \"__rt_heap_alloc\"); ctx.emitter.instruct",
+  "text": "sed -n '95,140p' src/codegen/lower_inst/objects/throwable_new.rs: llocate and stamp the compact Throwable payload -- ctx.emitter.instruction( &format!(\"mov x0, #{}\", THROWABLE_COMPACT_PAYLOAD_SIZE) ); // request compact Throwable payload storage abi::emit_call_label(ctx.emitter, \"__rt_heap_alloc\"); ctx.emitter.instruction(\"mov x9, #6\"); // heap kind 6 marks runtime object payloads ctx.emitter.instruction(\"str x9, [x0, #-8]\"); // stamp the heap header before the Throwable payload ctx.emitter.instruction(\"bl __rt_object_handle_acquire\"); // bind the new object to its PHP object handle ctx.emitter.instruction(&format!(\"mov x9, #{}\", class_id)); // materialize the Throwable runtime class id ctx.emitter.instruction(\"str x9, [x0]\"); // store class id at payload offset zero emit_throwable_creation_line_aarch64(ctx, \"x0\", \"x9\", creation_line); ctx.emitter.instruction(\"str xzr, [x0, #40]\"); // previous defaults to null until constructor init } Arch::X86_64 => {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c51f83f3b5b9c5c02cb5034d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:04:38.481Z",
+  "stored_at": "2026-08-24T20:04:38.481Z"
+}

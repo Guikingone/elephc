@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dyn_bisect.py 2>&1 | tail -10",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dyn_bisect.py 2>&1 | tail -10: foreach one name feof php=bool(false) elephc=Fatal error: Call to undefined function <dyn <-- DIFFERS foreach one ",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/dyn_bisect.py 2>&1 | tail -10: foreach one name feof php=bool(false) elephc=Fatal error: Call to undefined function <dyn <-- DIFFERS foreach one name ftell php=int(0) elephc=Fatal error: Call to undefined function <dyn <-- DIFFERS foreach same name twice php=bool(false) bool(false) elephc=Fatal error: Call to undefined function <dyn <-- DIFFERS foreach feof and ftell php=bool(false) int(0) elephc=Fatal error: Call to undefined function <dyn <-- DIFFERS foreach feof and fclose php=bool(false) bool(true) Fatal elephc=Fatal error: Call to undefined function <dyn <-- DIFFERS foreach ftell and fgets php=int(0) string(3) \"abc\" elephc=Fatal error: Call to undefined function <dyn <-- DIFFERS",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c46720e0a234ee9deac86fbc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:10:03.302Z",
+  "stored_at": "2026-08-22T11:10:03.302Z"
+}

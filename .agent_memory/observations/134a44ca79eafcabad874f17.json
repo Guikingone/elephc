@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"ssl://\\|tls://\" src tests/codegen/io 2>/dev/null | head -20; echo \"=== stream_socket_client transports ===\"; grep -n \"udg\\|unix\\|udp\\|tcp\" src/codegen/lower_inst/builtins/io/stream_sockets.rs | head -30",
+  "summary": "grep -rn \"ssl://\\|tls://\" src tests/codegen/io 2>/dev/null | head -20; echo \"=== stream_socket_client transports ===\"; grep -n \"udg\\|unix\\|udp\\|tcp\" src/codegen/lower_inst/builtins/io/stream_sockets.rs | head -30: === stream_socket_client transports ===",
+  "text": "grep -rn \"ssl://\\|tls://\" src tests/codegen/io 2>/dev/null | head -20; echo \"=== stream_socket_client transports ===\"; grep -n \"udg\\|unix\\|udp\\|tcp\" src/codegen/lower_inst/builtins/io/stream_sockets.rs | head -30: === stream_socket_client transports ===",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "134a44ca79eafcabad874f17",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:11.683Z",
+  "stored_at": "2026-08-14T14:15:11.684Z"
+}

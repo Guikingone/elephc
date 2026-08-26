@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 -c \"\nimport pathlib\np = pathlib.Path('examples/callbacks/main.php')\nt = p.read_text()\nold = '\\$positives = array_filter(\\$numbers, \\\"is_positive\\\", ARRAY_FILTER_USE_VALUE);'\nnew = '\\$positives = array_filter(\\$numbers, \\\"is_positive\\\");'\nassert t.count(old) == 1\np.write_text(t.replace(old, new, 1))\nprint('example no longer names a constant php does not define')\n\"; php -n examples/callbacks/main.php 2>&1 | head -6",
+  "summary": "About to run: python3 -c \" import pathlib p = pathlib.Path('examples/callbacks/main.php') t = p.read_text() old = '\\$positives = array_filter(\\$numbers, \\\"is_positive\\\", ARRAY_FILTER_USE_VALUE);' new = '\\$positives",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "03d04c8419fa42d75eac1c01",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:56:50.375Z",
+  "stored_at": "2026-08-22T09:56:50.376Z"
+}

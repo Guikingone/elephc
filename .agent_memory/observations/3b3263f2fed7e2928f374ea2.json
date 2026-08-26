@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 7 2>&1 | head -95",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 7 2>&1 | head -95: truction(\"jmp __rt_filemtime_ret\"); // skip the failure path after reading the modification time emitter.label(",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/dump_conflicts.py 7 2>&1 | head -95: truction(\"jmp __rt_filemtime_ret\"); // skip the failure path after reading the modification time emitter.label(\"__rt_filemtime_fail\"); emitter.instruction(\"mov rax, 0\"); // stat failed: integer payload defaults to 0 emitter.instruction(\"mov rdx, 0\"); // failure flag tells codegen to box PHP false >>>>>>> origin/main ########## src/codegen_support/runtime/io/stream_wrapper_register.rs (3 hunk(s)) ########## --- lines 11..35 --- <<<<<<< HEAD //! - Stores `(protocol_ptr, protocol_len, class_ptr, class_len)` tuples in the //! heap-backed registration table and the matching registration flags in the //! parallel flag table. An empty slot has a null `protocol_ptr`. //! - The slot comes from `__rt_user_wrappers_reserve`, which grows the table on //! demand, so registration is bounded only by the heap. PHP imposes no limit, //! and the previous fixed 64-slot array silently refused the 65th call.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3b3263f2fed7e2928f374ea2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:27:41.692Z",
+  "stored_at": "2026-08-20T17:27:41.692Z"
+}

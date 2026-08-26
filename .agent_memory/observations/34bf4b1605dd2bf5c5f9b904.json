@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests test_var_dump 2>&1 | rg \"^test result|FAILED\" | head -3; cargo test --lib 2>&1 | rg \"^test result: FAILED|FAILED\" | head -3; echo LIB_OK",
+  "summary": "cargo test --test codegen_tests test_var_dump 2>&1 | rg \"^test result|FAILED\" | head -3; cargo test --lib 2>&1 | rg \"^test result: FAILED|FAILED\" | head -3; echo LIB_OK: test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 8379 filtered out; finished in 10.11s test codegen_support::runtime::strings::resource_ty",
+  "text": "cargo test --test codegen_tests test_var_dump 2>&1 | rg \"^test result|FAILED\" | head -3; cargo test --lib 2>&1 | rg \"^test result: FAILED|FAILED\" | head -3; echo LIB_OK: test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 8379 filtered out; finished in 10.11s test codegen_support::runtime::strings::resource_type_name::tests::aarch64_emits_the_full_open_and_closed_arms ... FAILED test codegen_support::runtime::strings::resource_type_name::tests::every_calling_path_saves_and_restores_the_link_register ... FAILED test codegen_support::runtime::strings::resource_type_name::tests::x86_64_emits_the_full_open_and_closed_arms ... FAILED LIB_OK",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "34bf4b1605dd2bf5c5f9b904",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:19:21.576Z",
+  "stored_at": "2026-08-17T08:19:21.577Z"
+}

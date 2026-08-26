@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git add src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/resource_ids.rs src/codegen_support/runtime/io/php_wrapper_open.rs src/codegen/lower_inst/builtins/io/fopen_core.rs src/codegen/lower_inst/builtins/io/context_result_helpers.rs tests/codegen/io/resource_id_numbering.rs tests/codegen/io.rs; git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_… [+25 chars truncated]",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git add src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/resource_ids.rs src/codegen_support/runtime/io/php_wrapper_open.rs src/codegen/lower_inst/builtins/io/fopen_core.rs src/codegen/lower_inst/builtin",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git add src/codegen_support/runtime/data/fixed.rs src/codegen_support/runtime/resource_ids.rs src/codegen_support/runtime/io/php_wrapper_open.rs src/codegen/lower_inst/builtins/io/fopen_core.rs src/codegen/lower_inst/builtins/io/context_result_helpers.rs tests/codegen/io/resource_id_numbering.rs tests/codegen/io.rs; git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_tempid.txt 2>&1 | tail -3: [worktree-streams-csv-signature c56a6ad7b] fix(streams): php://temp consumes TWO resource ids, so every id after one was off by one 7 files changed, 167 insertions(+), 5 deletions(-) create mode 100644 tests/codegen/io/resource_id_numbering.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f25e0fbdaa3e1e5c1cdbae95",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T13:29:20.706Z",
+  "stored_at": "2026-08-24T13:29:20.707Z"
+}

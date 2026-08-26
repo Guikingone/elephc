@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | grep -c \"^CONFLICT\"; echo \"--- vrais conflits, par zone:\"; git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | grep \"^CONFLICT\" | sed 's/.*in //' | cut -d/ -f1-2 | sort | uniq -c | sort -rn | head -12",
+  "summary": "git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | grep -c \"^CONFLICT\"; echo \"--- vrais conflits, par zone:\"; git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | grep \"^CONFLICT\" | sed 's/.*in //' | cut -d/ -f1-2 | sort | uniq -c | sort -rn | head -12: 606 --- vrais conflits, par zone: 531 docs",
+  "text": "git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | grep -c \"^CONFLICT\"; echo \"--- vrais conflits, par zone:\"; git merge-tree --write-tree --name-only origin/main HEAD 2>&1 | grep \"^CONFLICT\" | sed 's/.*in //' | cut -d/ -f1-2 | sort | uniq -c | sort -rn | head -12: 606 --- vrais conflits, par zone: 531 docs/internals 22 src/codegen 20 src/codegen_support 9 tests/codegen 4 src/builtins 4 docs/php 3 scripts/docs 2 src/ir_lower 1 tree. 1 tests/ir_backend_smoke_test.rs 1 tests/error_tests.rs 1 tests/error_tests",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0dac02f415791d2b75e1a64c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T16:55:34.002Z",
+  "stored_at": "2026-08-20T16:55:34.003Z"
+}

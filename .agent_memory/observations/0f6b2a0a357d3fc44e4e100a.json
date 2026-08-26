@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 ./target/debug/deps/codegen_tests-711c2df818d88011 --test-threads 4 2>&1 | tail -8",
+  "summary": "RUST_MIN_STACK=33554432 ./target/debug/deps/codegen_tests-711c2df818d88011 --test-threads 4 2>&1 | tail -8: blic2v85s",
+  "text": "RUST_MIN_STACK=33554432 ./target/debug/deps/codegen_tests-711c2df818d88011 --test-threads 4 2>&1 | tail -8: blic2v85s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0f6b2a0a357d3fc44e4e100a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T16:02:22.596Z",
+  "stored_at": "2026-08-26T16:02:22.597Z"
+}

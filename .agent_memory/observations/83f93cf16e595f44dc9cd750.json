@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '40,92p' src/builtins/string/sscanf.rs",
+  "summary": "sed -n '40,92p' src/builtins/string/sscanf.rs: : &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> { reject_by_ref_vars(cx.name, cx.args.len(), cx.span)?; Ok(scanf_result_type()) } /// Returns the effect contract of a scanf builtin: those of the prelude call it lowers to. /// /// Shared with `fscanf()`, whose prel",
+  "text": "sed -n '40,92p' src/builtins/string/sscanf.rs: : &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> { reject_by_ref_vars(cx.name, cx.args.len(), cx.span)?; Ok(scanf_result_type()) } /// Returns the effect contract of a scanf builtin: those of the prelude call it lowers to. /// /// Shared with `fscanf()`, whose prelude entry point also reads from the stream through /// `fgets()` — a call effect already covers both. pub(crate) fn engine_call_effects( _input: &crate::builtins::semantics::BuiltinSemanticInput<'_>, ) -> crate::ir::Effects { Op::Call.default_effects() } /// Returns `array|null`, php's result for a scan that may hit end of input. /// /// Shared with `fscanf()`, which adds `false` for a stream already at EOF. pub(crate) fn scanf_result_type() -> PhpType { PhpType::Union(vec![ PhpType::Array(Box::new(PhpType::Mixed)), PhpType::Void, ]) } /// Lowers `sscanf(string, format)` to a direct call into the injected scanf prelude.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "83f93cf16e595f44dc9cd750",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:25:50.237Z",
+  "stored_at": "2026-08-18T10:25:50.238Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"stream_wrapper_register::\" src/codegen_support/runtime/io/mod.rs | head -3",
+  "summary": "grep -n \"stream_wrapper_register::\" src/codegen_support/runtime/io/mod.rs | head -3: 256:pub(crate) use stream_wrapper_register::emit_stream_wrapper_register;",
+  "text": "grep -n \"stream_wrapper_register::\" src/codegen_support/runtime/io/mod.rs | head -3: 256:pub(crate) use stream_wrapper_register::emit_stream_wrapper_register;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ecfaa9766642ab340825f37f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:55:24.448Z",
+  "stored_at": "2026-08-20T17:55:24.449Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/ | head -80; echo \"=== TOTAL ===\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/ | wc -l",
+  "summary": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/ | head -80; echo \"=== TOTAL ===\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/ | wc -l: ontrol_flow control_flow.rs dead_strip.rs destructors.rs ",
+  "text": "ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/ | head -80; echo \"=== TOTAL ===\"; ls /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/codegen/ | wc -l: ontrol_flow control_flow.rs dead_strip.rs destructors.rs echo_vars.rs eval.rs eval_builtin_parity.rs eval_callable_ref_errors.rs eval_callables.rs eval_closures.rs eval_constructors.rs eval_reflection_invocation.rs exceptions.rs ffi fibers generators image include_paths.rs io io.rs iterators.rs json json.rs lfc.rs magic_constants.rs math math.rs misc.rs mod.rs namespaces.rs null_sentinel null_sentinel.rs numeric_scalars.rs objects objects.rs oop oop.rs operators.rs optimizer optimizer.rs pdo.rs pdo_cubrid.rs pdo_dblib.rs pdo_firebird.rs pdo_ibm.rs pdo_informix.rs pdo_mysql.rs pdo_oci.rs pdo_odbc.rs pdo_pgsql.rs pdo_sqlsrv.rs pointers.rs preprocessor.rs references.rs regressions regressions.rs runtime_gc runtime_gc.rs runtime_reachability.rs scalar_strings.rs serialize.rs spl spl.rs stack_guard.rs static_class_features.rs strict_php.rs strings strings.rs support system.rs === TOTAL === 85",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fd645d32d809ffb51f2eea64",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:12:11.530Z",
+  "stored_at": "2026-08-14T14:12:11.530Z"
+}

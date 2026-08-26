@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git checkout -q worktree-streams-csv-signature 2>/dev/null || git checkout -q 359ec4ca0; git log --oneline -1; echo \"--- remaining chunk verdicts ---\"; tail -8 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bt97ph7lq.output",
+  "summary": "git checkout -q worktree-streams-csv-signature 2>/dev/null || git checkout -q 359ec4ca0; git log --oneline -1; echo \"--- remaining chunk verdicts ---\"; tail -8 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/b",
+  "text": "git checkout -q worktree-streams-csv-signature 2>/dev/null || git checkout -q 359ec4ca0; git log --oneline -1; echo \"--- remaining chunk verdicts ---\"; tail -8 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bt97ph7lq.output: 359ec4ca0 Merge origin/main (0.26.5) into feat/streams-csv-signatures --- remaining chunk verdicts --- regressions rc=101 test result: FAILED. 340 passed; 2 failed; 0 ignored; 0 measured; 8490 filtered out; finished in 94.13s runtime_gc rc=101 test result: FAILED. 341 passed; 1 failed; 0 ignored; 0 measured; 8490 filtered out; finished in 99.39s spl rc=0 test result: ok. 266 passed; 0 failed; 0 ignored; 0 measured; 8566 filtered out; finished in 70.70s strings rc=0 test result: ok. 333 passed; 0 failed; 0 ignored; 0 measured; 8499 filtered out; finished in 101.00s type_builtins rc=0 test result: ok. 114 passed; 0 failed; 0 ignored; 0 measured; 8718 filtered out; finished in 29.60s types rc=101 <no verdict — the process died> [exited with code 0]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cbe903a07723a6e07994dc80",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:24:17.334Z",
+  "stored_at": "2026-08-22T07:24:17.335Z"
+}

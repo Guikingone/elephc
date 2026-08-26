@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'merged_assignment_type' -A 25 src/types/checker/stmt_check/assignments/locals.rs | sed -n '1,45p'",
+  "summary": "grep -n 'merged_assignment_type' -A 25 src/types/checker/stmt_check/assignments/locals.rs | sed -n '1,45p': le-frame property: 843- // the lowering has to know before it declares the local, not when the write happens. 844- if matches!(merged_ty, Some(crate::types::PhpType::Mixed)) 845- && !matches!(existing, crate::typ",
+  "text": "grep -n 'merged_assignment_type' -A 25 src/types/checker/stmt_check/assignments/locals.rs | sed -n '1,45p': le-frame property: 843- // the lowering has to know before it declares the local, not when the write happens. 844- if matches!(merged_ty, Some(crate::types::PhpType::Mixed)) 845- && !matches!(existing, crate::types::PhpType::Mixed) 846- && !matches!(ty, crate::types::PhpType::Mixed) 847- { 848- let scope = checker.current_loop_storage_scope.clone(); 849- checker.widened_scalar_locals.insert((scope, name.to_string())); 850- } 851- if merged_ty.is_none() { 852- if !checker.strict_locals && stmt_form && checker.local_binding_is_killable(name) { 853- let message = format!( 854- \"${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)\", 855- name, existing, ty 856- ); 857- // Filed against the DECISION's key, not pushed straight into `warnings`, so a 858- // later walk that re-decides this site and drops the retype drops the warning",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eb03825a0fbe4a68b9ab6bbc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T17:11:26.309Z",
+  "stored_at": "2026-08-26T17:11:26.310Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '45,175p' src/codegen_support/runtime/io/stream_pending.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '45,175p' src/codegen_support/runtime/io/stream_pending.rs:  the last read /// stopped, and the caller has just asked to continue somewhere else. Without this a chunk read /// ahead of a `fseek()` was served after it ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '45,175p' src/codegen_support/runtime/io/stream_pending.rs:  the last read /// stopped, and the caller has just asked to continue somewhere else. Without this a chunk read /// ahead of a `fseek()` was served after it — the bytes were valid, for a position the program had /// left. pub fn emit_stream_pending_clear(emitter: &mut Emitter) { match emitter.target.arch { Arch::AArch64 => { emitter.blank(); emitter.comment(\"--- runtime: drop retained stream bytes ---\"); emitter.label_global(\"__rt_stream_pending_clear\"); emitter.instruction(\"sub sp, sp, #32\"); emitter.instruction(\"stp x29, x30, [sp, #16]\"); emitter.instruction(\"add x29, sp, #16\"); emitter.instruction(\"bl __rt_stream_state\"); // resolve the owning stream state emitter.instruction(\"cbz x0, __rt_spc_done\"); // a stale handle holds nothing emitter.instruction(&format!(\"ldr x9, [x0, #{STREAM_PENDING_PTR_OFFSET}]\")); emitter.instruction(&format!(\"str xzr, [x0, #{STREAM_PENDING_PTR_OFFSET}]\"));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "be0e537ca1634d598e3fd712",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T19:07:14.000Z",
+  "stored_at": "2026-08-23T19:07:14.000Z"
+}

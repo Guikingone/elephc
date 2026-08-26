@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test -p elephc-magician --lib 2>&1 | grep -B2 -A6 \"panicked\\|FAILED\" | head -25",
+  "summary": "cargo test -p elephc-magician --lib 2>&1 | grep -B2 -A6 \"panicked\\|FAILED\" | head -25 completed",
+  "text": "cargo test -p elephc-magician --lib 2>&1 | grep -B2 -A6 \"panicked\\|FAILED\" | head -25 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6470e32c52ac30bc8e51c77f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T08:58:00.383Z",
+  "stored_at": "2026-08-16T08:58:00.384Z"
+}

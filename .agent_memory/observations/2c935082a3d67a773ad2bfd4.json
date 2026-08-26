@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"SLOT_STATUS_OFFSET\\|SLOT_KIND\\|RESOURCE_KIND\\|SLOT_.*_OFFSET\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs | head -12",
+  "summary": "rtk proxy grep -n \"SLOT_STATUS_OFFSET\\|SLOT_KIND\\|RESOURCE_KIND\\|SLOT_.*_OFFSET\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs | head -12: 25:pub(crate) const SLOT_GENERATION_OFFSET: i64 = 0; 28:pub(crate) const SLOT_KIND_OFFS",
+  "text": "rtk proxy grep -n \"SLOT_STATUS_OFFSET\\|SLOT_KIND\\|RESOURCE_KIND\\|SLOT_.*_OFFSET\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/resources/layout.rs | head -12: 25:pub(crate) const SLOT_GENERATION_OFFSET: i64 = 0; 28:pub(crate) const SLOT_KIND_OFFSET: i64 = 8; 31:pub(crate) const SLOT_STATUS_OFFSET: i64 = 16; 34:pub(crate) const SLOT_REFS_OFFSET: i64 = 24; 37:pub(crate) const SLOT_PHP_ID_OFFSET: i64 = 32; 40:pub(crate) const SLOT_STATE_PTR_OFFSET: i64 = 40; 46:pub(crate) const SLOT_NEXT_FREE_OFFSET: i64 = 48; 49:pub(crate) const SLOT_REQUEST_EPOCH_OFFSET: i64 = SLOT_NEXT_FREE_OFFSET; 52:pub(crate) const SLOT_FLAGS_OFFSET: i64 = 56; 55:pub(crate) const RESOURCE_KIND_FREE: u64 = 0; 58:pub(crate) const RESOURCE_KIND_STREAM: u64 = 1; 61:pub(crate) const RESOURCE_KIND_CONTEXT: u64 = 2;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2c935082a3d67a773ad2bfd4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T08:09:02.582Z",
+  "stored_at": "2026-08-17T08:09:02.582Z"
+}

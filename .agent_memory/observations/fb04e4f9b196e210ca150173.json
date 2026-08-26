@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test -p elephc --lib 2>&1 | tail -4",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test -p elephc --lib 2>&1 | tail -4: test ir_lower::tests::corpus::lowers_examples_corpus ... ok test result: ok. 1532 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test -p elephc --lib 2>&1 | tail -4: test ir_lower::tests::corpus::lowers_examples_corpus ... ok test result: ok. 1532 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.43s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fb04e4f9b196e210ca150173",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:21:30.614Z",
+  "stored_at": "2026-08-23T17:21:30.621Z"
+}

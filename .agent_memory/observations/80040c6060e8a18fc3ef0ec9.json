@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/phar_write.rs')\nt = p.read_text()\nanchor = '''    let path_literal = optional_const_string_operand(ctx, path)?;\n    if let Some(path_literal) = path_literal.as_deref() {\n        if path_literal.starts_with(\"phar://\") {'''\nnew = '''    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.\n    super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;\n    let path_lit… [+376 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/phar_write.rs')\nt = p.read_text()\nanchor = '''    let path_literal = optional_const_string_operand(ctx, path)?;\n    if let Some(path_literal) =",
+  "text": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/builtins/io/phar_write.rs')\nt = p.read_text()\nanchor = '''    let path_literal = optional_const_string_operand(ctx, path)?;\n    if let Some(path_literal) = path_literal.as_deref() {\n        if path_literal.starts_with(\"phar://\") {'''\nnew = '''    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.\n    super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;\n    let path_literal = optional_const_string_operand(ctx, path)?;\n    if let Some(path_literal) = path_literal.as_deref() {\n        if path_literal.starts_with(\"phar://\") {'''\nassert t.count(anchor) == 1\np.write_text(t.replace(anchor, new, 1))\nprint('phar_write.rs: file_put_contents guarded')\nPY\ngrep -n \"emit_empty_path_value_error\" src/codegen/lower_inst/builtins/io/phar_read.rs | head -4: phar_write.rs: file_put_contents guarded 654: // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`. 656: super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?; 671: // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`. 673: super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "80040c6060e8a18fc3ef0ec9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:00:23.904Z",
+  "stored_at": "2026-08-21T18:00:23.906Z"
+}

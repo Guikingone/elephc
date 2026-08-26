@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/byref_edge.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/byref_edge.php: <?php\n// 1. the same variable through a WIDENING callee and then a reading one\nfunction w(array &$a): void { foreach ($a as $k ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/byref_edge.php: <?php\n// 1. the same variable through a WIDENING callee and then a reading one\nfunction w(array &$a): void { foreach ($a as $k => $v) { $a[$k] = $v * 2; } }\nfunction total(array &$a): int { $t = 0; foreach ($a as $v) { $t = $t + (int) $v; } return $t; }\n$x = [3, 1, 2]; w($x); echo \"1: \", total($x), \"|\", implode(\",\", $x), \"\\n\";\n\n// 2. call BEFORE the declaration is reached\n$y = [1, 2]; late($y); echo \"2: \", implode(\",\", $y), \"\\n\";\nfunction late(array &$a): void { foreach ($a as $k => $v) { $a[$k] = $v + 10; } }\n\n// 3. two different variables, one narrow one already mixed\nfunction both(array &$a",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3eef165297d1b8460d5c0f89",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:53:01.388Z",
+  "stored_at": "2026-08-16T20:53:01.388Z"
+}

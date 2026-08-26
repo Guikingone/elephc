@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_flush_shape.py && sed -n '70,100p' src/codegen_support/stream_filters/zlib.rs",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_flush_shape.py && sed -n '70,100p' src/codegen_support/stream_filters/zlib.rs: zlib's own window fills, and php pushes a `Z_SYNC_FLUSH` pass so ",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_flush_shape.py && sed -n '70,100p' src/codegen_support/stream_filters/zlib.rs: zlib's own window fills, and php pushes a `Z_SYNC_FLUSH` pass so what was written so far /// reaches the stream. Measured on `php -n` 8.5.6 over 400 bytes to a file, `filesize()` reads /// 0 after the write, 12 after `fflush()` and 14 after `fclose()`. /// /// It lives HERE rather than in the runtime because it calls `deflate()`: a runtime helper is /// emitted for every program, and every program would then have to link libz. pub(crate) flush_label: &'a str, } /// The `zlib.deflate` stream filter's shape: raw deflate, constant level, no sync flush. pub(crate) fn filter_shape<'a>( fwrite_label: &'a str, close_label: &'a str, skip_label: &'a str, level: i64, ) -> DeflateShape<'a> { DeflateShape { fwrite_label, close_label, skip_label, level: DeflateLevel::Constant(level), window_bits: -15, sync_flush_on_close: false, } } /// Emits the ARM64 helpers, then the deflate-stream initialization.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a024869cd9cc25a75f668f33",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T19:37:49.687Z",
+  "stored_at": "2026-08-17T19:37:49.687Z"
+}

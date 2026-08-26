@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy sed -n '195,235p' tests/codegen/strings/formatting.rs; echo \"=== failure ===\"; cargo test --test codegen_tests test_sscanf_float_negative_and_exponent 2>&1 | rg \"left|right|assertion\" -A3 | head -20",
+  "summary": "rtk proxy sed -n '195,235p' tests/codegen/strings/formatting.rs; echo \"=== failure ===\"; cargo test --test codegen_tests test_sscanf_float_negative_and_exponent 2>&1 | rg \"left|right|assertion\" -A3 | head -20: /// %f accepts a leading sign and a scientific exponent. #[test] fn test_sscanf_float_negative_and_exponent() ",
+  "text": "rtk proxy sed -n '195,235p' tests/codegen/strings/formatting.rs; echo \"=== failure ===\"; cargo test --test codegen_tests test_sscanf_float_negative_and_exponent 2>&1 | rg \"left|right|assertion\" -A3 | head -20: /// %f accepts a leading sign and a scientific exponent. #[test] fn test_sscanf_float_negative_and_exponent() { let out = compile_and_run( r#\"<?php $r = sscanf(\"-2.5e3\", \"%f\"); echo $r[0]; \"#, ); assert_eq!(out, \"-2.5e3\"); } /// %f composes with %s and %d in one format, each capturing its slice. #[test] fn test_sscanf_float_mixed_with_string_and_int() { let out = compile_and_run( r#\"<?php $r = sscanf(\"alice 1.5 30\", \"%s %f %d\"); echo $r[0] . \"|\" . $r[1] . \"|\" . $r[2]; \"#, ); assert_eq!(out, \"alice|1.5|30\"); } /// The string-search builtins must coerce a Mixed/Union haystack (e.g. a /// `string|false` value, as returned by stream_socket_get_name) to a real /// string before searching. The bug: they passed the boxed Mixed cell straight === failure === assertion `left == right` failed left: \"-2500\" right: \"-2.5e3\" note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1f0db9b31bc6d2449e20eabc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:27:01.636Z",
+  "stored_at": "2026-08-16T16:27:01.637Z"
+}

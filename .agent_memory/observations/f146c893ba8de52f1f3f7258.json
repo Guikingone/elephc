@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ext/standard/ 2>&1 | head -20; ls /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ | head -30",
+  "summary": "About to run: ls /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ext/standard/ 2>&1 | head -20; ls /Users/guillaumeloulier/PhpstormProjects/Research/php-src/ | head -30",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f146c893ba8de52f1f3f7258",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:37.226Z",
+  "stored_at": "2026-08-14T14:15:37.226Z"
+}

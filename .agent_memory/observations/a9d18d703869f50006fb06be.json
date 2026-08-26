@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '74,100p' src/ir_lower/expr/native_isset.rs",
+  "summary": "sed -n '74,100p' src/ir_lower/expr/native_isset.rs: pub(super) fn lower_native_isset_offset_probe_from_value( ctx: &mut LoweringContext<'_, '_>, array_value: LoweredValue, index: &Expr, expr: &Expr, ) -> LoweredValue { match array_value.ir_type { IrType::Heap(IrHeapKind::Array) => { let mut index_value = lower_expr(ctx",
+  "text": "sed -n '74,100p' src/ir_lower/expr/native_isset.rs: pub(super) fn lower_native_isset_offset_probe_from_value( ctx: &mut LoweringContext<'_, '_>, array_value: LoweredValue, index: &Expr, expr: &Expr, ) -> LoweredValue { match array_value.ir_type { IrType::Heap(IrHeapKind::Array) => { let mut index_value = lower_expr(ctx, index); let index_ty = isset_index_expr_key_type(ctx, index, index_value.value); if index_ty == PhpType::Int { index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span)); ctx.emit_value( Op::ArrayIsset, vec![array_value.value, index_value.value], None, PhpType::Bool, Op::ArrayIsset.default_effects(), Some(expr.span), ) } else { // `isset()` is a silent probe even when the key is absent. let read_value = ctx.emit_value( Op::ArrayGetMixedKeySilent, vec![array_value.value, index_value.value], None, PhpType::Mixed,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a9d18d703869f50006fb06be",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:04:51.762Z",
+  "stored_at": "2026-08-20T19:04:51.762Z"
+}

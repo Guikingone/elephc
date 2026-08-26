@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git add src/codegen/lower_inst/builtins/io/resource_handles.rs src/codegen/lower_inst/builtins/io/stream_filters.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_sfr.txt 2>&1 | tail -3",
+  "summary": "git add src/codegen/lower_inst/builtins/io/resource_handles.rs src/codegen/lower_inst/builtins/io/stream_filters.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratc",
+  "text": "git add src/codegen/lower_inst/builtins/io/resource_handles.rs src/codegen/lower_inst/builtins/io/stream_filters.rs tests/codegen/io/streams.rs && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_sfr.txt 2>&1 | tail -3: [worktree-streams-csv-signature d7cde2c2e] fix(streams): stream_filter_remove() reported success for a resource that is not a filter 3 files changed, 113 insertions(+), 4 deletions(-)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "46a3f36b84a7cb8ec2584057",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T15:03:05.960Z",
+  "stored_at": "2026-08-17T15:03:05.960Z"
+}

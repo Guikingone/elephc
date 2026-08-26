@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-branch-merge-origin-main-contract-port.md 2>/dev/null | head -45",
+  "summary": "cat /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-branch-merge-origin-main-contract-port.md 2>/dev/null | head -45: ns), pas dans un hook. **How to apply:** après tout merge d'une restructure : porter les diffs de signatures dans la nouvelle autorité, puis l",
+  "text": "cat /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/streams-branch-merge-origin-main-contract-port.md 2>/dev/null | head -45: ns), pas dans un hook. **How to apply:** après tout merge d'une restructure : porter les diffs de signatures dans la nouvelle autorité, puis laisser les SUITES faire le balayage anti-perte (magician 1172/1172 + error_tests arity — `array_filter min_args Some(2)` amont a ressuscité « takes 2 or 3 »). `min_args` explicite dans le catalogue quand la dérivation par défauts ne suffit pas. Dette CONNUE portée : `diskfreespace` déclare encore Float (l'alias n'a pas suivi le passage float|false→Mixed de disk_free_space) — antérieure au merge. Après commit : cherry-pick du correctif wrapper-ABI `2d60cbeb311` (agent nested-filter, checker-only, méthode de wrapper au retour non déclaré rendait un box dans rax = moitié pointeur de la paire chaîne x86), suites, push, refresh CI par commit-tree (nouveau parent = tip de main À JOUR si le PR upstream n'est plus CONFLICTING — vérifier), retarget watcher.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b5536c82cb61f9f0d4e9472d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:06:32.377Z",
+  "stored_at": "2026-08-21T19:06:32.377Z"
+}

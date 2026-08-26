@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"elephc_phar_|elephc_zip_\" -g '*.rs' src/ -l | head -10",
+  "summary": "About to run: rg -rn \"elephc_phar_|elephc_zip_\" -g '*.rs' src/ -l | head -10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "46e47c105ea045557af78be7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:35:50.744Z",
+  "stored_at": "2026-08-16T15:35:50.745Z"
+}

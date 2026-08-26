@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/uniqwarn.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/uniqwarn.php: <?php\n// How many \"Array to string conversion\" warnings does array_unique raise, and when?\nfunction count_warnings(callable $fn): in",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/uniqwarn.php: <?php\n// How many \"Array to string conversion\" warnings does array_unique raise, and when?\nfunction count_warnings(callable $fn): int\n{\n    $n = 0;\n    set_error_handler(static function () use (&$n) { $n++; return true; });\n    $fn();\n    restore_error_handler();\n    return $n;\n}\n$cases = [\n    'two identical'   => static fn() => array_unique([[3], [3]]),\n    'three identical' => static fn() => array_unique([[3], [3], [3]]),\n    'four identical'  => static fn() => array_unique([[3], [3], [3], [3]]),\n    'two distinct'    => static fn() => array_unique([[3], [4]]),\n    'mixed with int'  => stat",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1efa03a1868bb886dd7f7ef4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:13:02.939Z",
+  "stored_at": "2026-08-23T12:13:02.939Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'label_global(\"__rt_fread_raw\")' -A 3 src/codegen_support/runtime/io/fread.rs | head -6; grep -n 'ret\"' src/codegen_support/runtime/io/fread.rs | head -8",
+  "summary": "grep -n 'label_global(\"__rt_fread_raw\")' -A 3 src/codegen_support/runtime/io/fread.rs | head -6; grep -n 'ret\"' src/codegen_support/runtime/io/fread.rs | head -8: 56: emitter.label_global(\"__rt_fread_raw\"); 57- 58- // -- set up stack frame -- 59- emitter.instruction(\"sub sp, sp, #80\"); // allocate stream, descriptor, a",
+  "text": "grep -n 'label_global(\"__rt_fread_raw\")' -A 3 src/codegen_support/runtime/io/fread.rs | head -6; grep -n 'ret\"' src/codegen_support/runtime/io/fread.rs | head -8: 56: emitter.label_global(\"__rt_fread_raw\"); 57- 58- // -- set up stack frame -- 59- emitter.instruction(\"sub sp, sp, #80\"); // allocate stream, descriptor, and read-result spill slots -- 534: emitter.label_global(\"__rt_fread_raw\"); 124: emitter.instruction(\"b __rt_fread_ret\"); // DESCRIPTOR, which a wrapper fd overruns 343: emitter.instruction(\"cbz w3, __rt_fread_ret\"); // skip slot 1 when empty 348: emitter.instruction(\"b __rt_fread_ret\"); // common epilogue 354: emitter.label(\"__rt_fread_ret\"); 362: emitter.instruction(\"ret\"); // return to caller 443: emitter.instruction(\"ret\"); 454: emitter.instruction(\"ret\"); 516: emitter.instruction(\"ret\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "685cd8f8b88e37e0f73e4471",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T16:56:33.865Z",
+  "stored_at": "2026-08-26T16:56:33.866Z"
+}

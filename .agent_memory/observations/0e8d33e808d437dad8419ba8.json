@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/scanf_prelude/detect.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/scanf_prelude/detect.rs: ExprKind::StaticMethodCall { args, .. } => args.iter().any(expr_refs_scanf), -> ExprKind::StaticMethodCall { method, args, .. } => {\n            method_is_scanf(method) || args.iter().any(exp",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/scanf_prelude/detect.rs: ExprKind::StaticMethodCall { args, .. } => args.iter().any(expr_refs_scanf), -> ExprKind::StaticMethodCall { method, args, .. } => {\n            method_is_scanf(method) || args.iter().any(expr_refs_scanf)\n        }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0e8d33e808d437dad8419ba8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:38:10.988Z",
+  "stored_at": "2026-08-16T17:38:10.988Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests test_builtin_filters_read_their_params 2>&1 | tail -8",
+  "summary": "cargo test --test codegen_tests test_builtin_filters_read_their_params 2>&1 | tail -8: Finished `test` profile [unoptimized + debuginfo] target(s) in 22.66s Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-16c45d69d5f633ba) running 1 test test codegen::io::streams::test_builtin_filters_read_their_params ",
+  "text": "cargo test --test codegen_tests test_builtin_filters_read_their_params 2>&1 | tail -8: Finished `test` profile [unoptimized + debuginfo] target(s) in 22.66s Running tests/codegen_tests.rs (target/debug/deps/codegen_tests-16c45d69d5f633ba) running 1 test test codegen::io::streams::test_builtin_filters_read_their_params ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8419 filtered out; finished in 1.32s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "39d0cfa571d1c33d1e69c3fd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:29:43.101Z",
+  "stored_at": "2026-08-17T14:29:43.102Z"
+}

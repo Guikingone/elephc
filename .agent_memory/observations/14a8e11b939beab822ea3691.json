@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rln \"__rt_array_push\" -g '*.rs' src/codegen_support/runtime/ | head -20",
+  "summary": "rg -rln \"__rt_array_push\" -g '*.rs' src/codegen_support/runtime/ | head -20: ers.rs: emitter.instruction(\"mov rcx, QWORD PTR [rbp - 24]\"); // reload the slot index: rcx is caller-saved and ln_str may clobber it src/codegen_support/runtime/arrays/array_map_str.rs:/// Destination array is built with `ln_str` for dynamic ",
+  "text": "rg -rln \"__rt_array_push\" -g '*.rs' src/codegen_support/runtime/ | head -20: ers.rs: emitter.instruction(\"mov rcx, QWORD PTR [rbp - 24]\"); // reload the slot index: rcx is caller-saved and ln_str may clobber it src/codegen_support/runtime/arrays/array_map_str.rs:/// Destination array is built with `ln_str` for dynamic reallocation safety. src/codegen_support/runtime/arrays/array_map_str.rs: emitter.instruction(\"call ln_str\"); // persist and append the callback-produced string into the destination array, returning the possibly-grown array pointer src/codegen_support/runtime/io/notification.rs://! `ln_int`, which re-stamps the element type to scalar on the src/codegen_support/runtime/arrays/array_column_ref.rs: emitter.instruction(\"bl ln_int\"); // push heap pointer into result array src/codegen_support/runtime/arrays/array_column_ref.rs: emitter.instruction(\"call ln_refcounted\"); // retain and append the extracted refcounted column value to the result indexed array",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "14a8e11b939beab822ea3691",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:37:10.523Z",
+  "stored_at": "2026-08-16T15:37:10.523Z"
+}

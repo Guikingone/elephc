@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pub enum TypeSpec\" -A 25 crates/elephc-builtin-contract/src/*.rs | head -30",
+  "summary": "grep -n \"pub enum TypeSpec\" -A 25 crates/elephc-builtin-contract/src/*.rs | head -30: .rs-70- /// `PhpType::Pointer` otherwise have to declare `Mixed`, and every consumer that reads the crates/elephc-builtin-contract/src/spec.rs-71- /// DECLARED type rather than the checked one — the PHP-type conversion, the generated ",
+  "text": "grep -n \"pub enum TypeSpec\" -A 25 crates/elephc-builtin-contract/src/*.rs | head -30: .rs-70- /// `PhpType::Pointer` otherwise have to declare `Mixed`, and every consumer that reads the crates/elephc-builtin-contract/src/spec.rs-71- /// DECLARED type rather than the checked one — the PHP-type conversion, the generated docs, crates/elephc-builtin-contract/src/spec.rs-72- /// and the result-type fallback lowering takes when it cannot identify a call — then gets crates/elephc-builtin-contract/src/spec.rs-73- /// `mixed` for an address, and hands codegen a boxed cell where a raw address belongs. crates/elephc-builtin-contract/src/spec.rs-74- /// crates/elephc-builtin-contract/src/spec.rs-75- /// A `check` hook makes the declared type non-authoritative, not unused. crates/elephc-builtin-contract/src/spec.rs-76- Ptr, crates/elephc-builtin-contract/src/spec.rs-77- /// PHP `callable`, as the owned runtime descriptor it lowers to. crates/elephc-builtin-contract/src/spec.rs-78- ///",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9ae11b398fe261b8a8b7799d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:50:20.780Z",
+  "stored_at": "2026-08-21T16:50:20.781Z"
+}

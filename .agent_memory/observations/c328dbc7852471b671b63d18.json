@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,70p' src/codegen_support/runtime/exceptions/uncaught_report.rs",
+  "summary": "sed -n '1,70p' src/codegen_support/runtime/exceptions/uncaught_report.rs: ct have survived. //! //! - Stack alignment across `__rt_itoa` was checked rather than assumed. Because this helper is //! reached by a tail jump, `rsp` arrives 16-aligned or 8-off depending on whether the throwing //! site `call`ed or `jmp`ed in",
+  "text": "sed -n '1,70p' src/codegen_support/runtime/exceptions/uncaught_report.rs: ct have survived. //! //! - Stack alignment across `__rt_itoa` was checked rather than assumed. Because this helper is //! reached by a tail jump, `rsp` arrives 16-aligned or 8-off depending on whether the throwing //! site `call`ed or `jmp`ed into `__rt_throw_current`, so the call cannot guarantee SysV's //! entry invariant. It does not need to: the x86_64 `__rt_itoa` body is `push rbp` … `pop rbp` //! with no SSE operand, no `sub rsp`, and no nested call, so nothing there faults on a //! misaligned stack. The AArch64 side is unconditionally safe — `sp` is 16-aligned at every //! memory access by AAPCS64, and `sub sp, sp, #16` preserves that. use crate::codegen_support::platform::Arch; use crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET; use crate::codegen_support::{abi, emit::Emitter}; /// Byte length of `\"Fatal error: Uncaught \"`. const UNCAUGHT_PREFIX_LEN: i64 = 22;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c328dbc7852471b671b63d18",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:16:26.911Z",
+  "stored_at": "2026-08-18T15:16:26.911Z"
+}

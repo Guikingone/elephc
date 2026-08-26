@@ -1,0 +1,14 @@
+{
+  "type": "user_prompt",
+  "text": "<task-notification>\n<task-id>bmwtpm1j1</task-id>\n<summary>Monitor event: \"CI head 100656041f (tree 42a4b0f3bd: fd x86 + dir handles + zlib write)\"</summary>\n<event>CI run: 31950331533</event>\n</task-notification>",
+  "summary": "<task-notification> <task-id>bmwtpm1j1</task-id> <summary>Monitor event: \"CI head 100656041f (tree 42a4b0f3bd: fd x86 + dir handles + zlib write)\"</summary> <event>CI run: 31950331533</event> </task-notification>",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c78ad6c50a5ea599e8dc021c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T13:38:06.038Z",
+  "stored_at": "2026-08-16T13:38:06.038Z",
+  "low_signal": true
+}

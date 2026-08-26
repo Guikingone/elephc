@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "export CARGO_INCREMENTAL=0; ELEPHC_ORACLE_PHP=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scanf_oracle.php ELEPHC_ORACLE_WHICH=scanf cargo test -p elephc --lib converted_prelude_matches_its_php_on_request 2>&1 | tail -14",
+  "summary": "export CARGO_INCREMENTAL=0; ELEPHC_ORACLE_PHP=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scanf_oracle.php ELEPHC_ORACLE_WHICH=scanf cargo test -p elephc --lib converted_prelude_matches_its_php_on_",
+  "text": "export CARGO_INCREMENTAL=0; ELEPHC_ORACLE_PHP=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/scanf_oracle.php ELEPHC_ORACLE_WHICH=scanf cargo test -p elephc --lib converted_prelude_matches_its_php_on_request 2>&1 | tail -14: 91 | pub(crate) const GZ_PRELUDE_SRC: &str = r#\"<?php | ^^^^^^^^^^^^^^ | = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default warning: `elephc` (lib test) generated 1 warning Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s Running unittests src/lib.rs (target/debug/deps/elephc-9cd7487d45e66fca) running 1 test test synthetic_class::transcribe::tests::converted_prelude_matches_its_php_on_request ... ok test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1528 filtered out; finished in 0.01s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "95fdc73aa2947a0bbac84b23",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:42:12.637Z",
+  "stored_at": "2026-08-22T07:42:12.637Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '525,600p' src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs; echo \"=== load_stream_fd_to_result ===\"; grep -rn \"fn load_stream_fd_to_result\" -A 40 src/codegen/lower_inst/builtins/io/ | head -50",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '525,600p' src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs; echo \"=== load_stream_fd_to_result ===\"; grep -rn \"fn load_stream_fd_to_result\" -A 40 src/codegen/lower_inst/builtins/io/ | head -50: st/builtins/",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '525,600p' src/codegen/lower_inst/builtins/io/stream_file_dispatch.rs; echo \"=== load_stream_fd_to_result ===\"; grep -rn \"fn load_stream_fd_to_result\" -A 40 src/codegen/lower_inst/builtins/io/ | head -50: st/builtins/io/resource_handles.rs-44-pub(in crate::codegen::lower_inst::builtins) fn load_resource_payload_to_result( src/codegen/lower_inst/builtins/io/resource_handles.rs-45- ctx: &mut FunctionContext<'_>, src/codegen/lower_inst/builtins/io/resource_handles.rs-46- value: ValueId, src/codegen/lower_inst/builtins/io/resource_handles.rs-47- function_name: &str, src/codegen/lower_inst/builtins/io/resource_handles.rs-48-) -> Result<()> { src/codegen/lower_inst/builtins/io/resource_handles.rs-49- let raw_ty = ctx.raw_value_php_type(value)?; src/codegen/lower_inst/builtins/io/resource_handles.rs-50- ctx.load_value_to_result(value)?; src/codegen/lower_inst/builtins/io/resource_handles.rs-51- match raw_ty { src/codegen/lower_inst/builtins/io/resource_handles.rs-52- PhpType::Resource(_) => Ok(()), src/codegen/lower_inst/builtins/io/resource_handles.rs-53- PhpType::Mixed | PhpType::Union(_) => {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d6e86f504827cfc85bcc662a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:37:50.455Z",
+  "stored_at": "2026-08-22T16:37:50.455Z"
+}

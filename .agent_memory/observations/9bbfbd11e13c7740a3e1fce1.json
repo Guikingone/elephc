@@ -1,0 +1,16 @@
+{
+  "type": "tool_use",
+  "tool": "mcp__kage__kage_context",
+  "path": "",
+  "command": "",
+  "summary": "mcp__kage__kage_context: [{'type': 'text', 'text': '# Kage Context\\n\\nQuery: userspace stream wrapper protocol stream_open stream_read php_user_filter dispatch\\n\\n## Relevant Code Graph\\n1. [symbol] function eval_stream_wrapper_protocol in crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_register.rs",
+  "text": "[{'type': 'text', 'text': '# Kage Context\\n\\nQuery: userspace stream wrapper protocol stream_open stream_read php_user_filter dispatch\\n\\n## Relevant Code Graph\\n1. [symbol] function eval_stream_wrapper_protocol in crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_register.rs:64\\n2. [symbol] function eval_user_wrapper_stream_open_args in crates/elephc-magician/src/interpreter/builtins/filesystem/user_wrapper_streams.rs:431\\n3. [symbol] function eval_normalize_stream_wrapper_protocol in crates/elephc-magician/src/stream_resources/types.rs:85\\n4. [symbol] function extract_user_wrapper_protocol in tools/php_oracle/streams_manifest.py:431\\n5. [symbol] function eval_user_wrapper_stream_copy_to_stream_result in crates/elephc-magician/src/interpreter/builtins/filesystem/user_wrapper_streams.rs:163\\n\\n## Relevant Memory\\n\\n1. Team memory: streams-csv-signature repo overview\\n README excerpt: <p align=\"center\" <img src=\"assets/logo mark.png\" alt=\"elephc logo\" width=\"130\" </p <h1 align=\"center\" Elephc</h1 <p align=\"center\" <sub <strong Pronounced</strong <em el ef see</em — just spell out &ldqu\\n (noted 2026-08-14 · README.md)\\n\\n2. Team memory: streams-csv-signature ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "9bbfbd11e13c7740a3e1fce1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:10:32.567Z",
+  "stored_at": "2026-08-14T14:10:32.568Z"
+}

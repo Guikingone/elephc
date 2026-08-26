@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_round8d.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_round8d.txt: fix(streams): tmpfile() published the path of a file it had already deleted\n\nMEASURED on `php -n` 8.5.6, with the handle open and",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_round8d.txt: fix(streams): tmpfile() published the path of a file it had already deleted\n\nMEASURED on `php -n` 8.5.6, with the handle open and four bytes written through it, against the URI\n`stream_get_meta_data()` reports:\n\n    file_exists(uri)   php true   elephc false\n    is_file(uri)       php true   elephc false\n    filesize(uri)      php 4      elephc false\n    fopen(uri, 'r')    php reads back \"seed\"    elephc \"Failed to open stream\"\n\nphp keeps the temp file LINKED until the stream closes and unlinks it then. elephc unlinked it the\nmoment `mkstemp` returned — the right trick for the anonymous scratc",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "929e364826a798bb3151aa7f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:30:44.977Z",
+  "stored_at": "2026-08-23T08:30:44.977Z"
+}

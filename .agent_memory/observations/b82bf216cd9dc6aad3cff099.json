@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/segvcases && lldb -b -o run -o \"reg read x0 x30 x29\" ./open_only > lldb_out.txt 2>&1; sed -n '5,20p' lldb_out.txt",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/segvcases && lldb -b -o run -o \"reg read x0 x30 x29\" ./open_only > lldb_out.txt 2>&1; sed -n '5,20p' lldb_out.txt: Process 8175 stopped * thread #1, q",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/segvcases && lldb -b -o run -o \"reg read x0 x30 x29\" ./open_only > lldb_out.txt 2>&1; sed -n '5,20p' lldb_out.txt: Process 8175 stopped * thread #1, queue = 'com.apple.main-thread', stop reason = EXC_BAD_ACCESS (code=1, address=0x1) frame #0: 0x0000000100004e54 open_only`_rt_mixed_unbox + 8 open_only`_rt_mixed_unbox: -> 0x100004e54 <+8>: ldr x9, [x0] 0x100004e58 <+12>: cmp x9, #0x7 0x100004e5c <+16>: b.ne 0x100004e6c ; <+32> 0x100004e60 <+20>: ldr x0, [x0, #0x8] Target 0: (open_only) stopped.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b82bf216cd9dc6aad3cff099",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:43:19.951Z",
+  "stored_at": "2026-08-21T09:43:19.951Z"
+}

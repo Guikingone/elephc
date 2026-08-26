@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '80,95p' src/types/checker/driver/init.rs; echo \"=== stream_resource ===\"; grep -rn \"fn stream_resource\" -A 8 src/types --include='*.rs' | head -15",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '80,95p' src/types/checker/driver/init.rs; echo \"=== stream_resource ===\"; grep -rn \"fn stream_resource\" -A 8 src/types --include='*.rs' | head -15: hpType::Int); constants.insert(\"LOCK_NB\".to_string(), PhpType::Int);",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '80,95p' src/types/checker/driver/init.rs; echo \"=== stream_resource ===\"; grep -rn \"fn stream_resource\" -A 8 src/types --include='*.rs' | head -15: hpType::Int); constants.insert(\"LOCK_NB\".to_string(), PhpType::Int); for (name, _value) in ARRAY_INT_CONSTANTS { constants.insert((*name).to_string(), PhpType::Int); } for (name, _value) in crate::types::zlib_constants::ZLIB_INT_CONSTANTS { === stream_resource === src/types/model.rs:51: pub fn stream_resource() -> PhpType { src/types/model.rs-52- PhpType::Resource(Some(\"stream\".to_string())) src/types/model.rs-53- } src/types/model.rs-54- src/types/model.rs-55- /// Returns true if `expected` is compatible with `actual` for resource type matching. src/types/model.rs-56- /// A typed resource (Some) is compatible with a generic resource (None), and two typed src/types/model.rs-57- /// resources are compatible when their kind strings match. src/types/model.rs-58- pub fn resource_types_compatible(expected: &PhpType, actual: &PhpType) -> bool { src/types/model.rs-59- match (expected, actual) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0bdcbba28b8c018d2252b834",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:41:29.561Z",
+  "stored_at": "2026-08-22T16:41:29.562Z"
+}

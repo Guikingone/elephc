@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"ARRAY_FILTER\" -B 6 crates/elephc-builtin-contract/src/php_constants.rs | head -20; echo \"=== blame ===\"; git log --oneline -S \"ARRAY_FILTER_USE_VALUE\" -- src/types/array_constants.rs | head -5",
+  "summary": "grep -n \"ARRAY_FILTER\" -B 6 crates/elephc-builtin-contract/src/php_constants.rs | head -20; echo \"=== blame ===\"; git log --oneline -S \"ARRAY_FILTER_USE_VALUE\" -- src/types/array_constants.rs | head -5: 302- (\"CAL_JEWISH_ADD_ALAFIM\", 4), 303- (\"CAL_JEWISH_ADD_GERESHAYIM\", 8), 304-]; 305- 306-/// Tuple of `(name, value)",
+  "text": "grep -n \"ARRAY_FILTER\" -B 6 crates/elephc-builtin-contract/src/php_constants.rs | head -20; echo \"=== blame ===\"; git log --oneline -S \"ARRAY_FILTER_USE_VALUE\" -- src/types/array_constants.rs | head -5: 302- (\"CAL_JEWISH_ADD_ALAFIM\", 4), 303- (\"CAL_JEWISH_ADD_GERESHAYIM\", 8), 304-]; 305- 306-/// Tuple of `(name, value)` pairs for PHP array integer constants. 307-/// 308:/// `array_filter()` uses the `ARRAY_FILTER_*` constants to select which callback arguments 309-/// are passed; `count()` uses the `COUNT_*` constants to select flat or recursive counting. 310-pub const ARRAY_INT_CONSTANTS: &[(&str, i64)] = &[ 311: (\"ARRAY_FILTER_USE_VALUE\", 0), 312: (\"ARRAY_FILTER_USE_BOTH\", 1), 313: (\"ARRAY_FILTER_USE_KEY\", 2), === blame === b1624b0ae feat: support array_filter mode constants",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8ee3bb1512ebbcee81d45993",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:54:38.453Z",
+  "stored_at": "2026-08-22T09:54:38.453Z"
+}

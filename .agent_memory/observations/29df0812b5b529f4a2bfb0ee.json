@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "tail -25 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bvrw8toul.output",
+  "summary": "tail -25 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bvrw8toul.output: en::zval::test_zval_roundtrip_true codegen::zval::test_zval_type_false codegen::zval::test_zval_type_float codegen::zval::test_zval_ty",
+  "text": "tail -25 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/tasks/bvrw8toul.output: en::zval::test_zval_roundtrip_true codegen::zval::test_zval_type_false codegen::zval::test_zval_type_float codegen::zval::test_zval_type_hash_array codegen::zval::test_zval_type_hash_array_grows codegen::zval::test_zval_type_hash_mixed_keys codegen::zval::test_zval_type_int codegen::zval::test_zval_type_nested_hash_array codegen::zval::test_zval_type_null codegen::zval::test_zval_type_packed_array_grows codegen::zval::test_zval_type_packed_array_int codegen::zval::test_zval_type_packed_array_string codegen::zval::test_zval_type_string codegen::zval::test_zval_type_true codegen::zval::test_zval_unpack_packed_array_is_heap_recognized_by_foreach codegen::zval::test_zval_with_dynamic_callback_links test result: FAILED. 6243 passed; 2443 failed; 105 ignored; 0 measured; 0 filtered out; finished in 4380.18s error: test failed, to rerun pass `-p elephc --test codegen_tests` [exited with code 0]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "29df0812b5b529f4a2bfb0ee",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T21:10:39.412Z",
+  "stored_at": "2026-08-21T21:10:39.413Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md'\ns=open(p).read()\nanchor = \"- ✅✅✅🎯 [CAMPAGNE php-src: 5 lots livrés](streams-php-src-campaign-fixes.md)\"\nassert s.count(anchor)==1\nnew = (\"- 🔴🔴🔑 [`Foo::class` n'est PAS `Op::ConstStr`](class-constant-is-not-a-string-literal-for-reachability.md) — l'atteignabilité ne le voit pas ⇒ wrapper/filtre ENREGISTRÉ puis INUTILISABLE, sans diagnostic. 🛠️★★★ diff des SYMBOLES entre les deux `--emit-asm`.\\n\"\n       + anchor)\nopen(p,'w').write(s.replace(anchor,new))\nprint(\"i… [+17 chars truncated]",
+  "summary": "About to run: python3 - <<'PY' p='/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md' s=open(p).read() anchor = \"- ✅✅✅🎯 [CAMPAGNE php-src: 5 lots livrés](s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "955d4d60f7dfc406aa1dcbc6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:52:40.583Z",
+  "stored_at": "2026-08-17T09:52:40.584Z"
+}

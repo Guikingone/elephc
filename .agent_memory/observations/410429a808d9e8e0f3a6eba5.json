@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '578,592p' tests/codegen/io/files.rs; echo \"=== 640 ===\"; sed -n '641,655p' tests/codegen/io/files.rs",
+  "summary": "sed -n '578,592p' tests/codegen/io/files.rs; echo \"=== 640 ===\"; sed -n '641,655p' tests/codegen/io/files.rs: !( !out.stderr.contains(\"position -11\"), \"the @-suppressed read must not warn, got stderr={}\", out.stderr ); } /// Verifies a `$length` far larger than the file is bounded by the bytes that are actually /// the",
+  "text": "sed -n '578,592p' tests/codegen/io/files.rs; echo \"=== 640 ===\"; sed -n '641,655p' tests/codegen/io/files.rs: !( !out.stderr.contains(\"position -11\"), \"the @-suppressed read must not warn, got stderr={}\", out.stderr ); } /// Verifies a `$length` far larger than the file is bounded by the bytes that are actually /// there, and that `PHP_INT_MAX` neither wraps the kept byte count nor sizes an allocation. /// === 640 === assert!(out.success, \"program failed: {}\", out.stderr); assert_eq!( out.stdout, \"ValueError: file_get_contents(): Argument #5 ($length) must be greater than or equal to 0\\nValueError: file_get_contents(): Argument #5 ($length) must be greater than or equal to 0\\n\" ); assert!( !out.stderr.contains(\"Failed to open stream\"), \"the negative-length ValueError must precede the open, got stderr={}\", out.stderr ); } /// Verifies `$use_include_path = true` is accepted and reads the same file. /// /// elephc resolves paths against the current directory only — the same thing an include path of",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "410429a808d9e8e0f3a6eba5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T14:56:25.504Z",
+  "stored_at": "2026-08-18T14:56:25.505Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lower_local_assignment_expr\\|store_local(\" src/ir_lower/expr/assignments.rs | head -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lower_local_assignment_expr\\|store_local(\" src/ir_lower/expr/assignments.rs | head -8: 45: ctx.store_local(name, null_lowered, PhpType::Void, Some(expr.span)); 84: ctx.store_local(name, lowered, php_type, Some(ex",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lower_local_assignment_expr\\|store_local(\" src/ir_lower/expr/assignments.rs | head -8: 45: ctx.store_local(name, null_lowered, PhpType::Void, Some(expr.span)); 84: ctx.store_local(name, lowered, php_type, Some(expr.span)); 295: ctx.store_local(name, new, PhpType::Mixed, Some(expr.span)); 334: ctx.store_local(name, new, result_php_type, Some(expr.span));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "74db8a6a843d2c70a181f4b0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:49:46.757Z",
+  "stored_at": "2026-08-23T12:49:46.758Z"
+}

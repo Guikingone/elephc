@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ALL_INT_CONSTANT_TABLES\" src/ crates/ tests/ --include \"*.rs\" | grep -v \"php_constants.rs\" | head -10",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ALL_INT_CONSTANT_TABLES\" src/ crates/ tests/ --include \"*.rs\" | grep -v \"php_constants.rs\" | head -10: crates/elephc-magician/src/interpreter/constant_eval.rs:249: for table in elephc_builtin_contract::php_constant",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"ALL_INT_CONSTANT_TABLES\" src/ crates/ tests/ --include \"*.rs\" | grep -v \"php_constants.rs\" | head -10: crates/elephc-magician/src/interpreter/constant_eval.rs:249: for table in elephc_builtin_contract::php_constants::ALL_INT_CONSTANT_TABLES { crates/elephc-magician/src/interpreter/constant_eval.rs:270: for table in elephc_builtin_contract::php_constants::ALL_INT_CONSTANT_TABLES {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e3c056148aecb877c391552c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T09:20:48.275Z",
+  "stored_at": "2026-08-23T09:20:48.278Z"
+}

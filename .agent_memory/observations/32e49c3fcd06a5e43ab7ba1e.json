@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git cherry-pick 707536efe5 7dc444d4c0 1ce7173bcb e9ebb7c545 2>&1 | tail -2; git log --format=\"%h %s\" -5",
+  "summary": "git cherry-pick 707536efe5 7dc444d4c0 1ce7173bcb e9ebb7c545 2>&1 | tail -2; git log --format=\"%h %s\" -5: Date: Fri Aug 14 18:23:48 2026 +0200 2 files changed, 32 insertions(+), 1 deletion(-) a6d2539285 fix(spl): SplFileObject::getCsvControl() branched to address 0 2adc672062 fix(spl): SplFileObject::READ_CSV was explod",
+  "text": "git cherry-pick 707536efe5 7dc444d4c0 1ce7173bcb e9ebb7c545 2>&1 | tail -2; git log --format=\"%h %s\" -5: Date: Fri Aug 14 18:23:48 2026 +0200 2 files changed, 32 insertions(+), 1 deletion(-) a6d2539285 fix(spl): SplFileObject::getCsvControl() branched to address 0 2adc672062 fix(spl): SplFileObject::READ_CSV was explode(), not a CSV reader ebe6ce6591 fix(spl): SplFileObject::fputcsv dropped its $eol, and every CSV control ignored setCsvControl fe2b533362 fix(csv): the escape default, the empty $eol and six unvalidated control arguments d9a39e961b test(contract): the three surface-count assertions learn the ten builtins this branch adds",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "32e49c3fcd06a5e43ab7ba1e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T16:26:57.585Z",
+  "stored_at": "2026-08-14T16:26:57.586Z"
+}

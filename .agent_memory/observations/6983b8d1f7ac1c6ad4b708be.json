@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/nullable_sweep.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/nullable_sweep.py: \"\"\"Every scalar `?T $x = null` parameter, called with an EXPLICIT null, against `php -n` 8.5.6.\n\n`coerce_null_operands_to_builti",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/nullable_sweep.py: \"\"\"Every scalar `?T $x = null` parameter, called with an EXPLICIT null, against `php -n` 8.5.6.\n\n`coerce_null_operands_to_builtin_params` used to rewrite that null to the zero/empty value of the\nparameter's declared scalar type. The fix skips a parameter whose default is `DefaultSpec::Null`,\nwhich changes lowering for all 33 sites below — not just the two stream ones that motivated it.\nSo all 33 are measured: the ones that were silently wrong should now agree, and the ones that\nalready agreed must still agree.\n\nFour sites cannot be driven from a one-line program and are NOT covered; they are p",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6983b8d1f7ac1c6ad4b708be",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:06:52.630Z",
+  "stored_at": "2026-08-21T11:06:52.631Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"writes\" src/builtins/*.rs | grep -v \"^src/builtins/registry.rs\" | head -20; echo \"---\"; ls src/builtins/*.rs",
+  "summary": "grep -rn \"writes\" src/builtins/*.rs | grep -v \"^src/builtins/registry.rs\" | head -20; echo \"---\"; ls src/builtins/*.rs: src/builtins/macros.rs:121: variadic_writes: None, src/builtins/macros.rs:166: writes: Some($crate::builtins::spec::TypeSpec::$wty), src/builtins/macros.rs:179: writes: Some($crate::builtins::spec::Ty",
+  "text": "grep -rn \"writes\" src/builtins/*.rs | grep -v \"^src/builtins/registry.rs\" | head -20; echo \"---\"; ls src/builtins/*.rs: src/builtins/macros.rs:121: variadic_writes: None, src/builtins/macros.rs:166: writes: Some($crate::builtins::spec::TypeSpec::$wty), src/builtins/macros.rs:179: writes: Some($crate::builtins::spec::TypeSpec::$wty), src/builtins/macros.rs:192: writes: None, src/builtins/macros.rs:205: writes: None, src/builtins/macros.rs:218: writes: None, src/builtins/macros.rs:231: writes: None, src/builtins/requirements.rs:206: /// Verifies PHAR writes and known stream filters select their exact bridge libraries. --- src/builtins/array_or_false.rs src/builtins/convert.rs src/builtins/docs.rs src/builtins/macros.rs src/builtins/mod.rs src/builtins/parity_tests.rs src/builtins/registry.rs src/builtins/requirements.rs src/builtins/semantics.rs src/builtins/spec.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c9c06ed93e38a19b6510b34e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T19:59:50.624Z",
+  "stored_at": "2026-08-20T19:59:50.624Z"
+}

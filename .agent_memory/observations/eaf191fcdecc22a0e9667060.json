@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd ~/.cache/elephc; objdump -d --start-address=0x36bac --stop-address=0x36c40 runtime-v0.26.5-macos-aarch64-rta9a52f5f50e36c45-heap8388608.o 2>/dev/null | head -40",
+  "summary": "cd ~/.cache/elephc; objdump -d --start-address=0x36bac --stop-address=0x36c40 runtime-v0.26.5-macos-aarch64-rta9a52f5f50e36c45-heap8388608.o 2>/dev/null | head -40: 10] 36bd0: 910003e0 mov x0, sp 36bd4: 94000000 bl 0x36bd4 <__rt_tmpfile_named+0x28> 36bd8: 7100001f cmp w0, #0x0 36bdc: 5400014b b.lt 0x36c04 <__rt_tmpfile",
+  "text": "cd ~/.cache/elephc; objdump -d --start-address=0x36bac --stop-address=0x36c40 runtime-v0.26.5-macos-aarch64-rta9a52f5f50e36c45-heap8388608.o 2>/dev/null | head -40: 10] 36bd0: 910003e0 mov x0, sp 36bd4: 94000000 bl 0x36bd4 <__rt_tmpfile_named+0x28> 36bd8: 7100001f cmp w0, #0x0 36bdc: 5400014b b.lt 0x36c04 <__rt_tmpfile_named+0x58> 36be0: 93407c00 sxtw x0, w0 36be4: f9000fe0 str x0, [sp, #0x18] 36be8: 90000009 adrp x9, 0x36000 <__rt_fputcsv+0x334> 36bec: 91000129 add x9, x9, #0x0 36bf0: a9402fea ldp x10, x11, [sp] 36bf4: a9002d2a stp x10, x11, [x9] 36bf8: f9400bea ldr x10, [sp, #0x10] 36bfc: f900092a str x10, [x9, #0x10] 36c00: 17ffffe7 b 0x36b9c <__rt_tmpfile+0x5c> 36c04: 92800000 mov x0, #-0x1 ; =-1 36c08: a9427bfd ldp x29, x30, [sp, #0x20] 36c0c: 9100c3ff add sp, sp, #0x30 36c10: d65f03c0 ret 0000000000036c14 <__rt_symlink>: 36c14: d100c3ff sub sp, sp, #0x30 36c18: a9027bfd stp x29, x30, [sp, #0x20] 36c1c: 910083fd add x29, sp, #0x20 36c20: a90013e3 stp x3, x4, [sp] 36c24: 94000000 bl 0x36c24 <__rt_symlink+0x10> 36c28: f9000be0 str x0, [sp, #0x10]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eaf191fcdecc22a0e9667060",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T08:12:02.940Z",
+  "stored_at": "2026-08-23T08:12:02.941Z"
+}

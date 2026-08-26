@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'is not implemented' src crates --include='*.rs' | head -20; echo \"=== count ===\"; grep -rn 'is not implemented' src crates --include='*.rs' | wc -l",
+  "summary": "grep -rn 'is not implemented' src crates --include='*.rs' | head -20; echo \"=== count ===\"; grep -rn 'is not implemented' src crates --include='*.rs' | wc -l: src/image_prelude.rs:876: // Antialiased primitive drawing is not implemented (documented gap); the call src/codegen/lower_inst/externs.rs:99:/// Rejects extern ",
+  "text": "grep -rn 'is not implemented' src crates --include='*.rs' | head -20; echo \"=== count ===\"; grep -rn 'is not implemented' src crates --include='*.rs' | wc -l: src/image_prelude.rs:876: // Antialiased primitive drawing is not implemented (documented gap); the call src/codegen/lower_inst/externs.rs:99:/// Rejects extern features whose ABI cleanup or trampoline lowering is not implemented yet. src/codegen/lower_inst/builtins/system.rs:825: panic!(\"exit() is not implemented yet for target macos-x86_64\"); src/codegen_support/platform/target.rs:641: \"{} is not implemented yet for target {}\", src/codegen_support/abi/bootstrap.rs:113: panic!(\"process exit emission is not implemented yet for target macos-x86_64\"); src/codegen_support/abi/bootstrap.rs:154: panic!(\"process exit emission is not implemented yet for target macos-x86_64\"); crates/elephc-builtin-contract/src/runtime_id.rs:73: /// The ID or requested arity is not implemented by this ABI version. === count === 7",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8049d737397b33be10b821c8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:16:05.565Z",
+  "stored_at": "2026-08-14T14:16:05.565Z"
+}

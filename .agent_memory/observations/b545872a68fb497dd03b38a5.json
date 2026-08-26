@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"^<<<<<<<\\|^>>>>>>>\" CHANGELOG.md | head -6; echo \"--- size of the conflict ---\"; awk '/^<<<<<<</,/^>>>>>>>/' CHANGELOG.md | wc -l",
+  "summary": "About to run: grep -n \"^<<<<<<<\\|^>>>>>>>\" CHANGELOG.md | head -6; echo \"--- size of the conflict ---\"; awk '/^<<<<<<</,/^>>>>>>>/' CHANGELOG.md | wc -l",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b545872a68fb497dd03b38a5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T06:38:24.596Z",
+  "stored_at": "2026-08-22T06:38:24.597Z"
+}

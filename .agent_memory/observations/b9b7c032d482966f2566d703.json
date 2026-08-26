@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fatal_line_numbers.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fatal_line_numbers.py: \"\"\"Does an uncaught fatal name the line it was thrown on?\n\nA `stream_filter_remove()` TypeError on line 8 was reported as li",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fatal_line_numbers.py: \"\"\"Does an uncaught fatal name the line it was thrown on?\n\nA `stream_filter_remove()` TypeError on line 8 was reported as line 24 — a file with nine lines in\nit. If that is general, every uncaught diagnostic in every program points somewhere wrong; if it is\nthis throw site alone, it is one lowering.\n\nWarnings are asked alongside, because those carry the same ` in <file> on line N` suffix from a\nmechanism of their own and may well be right where the fatal is wrong.\n\"\"\"\nimport pathlib, subprocess, shutil, re\n\nD = pathlib.Path(__file__).parent / 'fatalline'\nELEPHC = '/Users/guillaumeloulier/Phpst",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b9b7c032d482966f2566d703",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:54:30.615Z",
+  "stored_at": "2026-08-21T18:54:30.616Z"
+}

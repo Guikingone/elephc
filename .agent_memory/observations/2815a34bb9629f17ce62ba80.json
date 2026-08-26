@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo test --test codegen_tests test_pdo_mysql_ssl 2>&1 | grep \"test result\" | head -1; cargo nextest run --test error_tests --no-fail-fast 2>&1 | grep -E \"FAIL |Summary\" | head -2; cargo test -p elephc-magician --lib 2>&1 | grep \"test result\" | head -1",
+  "summary": "cargo test --test codegen_tests test_pdo_mysql_ssl 2>&1 | grep \"test result\" | head -1; cargo nextest run --test error_tests --no-fail-fast 2>&1 | grep -E \"FAIL |Summary\" | head -2; cargo test -p elephc-magician --lib 2>&1 | grep \"test result\" | head -1: test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 8373 ",
+  "text": "cargo test --test codegen_tests test_pdo_mysql_ssl 2>&1 | grep \"test result\" | head -1; cargo nextest run --test error_tests --no-fail-fast 2>&1 | grep -E \"FAIL |Summary\" | head -2; cargo test -p elephc-magician --lib 2>&1 | grep \"test result\" | head -1: test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 8373 filtered out; finished in 34.21s Summary [ 62.705s] 1294 tests run: 1294 passed, 0 skipped test result: ok. 1191 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2815a34bb9629f17ce62ba80",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T11:43:28.634Z",
+  "stored_at": "2026-08-16T11:43:28.635Z"
+}

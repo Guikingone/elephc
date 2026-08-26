@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-array-param-widening-must-cross-the-boundary.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-array-param-widening-must-cross-the-boundary.md: ---\nname: byref-array-param-widening-must-cross-the-boundary\ndescription: \"CORRIGÉ: `array &$a` + boucle rendait des ADRESSES — le callee élargit la mémoire de",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/byref-array-param-widening-must-cross-the-boundary.md: ---\nname: byref-array-param-widening-must-cross-the-boundary\ndescription: \"CORRIGÉ: `array &$a` + boucle rendait des ADRESSES — le callee élargit la mémoire de l'APPELANT; le correctif = le callee REMONTE son type de sortie\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\nRepro 5 lignes, php le plus banal : `function f(array &$a) { foreach ($a as $k=>$x) { $a[$k] = $x*2; } } $arr=[1,2,3]; f($arr);` ⇒ php `[2,4,6]`, elephc **trois ADRESSES**. Matrice de départ dans [[byref-array-element-write-in-a-loop-stores-addresses]].\n\n**Chaîne causale (asm puis backtrace)** :\n1. le checker **SPÉCIALISE*",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8a56715341b8ff5b72a12a62",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T20:53:44.188Z",
+  "stored_at": "2026-08-16T20:53:44.188Z"
+}

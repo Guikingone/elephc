@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_builtin_throw_location.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_builtin_throw_location.py: \"\"\"An uncaught `TypeError` or `ValueError` from a builtin named no line at all.\n\n    fopen(\"\", \"r\");                ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_builtin_throw_location.py: \"\"\"An uncaught `TypeError` or `ValueError` from a builtin named no line at all.\n\n    fopen(\"\", \"r\");                  // line 4\n    php:    Fatal error: Uncaught ValueError: Path must not be empty in p.php:4\n    elephc: Fatal error: Uncaught ValueError: Path must not be empty\n\nA user `throw` carries its line, and every WARNING carries `in FILE on line N` — MEASURED. Only the\nthrowables codegen raises for a builtin argument check came out bare, and the reason was written\ndown: \"Most codegen-raised throwables have no user `new` behind them … so they carry no location,\nand PHP would name the inte",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5180510932ee480b791abc60",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:56:03.036Z",
+  "stored_at": "2026-08-21T18:56:03.036Z"
+}

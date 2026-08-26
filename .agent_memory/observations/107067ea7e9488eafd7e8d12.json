@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"assembly\\|-> String\" tests/codegen/support/compiler.rs | grep \"pub(crate) fn\" | head -12",
+  "summary": "grep -rn \"assembly\\|-> String\" tests/codegen/support/compiler.rs | grep \"pub(crate) fn\" | head -12: ng { tests/codegen/support/compiler.rs:411:pub(crate) fn compile_harness_and_run(source: &str, heap_size: usize, harness: &str) -> String { tests/codegen/support/compiler.rs:589:pub(crate) fn compile_and_run_with_heap_si",
+  "text": "grep -rn \"assembly\\|-> String\" tests/codegen/support/compiler.rs | grep \"pub(crate) fn\" | head -12: ng { tests/codegen/support/compiler.rs:411:pub(crate) fn compile_harness_and_run(source: &str, heap_size: usize, harness: &str) -> String { tests/codegen/support/compiler.rs:589:pub(crate) fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> String { tests/codegen/support/compiler.rs:644:pub(crate) fn compile_and_run(source: &str) -> String { tests/codegen/support/compiler.rs:649:pub(crate) fn compile_and_run_with_regex(source: &str) -> String { tests/codegen/support/compiler.rs:654:pub(crate) fn compile_and_run_with_php_ini(source: &str, ini: &str) -> String { tests/codegen/support/compiler.rs:764:pub(crate) fn compile_and_run_sentinel(source: &str) -> String { tests/codegen/support/compiler.rs:770:pub(crate) fn compile_and_run_tagged(source: &str) -> String { tests/codegen/support/compiler.rs:839:pub(crate) fn asm_without_embedded_script_path(user_asm: &str) -> String {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "107067ea7e9488eafd7e8d12",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T11:57:16.714Z",
+  "stored_at": "2026-08-21T11:57:16.714Z"
+}

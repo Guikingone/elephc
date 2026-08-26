@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git log -1 --format='%h %ci %s'; echo \"=== candle ===\"; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle && git log -1 --format='%h %ci %s'; git status --short | head -5; echo \"=== popcorn ===\"; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn && git log -1 --format='%h %ci %s'",
+  "summary": "git log -1 --format='%h %ci %s'; echo \"=== candle ===\"; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle && git log -1 --format='%h %ci %s'; git status --short | head -5; echo \"=== popcorn ===\"; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-p",
+  "text": "git log -1 --format='%h %ci %s'; echo \"=== candle ===\"; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle && git log -1 --format='%h %ci %s'; git status --short | head -5; echo \"=== popcorn ===\"; cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/lazy-petting-popcorn && git log -1 --format='%h %ci %s' failed: This session is isolated in the worktree /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature, but this command changes directory to the shared checkout (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/kind-exploring-candle) before running git. Refusing to run it — a worktree-isolated session's git operations must target its own worktree. Run the equivalent from /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature without the redirect.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1835fee74215ea8a1ad0b4e8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:11:31.209Z",
+  "stored_at": "2026-08-14T14:11:31.209Z"
+}

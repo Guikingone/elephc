@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "ls src/codegen_support/runtime/io/ | grep -i \"stream\" | head -60",
+  "summary": "ls src/codegen_support/runtime/io/ | grep -i \"stream\" | head -60: data_stream.rs data_stream_dynamic.rs stream_context_get_int_option.rs stream_context_get_ssl_peer_name.rs stream_context_get_string_option.rs stream_context_merge_options.rs stream_context_set_option_4.rs stream_copy_to_stream.rs stream_filter.rs stream",
+  "text": "ls src/codegen_support/runtime/io/ | grep -i \"stream\" | head -60: data_stream.rs data_stream_dynamic.rs stream_context_get_int_option.rs stream_context_get_ssl_peer_name.rs stream_context_get_string_option.rs stream_context_merge_options.rs stream_context_set_option_4.rs stream_copy_to_stream.rs stream_filter.rs stream_get_contents.rs stream_get_filters.rs stream_get_line.rs stream_get_meta_data.rs stream_get_wrappers.rs stream_is_local.rs stream_isatty.rs stream_record_meta.rs stream_record_mode.rs stream_select.rs stream_set_blocking.rs stream_set_timeout.rs stream_socket_accept.rs stream_socket_client.rs stream_socket_client_v6.rs stream_socket_get_name.rs stream_socket_pair.rs stream_socket_recvfrom.rs stream_socket_sendto.rs stream_socket_server.rs stream_socket_server_v6.rs stream_socket_shutdown.rs stream_supports_lock.rs stream_transport.rs stream_type_name.rs stream_wrapper_register.rs stream_wrapper_unregister.rs streams_ext.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c43fa745868d284b08256bd4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:20:49.587Z",
+  "stored_at": "2026-08-14T14:20:49.588Z"
+}

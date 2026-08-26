@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '975,1000p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs; echo \"=== str_getcsv ===\"; sed -n '715,730p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs",
+  "summary": "sed -n '975,1000p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs; echo \"=== str_getcsv ===\"; sed -n '715,730p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs: 64) << 24)), // stamp the element value_type into bits 24..27 None => { abi::emit_pop_reg(ctx.emitter, \"x0\"); // pop the element value_type read f",
+  "text": "sed -n '975,1000p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs; echo \"=== str_getcsv ===\"; sed -n '715,730p' src/codegen/lower_inst/builtins/io/stream_file_ops.rs: 64) << 24)), // stamp the element value_type into bits 24..27 None => { abi::emit_pop_reg(ctx.emitter, \"x0\"); // pop the element value_type read from the header === str_getcsv === let arch = ctx.emitter.target.arch; // -- pack csv_opts: (esc << 16) | (enc << 8) | sep -- // // The DEFAULT escape is spelled out rather than left as the zero the runtime reads as RFC // 4180 doubling: php's `str_getcsv($s)` uses `\"\\\\\"`, the same byte `fgetcsv()` defaults to, // and only an explicitly EMPTY `$escape` asks for doubling. emit_csv_control_bytes(ctx, inst, \"str_getcsv\", &STRING_CSV_CONTROLS)?; match arch { Arch::AArch64 => { abi::emit_pop_reg(ctx.emitter, \"x0\"); // escape byte ctx.emitter.instruction(\"lsl x0, x0, #16\"); ctx.emitter.instruction(\"mov x9, x0\"); abi::emit_pop_reg(ctx.emitter, \"x0\"); // enclosure byte ctx.emitter.instruction(\"lsl x0, x0, #8\"); ctx.emitter.instruction(\"orr x9, x9, x0\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3cbc74c96ecf20595f1099cd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T09:26:11.471Z",
+  "stored_at": "2026-08-18T09:26:11.471Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md",
+  "summary": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - 🔴 [PDO SQLite BLOB: `ftell` après `fwrite` rend 0](pdo-sqlite-blob-ftell-after-write-is-zero.md) -> - 🔴🔴 [`eval('return [1,2];')` SEGFAUTE](eval-return-array-segfault-and-parse-error-shape.md) — + `1",
+  "text": "changed /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/MEMORY.md: - 🔴 [PDO SQLite BLOB: `ftell` après `fwrite` rend 0](pdo-sqlite-blob-ftell-after-write-is-zero.md) -> - 🔴🔴 [`eval('return [1,2];')` SEGFAUTE](eval-return-array-segfault-and-parse-error-shape.md) — + `1and 2` refusé des DEUX côtés (php l'accepte: accord interne ≠ conformité) + parse errors génériques/exit 1.\n- 🔴 [PDO SQLite BLOB: `ftell` après `fwrite` rend 0](pdo-sqlite-blob-ftell-after-write-is-zero.md)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca1c1a5e0d32ffee780817cd",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-15T18:39:22.512Z",
+  "stored_at": "2026-08-15T18:39:22.512Z"
+}

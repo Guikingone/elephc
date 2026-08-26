@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/reference_arguments.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/reference_arguments.rs: pub(super) fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType) -> Result<()> {\n    if matches!(source_ty.codegen_repr(), PhpType::Int | PhpTyp -> pub(super",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen/lower_inst/reference_arguments.rs: pub(super) fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType) -> Result<()> {\n    if matches!(source_ty.codegen_repr(), PhpType::Int | PhpTyp -> pub(super) fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType) -> Result<()> {\n    // `Void` is php's out-parameter idiom: `$x = null; f($x);` where the callee writes. The null\n    // boxes into the temporary cell like any other scalar, and the caller's local is re-typed to\n    // the parameter's widened `<written>|null` by then, so the unboxed value stores back into\n    // storage that can hold it.\n    if matches!(\n        source_ty.codegen_repr(),\n        ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a823a23bf9afd2c81574d320",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:08:13.960Z",
+  "stored_at": "2026-08-18T10:08:13.960Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"_script_source_file\" src/ | grep -v \"throwable_methods\\|uncaught_report\\|diagnostics\\|trace_buffer\" | head -5",
+  "summary": "grep -rn \"_script_source_file\" src/ | grep -v \"throwable_methods\\|uncaught_report\\|diagnostics\\|trace_buffer\" | head -5: src/codegen_support/runtime/data/user.rs:716: emit_script_source_file_data(&mut out, source_path); src/codegen_support/runtime/data/user.rs:1344:fn emit_script_source_file_data(out: &mut String, sour",
+  "text": "grep -rn \"_script_source_file\" src/ | grep -v \"throwable_methods\\|uncaught_report\\|diagnostics\\|trace_buffer\" | head -5: src/codegen_support/runtime/data/user.rs:716: emit_script_source_file_data(&mut out, source_path); src/codegen_support/runtime/data/user.rs:1344:fn emit_script_source_file_data(out: &mut String, source_path: Option<&str>) { src/codegen_support/runtime/data/user.rs:1346: out.push_str(\".globl _script_source_file\\n_script_source_file:\\n\"); src/codegen_support/runtime/data/user.rs:1349: out.push_str(\".globl _script_source_file_len\\n_script_source_file_len:\\n\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "607a29d98d39f827b40f1fc6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:17:24.137Z",
+  "stored_at": "2026-08-22T12:17:24.137Z"
+}

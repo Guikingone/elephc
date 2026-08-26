@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/null-read-family-remaining-gaps.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/null-read-family-remaining-gaps.md: ---\nname: null-read-family-remaining-gaps\ndescription: Ce qui RESTE après « lecture indéfinie » et « lecture à travers null » — 11 écarts MESURÉS contre php -n 8.5.6, dont 2 répo",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/null-read-family-remaining-gaps.md: ---\nname: null-read-family-remaining-gaps\ndescription: Ce qui RESTE après « lecture indéfinie » et « lecture à travers null » — 11 écarts MESURÉS contre php -n 8.5.6, dont 2 réponses fausses silencieuses\nmetadata:\n  type: project\n---\n\nSuite de [[undefined-variable-semantics-landed]]. Les deux derniers membres de la famille\n(propriété et offset sur `null`) sont livrés : `$o = null; $o->name` avertit\n`Attempt to read property \"name\" on null` et rend NULL ; `$o[0]` avertit\n`Trying to access array offset on null`. Les sondes (`isset`/`empty`/`??`/`?->`) restent muettes.\n\n⚠️ Tout ce qui suit est ME",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a945d194d24bf60efed98cec",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:17:30.858Z",
+  "stored_at": "2026-08-21T07:17:30.859Z"
+}

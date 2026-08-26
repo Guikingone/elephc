@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"resource=\" src/codegen/lower_inst/builtins/io/*.rs src/codegen_support/runtime/io/*.rs 2>/dev/null | head -8",
+  "summary": "grep -rn \"resource=\" src/codegen/lower_inst/builtins/io/*.rs src/codegen_support/runtime/io/*.rs 2>/dev/null | head -8: r_inst/builtins/io/fopen_core.rs:881: /// `php://filter/no.such/resource=...` opened with `\"x\"` warns not at all while the same src/codegen/lower_inst/builtins/io/fopen_core.rs:1119: // Warning: fopen",
+  "text": "grep -rn \"resource=\" src/codegen/lower_inst/builtins/io/*.rs src/codegen_support/runtime/io/*.rs 2>/dev/null | head -8: r_inst/builtins/io/fopen_core.rs:881: /// `php://filter/no.such/resource=...` opened with `\"x\"` warns not at all while the same src/codegen/lower_inst/builtins/io/fopen_core.rs:1119: // Warning: fopen(php://filter/read=string.toupper/resource=missing.txt): src/codegen/lower_inst/builtins/io/fopen_core.rs:1177: // SUCCESS path only — measured: `fopen(\"php://filter/read=no.such/resource=missing.txt\")` src/codegen/lower_inst/builtins/io/fopen_core.rs:1278: .map(|spec| spec.split_once(\"/resource=\")) src/codegen/lower_inst/builtins/io/fopen_core.rs:1286:/// Parses `php://filter/[read=|write=]a|b|.../resource=path` for literal `fopen`. src/codegen/lower_inst/builtins/io/fopen_core.rs:1294: let (filter_part, resource) = spec.split_once(\"/resource=\")?; src/codegen/lower_inst/builtins/io/fopen_core.rs:1320: // `read=string.rot13/resource=php://filter/read=string.toupper/resource=x` uppercases and",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "71afd0e369e55be767351277",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:36:01.232Z",
+  "stored_at": "2026-08-21T09:36:01.232Z"
+}

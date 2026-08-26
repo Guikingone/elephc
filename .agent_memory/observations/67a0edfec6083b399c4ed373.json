@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"throw_access_sites\" src/ | head -12",
+  "summary": "grep -rn \"throw_access_sites\" src/ | head -12: result.rs:85: pub throw_access_sites: HashMap<Span, ThrowAccessInfo>, src/types/checker/mod.rs:240: pub throw_access_sites: HashMap<Span, ThrowAccessInfo>, src/types/checker/mod.rs:329: throw_access_sites: checker.throw_access_sites, src/types/checker/stmt_check/assignment",
+  "text": "grep -rn \"throw_access_sites\" src/ | head -12: result.rs:85: pub throw_access_sites: HashMap<Span, ThrowAccessInfo>, src/types/checker/mod.rs:240: pub throw_access_sites: HashMap<Span, ThrowAccessInfo>, src/types/checker/mod.rs:329: throw_access_sites: checker.throw_access_sites, src/types/checker/stmt_check/assignments/properties.rs:263: checker.throw_access_sites.insert( src/types/checker/driver/init.rs:197: throw_access_sites: HashMap::new(), src/types/checker/inference/objects/methods.rs:380: self.throw_access_sites.insert( src/ir_lower/context.rs:196: pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>, src/ir_lower/context.rs:277: throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>, src/ir_lower/context.rs:310: throw_access_sites, src/ir_lower/function.rs:80: &check_result.throw_access_sites, src/ir_lower/function.rs:275: &check_result.throw_access_sites, src/ir_lower/function.rs:376: &check_result.throw_access_sites,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "67a0edfec6083b399c4ed373",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T18:59:36.919Z",
+  "stored_at": "2026-08-18T18:59:36.920Z"
+}

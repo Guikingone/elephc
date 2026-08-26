@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n 'line' src/codegen_support/runtime/diagnostics.rs | head -25",
+  "summary": "grep -n 'line' src/codegen_support/runtime/diagnostics.rs | head -25: n(\"str xzr, [x9]\"); // the line is out; start the next one empty 224: // See the AArch64 counterpart: the pieces of one diagnostic are accumulated and the line is 225: // written once the piece carrying its newline arrives, through the output-buffer ",
+  "text": "grep -n 'line' src/codegen_support/runtime/diagnostics.rs | head -25: n(\"str xzr, [x9]\"); // the line is out; start the next one empty 224: // See the AArch64 counterpart: the pieces of one diagnostic are accumulated and the line is 225: // written once the piece carrying its newline arrives, through the output-buffer funnel. 259: emitter.instruction(\"call __rt_stdout_write\"); // php opens a diagnostic with a blank line 261: emitter.instruction(\"sub rsi, 1\"); // everything but the newline it ends with 266: emitter.instruction(\"jz __rt_diag_bare_newline_x\"); // no site published one: end the line plainly 269: emitter.instruction(\"jz __rt_diag_bare_newline_x\"); // a module with no source path omits the location 278: emitter.instruction(\"call __rt_stdout_write\"); // ` on line N` and its newline 280: emitter.label(\"__rt_diag_bare_newline_x\"); 286: abi::emit_store_reg_to_symbol(emitter, \"r10\", \"_rt_diag_buf_len\", 0); // the line is out; start the next one empty",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6eb2039efadeba1bc1485cd1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:34:59.207Z",
+  "stored_at": "2026-08-25T13:34:59.207Z"
+}

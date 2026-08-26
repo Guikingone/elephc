@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1855,1885p' tests/codegen/io/streams.rs; echo \"=== gated ===\"; sed -n '1893,1930p' tests/codegen/io/streams.rs",
+  "summary": "About to run: sed -n '1855,1885p' tests/codegen/io/streams.rs; echo \"=== gated ===\"; sed -n '1893,1930p' tests/codegen/io/streams.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "96ce748fb887823a5aee6d71",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:10:41.455Z",
+  "stored_at": "2026-08-18T15:10:41.455Z"
+}

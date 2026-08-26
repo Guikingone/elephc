@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "perl -pi -e 's/Platform::MacOs/Platform::MacOS/g' src/codegen_support/runtime/io/file_scheme.rs && CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --lib file_scheme 2>&1 | tail -8",
+  "summary": "perl -pi -e 's/Platform::MacOs/Platform::MacOS/g' src/codegen_support/runtime/io/file_scheme.rs && CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --lib file_scheme 2>&1 | tail -8: failures: codegen_support::runtime::io::file_scheme::tests::the_strip_stays_inside_the_scratch_cstr_already_clob",
+  "text": "perl -pi -e 's/Platform::MacOs/Platform::MacOS/g' src/codegen_support/runtime/io/file_scheme.rs && CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --lib file_scheme 2>&1 | tail -8: failures: codegen_support::runtime::io::file_scheme::tests::the_strip_stays_inside_the_scratch_cstr_already_clobbers test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.00s error: test failed, to rerun pass `-p elephc --lib`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "93698c95e3daa6609898ae53",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:22:53.488Z",
+  "stored_at": "2026-08-24T18:22:53.488Z"
+}

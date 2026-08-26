@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cp /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uncaught_report.mine.rs src/codegen_support/runtime/exceptions/uncaught_report.rs && cp /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fixed.mine.rs src/codegen_support/runtime/data/fixed.rs && git status --short src/ && sed -n '175,215p' tests/uncaught_exception_report_tests.rs",
+  "summary": "cp /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uncaught_report.mine.rs src/codegen_support/runtime/exceptions/uncaught_report.rs && cp /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-",
+  "text": "cp /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uncaught_report.mine.rs src/codegen_support/runtime/exceptions/uncaught_report.rs && cp /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fixed.mine.rs src/codegen_support/runtime/data/fixed.rs && git status --short src/ && sed -n '175,215p' tests/uncaught_exception_report_tests.rs: // skipping one label too far would drop the suffix along with the separator. #[test] fn uncaught_empty_message_omits_the_separator() { let prefix = \"elephc_uncaught_empty\"; let (reported, code, dir) = run_uncaught(prefix, \"<?php\\nthrow new Exception(\\\"\\\");\\n\"); let expected = format!( \"\\nFatal error: Uncaught Exception{}\\n\", location_suffix(&dir, &format!(\"{prefix}.php\"), 2) ); assert_eq!( reported, expected, \"an empty message must not be preceded by a colon, yet must still carry the location\" ); assert_eq!(code, Some(255)); let _ = fs::remove_dir_all(&dir); } /// The reported line is where the exception was CONSTRUCTED, not where it was thrown. /// /// This is the one test whose expected value would change if the line came from the `throw` /// terminator instead of the `new`: the two sit on different lines, and in different functions. /// Reference PHP 8.5.6 prints line 2 here. #[test]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6455600c296bcaeab2d49c93",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T17:53:38.778Z",
+  "stored_at": "2026-08-24T17:53:38.778Z"
+}

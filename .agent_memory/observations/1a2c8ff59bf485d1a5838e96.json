@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"type_name\\|_type_word\\|tag\\b\" src/codegen_support/runtime/arrays/foreach_non_iterable_warning.rs | head -12; grep -rn \"label_global\" src/codegen_support/runtime/arrays/foreach_non_iterable_warning.rs | head -3",
+  "summary": "grep -n \"type_name\\|_type_word\\|tag\\b\" src/codegen_support/runtime/arrays/foreach_non_iterable_warning.rs | head -12; grep -rn \"label_global\" src/codegen_support/runtime/arrays/foreach_non_iterable_warning.rs | head -3: r.instruction(\"cmp x0, #0\"); // runtime tag 0 = int 109: emitter.instruction(\"cmp x0, #1\"); // runti",
+  "text": "grep -n \"type_name\\|_type_word\\|tag\\b\" src/codegen_support/runtime/arrays/foreach_non_iterable_warning.rs | head -12; grep -rn \"label_global\" src/codegen_support/runtime/arrays/foreach_non_iterable_warning.rs | head -3: r.instruction(\"cmp x0, #0\"); // runtime tag 0 = int 109: emitter.instruction(\"cmp x0, #1\"); // runtime tag 1 = string 111: emitter.instruction(\"cmp x0, #2\"); // runtime tag 2 = float 113: emitter.instruction(\"cmp x0, #3\"); // runtime tag 3 = bool 115: emitter.instruction(\"cmp x0, #9\"); // runtime tag 9 = resource 117: emitter.instruction(\"b __rt_warn_foreach_non_iterable_null\"); // tag 8 and every unmapped tag report null 150:/// `rax` carries the runtime value tag and `rdi` the payload low word, matching what 163: emitter.instruction(\"cmp rax, 0\"); // runtime tag 0 = int 165: emitter.instruction(\"cmp rax, 1\"); // runtime tag 1 = string src/codegen_support/runtime/arrays/foreach_non_iterable_warning.rs:101: emitter.label_global(\"__rt_warn_foreach_non_iterable\"); src/codegen_support/runtime/arrays/foreach_non_iterable_warning.rs:157: emitter.label_global(\"__rt_warn_foreach_non_iterable\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1a2c8ff59bf485d1a5838e96",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:01:46.829Z",
+  "stored_at": "2026-08-22T16:01:46.829Z"
+}

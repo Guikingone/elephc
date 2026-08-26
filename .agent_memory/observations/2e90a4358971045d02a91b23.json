@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cargo nextest run --test error_tests --no-fail-fast 2>&1 | grep -E \"FAIL |TIMEOUT |Summary\" | head -4 && cargo test -p elephc-magician --lib 2>&1 | grep -cE \"FAILED|panicked\"; cargo nextest run --test codegen_tests -E 'test(/exception|throw|catch|finally|try/)' --no-fail-fast 2>&1 | grep -E \"FAIL |TIMEOUT |Summary\" | head -4",
+  "summary": "cargo nextest run --test error_tests --no-fail-fast 2>&1 | grep -E \"FAIL |TIMEOUT |Summary\" | head -4 && cargo test -p elephc-magician --lib 2>&1 | grep -cE \"FAILED|panicked\"; cargo nextest run --test codegen_tests -E 'test(/exception|throw|catch|finally|try/)' --no-fail-fast 2>&1 | grep -E \"FAIL |TIMEOUT |Summary\" | h",
+  "text": "cargo nextest run --test error_tests --no-fail-fast 2>&1 | grep -E \"FAIL |TIMEOUT |Summary\" | head -4 && cargo test -p elephc-magician --lib 2>&1 | grep -cE \"FAILED|panicked\"; cargo nextest run --test codegen_tests -E 'test(/exception|throw|catch|finally|try/)' --no-fail-fast 2>&1 | grep -E \"FAIL |TIMEOUT |Summary\" | head -4: b0af2xv61",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2e90a4358971045d02a91b23",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T18:49:37.260Z",
+  "stored_at": "2026-08-14T18:49:37.261Z"
+}

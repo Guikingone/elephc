@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"WRAPPER_ID_|wrapper_id\" src/codegen_support/runtime/io/stream_state.rs 2>/dev/null | head -30; echo \"--- files:\"; rg -ln \"socket\" src/codegen_support/runtime/io/ | head -20",
+  "summary": "rg -rn \"WRAPPER_ID_|wrapper_id\" src/codegen_support/runtime/io/stream_state.rs 2>/dev/null | head -30; echo \"--- files:\"; rg -ln \"socket\" src/codegen_support/runtime/io/ | head -20: io/fsockopen.rs src/codegen_support/runtime/io/socket_backlog.rs src/codegen_support/runtime/io/stream_set_timeout.rs src/codegen_support/",
+  "text": "rg -rn \"WRAPPER_ID_|wrapper_id\" src/codegen_support/runtime/io/stream_state.rs 2>/dev/null | head -30; echo \"--- files:\"; rg -ln \"socket\" src/codegen_support/runtime/io/ | head -20: io/fsockopen.rs src/codegen_support/runtime/io/socket_backlog.rs src/codegen_support/runtime/io/stream_set_timeout.rs src/codegen_support/runtime/io/stream_socket_client.rs src/codegen_support/runtime/io/user_wrapper_url_stat_fields.rs src/codegen_support/runtime/io/build_sockaddr_in6.rs src/codegen_support/runtime/io/http_build_request.rs src/codegen_support/runtime/io/unix_socket_server.rs src/codegen_support/runtime/io/user_wrapper_cast.rs src/codegen_support/runtime/io/stream_transport.rs src/codegen_support/runtime/io/format_sockaddr.rs src/codegen_support/runtime/io/socket_connect_warning.rs src/codegen_support/runtime/io/socket_errno.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/io/stream_socket_sendto.rs src/codegen_support/runtime/io/stream_socket_shutdown.rs src/codegen_support/runtime/io/stream_type_name.rs src/codegen_support/runtime/io/socket_scheme.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f15f2f7e552c9fc8e9d8d265",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:11:40.736Z",
+  "stored_at": "2026-08-17T13:11:40.736Z"
+}

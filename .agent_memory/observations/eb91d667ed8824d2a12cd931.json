@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"features\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | head -10",
+  "summary": "grep -n \"features\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | head -10: 39:pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) { 41: emit_mixed_free_deep_linux_x86_64(emitter, features); 171:fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) { 3",
+  "text": "grep -n \"features\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | head -10: 39:pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) { 41: emit_mixed_free_deep_linux_x86_64(emitter, features); 171:fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) { 332: fn emit_for(shapes: &LadderShapes, features: RuntimeFeatures) -> String { 334: emit_mixed_free_deep(&mut emitter, features); 427: /// into the Mixed high payload word, and `lowered_runtime_features` turns that same answer",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "eb91d667ed8824d2a12cd931",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:56:05.403Z",
+  "stored_at": "2026-08-20T17:56:05.404Z"
+}

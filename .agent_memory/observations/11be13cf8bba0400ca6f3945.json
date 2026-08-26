@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"fn lower_fscanf\" -A40 src/codegen/lower_inst/builtins/io/stream_file_ops.rs | head -50",
+  "summary": "rtk proxy rg -n \"fn lower_fscanf\" -A40 src/codegen/lower_inst/builtins/io/stream_file_ops.rs | head -50:  425- abi::emit_pop_reg_pair(ctx.emitter, \"rax\", \"rdx\"); 426- } 427- } 428- abi::emit_call_label(ctx.emitter, \"__rt_sscanf\"); 429- store_if_result(ctx, inst) 430-} 431- 432-/// Lowers `fgets(stream)` through the sha",
+  "text": "rtk proxy rg -n \"fn lower_fscanf\" -A40 src/codegen/lower_inst/builtins/io/stream_file_ops.rs | head -50:  425- abi::emit_pop_reg_pair(ctx.emitter, \"rax\", \"rdx\"); 426- } 427- } 428- abi::emit_call_label(ctx.emitter, \"__rt_sscanf\"); 429- store_if_result(ctx, inst) 430-} 431- 432-/// Lowers `fgets(stream)` through the shared line-read runtime helper. 433-/// php-src's verbatim `ValueError` wording for `fgets()` with a non-positive `$length`. 434-const FGETS_NON_POSITIVE_LENGTH_MESSAGE: &str = 435- \"fgets(): Argument #2 ($length) must be greater than 0\"; 436- 437-pub(crate) fn lower_fgets(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> { 438- super::super::ensure_arg_count_between(inst, \"fgets\", 1, 2)?; 439- let stream = expect_operand(inst, 0)?; 440- // PHP's optional `$length` bounds the line at `$length - 1` bytes. Zero means unbounded here, 441- // which is what an omitted argument resolves to, so the helper needs no separate flag. 442- match inst.operands.get(1).copied() {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "11be13cf8bba0400ca6f3945",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T16:17:21.690Z",
+  "stored_at": "2026-08-16T16:17:21.690Z"
+}

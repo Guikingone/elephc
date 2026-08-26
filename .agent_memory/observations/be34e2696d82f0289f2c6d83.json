@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"pub struct CheckResult\" -A 30 src/types/ | head -40",
+  "summary": "grep -rn \"pub struct CheckResult\" -A 30 src/types/ | head -40: 83- /// Statically-decided access violations lowered to runtime `Error` throws, src/types/result.rs-84- /// keyed by the source span of the offending call/assignment. src/types/result.rs-85- pub throw_access_sites: HashMap<Span, ThrowAccessInfo>, src/types/",
+  "text": "grep -rn \"pub struct CheckResult\" -A 30 src/types/ | head -40: 83- /// Statically-decided access violations lowered to runtime `Error` throws, src/types/result.rs-84- /// keyed by the source span of the offending call/assignment. src/types/result.rs-85- pub throw_access_sites: HashMap<Span, ThrowAccessInfo>, src/types/result.rs-86- /// Authoritative checker result types for builtin calls, keyed by call span. src/types/result.rs-87- pub builtin_call_types: HashMap<Span, PhpType>, src/types/result.rs-88- /// Fixed-point array-local storage contracts keyed by function-like scope and loop span. src/types/result.rs-89- pub loop_storage_types: LoopStorageTypes, src/types/result.rs-90- /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--` src/types/result.rs-91- /// target, so EIR lowering can give them boxed `Mixed` storage from their first store. src/types/result.rs-92- pub string_incdec_locals: HashSet<(String, String)>,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "be34e2696d82f0289f2c6d83",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T18:56:28.828Z",
+  "stored_at": "2026-08-18T18:56:28.829Z"
+}

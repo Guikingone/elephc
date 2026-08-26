@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('psfs2.php','w').write('''<?php\nclass FatalFilter extends php_user_filter {\n    public function filter($in, $out, &$consumed, $closing): int {\n        stream_bucket_make_writeable($in);\n        return PSFS_ERR_FATAL;\n    }\n}\nclass PassFilter extends php_user_filter {\n    public function filter($in, $out, &$consumed, $closing): int {\n        while ($b = stream_bucket_make_writeable($in)) {… [+1045 chars truncated]",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('psfs2.php','w').write('''<?php\nclass FatalFilter extends php_user_filter {\n    public function filter($in, $out, &$consu",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\nopen('psfs2.php','w').write('''<?php\nclass FatalFilter extends php_user_filter {\n    public function filter($in, $out, &$consumed, $closing): int {\n        stream_bucket_make_writeable($in);\n        return PSFS_ERR_FATAL;\n    }\n}\nclass PassFilter extends php_user_filter {\n    public function filter($in, $out, &$consumed, $closing): int {\n        while ($b = stream_bucket_make_writeable($in)) {\n            $consumed += $b->datalen;\n            stream_bucket_append($out, $b);\n        }\n        return PSFS_PASS_ON;\n    }\n}\nstream_filter_register('fatalf', 'FatalFilter');\nstream_filter_register('passf', 'PassFilter');\nfunction src(string $filter) {\n    $s = fopen('php://memory', 'rb+');\n    fwrite($s, 'Test data');\n    rewind($s);\n    stream_filter_prepend($s, $filter, STREAM_FILTER_READ);\n    return $s;\n}\n$a = src('fatalf'); echo var_export(stream_copy_to_stream($a, fopen('php://memory', 'wb')), true), \"|\"; fclose($a);\n$b = src('fatalf'); echo var_export(fread($b, 32), true), \"|\"; fclose($b);\n$c = src('fatalf'); echo var_export(stream_get_contents($c), true), \"|\"; fclose($c);\n$d = src('fatalf'); echo var_export(fgets($d), true), \"|\"; fclose($d);\n$e = src('passf'); echo var_export(fread($e, 32), true), \"|\";\necho var_export(fread($e, 32), true), \"|\";\nfclose($e);\n$f = src('passf'); echo var_export(stream_copy_to_stream($f, fopen('php://memory', 'wb')), true); fclose($f);\n''')\nprint(\"written\")\nPY\nzsh difftests.sh psfs2 2>&1 | head -10: written psfs2 IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1876e2f0511adb50d1420ed2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:32:25.809Z",
+  "stored_at": "2026-08-17T12:32:25.809Z"
+}

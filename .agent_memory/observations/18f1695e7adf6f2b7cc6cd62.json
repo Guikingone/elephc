@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -n \"fn file_path_expr|fn property_access\\b|fn property_assign_stmt|fn new_object_expr|fn bool_expr\" -A3 src/types/checker/builtin_spl_classes/filesystem.rs src/types/checker/builtin_spl_classes/common.rs 2>/dev/null | head -20",
+  "summary": "rtk proxy rg -n \"fn file_path_expr|fn property_access\\b|fn property_assign_stmt|fn new_object_expr|fn bool_expr\" -A3 src/types/checker/builtin_spl_classes/filesystem.rs src/types/checker/builtin_spl_classes/common.rs 2>/dev/null | head -20:  { src/types/checker/builtin_spl_classes/common.rs-334- class_name: Name::unqua",
+  "text": "rtk proxy rg -n \"fn file_path_expr|fn property_access\\b|fn property_assign_stmt|fn new_object_expr|fn bool_expr\" -A3 src/types/checker/builtin_spl_classes/filesystem.rs src/types/checker/builtin_spl_classes/common.rs 2>/dev/null | head -20:  { src/types/checker/builtin_spl_classes/common.rs-334- class_name: Name::unqualified(class_name), src/types/checker/builtin_spl_classes/common.rs-335- args, -- src/types/checker/builtin_spl_classes/common.rs:371:pub(super) fn property_access(object: Expr, property: &str) -> Expr { src/types/checker/builtin_spl_classes/common.rs-372- expr(ExprKind::PropertyAccess { src/types/checker/builtin_spl_classes/common.rs-373- object: Box::new(object), src/types/checker/builtin_spl_classes/common.rs-374- property: property.to_string(), -- src/types/checker/builtin_spl_classes/common.rs:415:pub(super) fn property_assign_stmt(object: Expr, property: &str, value: Expr) -> Stmt { src/types/checker/builtin_spl_classes/common.rs-416- Stmt::new( src/types/checker/builtin_spl_classes/common.rs-417- StmtKind::PropertyAssign { src/types/checker/builtin_spl_classes/common.rs-418- object: Box::new(object), --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "18f1695e7adf6f2b7cc6cd62",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:35:18.650Z",
+  "stored_at": "2026-08-16T17:35:18.651Z"
+}

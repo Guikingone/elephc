@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rln \"user_wrapper\" src/codegen_support/runtime/io/ | head; echo \"--- recherche du lecteur de l'offset context:\"; grep -rn \"ctx_off\\|wrapper_context_offset\\|#{}\\\", *USER_WRAPPER_VTABLE_SLOTS\" src/codegen_support/runtime/io/user_wrapper.rs | head -5",
+  "summary": "grep -rln \"user_wrapper\" src/codegen_support/runtime/io/ | head; echo \"--- recherche du lecteur de l'offset context:\"; grep -rn \"ctx_off\\|wrapper_context_offset\\|#{}\\\", *USER_WRAPPER_VTABLE_SLOTS\" src/codegen_support/runtime/io/user_wrapper.rs | head -5: src/codegen_support/runtime/io/rewinddir.rs src/codegen_support/r",
+  "text": "grep -rln \"user_wrapper\" src/codegen_support/runtime/io/ | head; echo \"--- recherche du lecteur de l'offset context:\"; grep -rn \"ctx_off\\|wrapper_context_offset\\|#{}\\\", *USER_WRAPPER_VTABLE_SLOTS\" src/codegen_support/runtime/io/user_wrapper.rs | head -5: src/codegen_support/runtime/io/rewinddir.rs src/codegen_support/runtime/io/fgets.rs src/codegen_support/runtime/io/user_wrapper_url_stat.rs src/codegen_support/runtime/io/user_wrapper_url_stat_fields.rs src/codegen_support/runtime/io/user_wrapper_path_op.rs src/codegen_support/runtime/io/stream_record_meta.rs src/codegen_support/runtime/io/fwrite.rs src/codegen_support/runtime/io/feof.rs src/codegen_support/runtime/io/stream_select.rs src/codegen_support/runtime/io/user_wrapper_set_option.rs --- recherche du lecteur de l'offset context:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6f5988ddc171afde1ee1ac8c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T17:20:24.205Z",
+  "stored_at": "2026-08-20T17:20:24.206Z"
+}

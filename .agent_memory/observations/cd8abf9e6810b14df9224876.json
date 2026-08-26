@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 195,216p src/ir/function.rs | head -22",
+  "summary": "sed -n 195,216p src/ir/function.rs | head -22: OwnedTemp, TryHandler, ClosureCapture, NamedArgTemp, IteratorState, GeneratorState, EvalContext, EvalScope, EvalGlobalScope, } /// Function-level shape flags used by lowering and later codegen. #[derive(Debug, Clone, Default, PartialEq, Eq)] pub struct FunctionFlags { pub ",
+  "text": "sed -n 195,216p src/ir/function.rs | head -22: OwnedTemp, TryHandler, ClosureCapture, NamedArgTemp, IteratorState, GeneratorState, EvalContext, EvalScope, EvalGlobalScope, } /// Function-level shape flags used by lowering and later codegen. #[derive(Debug, Clone, Default, PartialEq, Eq)] pub struct FunctionFlags { pub is_main: bool, pub is_method: bool, pub is_closure: bool, pub is_generator: bool, pub is_fiber_wrapper: bool, pub is_callback_wrapper: bool, pub is_runtime_callable_invoker: bool, pub is_static: bool,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cd8abf9e6810b14df9224876",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T12:31:57.453Z",
+  "stored_at": "2026-08-22T12:31:57.454Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/spl-temp-file-object.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/spl-temp-file-object.php: <?php\n$t = new SplTempFileObject();\necho \"empty-eof \", var_export($t->eof(), true), \"\\n\";\necho \"write \", var_ex",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/spl-temp-file-object.php: <?php\n$t = new SplTempFileObject();\necho \"empty-eof \", var_export($t->eof(), true), \"\\n\";\necho \"write \", var_export($t->fwrite(\"a\\nbb\\nccc\\n\"), true), \"\\n\";\necho \"tell \", $t->ftell(), \"\\n\";\n$t->rewind();\necho \"tell0 \", $t->ftell(), \" eof \", var_export($t->eof(), true), \"\\n\";\necho \"fgets1 \", var_export($t->fgets(), true), \"\\n\";\necho \"fgets2 \", var_export($t->fgets(), true), \"\\n\";\necho \"fgetc \", var_export($t->fgetc(), true), \"\\n\";\necho \"fread \", var_export($t->fread(2), true), \"\\n\";\necho \"tell-now \", $t->ftell(), \"\\n\";\n$t->fseek(0);\necho \"current \", var_export($t->current(), true), \" key \", $t-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b7cdd4573a74c1b147e8ee40",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:40:42.033Z",
+  "stored_at": "2026-08-24T20:40:42.034Z"
+}

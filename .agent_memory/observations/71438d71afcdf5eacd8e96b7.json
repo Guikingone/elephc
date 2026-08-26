@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git log --oneline 50b9621e1..HEAD | cat",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git log --oneline 50b9621e1..HEAD | cat: 3e7a fix(objects): two empty() arms were unreachable behind one that claimed every property access c12904c8c fix(objects): a method call on a non-object always said \"on null\", whateve",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; git log --oneline 50b9621e1..HEAD | cat: 3e7a fix(objects): two empty() arms were unreachable behind one that claimed every property access c12904c8c fix(objects): a method call on a non-object always said \"on null\", whatever the receiver was 1d56e4dad fix(exceptions): a TypeError whose message is built at run time reported neither its location nor its trace c9b56b13d fix(php): a multi-property declaration did not parse, and a defaultless property crashed var_dump 0f51a3308 fix(streams): tmpfile() published the path of a file it had already deleted 53e9e62f1 fix(streams): an unassigned select set was read as eight elements, a socket claimed to lock, and an empty write refused aa9ae1f9f fix(streams): stream_select() counted a plain integer as a stream, and its x86 tally ate the timeout 42f669d25 fix(streams): copy() appended when it should truncate, copied a file onto itself, and php:// was unreachable from the one-shot builtins",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "71438d71afcdf5eacd8e96b7",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:38:58.739Z",
+  "stored_at": "2026-08-23T12:38:58.740Z"
+}

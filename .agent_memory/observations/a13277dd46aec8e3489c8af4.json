@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-aece3ab327311a17d 2>&1 | head -1; df -h / | tail -1; git log --format=\"%h %s\" 1978ff8bb9..worktree-agent-a36e969ace98e7e68",
+  "summary": "About to run: git worktree remove --force /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/agent-aece3ab327311a17d 2>&1 | head -1; df -h / | tail -1; git log --format=\"%h %s\" 1978ff8bb9..worktr",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a13277dd46aec8e3489c8af4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T06:55:44.182Z",
+  "stored_at": "2026-08-16T06:55:44.182Z"
+}

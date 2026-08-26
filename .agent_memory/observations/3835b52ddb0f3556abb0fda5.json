@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::control_flow) or test(codegen::operators) or test(codegen::array_basics) or test(codegen::arrays) or test(codegen::references) or test(codegen::runtime_gc) or test(codegen::destructors) or test(codegen::objects) or test(codegen::regressions) or test(codegen::iterators) or test(codegen::generators)' 2>&1 | tail -25",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::control_flow) or test(codegen::operators) or test(codegen::array_basics) or test(c",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::control_flow) or test(codegen::operators) or test(codegen::array_basics) or test(codegen::arrays) or test(codegen::references) or test(codegen::runtime_gc) or test(codegen::destructors) or test(codegen::objects) or test(codegen::regressions) or test(codegen::iterators) or test(codegen::generators)' 2>&1 | tail -25: es_builtin_wrapper PASS [ 2.742s] (2102/2105) elephc::codegen_tests codegen::runtime_gc::user_wrapper_registry::test_user_wrapper_registry_supports_more_than_256_live_directories PASS [ 4.563s] (2103/2105) elephc::codegen_tests codegen::runtime_gc::stream_tls_registry::test_stream_tls_registry_supports_more_than_256_live_tls_sessions PASS [ 2.890s] (2104/2105) elephc::codegen_tests codegen::runtime_gc::user_wrapper_registry::test_user_wrapper_registry_supports_more_than_256_live_streams PASS [ 2.779s] (2105/2105) elephc::codegen_tests codegen::runtime_gc::user_wrapper_registry::test_user_wrapper_registry_supports_more_than_64_registered_schemes ──────────── Summary [ 566.471s] 2105 tests run: 2104 passed, 1 failed, 6793 skipped FAIL [ 0.086s] (1827/2105) elephc::codegen_tests codegen::runtime_gc::heap_codegen::every_x86_64_incref_call_site_passes_its_pointer_in_rax error: test run failed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3835b52ddb0f3556abb0fda5",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T14:12:57.145Z",
+  "stored_at": "2026-08-23T14:12:57.146Z"
+}

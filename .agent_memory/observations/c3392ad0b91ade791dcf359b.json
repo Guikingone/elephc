@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/plural_quiet.py; grep -n \"pub use\\|pub(crate) use\" src/codegen/lower_inst/builtins/io.rs | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/plural_quiet.py; grep -n \"pub use\\|pub(crate) us",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/plural_quiet.py; grep -n \"pub use\\|pub(crate) use\" src/codegen/lower_inst/builtins/io.rs | head -20: stream_context_set_options() no longer carries the singular deprecation 144:pub(crate) use phar_read::{ 147:pub(crate) use fopen_core::{ 150:pub(crate) use stream_context::{ 155:pub(crate) use stream_copy_queries::{ 160:pub(crate) use stream_filters::{ 163:pub(crate) use stream_buckets::{ 167:pub(crate) use stream_options::{ 172:pub(crate) use stream_sockets::{ 177:pub(crate) use stream_file_ops::{ 182:pub(crate) use stream_file_dispatch::{ 187:pub(crate) use host_directory_process::{ 194:pub(crate) use phar_write::{ 198:pub(crate) use phar_metadata::{ 204:pub(crate) use filesystem_ops::{ 212:pub(crate) use stat_ops::{",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c3392ad0b91ade791dcf359b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:07:14.628Z",
+  "stored_at": "2026-08-22T17:07:14.629Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"impl Emitter\" -A 3 src/codegen_support/emit.rs | head -6; grep -n \"pub fn \" src/codegen_support/emit.rs | head -14",
+  "summary": "grep -rn \"impl Emitter\" -A 3 src/codegen_support/emit.rs | head -6; grep -n \"pub fn \" src/codegen_support/emit.rs | head -14: src/codegen_support/emit.rs:42:impl Emitter { src/codegen_support/emit.rs-43- /// Creates an emitter for the specified target platform. src/codegen_support/emit.rs-44- pub fn new(target: Target)",
+  "text": "grep -rn \"impl Emitter\" -A 3 src/codegen_support/emit.rs | head -6; grep -n \"pub fn \" src/codegen_support/emit.rs | head -14: src/codegen_support/emit.rs:42:impl Emitter { src/codegen_support/emit.rs-43- /// Creates an emitter for the specified target platform. src/codegen_support/emit.rs-44- pub fn new(target: Target) -> Self { src/codegen_support/emit.rs-45- Self { 44: pub fn new(target: Target) -> Self { 58: pub fn new_pic(target: Target) -> Self { 65: pub fn instruction(&mut self, instr: &str) { 78: pub fn label(&mut self, name: &str) { 91: pub fn take_internal_labels(&mut self) -> HashSet<String> { 104: pub fn label_shared(&mut self, name: &str) { 114: pub fn label_global(&mut self, name: &str) { 127: pub fn comment(&mut self, text: &str) { 137: pub fn blank(&mut self) { 142: pub fn raw(&mut self, text: &str) { 148: pub fn emit_text_prelude(&mut self) { 156: pub fn output(self) -> String { 163: pub fn adrp(&mut self, reg: &str, sym: &str) { 174: pub fn add_lo12(&mut self, dst: &str, src: &str, sym: &str) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "181c8ab91ad1388991cf92e2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:25:41.959Z",
+  "stored_at": "2026-08-22T08:25:41.960Z"
+}

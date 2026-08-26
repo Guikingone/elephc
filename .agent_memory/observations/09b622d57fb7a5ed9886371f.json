@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn load_open_stream_handle_to_result\" -A 25 src/codegen/lower_inst/builtins/io/ | head -32",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn load_open_stream_handle_to_result\" -A 25 src/codegen/lower_inst/builtins/io/ | head -32: rc/codegen/lower_inst/builtins/io/resource_handles.rs-82- Arch::X86_64 => { src/codegen/lower_inst/builtins/io/resource_ha",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn load_open_stream_handle_to_result\" -A 25 src/codegen/lower_inst/builtins/io/ | head -32: rc/codegen/lower_inst/builtins/io/resource_handles.rs-82- Arch::X86_64 => { src/codegen/lower_inst/builtins/io/resource_handles.rs-83- ctx.emitter.instruction(\"test rax, rax\"); // reject stale, closed, or non-stream handles src/codegen/lower_inst/builtins/io/resource_handles.rs-84- ctx.emitter.instruction(&format!(\"jns {}\", open_label)); // continue only when an open backend resolved src/codegen/lower_inst/builtins/io/resource_handles.rs-85- } src/codegen/lower_inst/builtins/io/resource_handles.rs-86- } src/codegen/lower_inst/builtins/io/resource_handles.rs-87- emit_closed_stream_type_error(ctx, function_name); src/codegen/lower_inst/builtins/io/resource_handles.rs-88- ctx.emitter.label(&open_label); src/codegen/lower_inst/builtins/io/resource_handles.rs-89- abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); src/codegen/lower_inst/builtins/io/resource_handles.rs-90- Ok(())",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "09b622d57fb7a5ed9886371f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T12:43:17.912Z",
+  "stored_at": "2026-08-24T12:43:17.912Z"
+}

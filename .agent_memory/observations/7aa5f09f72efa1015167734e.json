@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/bound_by_mentioned_names.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/bound_by_mentioned_names.py: \"\"\"Bound the widened ladder by the names the PROGRAM mentions, not by what the analysis narrows.\n\n`candidate_names.is_",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/bound_by_mentioned_names.py: \"\"\"Bound the widened ladder by the names the PROGRAM mentions, not by what the analysis narrows.\n\n`candidate_names.is_some()` turned out to be the wrong bound. MEASURED: `$fn = \"feof\"; $fn($h);`\nnarrows and works, but `foreach ([\"feof\"] as $fn) { $fn($h); }` does NOT — the reachability\nanalysis follows locals and pass-through ops, not array elements — so the gate blocked exactly the\nshape it was added for. `strtoupper` worked in the same foreach only because string builtins are\neligible by policy and never needed the gate.\n\nExtending the analysis to array literals would fix that one shape. The",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7aa5f09f72efa1015167734e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:11:08.880Z",
+  "stored_at": "2026-08-22T11:11:08.881Z"
+}

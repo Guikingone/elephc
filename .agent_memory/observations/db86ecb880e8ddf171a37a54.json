@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 813,880p src/types/checker/builtins/callables.rs",
+  "summary": "sed -n 813,880p src/types/checker/builtins/callables.rs: mpileError::new( callback.span, &format!( \"{} does not support complex expressions that select captured callables at runtime\", label ), )); } if let ExprKind::FirstClassCallable(target) = &callback.kind { let sig = checker.specialize_first_class_callable_target(t",
+  "text": "sed -n 813,880p src/types/checker/builtins/callables.rs: mpileError::new( callback.span, &format!( \"{} does not support complex expressions that select captured callables at runtime\", label ), )); } if let ExprKind::FirstClassCallable(target) = &callback.kind { let sig = checker.specialize_first_class_callable_target(target, callback_args, span, env)?; return checker.check_known_callable_call(&sig, callback_args, span, env, label); } if let ExprKind::Variable(var_name) = &callback.kind { if let Some(target) = checker.first_class_callable_targets.get(var_name).cloned() { let sig = checker.specialize_first_class_callable_target(&target, callback_args, span, env)?; checker.callable_sigs.insert(var_name.clone(), sig.clone()); checker .closure_return_types .insert(var_name.clone(), sig.return_type.clone()); return checker.check_known_callable_call(&sig, callback_args, span, env, label); } } if let ExprKind::StringLiteral(cb_name) = &callback.kind {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "db86ecb880e8ddf171a37a54",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:16:57.245Z",
+  "stored_at": "2026-08-22T11:16:57.245Z"
+}

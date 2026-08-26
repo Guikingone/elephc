@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -rn \"StrReplace\" src/codegen/lower_inst/ src/ir/runtime_fn.rs 2>/dev/null | head -5; rg -rln \"__rt_str_replace\" src/codegen_support/ | head -3",
+  "summary": "rg -rn \"StrReplace\" src/codegen/lower_inst/ src/ir/runtime_fn.rs 2>/dev/null | head -5; rg -rln \"__rt_str_replace\" src/codegen_support/ | head -3: src/ir/runtime_fn.rs: n, src/ir/runtime_fn.rs: RuntimeFnId::n | src/ir/runtime_fn.rs: RuntimeFnId::n => \"str_replace\", src/codegen/lower_inst/runtime_functions/group_10.rs: ",
+  "text": "rg -rn \"StrReplace\" src/codegen/lower_inst/ src/ir/runtime_fn.rs 2>/dev/null | head -5; rg -rln \"__rt_str_replace\" src/codegen_support/ | head -3: src/ir/runtime_fn.rs: n, src/ir/runtime_fn.rs: RuntimeFnId::n | src/ir/runtime_fn.rs: RuntimeFnId::n => \"str_replace\", src/codegen/lower_inst/runtime_functions/group_10.rs: RuntimeFnId::n => Some({ src/codegen_support/runtime/strings/str_replace.rs://! Emits the `ln`, `ln_loop` runtime helper assembly for str replace. src/codegen_support/runtime/strings/str_replace.rs:/// Emits the `ln` runtime helper. src/codegen_support/runtime/strings/str_replace.rs: emitter.label_global(\"ln\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4573c6fbe4e025aec165f266",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:25:39.651Z",
+  "stored_at": "2026-08-17T21:25:39.651Z"
+}

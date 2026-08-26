@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests system::test_preg_match_populates_matches_array 2>&1 | tail -25",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests system::test_preg_match_populates_matches_array 2>&1 | tail -25: pulates_matches_array' (46107495) panicked at tests/codegen/support/runner.rs:968:5",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --test codegen_tests system::test_preg_match_populates_matches_array 2>&1 | tail -25: pulates_matches_array' (46107495) panicked at tests/codegen/support/runner.rs:968:5: binary exited with status exit status: 255 stdout: Fatal error: Uncaught TypeError: count(): Argument #1 ($value) must be of type Countable|array, true given in /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_17395_ThreadId(2)_0/test.php:3 Stack trace: #0 /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_17395_ThreadId(2)_0/test.php(3): count(true) #1 {main} thrown in /var/folders/xc/t6g4brv13nd3_cxddjcp5ksh0000gn/T/elephc_test_17395_ThreadId(2)_0/test.php on line 3 stderr: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace failures: codegen::system::test_preg_match_populates_matches_array test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8890 filtered out; finished in 1.18s error: test failed, to rerun pass `-p elephc --test codegen_tests`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a7948487b6d1377d43ad91e2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T10:30:42.177Z",
+  "stored_at": "2026-08-23T10:30:42.177Z"
+}

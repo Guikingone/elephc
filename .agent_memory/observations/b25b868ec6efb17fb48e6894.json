@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_fixup.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_fixup.txt: fix(tests): repair six merge seams `cargo check --workspace` never saw\n\nThe merge was validated with `cargo check --workspace`, which d",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/msg_fixup.txt: fix(tests): repair six merge seams `cargo check --workspace` never saw\n\nThe merge was validated with `cargo check --workspace`, which does NOT build\ntest targets. It reported a clean tree while the `codegen_tests` and\n`error_tests` binaries did not compile at all. `--all-targets` is the check that\ncovers them, and is what this commit is verified with.\n\nEvery one of the six is a UNION resolution gone wrong, not a bad decision about\nwhich side to keep. Keeping both sides is safe when each ADDED disjoint text; it\nis not when the conflict boundary cuts through a syntactic unit, and it is worst\nwhe",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b25b868ec6efb17fb48e6894",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:12:13.579Z",
+  "stored_at": "2026-08-20T18:12:13.580Z"
+}

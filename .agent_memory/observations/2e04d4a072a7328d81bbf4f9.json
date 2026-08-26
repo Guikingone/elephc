@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n sel.php 2>&1 | head -20",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n sel.php 2>&1 | head -20: -csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel.php on line 11 ValueError: No stream ",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && php -n sel.php 2>&1 | head -20: -csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel.php on line 11 ValueError: No stream arrays were passed b temp-only: n=1 ready=1 c real file: n=1 ready=1 d memory + real file: Warning: stream_select(): Cannot represent a stream of type MEMORY as a select()able descriptor in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel.php on line 38 Warning: stream_select(): Cannot represent a stream of type MEMORY as a select()able descriptor in /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2/sel.php on line 38 n=1 ready=1 e all null: ValueError: No stream arrays were passed f empty array: ValueError: No stream arrays were passed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2e04d4a072a7328d81bbf4f9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T06:25:37.166Z",
+  "stored_at": "2026-08-17T06:25:37.167Z"
+}

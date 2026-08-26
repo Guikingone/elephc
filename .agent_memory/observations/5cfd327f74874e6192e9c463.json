@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"pending_null_probe_roots\\|null_probe_scope_is_top_level\\|null_probe_depth\" src/types/checker/mod.rs | head -10",
+  "summary": "About to run: grep -n \"pending_null_probe_roots\\|null_probe_scope_is_top_level\\|null_probe_depth\" src/types/checker/mod.rs | head -10",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5cfd327f74874e6192e9c463",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T08:15:55.998Z",
+  "stored_at": "2026-08-21T08:15:55.998Z"
+}

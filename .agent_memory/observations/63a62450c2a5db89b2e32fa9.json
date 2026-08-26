@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::spl::file_object_lines) or test(codegen::spl::filesystem)' 2>&1 | tail -8",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::spl::file_object_lines) or test(codegen::spl::filesystem)' 2>&1 | tail -8: PASS [ ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo nextest run --test codegen_tests --no-fail-fast --final-status-level fail -E 'test(codegen::spl::file_object_lines) or test(codegen::spl::filesystem)' 2>&1 | tail -8: PASS [ 3.456s] (21/26) elephc::codegen_tests codegen::spl::filesystem::test_spl_file_object_stream_position_methods PASS [ 3.367s] (22/26) elephc::codegen_tests codegen::spl::filesystem::test_spl_temp_file_object_memory_buffer_before_spill PASS [ 6.323s] (23/26) elephc::codegen_tests codegen::spl::filesystem::test_spl_file_object_fscanf_scans_one_line_per_call PASS [ 3.741s] (24/26) elephc::codegen_tests codegen::spl::filesystem::test_spl_temp_file_object_negative_memory_uses_memory_stream PASS [ 3.244s] (25/26) elephc::codegen_tests codegen::spl::filesystem::test_spl_temp_file_object_stream_read_write PASS [ 3.873s] (26/26) elephc::codegen_tests codegen::spl::filesystem::test_spl_temp_file_object_spills_after_threshold ──────────── Summary [ 11.664s] 26 tests run: 26 passed, 8902 skipped",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "63a62450c2a5db89b2e32fa9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:24:24.576Z",
+  "stored_at": "2026-08-24T08:24:24.576Z"
+}

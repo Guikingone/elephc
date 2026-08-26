@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"No stream arrays were passed\" src --include \"*.rs\" | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"No stream arrays were passed\" src --include \"*.rs\" | head: src/codegen/lower_inst/builtins/io/stream_options.rs:109:const STREAM_SELECT_NO_STREAM_ARRAYS_MESSAGE: &str = \"No stream arrays were passed\"; src/codegen_s",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"No stream arrays were passed\" src --include \"*.rs\" | head: src/codegen/lower_inst/builtins/io/stream_options.rs:109:const STREAM_SELECT_NO_STREAM_ARRAYS_MESSAGE: &str = \"No stream arrays were passed\"; src/codegen_support/runtime/io/stream_select.rs:141: // -2 is the lowering's cue to raise php's `ValueError: No stream arrays were passed`. It has src/codegen_support/runtime/io/stream_select.rs:268: // raising `No stream arrays were passed`. The pollfd slot is still written above, because the src/codegen_support/runtime/io/stream_select.rs:511: // php counts the streams it could cast and raises `ValueError: No stream arrays were passed` src/codegen_support/runtime/io/stream_select.rs:546: // -2 is the lowering's cue to raise php's `ValueError: No stream arrays were passed`, kept src/codegen_support/runtime/io/stream_select_memory_guard.rs:12://! MEMORY as a select()able descriptor` — and the `ValueError: No stream arrays were passed`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e1861bff22dc9e1944707ba8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:17:21.062Z",
+  "stored_at": "2026-08-23T07:17:21.062Z"
+}

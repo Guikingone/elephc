@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn lower_string_replace_aarch64\" -A 16 src/codegen/lower_inst/builtins/strings/replace_wrap.rs | head -20",
+  "summary": "grep -n \"fn lower_string_replace_aarch64\" -A 16 src/codegen/lower_inst/builtins/strings/replace_wrap.rs | head -20: , inst, 0, name, \"x1\", \"x2\")?; 480- ctx.emitter.instruction(\"stp x1, x2, [sp, #-16]!\"); // preserve the search string while materializing replacement and subject 481- load_string_arg_to_regs(ctx, inst, 1,",
+  "text": "grep -n \"fn lower_string_replace_aarch64\" -A 16 src/codegen/lower_inst/builtins/strings/replace_wrap.rs | head -20: , inst, 0, name, \"x1\", \"x2\")?; 480- ctx.emitter.instruction(\"stp x1, x2, [sp, #-16]!\"); // preserve the search string while materializing replacement and subject 481- load_string_arg_to_regs(ctx, inst, 1, name, \"x1\", \"x2\")?; 482- ctx.emitter.instruction(\"stp x1, x2, [sp, #-16]!\"); // preserve the replacement string while materializing the subject 483- load_string_arg_to_regs(ctx, inst, 2, name, \"x1\", \"x2\")?; 484- ctx.emitter.instruction(\"mov x5, x1\"); // pass the subject string pointer as the third runtime string argument 485- ctx.emitter.instruction(\"mov x6, x2\"); // pass the subject string length as the third runtime string argument 486- ctx.emitter.instruction(\"ldp x3, x4, [sp], #16\"); // restore replacement into the secondary runtime string argument 487- ctx.emitter.instruction(\"ldp x1, x2, [sp], #16\"); // restore search into the primary runtime string argument 488- Ok(()) 489-} 490-",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d92b801c468181c24faa1856",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T21:34:53.821Z",
+  "stored_at": "2026-08-17T21:34:53.821Z"
+}

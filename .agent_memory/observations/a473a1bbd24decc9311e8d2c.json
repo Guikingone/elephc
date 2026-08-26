@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: /// Reads the StreamState URI pointer/length pair and loads it into\n/// x3 (ptr) / x4 (len) / x5 (tag=1), then inserts the hash entry.\n/// Fallback (ptr == 0) → -> ",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: /// Reads the StreamState URI pointer/length pair and loads it into\n/// x3 (ptr) / x4 (len) / x5 (tag=1), then inserts the hash entry.\n/// Fallback (ptr == 0) → -> /// Reads the StreamState URI pointer/length pair and loads it into\n/// x3 (ptr) / x4 (len) / x5 (tag=1), then inserts the hash entry.\n///\n/// A stream with NO recorded path contributes no key at all. php guards the insertion with\n/// `if (stream->orig_path)` (`ext/standard/streamsfuncs.c`), so a directory handle and a socket\n/// — neither of which carries an `orig_path` — answer EIGHT keys. elephc inserted\n/// `[\"uri\"] => \"\"` for them, which made every `count()` and every ke",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a473a1bbd24decc9311e8d2c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:00:58.831Z",
+  "stored_at": "2026-08-17T07:00:58.831Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\np='src/types/checker/builtin_spl_classes/filesystem.rs'\ns=open(p).read()\nold = '        method_with_body(\"getCurrentLine\", Vec::new(), Some(mixed_type()), return_body(file_current_line_expr())),'\nnew = ('        // php documents `getCurrentLine()` as an ALIAS of `fgets()`, and it behaves like one:\\n'\n       '        // measured on `php -n` 8.5.6 over `\"aa\\\\nbb\\\\n\"`, it CONSUMES the line, advances\\n'\n       '        // `key()`, and throws once `feof()` holds. Answering the cached current line instead\\n'\n       '        // left the stream where it was, so `getCurrentLine()` then… [+389 chars truncated]",
+  "summary": "python3 - <<'PY'\np='src/types/checker/builtin_spl_classes/filesystem.rs'\ns=open(p).read()\nold = '        method_with_body(\"getCurrentLine\", Vec::new(), Some(mixed_type()), return_body(file_current_line_expr())),'\nnew = ('        // php documents `getCurrentLine()` as an ALIAS of `fgets()`, and it behaves like one:\\n'\n ",
+  "text": "python3 - <<'PY'\np='src/types/checker/builtin_spl_classes/filesystem.rs'\ns=open(p).read()\nold = '        method_with_body(\"getCurrentLine\", Vec::new(), Some(mixed_type()), return_body(file_current_line_expr())),'\nnew = ('        // php documents `getCurrentLine()` as an ALIAS of `fgets()`, and it behaves like one:\\n'\n       '        // measured on `php -n` 8.5.6 over `\"aa\\\\nbb\\\\n\"`, it CONSUMES the line, advances\\n'\n       '        // `key()`, and throws once `feof()` holds. Answering the cached current line instead\\n'\n       '        // left the stream where it was, so `getCurrentLine()` then `fgetc()` read `a` where\\n'\n       '        // php reads `b`.\\n'\n       '        method_with_body(\"getCurrentLine\", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),')\nassert s.count(old)==1\nopen(p,'w').write(s.replace(old,new))\nprint('getCurrentLine aliased to fgets')\nPY\nrtk proxy rg -n \"file_current_line_expr\" src/types/checker/builtin_spl_classes/filesystem.rs | head -5: getCurrentLine aliased to fgets 832:fn file_current_line_expr() -> Expr { 1353: return_stmt(file_current_line_expr()),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "be9a727c90e23674478fdcda",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T18:41:06.214Z",
+  "stored_at": "2026-08-16T18:41:06.215Z"
+}

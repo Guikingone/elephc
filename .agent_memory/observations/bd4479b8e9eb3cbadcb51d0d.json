@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy cat /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/stream_wrapper_register.rs | head -60",
+  "summary": "rtk proxy cat /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/stream_wrapper_register.rs | head -60: tes that the class argument names a declared class and returns `Bool`. //! - Arguments are pre-inferred by the registry before the hook runs; the hook does NOT",
+  "text": "rtk proxy cat /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/builtins/io/stream_wrapper_register.rs | head -60: tes that the class argument names a declared class and returns `Bool`. //! - Arguments are pre-inferred by the registry before the hook runs; the hook does NOT //! re-infer them. use crate::builtins::spec::BuiltinCheckCtx; use crate::errors::CompileError; use crate::types::PhpType; builtin! { contract: \"stream_wrapper_register\", check: check, semantics: crate::builtins::semantics::runtime_fn_semantics( crate::ir::RuntimeFnId::StreamWrapperRegister, ), } /// Validates the class argument names a declared class and returns `Bool`. /// /// Arguments are pre-inferred by the registry; this hook validates the class /// registration using the shared `validate_registered_stream_class` helper. fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> { crate::builtins::io::stream_support::validate_registered_stream_class( cx.checker, cx.name, &cx.args[1], cx.span, )?; Ok(PhpType::Bool) }",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bd4479b8e9eb3cbadcb51d0d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:46:45.503Z",
+  "stored_at": "2026-08-17T09:46:45.504Z"
+}

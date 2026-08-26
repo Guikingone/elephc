@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"cbz x2, __rt_uwfc_empty\");                     // the source had nothing\n            emitter.instruction(\"stp x1, x2, [sp, #16]\");          -> emitter.instruc",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/fread.rs: emitter.instruction(\"cbz x2, __rt_uwfc_empty\");                     // the source had nothing\n            emitter.instruction(\"stp x1, x2, [sp, #16]\");          -> emitter.instruction(\"cbz x2, __rt_uwfc_empty\");                     // the source had nothing\n            emitter.instruction(\"stp x1, x2, [sp, #16]\");                       // the chunk outlives the calls below",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e01a50cef627f36c743aaaf2",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T20:06:57.656Z",
+  "stored_at": "2026-08-23T20:06:57.657Z"
+}

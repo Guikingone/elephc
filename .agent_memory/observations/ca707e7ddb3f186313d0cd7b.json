@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"^use \" src/image_prelude.rs | head -8; echo \"--- internal_declarations ---\"; grep -rn \"fn internal_declarations\" -A 12 src/ | head -16",
+  "summary": "grep -n \"^use \" src/image_prelude.rs | head -8; echo \"--- internal_declarations ---\"; grep -rn \"fn internal_declarations\" -A 12 src/ | head -16: fault coercive typing, which is right src/synthetic_class.rs-71- // here: a built prelude declares no `strict_types=1`, so it must be stamped the way an src/synthetic_class.rs",
+  "text": "grep -n \"^use \" src/image_prelude.rs | head -8; echo \"--- internal_declarations ---\"; grep -rn \"fn internal_declarations\" -A 12 src/ | head -16: fault coercive typing, which is right src/synthetic_class.rs-71- // here: a built prelude declares no `strict_types=1`, so it must be stamped the way an src/synthetic_class.rs-72- // undeclared file is rather than inheriting whatever the caller was parsing. src/synthetic_class.rs-73- crate::source::with_parse_mode(SourceProfile::new(SourceMode::Internal), build) src/synthetic_class.rs-74-} src/synthetic_class.rs-75- src/synthetic_class.rs-76-// --------------------------------------------------------------------------- src/synthetic_class.rs-77-// Type helpers src/synthetic_class.rs-78-// --------------------------------------------------------------------------- src/synthetic_class.rs-79- src/synthetic_class.rs-80-/// PHP's `mixed`, which the parser models as an unqualified named type rather than a src/synthetic_class.rs-81-/// dedicated `TypeExpr` variant (see `parser/stmt/params.rs`).",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ca707e7ddb3f186313d0cd7b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T07:29:20.823Z",
+  "stored_at": "2026-08-22T07:29:20.824Z"
+}

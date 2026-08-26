@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "printf 'docs(builtins): regenerate the builtin registry and pages\\n\\nThe generated pages carry the source line each builtin lowers at, and adding\\n`intern_function_name` to `BuiltinLoweringContext` moved `lower_registry_call`\\nin `src/builtins/semantics.rs`. Produced by the `builtins-docs-sync` workflow —\\n`cargo build --example gen_builtins` then `extract_builtins.py --render --force`\\n— with `audit_builtins.py`, `validate_site_compat.py` and the EIR boundary audit\\nall clean and `docs/php/compatibility.md` unchanged, since the catalog surface\\ndid not move.\\n' > /private/tmp/claude-501/-User… [+406 chars truncated]",
+  "summary": "printf 'docs(builtins): regenerate the builtin registry and pages\\n\\nThe generated pages carry the source line each builtin lowers at, and adding\\n`intern_function_name` to `BuiltinLoweringContext` moved `lower_registry_call`\\nin `src/builtins/semantics.rs`. Produced by the `builtins-docs-sync` workflow —\\n`cargo build",
+  "text": "printf 'docs(builtins): regenerate the builtin registry and pages\\n\\nThe generated pages carry the source line each builtin lowers at, and adding\\n`intern_function_name` to `BuiltinLoweringContext` moved `lower_registry_call`\\nin `src/builtins/semantics.rs`. Produced by the `builtins-docs-sync` workflow —\\n`cargo build --example gen_builtins` then `extract_builtins.py --render --force`\\n— with `audit_builtins.py`, `validate_site_compat.py` and the EIR boundary audit\\nall clean and `docs/php/compatibility.md` unchanged, since the catalog surface\\ndid not move.\\n' > /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/docsmsg.txt && git add docs/ scripts/docs/builtin_registry.json && git commit -F /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/docsmsg.txt 2>&1 | tail -3: [worktree-streams-csv-signature 947054551] docs(builtins): regenerate the builtin registry and pages 549 files changed, 1126 insertions(+), 1174 deletions(-)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "862784f70ba9756586d2bba8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T17:28:25.795Z",
+  "stored_at": "2026-08-16T17:28:25.796Z"
+}

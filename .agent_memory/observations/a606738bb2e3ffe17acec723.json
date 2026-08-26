@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\ns=open('wrapclass.php').read()\nopen('wraplit.php','w').write(s.replace(\"MemWrapper::class\", \"'MemWrapper'\"))\nprint(\"written\")\nPY\nzsh difftests.sh wraplit 2>&1 | head -8",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\ns=open('wrapclass.php').read()\nopen('wraplit.php','w').write(s.replace(\"MemWrapper::class\", \"'MemWrapper'\"))\nprint(\"written\")\n",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && python3 - <<'PY'\ns=open('wrapclass.php').read()\nopen('wraplit.php','w').write(s.replace(\"MemWrapper::class\", \"'MemWrapper'\"))\nprint(\"written\")\nPY\nzsh difftests.sh wraplit 2>&1 | head -8: written wraplit IDENTICAL",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a606738bb2e3ffe17acec723",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:41:12.030Z",
+  "stored_at": "2026-08-17T09:41:12.030Z"
+}

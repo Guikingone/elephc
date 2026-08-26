@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"fn test_error_undefined_variable\\|fn test_undefined_variable_read_is_still_rejected\\|fn test_error_plain_self_read_assignment_remains_undefined\\|fn test_null_probe_index_subexpression_still_requires_a_defined_variable\\|fn test_error_short_circuit_assignment_effect_is_not_definite\" -A 8 tests/error_tests/type_system.rs | head -50",
+  "summary": "grep -n \"fn test_error_undefined_variable\\|fn test_undefined_variable_read_is_still_rejected\\|fn test_error_plain_self_read_assignment_remains_undefined\\|fn test_null_probe_index_subexpression_still_requires_a_defined_variable\\|fn test_error_short_circuit_assignment_effect_is_not_definite\" -A 8 tests/error_tests/type_s",
+  "text": "grep -n \"fn test_error_undefined_variable\\|fn test_undefined_variable_read_is_still_rejected\\|fn test_error_plain_self_read_assignment_remains_undefined\\|fn test_null_probe_index_subexpression_still_requires_a_defined_variable\\|fn test_error_short_circuit_assignment_effect_is_not_definite\" -A 8 tests/error_tests/type_system.rs | head -50:  expression produces an error. 307-#[test] -- 1032:fn test_undefined_variable_read_is_still_rejected() { 1033- expect_error(\"<?php echo $neverDefined;\", \"Undefined variable: $neverDefined\"); 1034-} 1035- 1036-/// Verifies only the probe's chain SPINE is tolerated: PHP warns about `$b` in `isset($a[$b])` 1037-/// but not about `$a`, so the index subexpression keeps the diagnostic. 1038-#[test] 1039:fn test_null_probe_index_subexpression_still_requires_a_defined_variable() { 1040- expect_error(\"<?php var_dump(isset($a[$b]));\", \"Undefined variable: $b\"); 1041-} 1042- 1043-/// Verifies `isset()`, `empty()`, `unset()` and `??` accept a never-declared variable, which is 1044-/// exactly what those constructs exist for. Runtime answers are pinned by codegen tests. 1045-#[test] 1046-fn test_null_probes_accept_a_never_declared_variable() { 1047- expect_no_error(\"<?php var_dump(isset($neverA));\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0991229a094b6872419eb075",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T18:59:36.008Z",
+  "stored_at": "2026-08-20T18:59:36.008Z"
+}

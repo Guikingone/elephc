@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"php://\" src --include=\"*.rs\" | head -40",
+  "summary": "grep -rn \"php://\" src --include=\"*.rs\" | head -40: ext_result_helpers.rs:544:/// Recognizes in-memory `php://` stream URLs backed by the temp-file helper. src/codegen/lower_inst/builtins/io/context_result_helpers.rs:546: path == \"php://memory\" || path == \"php://temp\" || path.starts_with(\"php://temp/\") src/codegen/lower",
+  "text": "grep -rn \"php://\" src --include=\"*.rs\" | head -40: ext_result_helpers.rs:544:/// Recognizes in-memory `php://` stream URLs backed by the temp-file helper. src/codegen/lower_inst/builtins/io/context_result_helpers.rs:546: path == \"php://memory\" || path == \"php://temp\" || path.starts_with(\"php://temp/\") src/codegen/lower_inst/builtins/io/fopen_core.rs:21: if path.starts_with(\"php://filter/\") { src/codegen/lower_inst/builtins/io/fopen_core.rs:75:/// Where the open mode a `php://filter` URL is opened with comes from. src/codegen/lower_inst/builtins/io/fopen_core.rs:90:/// Replaces a run-time `php://filter/...` filename with the RESOURCE it wraps. src/codegen/lower_inst/builtins/io/fopen_core.rs:93:/// whatever the resource turns out to be — a file, `php://temp`, anything. The filter it named is src/codegen/lower_inst/builtins/io/fopen_core.rs:185:/// Finishes a run-time `php://filter` open: the failed-open line, the chain, the skipped names.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "42459a76e2ed745540cc3d8b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:12:40.142Z",
+  "stored_at": "2026-08-14T14:12:40.143Z"
+}

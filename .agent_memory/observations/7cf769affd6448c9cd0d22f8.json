@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_scanf_reachability.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_scanf_reachability.py: \"\"\"The scanf engine is reachable only through a call the BACKEND emits, and nothing kept it alive.\n\n`sscanf()` and `fsca",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/fix_scanf_reachability.py: \"\"\"The scanf engine is reachable only through a call the BACKEND emits, and nothing kept it alive.\n\n`sscanf()` and `fscanf()` lower to calls to `__elephc_scanf` / `__elephc_fscanf`, PHP functions the\nscanf prelude declares. No PHP source ever names them, so the declaration-reachability pass finds\nnothing pointing at them and prunes them — and the backend then meets a call to a function that no\nlonger exists. EVERY `sscanf()` and `fscanf()` in any form fails to compile.\n\nThe other prelude-backed builtins are unaffected, and the reason is instructive: `hash_init()` and\nfriends ARE named in PHP s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7cf769affd6448c9cd0d22f8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:34:19.830Z",
+  "stored_at": "2026-08-21T16:34:19.830Z"
+}

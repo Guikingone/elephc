@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"__rt_file_get_contents_maybe_phar\" src/codegen_support/runtime/ | head -3",
+  "summary": "grep -rn \"__rt_file_get_contents_maybe_phar\" src/codegen_support/runtime/ | head -3: src/codegen_support/runtime/io/file_get_contents_url.rs:550: emitter.instruction(\"b __rt_file_get_contents_maybe_phar\"); // fallback to phar:// runtime reader or filesystem path src/codegen_support/runtime/io/file_get_contents_url.rs:1",
+  "text": "grep -rn \"__rt_file_get_contents_maybe_phar\" src/codegen_support/runtime/ | head -3: src/codegen_support/runtime/io/file_get_contents_url.rs:550: emitter.instruction(\"b __rt_file_get_contents_maybe_phar\"); // fallback to phar:// runtime reader or filesystem path src/codegen_support/runtime/io/file_get_contents_url.rs:1031: emitter.instruction(\"jmp __rt_file_get_contents_maybe_phar\"); // fallback to phar:// runtime reader or filesystem path src/codegen_support/runtime/io/phar_read.rs:207: // ===== __rt_file_get_contents_maybe_phar(x1=url ptr, x2=url len) -> x1=str ptr, x2=len =====",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a3ff79bd581d5fb3e4b97860",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:53:02.149Z",
+  "stored_at": "2026-08-21T17:53:02.150Z"
+}

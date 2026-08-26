@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rhoE '\"stream_[a-z_]+\"|\"url_stat\"|\"dir_[a-z]+\"' src crates --include='*.rs' | sort | uniq -c | sort -rn",
+  "summary": "grep -rhoE '\"stream_[a-z_]+\"|\"url_stat\"|\"dir_[a-z]+\"' src crates --include='*.rs' | sort | uniq -c | sort -rn: eam_tell\" 2 \"stream_stat\" 2 \"stream_metadata\" 2 \"stream_flush\" 2 \"stream_eof\" 2 \"stream_close\" 2 \"dir_rewinddir\" 2 \"dir_closedir\" 1 \"stream_type_error_unknown\" 1 \"stream_type_error_true\" 1 \"stream_type_error_s",
+  "text": "grep -rhoE '\"stream_[a-z_]+\"|\"url_stat\"|\"dir_[a-z]+\"' src crates --include='*.rs' | sort | uniq -c | sort -rn: eam_tell\" 2 \"stream_stat\" 2 \"stream_metadata\" 2 \"stream_flush\" 2 \"stream_eof\" 2 \"stream_close\" 2 \"dir_rewinddir\" 2 \"dir_closedir\" 1 \"stream_type_error_unknown\" 1 \"stream_type_error_true\" 1 \"stream_type_error_string\" 1 \"stream_type_error_object\" 1 \"stream_type_error_null\" 1 \"stream_type_error_int\" 1 \"stream_type_error_float\" 1 \"stream_type_error_false\" 1 \"stream_type_error_bool\" 1 \"stream_type_error_array\" 1 \"stream_transport_inherit_done\" 1 \"stream_transport_done\" 1 \"stream_socket_pair_false\" 1 \"stream_socket_pair_done\" 1 \"stream_set_buffer\" 1 \"stream_resource_open\" 1 \"stream_resource_ok\" 1 \"stream_mode_literal_done\" 1 \"stream_mode_done\" 1 \"stream_meta_symbol_done\" 1 \"stream_meta_stashed_done\" 1 \"stream_meta_literal_done\" 1 \"stream_handle_open\" 1 \"stream_filter\" 1 \"stream_context_default\" 1 \"stream_connect_host_done\" 1 \"stream_close_resolved\" 1 \"stream_close_marked\" 1 \"stream_chunk_open\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4c1415fad5bb6cf3498136aa",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:10:49.593Z",
+  "stored_at": "2026-08-14T14:10:49.594Z"
+}

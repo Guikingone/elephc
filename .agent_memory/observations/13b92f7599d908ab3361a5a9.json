@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy grep -n \"test_error_fwrite_wrong_args\" -B6 -A14 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/error_tests/io_builtins/streams.rs | head -24",
+  "summary": "rtk proxy grep -n \"test_error_fwrite_wrong_args\" -B6 -A14 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/error_tests/io_builtins/streams.rs | head -24: 53-fn test_error_fread_requires_resource_handle() { 54- expect_error(\"<?php fread(1, 1);\", \"fread() expects resource,",
+  "text": "rtk proxy grep -n \"test_error_fwrite_wrong_args\" -B6 -A14 /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/error_tests/io_builtins/streams.rs | head -24: 53-fn test_error_fread_requires_resource_handle() { 54- expect_error(\"<?php fread(1, 1);\", \"fread() expects resource, got int\"); 55-} 56- 57-/// Verifies fwrite() produces correct error when called with only one argument. 58-#[test] 59:fn test_error_fwrite_wrong_args() { 60- expect_error(\"<?php fwrite(1);\", \"fwrite() takes exactly 2 arguments\"); 61-} 62- 63-/// Verifies fwrite() produces correct error when passed an int instead of a resource. 64-#[test] 65-fn test_error_fwrite_requires_resource_handle() { 66- expect_error( 67- r#\"<?php fwrite(1, \"x\");\"#, 68- \"fwrite() expects resource, got int\", 69- ); 70-} 71- 72-/// Verifies fgets() produces correct error when called with no arguments. 73-#[test]",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "13b92f7599d908ab3361a5a9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:43:22.953Z",
+  "stored_at": "2026-08-17T07:43:22.953Z"
+}

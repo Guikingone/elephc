@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"unresolved_variable_error\\|Undefined variable\" src/types/checker/null_probe.rs | head; echo \"---\"; sed -n '130,160p' src/types/checker/null_probe.rs",
+  "summary": "grep -rn \"unresolved_variable_error\\|Undefined variable\" src/types/checker/null_probe.rs | head; echo \"---\"; sed -n '130,160p' src/types/checker/null_probe.rs: their locals to `global_env`, so there /// is nothing to validate the tolerance against there and nothing to seed for lowering. fn record_pending_root(checker: ",
+  "text": "grep -rn \"unresolved_variable_error\\|Undefined variable\" src/types/checker/null_probe.rs | head; echo \"---\"; sed -n '130,160p' src/types/checker/null_probe.rs: their locals to `global_env`, so there /// is nothing to validate the tolerance against there and nothing to seed for lowering. fn record_pending_root(checker: &mut Checker, name: &str, span: Span) { if !checker.null_probe_scope_is_top_level { return; } checker .pending_null_probe_roots .push((name.to_string(), span)); } /// Builds the diagnostic re-raised when a deferred probe root turns out to be assigned elsewhere /// in the same scope, so the tolerance is not backed by a representable `null` slot. pub(crate) fn unrepresentable_probe_root_error(name: &str, span: Span) -> CompileError { CompileError::new(span, &format!(\"Undefined variable: ${}\", name)) } #[cfg(test)] mod tests { use super::*; /// Builds a point-span expression for the probe-shape unit tests. fn expr(kind: ExprKind) -> Expr { Expr::new(kind, Span::new(1, 1)) } /// A bare undefined variable is reported as the probe root.",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c1da24bd2c85a153dc2b6b2f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T16:09:50.587Z",
+  "stored_at": "2026-08-18T16:09:50.588Z"
+}

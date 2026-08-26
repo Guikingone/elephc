@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"'directory family'\" -A 22 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py",
+  "summary": "grep -n \"'directory family'\" -A 22 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py: 412: 'directory family': '''<?php 413-mkdir(\"d\"); 414-file_put_contents(\"d/b.txt\", \"\"); 41",
+  "text": "grep -n \"'directory family'\" -A 22 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/streams_behaviour_sweep.py: 412: 'directory family': '''<?php 413-mkdir(\"d\"); 414-file_put_contents(\"d/b.txt\", \"\"); 415-file_put_contents(\"d/a.txt\", \"\"); 416-$h = opendir(\"d\"); 417-$seen = []; 418-while (($e = readdir($h)) !== false) { $seen[] = $e; } 419-sort($seen); 420-var_dump($seen); 421-rewinddir($h); 422-var_dump(readdir($h) !== false); 423-closedir($h); 424-var_dump(scandir(\"d\")); 425-var_dump(scandir(\"d\", SCANDIR_SORT_DESCENDING)); 426-''', 427- 'glob patterns': '''<?php 428-mkdir(\"d\"); 429-file_put_contents(\"d/a.txt\", \"\"); 430-file_put_contents(\"d/b.log\", \"\"); 431-var_dump(glob(\"d/*\")); 432-var_dump(glob(\"d/*.txt\")); 433-var_dump(glob(\"d/*.none\")); 434-var_dump(glob(\"d/*\", GLOB_ONLYDIR));",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c9b2dca20cd82649746abdf0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T10:12:39.114Z",
+  "stored_at": "2026-08-22T10:12:39.115Z"
+}

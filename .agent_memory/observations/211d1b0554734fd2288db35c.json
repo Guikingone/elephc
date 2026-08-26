@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_closing.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_closing.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\np = 'src/types/che",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/fix_closing.py: import os\n\nos.chdir('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\n\np = 'src/types/checker/method_pass.rs'\ns = open(p).read()\n\n# 1. per-position optional seeding, so a method can pin ONE parameter and leave the rest inferred\nold_sig = '''fn stream_wrapper_contract_param_types(method_key: &str) -> Option<Vec<PhpType>> {\n    let ints = |n: usize| vec![PhpType::Int; n];\n    Some(match method_key {\n        \"stream_open\" => vec![PhpType::Str, PhpType::Str, PhpType::Int, PhpType::Str],\n        \"stream_write\" => vec![PhpType::Str],\n        \"stream_read\"",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "211d1b0554734fd2288db35c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T12:05:16.172Z",
+  "stored_at": "2026-08-17T12:05:16.173Z"
+}

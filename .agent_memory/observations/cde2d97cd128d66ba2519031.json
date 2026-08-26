@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"fn normalize_builtin_call_args\" -A 45 src/types/checker/ | head -60",
+  "summary": "grep -rn \"fn normalize_builtin_call_args\" -A 45 src/types/checker/ | head -60: es/checker/functions/call_validation.rs-288- /// Returns true if `expected` and `actual` are compatible according to PHP assignment src/types/checker/functions/call_validation.rs-289- /// coercion rules (e.g., int is compatible with float, f",
+  "text": "grep -rn \"fn normalize_builtin_call_args\" -A 45 src/types/checker/ | head -60: es/checker/functions/call_validation.rs-288- /// Returns true if `expected` and `actual` are compatible according to PHP assignment src/types/checker/functions/call_validation.rs-289- /// coercion rules (e.g., int is compatible with float, float is compatible with int/bool/void, src/types/checker/functions/call_validation.rs-290- /// `Mixed` is compatible with everything, `Never` is compatible with everything). src/types/checker/functions/call_validation.rs-291- pub(crate) fn types_compatible(expected: &PhpType, actual: &PhpType) -> bool { src/types/checker/functions/call_validation.rs-292- if expected == actual { src/types/checker/functions/call_validation.rs-293- return true; src/types/checker/functions/call_validation.rs-294- } src/types/checker/functions/call_validation.rs-295- match (expected, actual) { src/types/checker/functions/call_validation.rs-296- (PhpType::Mixed, _) => true,",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "cde2d97cd128d66ba2519031",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:11:51.884Z",
+  "stored_at": "2026-08-21T16:11:51.884Z"
+}

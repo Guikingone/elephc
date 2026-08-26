@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"by-ref integer output written into a string slot\" src/ | head -3",
+  "summary": "grep -rn \"by-ref integer output written into a string slot\" src/ | head -3 completed",
+  "text": "grep -rn \"by-ref integer output written into a string slot\" src/ | head -3 completed",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "f2f2bdc570ad35c71bcec9ef",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:10:09.098Z",
+  "stored_at": "2026-08-22T13:10:09.098Z",
+  "low_signal": true
+}

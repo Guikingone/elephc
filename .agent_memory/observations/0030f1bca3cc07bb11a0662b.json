@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rhoE 'stream_wrapper_register\\(\"[^\"]*\"' tests/codegen/ | sed 's/.*(\"//' | sed 's/\"//' | sort | uniq -c | sort -rn | head -30",
+  "summary": "grep -rhoE 'stream_wrapper_register\\(\"[^\"]*\"' tests/codegen/ | sed 's/.*(\"//' | sed 's/\"//' | sort | uniq -c | sort -rn | head -30: 9 ww 6 bare 3 sw 3 my 2 w6 2 statw 2 nm 2 mw 2 hs 2 foo 2 cycle 2 custom 1 wtst 1 wr 1 wd 1 w9 1 w8 1 w7 1 w1 1 unionread 1 uniondir 1 umw 1 typew 1 tw 1 truncw 1 touchw 1 th 1 tellw 1 src",
+  "text": "grep -rhoE 'stream_wrapper_register\\(\"[^\"]*\"' tests/codegen/ | sed 's/.*(\"//' | sed 's/\"//' | sort | uniq -c | sort -rn | head -30: 9 ww 6 bare 3 sw 3 my 2 w6 2 statw 2 nm 2 mw 2 hs 2 foo 2 cycle 2 custom 1 wtst 1 wr 1 wd 1 w9 1 w8 1 w7 1 w1 1 unionread 1 uniondir 1 umw 1 typew 1 tw 1 truncw 1 touchw 1 th 1 tellw 1 src 1 sp",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0030f1bca3cc07bb11a0662b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:07:55.554Z",
+  "stored_at": "2026-08-21T17:07:55.555Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_copyfilter.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_copyfilter.txt: fix(io): copy() could not open a `php://filter/` source spelled at RUN TIME, only a literal one\n\n    $src = 'php://filter/read",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_copyfilter.txt: fix(io): copy() could not open a `php://filter/` source spelled at RUN TIME, only a literal one\n\n    $src = 'php://filter/read=string.rot13/resource=' . $raw;\n    copy($src, $dst);\n    php    true, and $dst holds the decoded bytes\n    elephc Warning: copy(php://filter/…): Failed to open stream: No such file or directory\n\nThe same string opens fine through `fopen()` and reads fine through `file_get_contents()` — that\ncontrast is what located the defect. `__rt_copy` reads through `__rt_file_get_contents`, whose\nruntime half is a `stat` and an `open(2)`: it reaches every REGISTERED wrapper and kn",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b13ac5453e834d298785018d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T09:33:39.670Z",
+  "stored_at": "2026-08-24T09:33:39.671Z"
+}

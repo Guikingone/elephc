@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"_meta_wrapper_zlib\\|_meta_wrapper_bzip2\\|_meta_wrapper_glob\\|_meta_wrapper_phar\" src --include=\"*.rs\" | grep -v \"fixed.rs\" | head",
+  "summary": "About to run: grep -rn \"_meta_wrapper_zlib\\|_meta_wrapper_bzip2\\|_meta_wrapper_glob\\|_meta_wrapper_phar\" src --include=\"*.rs\" | grep -v \"fixed.rs\" | head",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "509d92e0e695bf5fc44c9960",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:16:21.029Z",
+  "stored_at": "2026-08-14T14:16:21.030Z"
+}

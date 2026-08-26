@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg9.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg9.txt: fix(streams): a filter URL over a user wrapper crashed, on a shared stack slot\n\n`fopen(\"php://filter/read=.../resource=w://x\")` died with",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg9.txt: fix(streams): a filter URL over a user wrapper crashed, on a shared stack slot\n\n`fopen(\"php://filter/read=.../resource=w://x\")` died with SIGSEGV. No read was needed — the open\nalone was enough — and it happened for a read chain or a write chain, whatever `stream_open`\ndeclared as its return type.\n\n`__rt_fopen`'s wrapper dispatch keeps the \"stream_open returns a boxed Mixed\" flag at `[sp, #56]`,\nstored before the handle-slot scan and reloaded just before the call. The filter-suppression\nstand-down, added later, parks the caller's suppression depth in the SAME slot; its comment calls\nit \"the di",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "166e4fbb4b7a7affbc95c365",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:53:20.910Z",
+  "stored_at": "2026-08-21T09:53:20.910Z"
+}

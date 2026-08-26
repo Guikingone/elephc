@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-store-in-a-loop-condition-is-outside-the-loop.md",
+  "summary": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-store-in-a-loop-condition-is-outside-the-loop.md: ---\nname: a-store-in-a-loop-condition-is-outside-the-loop\ndescription: \"while (($x = f()) !== null) fuyait UNE allocation PAR TOUR — la pile de boucles ne contien",
+  "text": "wrote /Users/guillaumeloulier/.claude/projects/-Users-guillaumeloulier-PhpstormProjects-oss-elephc/memory/a-store-in-a-loop-condition-is-outside-the-loop.md: ---\nname: a-store-in-a-loop-condition-is-outside-the-loop\ndescription: \"while (($x = f()) !== null) fuyait UNE allocation PAR TOUR — la pile de boucles ne contient une trame que pour le CORPS, donc les 4 régions portées par l'arête arrière (conditions while/do-while/for, mise à jour du for) ne relâchaient jamais ce qu'elles écrasaient.\"\nmetadata:\n  node_type: memory\n  type: project\n---\n\n`store_local` relâche l'occupant précédent d'un créneau avant de l'écraser. Quand le créneau n'a\npas de store prédécesseur en ligne droite, la SEULE raison qu'un occupant existe est qu'une\n**arête arrière** l'a",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "86ab6d9eef2b33a7b16535db",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T13:31:33.541Z",
+  "stored_at": "2026-08-23T13:31:33.542Z"
+}

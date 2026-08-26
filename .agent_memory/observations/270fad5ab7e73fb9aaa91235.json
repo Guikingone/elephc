@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"__rt_sgl_wrapper_entry\" -A 45 src/codegen_support/runtime/io/stream_get_line.rs | head -52",
+  "summary": "grep -n \"__rt_sgl_wrapper_entry\" -A 45 src/codegen_support/runtime/io/stream_get_line.rs | head -52: r.instruction(\"str xzr, [sp, #72]\"); // which php spells false 156- emitter.instruction(\"b __rt_stream_get_line_done\"); 157- emitter.label(\"__rt_stream_get_line_read_ok\"); 158- emitter.instruction(\"cbz x0, __rt_stream_g",
+  "text": "grep -n \"__rt_sgl_wrapper_entry\" -A 45 src/codegen_support/runtime/io/stream_get_line.rs | head -52: r.instruction(\"str xzr, [sp, #72]\"); // which php spells false 156- emitter.instruction(\"b __rt_stream_get_line_done\"); 157- emitter.label(\"__rt_stream_get_line_read_ok\"); 158- emitter.instruction(\"cbz x0, __rt_stream_get_line_eof\"); // a zero-byte read means EOF 159- 160- emitter.label(\"__rt_sgl_byte_counted\"); 161- emitter.instruction(\"ldr x10, [sp, #56]\"); // running total 162- emitter.instruction(\"add x10, x10, #1\"); // count the new byte 163- emitter.instruction(\"str x10, [sp, #56]\"); // store the running total 164- emitter.instruction(\"mov x11, #1\"); // a byte reached the buffer -- 217: emitter.label(\"__rt_sgl_wrapper_entry\"); 218- emit_symbol_address(emitter, \"x12\", \"_user_wrapper_drain_buf\"); 219- emitter.instruction(\"str x12, [sp, #48]\"); // result start = drain-buf base 220- emitter.label(\"__rt_sgl_wrapper_loop\"); 221- emitter.instruction(\"ldr x10, [sp, #56]\"); // running total",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "270fad5ab7e73fb9aaa91235",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:39:38.862Z",
+  "stored_at": "2026-08-21T13:39:38.863Z"
+}

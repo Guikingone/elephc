@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/pm && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-ir it.php 2>&1 | grep -n 'function show' -A 12",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/pm && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-ir it.php 2>&1 | grep -n 'fu",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/pm && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc --emit-ir it.php 2>&1 | grep -n 'function show' -A 12: 14: function show(items: Heap(Iterable) php=iterable) -> Void { 15- entry: 16- concat_reset ; effects: writes_global ; span: 3:5 17- v0: Heap(Iterable) php=iterable own=maybe_owned = load_local slot[0] ; effects: reads_local ; span: 3:10 18- echo_value v0 ; effects: output, may_warn ; span: 3:5 19- nop ; span: 3:5 20- return 21- } 22- 23- function _class_propinit_0(this: Heap(Object) php=Error) -> Void { 24- entry: 25- v0: Str php=string own=persistent = nop ; span: 0:0 26- v1: Heap(Object) php=Error own=maybe_owned = load_local slot[0] ; effects: reads_local ; span: 0:0",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "97953c81c90363fa07b11afe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T13:21:50.998Z",
+  "stored_at": "2026-08-25T13:21:50.999Z"
+}

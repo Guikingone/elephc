@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport pathlib\np = pathlib.Path('src/codegen_support/runtime/data/mod.rs')\nt = p.read_text()\nold = 'pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;'\nassert t.count(old) == 1\np.write_text(t.replace(old, old + '\\npub(crate) use user::USER_WRAPPER_VTABLE_CONTEXT_OFFSET;'))\nprint('re-exported')\nPY\ncargo build 2>&1 | tail -6",
+  "summary": "About to run: python3 - <<'PY' import pathlib p = pathlib.Path('src/codegen_support/runtime/data/mod.rs') t = p.read_text() old = 'pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;' assert t.count(old) ==",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6e02c7790e5299fac680f546",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:33:58.245Z",
+  "stored_at": "2026-08-21T09:33:58.246Z"
+}

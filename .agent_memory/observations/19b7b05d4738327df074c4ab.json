@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'wrapper id\\|WRAPPER_ID\\|_stream_wrapper_id\\|STREAM_WRAPPER_OFFSET' src/codegen_support/runtime/io/stream_record_meta.rs | head -10",
+  "summary": "grep -rn 'wrapper id\\|WRAPPER_ID\\|_stream_wrapper_id\\|STREAM_WRAPPER_OFFSET' src/codegen_support/runtime/io/stream_record_meta.rs | head -10: src/codegen_support/runtime/io/stream_record_meta.rs:36: emitter.instruction(\"stp x0, x1, [sp, #0]\"); // preserve opaque handle and requested wrapper id src/codegen_support/runti",
+  "text": "grep -rn 'wrapper id\\|WRAPPER_ID\\|_stream_wrapper_id\\|STREAM_WRAPPER_OFFSET' src/codegen_support/runtime/io/stream_record_meta.rs | head -10: src/codegen_support/runtime/io/stream_record_meta.rs:36: emitter.instruction(\"stp x0, x1, [sp, #0]\"); // preserve opaque handle and requested wrapper id src/codegen_support/runtime/io/stream_record_meta.rs:55: emitter.instruction(\"ldr x11, [sp, #8]\"); // reload the requested wrapper id src/codegen_support/runtime/io/stream_record_meta.rs:72: super::WRAPPER_ID_ZIP src/codegen_support/runtime/io/stream_record_meta.rs:81: emitter.instruction(\"bic x13, x13, x14\"); // clear any previous URL-wrapper identity src/codegen_support/runtime/io/stream_record_meta.rs:84: emitter.instruction(\"cmp x11, #7\"); // the data:// wrapper id src/codegen_support/runtime/io/stream_record_meta.rs:86: emitter.instruction(\"cmp x11, #1\"); // built-in remote wrapper ids start at HTTP src/codegen_support/runtime/io/stream_record_meta.rs:88: emitter.instruction(\"cmp x11, #4\"); // built-in remote wrapper ids end at FTPS",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "19b7b05d4738327df074c4ab",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-25T09:14:33.289Z",
+  "stored_at": "2026-08-25T09:14:33.290Z"
+}

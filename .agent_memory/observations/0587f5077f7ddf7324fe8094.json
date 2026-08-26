@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"on line\" src/codegen_support/runtime/diagnostics.rs | head -5; grep -n \"line\" src/codegen_support/runtime/diagnostics.rs | grep -i \"symbol\\|global\\|_diag\" | head -8",
+  "summary": "grep -rn \"on line\" src/codegen_support/runtime/diagnostics.rs | head -5; grep -n \"line\" src/codegen_support/runtime/diagnostics.rs | grep -i \"symbol\\|global\\|_diag\" | head -8: ); // ` on line N` and its newline src/codegen_support/runtime/diagnostics.rs:278: emitter.instruction(\"call __rt_stdout_write\"); // ` on line N",
+  "text": "grep -rn \"on line\" src/codegen_support/runtime/diagnostics.rs | head -5; grep -n \"line\" src/codegen_support/runtime/diagnostics.rs | grep -i \"symbol\\|global\\|_diag\" | head -8: ); // ` on line N` and its newline src/codegen_support/runtime/diagnostics.rs:278: emitter.instruction(\"call __rt_stdout_write\"); // ` on line N` and its newline 16://! `_rt_diag_buf` and are written together when the piece carrying the newline arrives, so 137: emitter.instruction(\"cbz x1, __rt_diag_bare_newline\"); // no site published one: end the line plainly 139: emitter.instruction(\"cbz x9, __rt_diag_bare_newline\"); // a module with no source path omits the location 152: emitter.label(\"__rt_diag_bare_newline\"); 266: emitter.instruction(\"jz __rt_diag_bare_newline_x\"); // no site published one: end the line plainly 269: emitter.instruction(\"jz __rt_diag_bare_newline_x\"); // a module with no source path omits the location 280: emitter.label(\"__rt_diag_bare_newline_x\"); 286: abi::emit_store_reg_to_symbol(emitter, \"r10\", \"_rt_diag_buf_len\", 0); // the line is out; start the next one empty",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0587f5077f7ddf7324fe8094",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T11:57:43.588Z",
+  "stored_at": "2026-08-22T11:57:43.589Z"
+}

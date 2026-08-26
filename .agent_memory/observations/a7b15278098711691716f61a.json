@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "awk 'NR>=485 && NR<=500' src/codegen_support/runtime/io/user_filter_brigade.rs",
+  "summary": "awk 'NR>=485 && NR<=500' src/codegen_support/runtime/io/user_filter_brigade.rs: si, QWORD PTR [rbp - 40]\"); // in_brigade obj (raw) emitter.instruction(\"mov rdx, QWORD PTR [rbp - 48]\"); // out_brigade obj (raw) emitter.instruction(\"mov rcx, QWORD PTR [rbp - 56]\"); // consumed mixed emitter.instruction(\"mov r8, QWORD PT",
+  "text": "awk 'NR>=485 && NR<=500' src/codegen_support/runtime/io/user_filter_brigade.rs: si, QWORD PTR [rbp - 40]\"); // in_brigade obj (raw) emitter.instruction(\"mov rdx, QWORD PTR [rbp - 48]\"); // out_brigade obj (raw) emitter.instruction(\"mov rcx, QWORD PTR [rbp - 56]\"); // consumed mixed emitter.instruction(\"mov r8, QWORD PTR [rbp - 64]\"); // closing as a plain int emitter.instruction(\"mov r11, QWORD PTR [rbp - 32]\"); // method ptr emitter.instruction(\"call r11\"); // call filter() // -- observe the PSFS return code (rax): 0=ERR_FATAL, 1=FEED_ME, 2=PASS_ON -- emitter.instruction(\"mov QWORD PTR [rbp - 72], rax\"); // save PSFS code (reuse bucket slot, now free) abi::emit_symbol_address(emitter, \"r10\", \"_user_filter_last_psfs\"); emitter.instruction(\"mov QWORD PTR [r10], rax\"); // publish it: the pair this returns cannot carry it // -- publish whatever the method left in `&$consumed` -- // php reports it as `fwrite()`'s answer on a filtered write stream, so a filter that never",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a7b15278098711691716f61a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T18:31:15.316Z",
+  "stored_at": "2026-08-17T18:31:15.316Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_a2s.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_a2s.txt: fix(php): `Array to string conversion` was raised NOWHERE, and through a boxed Mixed an array rendered as the EMPTY STRING\n\nphp raise",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_a2s.txt: fix(php): `Array to string conversion` was raised NOWHERE, and through a boxed Mixed an array rendered as the EMPTY STRING\n\nphp raises `Array to string conversion` at every site that renders an array as a string and\nanswers the literal `Array`. Measured on `php -n` 8.5.6, one shape per line: `echo`, `print`,\n`.`, `.=`, interpolation, a heredoc, `(string)`, `strval()`. All eight warnings were missing.\n\nThe boxed half was worse than a missing diagnostic — it was a WRONG VALUE:\n\n    <?php function show(mixed $v) { echo \"concat: \" . $v . \"\\n\"; echo $v; }\n    show([1, 2]);\n    php    concat: Array ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d38a2bdb2d83db59b2dd4ab4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:33:04.014Z",
+  "stored_at": "2026-08-23T17:33:04.015Z"
+}

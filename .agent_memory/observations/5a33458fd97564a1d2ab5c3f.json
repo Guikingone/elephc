@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/fopen-mode-c.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/fopen-mode-c.php: <?php\n// Modes 'c' and 'c+': create without truncating, and do NOT seek to the end.\nfile_put_contents(\"c.txt\", \"0123456",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes/fopen-mode-c.php: <?php\n// Modes 'c' and 'c+': create without truncating, and do NOT seek to the end.\nfile_put_contents(\"c.txt\", \"0123456789\");\n$h = fopen(\"c.txt\", \"c\");\nvar_dump(ftell($h), filesize(\"c.txt\"));\nfwrite($h, \"AB\");\nfclose($h);\nvar_dump(file_get_contents(\"c.txt\"));\n\n$h = fopen(\"c.txt\", \"c+\");\nvar_dump(ftell($h), fread($h, 4));\nfseek($h, 0);\nfwrite($h, \"xy\");\nfclose($h);\nvar_dump(file_get_contents(\"c.txt\"));\n\n// 'c' on a file that does not exist creates it.\n@unlink(\"c2.txt\");\n$h = fopen(\"c2.txt\", \"c\");\nvar_dump($h !== false, file_exists(\"c2.txt\"), ftell($h));\nfwrite($h, \"new\");\nfclose($h);\nvar_dump(f",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5a33458fd97564a1d2ab5c3f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T07:50:34.539Z",
+  "stored_at": "2026-08-26T07:50:34.540Z"
+}

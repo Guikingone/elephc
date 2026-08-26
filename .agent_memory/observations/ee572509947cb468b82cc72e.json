@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '361,400p' src/codegen/frame.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '361,400p' src/codegen/frame.rs: CLI does this: a --web worker // reuses one registry across requests, so it stops at the request reset above. abi::emit_call_label(ctx.emitter, \"__rt_resource_registry_teardown\"); emit",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '361,400p' src/codegen/frame.rs: CLI does this: a --web worker // reuses one registry across requests, so it stops at the request reset above. abi::emit_call_label(ctx.emitter, \"__rt_resource_registry_teardown\"); emit_callee_saved_restores(ctx); abi::emit_frame_restore(ctx.emitter, ctx.frame_size); if ctx.gc_stats { emit_gc_stats(ctx); } if ctx.heap_debug { ctx.emitter .comment(\"heap-debug: print allocator summary and leak report to stderr\"); abi::emit_call_label(ctx.emitter, \"__rt_heap_debug_report\"); } abi::emit_exit(ctx.emitter, 0); ctx.epilogue_emitted = true; } /// Releases initialized function static locals before process-exit diagnostics. fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) { let static_locals = ctx.data.static_locals().to_vec(); for record in static_locals { let ty = record.php_type.codegen_repr(); if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) { continue;",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee572509947cb468b82cc72e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T07:48:52.029Z",
+  "stored_at": "2026-08-23T07:48:52.029Z"
+}

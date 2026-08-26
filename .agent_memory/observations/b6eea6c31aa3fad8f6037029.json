@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '262,290p' src/codegen_support/abi/symbols.rs",
+  "summary": "sed -n '262,290p' src/codegen_support/abi/symbols.rs:  into the symbol base slot } else { emitter.instruction(&format!(\"str {}, [x9, #{}]\", reg, byte_offset)); // store the register payload into the requested symbol byte offset } } Arch::X86_64 => { let scratch = symbol_scratch_reg(emitter); if byte_offset == 0 { if is",
+  "text": "sed -n '262,290p' src/codegen_support/abi/symbols.rs:  into the symbol base slot } else { emitter.instruction(&format!(\"str {}, [x9, #{}]\", reg, byte_offset)); // store the register payload into the requested symbol byte offset } } Arch::X86_64 => { let scratch = symbol_scratch_reg(emitter); if byte_offset == 0 { if is_float_register(reg) { emitter.instruction(&format!(\"movsd QWORD PTR [rip + {}], {}\", symbol, reg)); // store the floating-point payload directly into RIP-relative symbol storage } else { emitter.instruction(&format!(\"mov QWORD PTR [rip + {}], {}\", symbol, reg)); // store the integer or pointer payload directly into RIP-relative symbol storage } } else { emit_symbol_address(emitter, scratch, symbol); if is_float_register(reg) { emitter.instruction(&format!( \"movsd QWORD PTR [{} + {}], {}\", scratch, byte_offset, reg )); // store the floating-point payload into a non-zero symbol byte offset } else { emitter.instruction(&format!(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "b6eea6c31aa3fad8f6037029",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T13:48:32.304Z",
+  "stored_at": "2026-08-18T13:48:32.305Z"
+}

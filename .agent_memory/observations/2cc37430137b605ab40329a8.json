@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/file-scheme5.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/file-scheme5.php: <?php\n$dir = getcwd();\nfile_put_contents(\"u.txt\", \"content\\n\");\n$abs = \"$dir/u.txt\";\n\nfunction t(string $label, string",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep/probes2/file-scheme5.php: <?php\n$dir = getcwd();\nfile_put_contents(\"u.txt\", \"content\\n\");\n$abs = \"$dir/u.txt\";\n\nfunction t(string $label, string $url): void {\n    $r = @file_get_contents($url);\n    echo $label, \" \", $r === false ? \"false\" : \"ok(\" . strlen($r) . \")\", \"\\n\";\n}\n\nt(\"empty-host\", \"file://$abs\");\nt(\"localhost\", \"file://localhost$abs\");\nt(\"LOCALHOST\", \"file://LOCALHOST$abs\");\nt(\"LocalHost\", \"file://LocalHost$abs\");\nt(\"localhost-no-path\", \"file://localhost\");\nt(\"four-slash\", \"file:///\" . ltrim($abs, \"/\"));\nt(\"many-slash\", \"file:////\" . ltrim($abs, \"/\"));\nt(\"file-colon-only\", \"file:$abs\");\nt(\"no-slash-abs\", \"fil",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "2cc37430137b605ab40329a8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:09:54.072Z",
+  "stored_at": "2026-08-24T18:09:54.072Z"
+}

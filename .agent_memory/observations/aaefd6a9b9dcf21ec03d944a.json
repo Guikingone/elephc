@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rm -rf target/debug/incremental\ndf -h / | tail -1",
+  "summary": "rm -rf target/debug/incremental\ndf -h / | tail -1: /dev/disk3s1s1 460Gi 12Gi 12Gi 49% 459k 130M 0% /",
+  "text": "rm -rf target/debug/incremental\ndf -h / | tail -1: /dev/disk3s1s1 460Gi 12Gi 12Gi 49% 459k 130M 0% /",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "aaefd6a9b9dcf21ec03d944a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T15:34:34.140Z",
+  "stored_at": "2026-08-18T15:34:34.141Z"
+}

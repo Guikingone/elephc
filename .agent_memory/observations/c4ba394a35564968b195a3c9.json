@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '1,45p' src/codegen_support/runtime/io/fread.rs | grep -n \"use \\|^//!\" | head -12; echo \"=== offsets ===\"; grep -n \"STREAM_PENDING_LEN_OFFSET\\|STREAM_PENDING_POS_OFFSET\" src/codegen_support/runtime/resources/layout.rs",
+  "summary": "About to run: sed -n '1,45p' src/codegen_support/runtime/io/fread.rs | grep -n \"use \\|^//!\" | head -12; echo \"=== offsets ===\"; grep -n \"STREAM_PENDING_LEN_OFFSET\\|STREAM_PENDING_POS_OFFSET\" src/codegen_support/run",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c4ba394a35564968b195a3c9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T13:03:37.514Z",
+  "stored_at": "2026-08-21T13:03:37.514Z"
+}

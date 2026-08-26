@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn stat_size_offset\\|fn stat_buf_size\\|fn stat_mode_offset\\|fn stat_ino_offset\\|fn stat_dev_offset\" src/codegen_support/ | head",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn stat_size_offset\\|fn stat_buf_size\\|fn stat_mode_offset\\|fn stat_ino_offset\\|fn stat_dev_offset\" src/codegen_support/ | head: src/codegen_support/platform/target.rs:303: pub fn stat_buf_size(&self) -> usize { sr",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -rn \"fn stat_size_offset\\|fn stat_buf_size\\|fn stat_mode_offset\\|fn stat_ino_offset\\|fn stat_dev_offset\" src/codegen_support/ | head: src/codegen_support/platform/target.rs:303: pub fn stat_buf_size(&self) -> usize { src/codegen_support/platform/target.rs:312: pub fn stat_mode_offset(&self) -> usize { src/codegen_support/platform/target.rs:333: pub fn stat_size_offset(&self) -> usize { src/codegen_support/platform/target.rs:405: pub fn stat_ino_offset(&self) -> usize { src/codegen_support/platform/target.rs:435: pub fn stat_dev_offset(&self) -> usize {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "5259662e0966b2479dbd47e4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T21:10:40.957Z",
+  "stored_at": "2026-08-22T21:10:40.957Z"
+}

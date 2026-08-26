@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n '60,110p' src/codegen_support/runtime/io/stream_select.rs",
+  "summary": "sed -n '60,110p' src/codegen_support/runtime/io/stream_select.rs: ead (POLLIN), write (POLLOUT), except (POLLPRI) -- emitter.instruction(\"mov x14, #0\"); // running pollfd index emitter.instruction(\"str xzr, [sp, #2184]\"); // clear the castable-descriptor tally emit_build_pollfd_aarch64(emitter, 2048, 2072, POLLIN, \"r\")",
+  "text": "sed -n '60,110p' src/codegen_support/runtime/io/stream_select.rs: ead (POLLIN), write (POLLOUT), except (POLLPRI) -- emitter.instruction(\"mov x14, #0\"); // running pollfd index emitter.instruction(\"str xzr, [sp, #2184]\"); // clear the castable-descriptor tally emit_build_pollfd_aarch64(emitter, 2048, 2072, POLLIN, \"r\"); emit_build_pollfd_aarch64(emitter, 2056, 2080, POLLOUT, \"w\"); emit_build_pollfd_aarch64(emitter, 2064, 2088, POLLPRI, \"e\"); // php counts the streams it could cast to a descriptor and raises `ValueError: No stream // arrays were passed` when that count is zero — the same error an empty array gets, because // php cannot tell \"you passed nothing\" from \"nothing you passed is selectable\". emitter.instruction(\"ldr x9, [sp, #2184]\"); // how many entries yielded a real descriptor? emitter.instruction(\"cbz x9, __rt_stream_select_no_castable\"); // none → php's ValueError // -- compute the poll timeout in milliseconds (reloaded from the frame) --",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "170a37ca2e5e7fa20f3ee0c1",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:21:06.609Z",
+  "stored_at": "2026-08-18T11:21:06.609Z"
+}

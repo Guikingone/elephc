@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/STREAMS_CAMPAIGN.md",
+  "summary": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/STREAMS_CAMPAIGN.md: php-src corpus: `OK 38 → 40` and climbing; `SEGV 1` remaining is a user-filter\nclass with a DYNAMIC property (`gh20370_dynamic_",
+  "text": "changed /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/STREAMS_CAMPAIGN.md: php-src corpus: `OK 38 → 40` and climbing; `SEGV 1` remaining is a user-filter\nclass with a DYNAMIC property (`gh20370_dynamic_stream_property`). -> php-src corpus: `OK 38 → 40` and climbing; `SEGV 1` remaining is a user-filter\nclass with a DYNAMIC property (`gh20370_dynamic_stream_property`).\n\n## 🔴 A REGRESSION I INTRODUCED, then caught and closed\nAccepting a PROPERTY as a by-reference argument (commit `8523b627e`) was verified\nfor a FREE FUNCTION, whose lowering rewrites the place. The checker's validation\nis SHARED with methods, closures and callables, which have no such rewrite — so\n`$this->twiddle($box->data)` went f",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "3ed008ce9695b04c72dfa9cc",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T09:21:52.666Z",
+  "stored_at": "2026-08-17T09:21:52.667Z"
+}

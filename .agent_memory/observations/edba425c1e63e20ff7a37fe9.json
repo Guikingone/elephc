@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lower_stream_context_set_default\\|fn lower_stream_context_get_default\" -A 30 src/codegen/lower_inst/builtins/io/stream_context.rs | head -70",
+  "summary": "About to run: cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"fn lower_stream_context_set_default\\|fn lower_stream_context_get_default\" -A 30 src/codegen/low",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "edba425c1e63e20ff7a37fe9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T17:05:07.669Z",
+  "stored_at": "2026-08-22T17:05:07.670Z"
+}

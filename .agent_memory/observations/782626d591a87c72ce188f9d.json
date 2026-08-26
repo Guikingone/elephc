@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_eval_diff.py plain 2>&1 | head -5; cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/globevaldiff && mkdir -p lit && cd lit && printf '%s\\n' '<?php' 'mkdir(\"d\"); mkdir(\"d/sub\"); file_put_contents(\"d/a.txt\",\"a\");' 'eval(\"print_r(glob(\\\"d/*\\\", 8));\");' 'eval(\"var_dump(GLOB_MARK);\");' > p.php && php -n… [+22 chars truncated]",
+  "summary": "About to run: python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/glob_eval_diff.py plain 2",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "782626d591a87c72ce188f9d",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:23:41.963Z",
+  "stored_at": "2026-08-22T09:23:41.963Z"
+}

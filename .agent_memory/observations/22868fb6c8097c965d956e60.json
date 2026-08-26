@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8/kimi-k3-56.php",
+  "summary": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8/kimi-k3-56.php: 1 <?php 2 file_put_contents(\"big.txt\", str_repeat(\"abcdefgh\\n\", 100000)); 3 $h = fopen(\"big.txt\", \"r\"); 4 $t = micr",
+  "text": "cat -n /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8/kimi-k3-56.php: 1 <?php 2 file_put_contents(\"big.txt\", str_repeat(\"abcdefgh\\n\", 100000)); 3 $h = fopen(\"big.txt\", \"r\"); 4 $t = microtime(true); 5 $n = 0; 6 while (($c = fgetc($h)) !== false) $n++; 7 printf(\"%d %.3f\\n\", $n, microtime(true) - $t);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "22868fb6c8097c965d956e60",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T10:13:29.010Z",
+  "stored_at": "2026-08-26T10:13:29.010Z"
+}

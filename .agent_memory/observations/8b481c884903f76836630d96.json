@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction bump(&$a): void { $a = $a + 1; }\\nfunction typed(int &$a): void { $a = 5; }\\n$i = 1; bump($i); var_dump($i);\\n$j = 1; typed($j); var_dump($j);\\n$s = \"x\"; $t = $s; var_dump($t);\\nfunction twice(&$a, &$b): void { $a = 1; $b = 2; }\\n$p = null; $q = null; twice($p, $q); var_dump($p, $q);\\n' > t7.php && php -n t7.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction bump(&$a): void { $a = $a + 1; }\\nfunction typed(int &$a): void { $a = 5; }\\n$i = 1; bump($i); var_dump($i);\\n$j = 1; t",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && printf '<?php\\nfunction bump(&$a): void { $a = $a + 1; }\\nfunction typed(int &$a): void { $a = 5; }\\n$i = 1; bump($i); var_dump($i);\\n$j = 1; typed($j); var_dump($j);\\n$s = \"x\"; $t = $s; var_dump($t);\\nfunction twice(&$a, &$b): void { $a = 1; $b = 2; }\\n$p = null; $q = null; twice($p, $q); var_dump($p, $q);\\n' > t7.php && php -n t7.php: int(2) int(5) string(1) \"x\" int(1) int(2)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8b481c884903f76836630d96",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:19:18.325Z",
+  "stored_at": "2026-08-18T10:19:18.326Z"
+}

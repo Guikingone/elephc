@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rewrite_free_deep_tests.py && cargo test -p elephc --lib mixed_free_deep 2>&1 | tail -20",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rewrite_free_deep_tests.py && cargo test -p elephc --lib mixed_free_deep 2>&1 | tail -20: mixed_free_deep.rs: the tests describe the registry des",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/rewrite_free_deep_tests.py && cargo test -p elephc --lib mixed_free_deep 2>&1 | tail -20: mixed_free_deep.rs: the tests describe the registry design that shipped Compiling elephc v0.26.4 (/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature) Finished `test` profile [unoptimized + debuginfo] target(s) in 22.64s Running unittests src/lib.rs (target/debug/deps/elephc-7261e25721c3a6e8) running 3 tests test codegen_support::runtime::arrays::mixed_free_deep::tests::the_ladder_is_the_same_whatever_the_feature_set ... ok test codegen_support::runtime::arrays::mixed_free_deep::tests::each_arm_matches_the_kind_its_producer_stamps ... ok test codegen_support::runtime::arrays::mixed_free_deep::tests::every_registry_owned_kind_releases_through_the_registry ... ok test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1496 filtered out; finished in 0.00s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "da6a9b233aa682102b992988",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:56:35.846Z",
+  "stored_at": "2026-08-20T20:56:35.847Z"
+}

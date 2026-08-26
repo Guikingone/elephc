@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg7.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg7.txt: fix(streams): ftell() answered 0 for every wrapper read that was not fread()\n\nphp-src keeps `stream->position` for a userspace wrapper IT",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/msg7.txt: fix(streams): ftell() answered 0 for every wrapper read that was not fread()\n\nphp-src keeps `stream->position` for a userspace wrapper ITSELF and advances it by whatever each\nread hands back; `stream_tell` is consulted only from inside the seek op, which is why `ftell()`\nreports php's own count rather than whatever the wrapper chooses to say. elephc advanced it from\n`fread()` alone, so every other read left it where it was.\n\nMEASURED on `php -n` 8.5.6, on a wrapper whose `stream_tell()` reports its real position:\n\n    after fread($h, 5)                            php  5    elephc  5\n    after ",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fec8d7927b8409e1a29b35c6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T09:40:30.121Z",
+  "stored_at": "2026-08-21T09:40:30.122Z"
+}

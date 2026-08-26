@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/std2.php",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/std2.php: <?php\n\necho \"direct  gettype=\", gettype(STDOUT), \" is_resource=\", var_export(is_resource(STDOUT), true), \"\\n\";\n$h = STDOUT;\necho \"local ",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/std2.php: <?php\n\necho \"direct  gettype=\", gettype(STDOUT), \" is_resource=\", var_export(is_resource(STDOUT), true), \"\\n\";\n$h = STDOUT;\necho \"local   gettype=\", gettype($h), \" is_resource=\", var_export(is_resource($h), true), \"\\n\";\n$a = [STDOUT];\necho \"in-list gettype=\", gettype($a[0]), \" is_resource=\", var_export(is_resource($a[0]), true), \"\\n\";\n$m = fopen(\"php://memory\", \"w+\");\necho \"fopen   gettype=\", gettype($m), \" is_resource=\", var_export(is_resource($m), true), \"\\n\";\n$b = [$m];\necho \"f-list  gettype=\", gettype($b[0]), \" is_resource=\", var_export(is_resource($b[0]), true), \"\\n\";",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4a254b4bf69eeff2fb306b20",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T16:41:41.040Z",
+  "stored_at": "2026-08-22T16:41:41.040Z"
+}

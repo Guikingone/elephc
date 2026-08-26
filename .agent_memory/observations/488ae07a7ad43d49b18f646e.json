@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "sed -n 110,145p src/types/call_args/plan.rs",
+  "summary": "sed -n 110,145p src/types/call_args/plan.rs: perator. pub(crate) fn has_spread_args(&self) -> bool { self.source_args .iter() .any(|arg| matches!(arg.kind, ExprKind::Spread(_))) } /// Returns a flat list of expressions in parameter order suitable for codegen /// materialization. Preserves spread expressions for static-",
+  "text": "sed -n 110,145p src/types/call_args/plan.rs: perator. pub(crate) fn has_spread_args(&self) -> bool { self.source_args .iter() .any(|arg| matches!(arg.kind, ExprKind::Spread(_))) } /// Returns a flat list of expressions in parameter order suitable for codegen /// materialization. Preserves spread expressions for static-array spreads that /// were resolved in place; applies default guards for optional slots when the /// spread may not have provided those elements. pub(crate) fn normalized_args(&self) -> Vec<Expr> { if let Some(args) = &self.passthrough_args { return args.clone(); } let mut args = Vec::new(); for arg in &self.regular_args { args.push(match arg { PlannedRegularArg::Source { expr, .. } => expr.clone(), PlannedRegularArg::SpreadElement { spread_expr, spread_span, element_idx, param_name, prefer_named_key, default, guaranteed_present, .. } => { if let Some(default) = default { if *guaranteed_present { spread_element_expr(",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "488ae07a7ad43d49b18f646e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T16:13:01.451Z",
+  "stored_at": "2026-08-21T16:13:01.451Z"
+}

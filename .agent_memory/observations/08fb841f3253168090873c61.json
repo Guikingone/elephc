@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 - <<'PY'\nimport json, pathlib\nbase = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/php_oracle/manifests/streams/php-8.5.6')\nnames = [\"GLOB_ERR\",\"GLOB_MARK\",\"GLOB_NOCHECK\",\"GLOB_NOSORT\",\"GLOB_BRACE\",\"GLOB_NOESCAPE\",\"GLOB_ONLYDIR\",\"GLOB_AVAILABLE_FLAGS\"]\nfor target in sorted(p.name for p in base.iterdir() if p.is_dir()):\n    f = next(iter((base / target).glob('*.json')), None)\n    if not f:\n        continue\n    data = json.loads(f.read_text())\n    found = {}\n    def walk(node):\n        if isinstance(node, dict):… [+412 chars truncated]",
+  "summary": "python3 - <<'PY'\nimport json, pathlib\nbase = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/php_oracle/manifests/streams/php-8.5.6')\nnames = [\"GLOB_ERR\",\"GLOB_MARK\",\"GLOB_NOCHECK\",\"GLOB_NOSORT\",\"GLOB_BRACE\",\"GLOB_NOESCAPE\",\"GLOB_ONLYDIR\",\"GLOB_AVAILABLE_F",
+  "text": "python3 - <<'PY'\nimport json, pathlib\nbase = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/tests/php_oracle/manifests/streams/php-8.5.6')\nnames = [\"GLOB_ERR\",\"GLOB_MARK\",\"GLOB_NOCHECK\",\"GLOB_NOSORT\",\"GLOB_BRACE\",\"GLOB_NOESCAPE\",\"GLOB_ONLYDIR\",\"GLOB_AVAILABLE_FLAGS\"]\nfor target in sorted(p.name for p in base.iterdir() if p.is_dir()):\n    f = next(iter((base / target).glob('*.json')), None)\n    if not f:\n        continue\n    data = json.loads(f.read_text())\n    found = {}\n    def walk(node):\n        if isinstance(node, dict):\n            for k, v in node.items():\n                if k in names:\n                    found[k] = v\n                walk(v)\n        elif isinstance(node, list):\n            for v in node:\n                walk(v)\n    walk(data)\n    print(f'{target}:')\n    for n in names:\n        if n in found:\n            v = found[n]\n            v = v.get('value') if isinstance(v, dict) else v\n            print(f'    {n:24s} {v}')\nPY: linux-aarch64: GLOB_ERR 4 GLOB_MARK 8 GLOB_NOCHECK 16 GLOB_NOSORT 32 GLOB_BRACE 128 GLOB_NOESCAPE 4096 GLOB_ONLYDIR 1073741824 GLOB_AVAILABLE_FLAGS 1073746108 linux-x86_64: GLOB_ERR 4 GLOB_MARK 8 GLOB_NOCHECK 16 GLOB_NOSORT 32 GLOB_BRACE 128 GLOB_NOESCAPE 4096 GLOB_ONLYDIR 1073741824 GLOB_AVAILABLE_FLAGS 1073746108 macos-aarch64: GLOB_ERR 4 GLOB_MARK 8 GLOB_NOCHECK 16 GLOB_NOSORT 32 GLOB_BRACE 128 GLOB_NOESCAPE 4096 GLOB_ONLYDIR 1073741824 GLOB_AVAILABLE_FLAGS 1073746108",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "08fb841f3253168090873c61",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T08:45:14.982Z",
+  "stored_at": "2026-08-22T08:45:14.982Z"
+}

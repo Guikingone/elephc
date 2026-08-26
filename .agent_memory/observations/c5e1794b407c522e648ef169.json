@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"must be an open stream resource\" -B 25 src/codegen/lower_inst/builtins/io/resource_handles.rs | head -35",
+  "summary": "grep -n \"must be an open stream resource\" -B 25 src/codegen/lower_inst/builtins/io/resource_handles.rs | head -35: ax, 9\"); // check whether the boxed stream value uses the resource tag 255- ctx.emitter.instruction(&format!(\"je {}\", ok_label)); // continue only when the boxed value is a resource 256- } 257- } 258- emit",
+  "text": "grep -n \"must be an open stream resource\" -B 25 src/codegen/lower_inst/builtins/io/resource_handles.rs | head -35: ax, 9\"); // check whether the boxed stream value uses the resource tag 255- ctx.emitter.instruction(&format!(\"je {}\", ok_label)); // continue only when the boxed value is a resource 256- } 257- } 258- emit_stream_type_error(ctx, function_name); 259- ctx.emitter.label(&ok_label); 260- match ctx.emitter.target.arch { 261- Arch::AArch64 => { 262- ctx.emitter.instruction(\"mov x0, x1\"); // expose the opaque registry handle as the integer result 263- } 264- Arch::X86_64 => { 265- ctx.emitter.instruction(\"mov rax, rdi\"); // expose the opaque registry handle as the integer result 266- } 267- } 268-} 269- 270-/// Emits the PHP diagnostic used when a resource handle no longer resolves to an open stream. 271-pub(super) fn emit_closed_stream_type_error(ctx: &mut FunctionContext<'_>, function_name: &str) { 272- let message = format!( 273: \"{}(): Argument #1 ($stream) must be an open stream resource\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "c5e1794b407c522e648ef169",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T14:53:25.820Z",
+  "stored_at": "2026-08-17T14:53:25.821Z"
+}

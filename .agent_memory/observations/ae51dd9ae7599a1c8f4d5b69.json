@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_isdir.txt",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_isdir.txt: fix(runtime): is_dir() SEGFAULTED in any program that did not also call glob(..., GLOB_ONLYDIR)\n\n    <?php if (is_dir(\".\")) echo \"y",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/msg_isdir.txt: fix(runtime): is_dir() SEGFAULTED in any program that did not also call glob(..., GLOB_ONLYDIR)\n\n    <?php if (is_dir(\".\")) echo \"yes\";     php prints yes    elephc: SIGSEGV\n\n`__rt_is_dir` is the wrapper guard and `__rt_is_dir_core` the body, declared as a second global a\nfew instructions later; the guard branches over the refusal into it. On macOS every global starts\nits own SUBSECTION (`.subsections_via_symbols`), and that branch — resolved by the assembler inside\none section — carries NO relocation. The linker therefore sees nothing referencing the core,\nstrips it, and the branch lands in w",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ae51dd9ae7599a1c8f4d5b69",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T12:34:34.630Z",
+  "stored_at": "2026-08-23T12:34:34.630Z"
+}

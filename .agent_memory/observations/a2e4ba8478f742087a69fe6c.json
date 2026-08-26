@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "rg -n \"generic_socket|tcp_socket|SOCK|socket\" src/codegen_support/runtime/io/stream_type_name.rs | head -25",
+  "summary": "rg -n \"generic_socket|tcp_socket|SOCK|socket\" src/codegen_support/runtime/io/stream_type_name.rs | head -25: 11://! `php://memory` STDIO, `php://output` a socket, and a `popen()` pipe a socket too, because the 17://! what leaves sockets on the descriptor-derived name until they record a transport of their own. 132: emi",
+  "text": "rg -n \"generic_socket|tcp_socket|SOCK|socket\" src/codegen_support/runtime/io/stream_type_name.rs | head -25: 11://! `php://memory` STDIO, `php://output` a socket, and a `popen()` pipe a socket too, because the 17://! what leaves sockets on the descriptor-derived name until they record a transport of their own. 132: emitter.instruction(&format!(\"ldr x9, [x0, #{STREAM_TRANSPORT_OFFSET}]\")); // which transport, if this is a socket 222: )); // which transport, if this is a socket",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "a2e4ba8478f742087a69fe6c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T13:12:35.263Z",
+  "stored_at": "2026-08-17T13:12:35.265Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n -i -m 40 \"elephc run\\|--help\\|Usage\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/AGENTS.md | head -40",
+  "summary": "grep -n -i -m 40 \"elephc run\\|--help\\|Usage\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/AGENTS.md | head -40: 154:| `src/codegen/program_usage/` | Program scans | Collects codegen metadata such as required classes and variables before emission | 178:prelude so the API is",
+  "text": "grep -n -i -m 40 \"elephc run\\|--help\\|Usage\" /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/AGENTS.md | head -40: 154:| `src/codegen/program_usage/` | Program scans | Collects codegen metadata such as required classes and variables before emission | 178:prelude so the API is declared even when usage was not detected. The flag name is 230:- Program usage scans in `src/codegen/program_usage/`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "8412d464dfa5abd824b0ad8e",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:10:50.705Z",
+  "stored_at": "2026-08-14T14:10:50.705Z"
+}

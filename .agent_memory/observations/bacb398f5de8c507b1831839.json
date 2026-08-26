@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "git show 783c63af1:src/ir_lower/expr/array_builtin_args.rs 2>/dev/null | sed -n '240,275p'; echo \"=== match arm ===\"; git show 783c63af1:src/ir_lower/expr/array_builtin_args.rs 2>/dev/null | grep -n \"ReverseKeySort\" -B3 -A5",
+  "summary": "git show 783c63af1:src/ir_lower/expr/array_builtin_args.rs 2>/dev/null | sed -n '240,275p'; echo \"=== match arm ===\"; git show 783c63af1:src/ir_lower/expr/array_builtin_args.rs 2>/dev/null | grep -n \"ReverseKeySort\" -B3 -A5: e(ctx, sig, &pruned); // Named and spread plans re-materialize the optional `mode` default even",
+  "text": "git show 783c63af1:src/ir_lower/expr/array_builtin_args.rs 2>/dev/null | sed -n '240,275p'; echo \"=== match arm ===\"; git show 783c63af1:src/ir_lower/expr/array_builtin_args.rs 2>/dev/null | grep -n \"ReverseKeySort\" -B3 -A5: e(ctx, sig, &pruned); // Named and spread plans re-materialize the optional `mode` default even // after the AST prune; a trailing constant-zero mode stays a no-op for // the unary count contract, so drop the operand (DCE reclaims the const). if operands.len() == 2 { let trailing_zero_mode = ctx .builder .value_defining_instruction(operands[1]) .is_some_and(|inst| { inst.op == Op::ConstI64 && matches!(inst.immediate, Some(crate::ir::Immediate::I64(0))) }); if trailing_zero_mode { operands.pop(); } === match arm === 105- { 106- lower_user_value_sort_args(ctx, sig, args) 107- } 108: crate::builtins::semantics::BuiltinArgumentLowering::ReverseKeySort => { 109- lower_reverse_key_sort_args(ctx, sig, args) 110- } 111- crate::builtins::semantics::BuiltinArgumentLowering::OpensslEncrypt => { 112- prepare_openssl_encrypt_tag_local(ctx, args); 113- if !crate::types::call_args::has_named_args(args)",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bacb398f5de8c507b1831839",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T07:24:40.672Z",
+  "stored_at": "2026-08-21T07:24:40.672Z"
+}

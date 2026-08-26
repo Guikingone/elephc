@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"ref_params\" src/ir_lower/expr/*.rs src/ir_lower/expr/**/*.rs 2>/dev/null | head -20",
+  "summary": "grep -rn \"ref_params\" src/ir_lower/expr/*.rs src/ir_lower/expr/**/*.rs 2>/dev/null | head -20: nwrap_or(false) { src/ir_lower/expr/descriptor_invoke.rs:180: ref_params: vec![false; sig.params.len()], src/ir_lower/expr/descriptor_invoke.rs:246: if sig.is_some_and(|sig| sig.ref_params.iter().any(|is_ref| *is_ref)) { src/",
+  "text": "grep -rn \"ref_params\" src/ir_lower/expr/*.rs src/ir_lower/expr/**/*.rs 2>/dev/null | head -20: nwrap_or(false) { src/ir_lower/expr/descriptor_invoke.rs:180: ref_params: vec![false; sig.params.len()], src/ir_lower/expr/descriptor_invoke.rs:246: if sig.is_some_and(|sig| sig.ref_params.iter().any(|is_ref| *is_ref)) { src/ir_lower/expr/descriptor_invoke.rs:286: if !sig.ref_params.get(index).copied().unwrap_or(false) { src/ir_lower/expr/mod.rs:899: || sig.ref_params.get(param_idx).copied().unwrap_or(false) src/ir_lower/expr/nullable_method_calls.rs:320: .ref_params src/ir_lower/expr/array_builtin_args.rs:103: // `active_ref_params`, so the two never disagree about what the receiver's storage is. src/ir_lower/expr/ref_place_args.rs:79: if !sig.ref_params.iter().any(|is_ref| *is_ref) { src/ir_lower/expr/ref_place_args.rs:164: if !sig.ref_params.get(param_index).copied().unwrap_or(false) { src/ir_lower/expr/call_arg_coercion.rs:70: if !sig.ref_params.get(index).copied().unwrap_or(false) {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "119876bafca94c20953cea80",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:02:17.111Z",
+  "stored_at": "2026-08-20T20:02:17.111Z"
+}

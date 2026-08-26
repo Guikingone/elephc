@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8; cat kimi-k2.7-code-54.php; echo \"=== 79\"; cat kimi-k2.7-code-79.php",
+  "summary": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8; cat kimi-k2.7-code-54.php; echo \"=== 79\"; cat kimi-k2.7-code-79.php: <?php $h = fopen(__FILE__,'rb'); $m = stream_get_meta_data($h); e",
+  "text": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/obj/named_probes8; cat kimi-k2.7-code-54.php; echo \"=== 79\"; cat kimi-k2.7-code-79.php: <?php $h = fopen(__FILE__,'rb'); $m = stream_get_meta_data($h); echo $m['mode'],' ',$m['seekable']?'y':'n',' ',$m['unread_bytes'],\"\\n\"; fread($h,5); $m = stream_get_meta_data($h); echo $m['unread_bytes'],\"\\n\"; fclose($h); === 79 <?php $h = fopen(__FILE__, 'rb'); $m = stream_get_meta_data($h); echo $m['mode'], ' ', $m['unread_bytes'], \"\\n\"; fread($h, 5); echo stream_get_meta_data($h)['unread_bytes'], \"\\n\"; fclose($h);",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "82535b4e9123e011c809e060",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T18:23:38.144Z",
+  "stored_at": "2026-08-23T18:23:38.145Z"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::filesystem::test_glob 2>&1 | grep -E \"^test |test result|panicked|left:|right:|error\\[|^error\" | head -40",
+  "summary": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::filesystem::test_glob 2>&1 | grep -E \"^test |test result|panicked|left:|right:|error\\[|^error\" | head -40: test codegen::io::filesystem::test_glob_stream_wrapper_iterates_matches ... ok test codegen::io::filesystem::test_glob_fn ... ok test codegen::io::filesy",
+  "text": "RUST_MIN_STACK=33554432 cargo test --test codegen_tests io::filesystem::test_glob 2>&1 | grep -E \"^test |test result|panicked|left:|right:|error\\[|^error\" | head -40: test codegen::io::filesystem::test_glob_stream_wrapper_iterates_matches ... ok test codegen::io::filesystem::test_glob_fn ... ok test codegen::io::filesystem::test_glob_flags_match_php ... ok test codegen::io::filesystem::test_glob_onlydir_survives_the_unregistered_file_wrapper ... ok test codegen::io::filesystem::test_glob_refuses_a_flag_php_does_not_expose ... ok test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 8833 filtered out; finished in 2.01s",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d687e7d0f22c3e81af146400",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T09:11:02.415Z",
+  "stored_at": "2026-08-22T09:11:02.416Z"
+}

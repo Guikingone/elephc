@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && php -n -r '\n$s=fopen(\"php://temp\",\"r+\"); var_dump($s); fwrite($s,\"hello\"); rewind($s); var_dump(stream_get_contents($s)); print_r(stream_get_meta_data($s));\n$m=fopen(\"php://memory\",\"r+\"); fwrite($m,\"abc\"); rewind($m); var_dump(fread($m,10)); print_r(stream_get_meta_data($m));\n$t=fopen(\"php://temp/maxmemory:16\",\"r+\"); var_dump($t!==false); print_r(stream_get_meta_data($t));\n' 2>&1",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad && php -n -r ' $s=fopen(\"php://te",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "edf87901e2331cc59f1cb867",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:13:05.832Z",
+  "stored_at": "2026-08-14T14:13:05.832Z"
+}

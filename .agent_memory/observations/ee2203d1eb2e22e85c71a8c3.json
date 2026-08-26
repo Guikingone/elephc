@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '466,486p' src/types/checker/builtin_spl_classes/filesystem.rs",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '466,486p' src/types/checker/builtin_spl_classes/filesystem.rs: param_default(\"escape\", TypeExpr::Str, string_expr(\"\\\\\")), ], Some(TypeExpr::Void), spl_file_object_set_csv_control_body(), ), method_with_body(\"getCsvCo",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; sed -n '466,486p' src/types/checker/builtin_spl_classes/filesystem.rs: param_default(\"escape\", TypeExpr::Str, string_expr(\"\\\\\")), ], Some(TypeExpr::Void), spl_file_object_set_csv_control_body(), ), method_with_body(\"getCsvControl\", Vec::new(), Some(array_type()), spl_file_object_get_csv_control_body()), // Compiler-synthesized READ_CSV helpers; not part of php's SplFileObject surface. protected_method_with_body( \"__elephcCsvBuild\", Vec::new(), Some(TypeExpr::Void), spl_file_object_csv_build_body(), ), protected_method_with_body( \"__elephcCsvSkipBlank\", Vec::new(), Some(TypeExpr::Void), spl_file_object_csv_skip_blank_body(), ), // The three controls default to NULL rather than to `\",\"` / `'\"'` / `\"\\\\\"`, because // php resolves an omitted one against the object's own `setCsvControl()` state, not",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "ee2203d1eb2e22e85c71a8c3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T08:17:48.943Z",
+  "stored_at": "2026-08-24T08:17:48.944Z"
+}

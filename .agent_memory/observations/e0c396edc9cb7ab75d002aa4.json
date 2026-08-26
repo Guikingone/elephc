@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n -A3 '        name: \"sscanf\",' crates/elephc-builtin-contract/src/catalog_data.rs | head; echo \"---\"; grep -n 'name: \"sscanf\"' crates/elephc-builtin-contract/src/catalog_data.rs; grep -n 'name: \"fscanf\"' crates/elephc-builtin-contract/src/catalog_data.rs",
+  "summary": "grep -n -A3 '        name: \"sscanf\",' crates/elephc-builtin-contract/src/catalog_data.rs | head; echo \"---\"; grep -n 'name: \"sscanf\"' crates/elephc-builtin-contract/src/catalog_data.rs; grep -n 'name: \"fscanf\"' crates/elephc-builtin-contract/src/catalog_data.rs: 14934: name: \"sscanf\", 14935- area: Area::String, 14936- ",
+  "text": "grep -n -A3 '        name: \"sscanf\",' crates/elephc-builtin-contract/src/catalog_data.rs | head; echo \"---\"; grep -n 'name: \"sscanf\"' crates/elephc-builtin-contract/src/catalog_data.rs; grep -n 'name: \"fscanf\"' crates/elephc-builtin-contract/src/catalog_data.rs: 14934: name: \"sscanf\", 14935- area: Area::String, 14936- kind: BuiltinKind::Function, 14937- params: &[ --- 14934: name: \"sscanf\", 7157: name: \"fscanf\",",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "e0c396edc9cb7ab75d002aa4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T10:28:15.315Z",
+  "stored_at": "2026-08-18T10:28:15.316Z"
+}

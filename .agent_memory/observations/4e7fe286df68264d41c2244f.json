@@ -1,0 +1,17 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_set_option.py 2>&1 | head -30",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_set_option.py 2>&1 | head -30: ns) elephc: !! php: stream_context_set_option(): Argument #4 ($value) must be provided when argument #2 ($wrap",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/ctx_set_option.py 2>&1 | head -30: ns) elephc: !! php: stream_context_set_option(): Argument #4 ($value) must be provided when argument #2 ($wrapper_or_options) is a elephc: Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options php: stream_context_set_option(): Argument #3 ($option_name) cannot be null when argument #2 ($wrapper_or_options) !! php: true elephc: stream_context_set_option(): Argument #4 ($value) must be provided when argument #2 ($wrapper_or_options) is a !! php: {\"http\":{\"header\":\"X: 1\"}} elephc: !! php: elephc: Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options !! php: <none> elephc: stream_context_set_option(): Argument #3 ($option_name) cannot be null when argument #2 ($wrapper_or_options) !! php: <none> elephc: true !! php: <none> elephc: {\"http\":{\"header\":\"X: 1\"}} !! php: <none> elephc:",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "4e7fe286df68264d41c2244f",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T17:01:55.736Z",
+  "stored_at": "2026-08-21T17:01:55.737Z",
+  "low_signal": true
+}

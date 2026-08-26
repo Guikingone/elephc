@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn '_rt_open_diag_name' src/ | grep -v 'file_get_contents.rs' | head -20",
+  "summary": "grep -rn '_rt_open_diag_name' src/ | grep -v 'file_get_contents.rs' | head -20: src/codegen/lower_inst/builtins/io/filesystem_ops.rs:302: (\"_rt_open_diag_name\", Some((name, name_len))), src/codegen/lower_inst/builtins/io/filesystem_ops.rs:304: None => [(\"_rt_open_diag_prefix\", None), (\"_rt_open_diag_name\", None)], src/",
+  "text": "grep -rn '_rt_open_diag_name' src/ | grep -v 'file_get_contents.rs' | head -20: src/codegen/lower_inst/builtins/io/filesystem_ops.rs:302: (\"_rt_open_diag_name\", Some((name, name_len))), src/codegen/lower_inst/builtins/io/filesystem_ops.rs:304: None => [(\"_rt_open_diag_prefix\", None), (\"_rt_open_diag_name\", None)], src/codegen_support/runtime/data/fixed.rs:857: out.push_str(\".globl _rt_open_diag_name\\n_rt_open_diag_name:\\n .quad 0\\n\"); src/codegen_support/runtime/data/fixed.rs:858: out.push_str(\".globl _rt_open_diag_name_len\\n_rt_open_diag_name_len:\\n .quad 0\\n\");",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7da151a757c74d6fc212904c",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:34:44.726Z",
+  "stored_at": "2026-08-24T18:34:44.726Z"
+}

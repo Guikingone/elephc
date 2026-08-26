@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "df -h / | tail -1; CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | tail -4",
+  "summary": "df -h / | tail -1; CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | tail -4: /dev/disk3s1s1 460Gi 12Gi 7.1Gi 63% 459k 74M 1% / test result: FAILED. 257 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 183.41s error: te",
+  "text": "df -h / | tail -1; CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=false RUST_MIN_STACK=33554432 cargo test -p elephc --test ir_backend_smoke_test 2>&1 | tail -4: /dev/disk3s1s1 460Gi 12Gi 7.1Gi 63% 459k 74M 1% / test result: FAILED. 257 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 183.41s error: test failed, to rerun pass `-p elephc --test ir_backend_smoke_test`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "7e44b921d68d7904d66a2b8a",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-26T19:59:19.238Z",
+  "stored_at": "2026-08-26T19:59:19.238Z"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Write",
+  "path": "/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/type_checker_doc.py",
+  "summary": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/type_checker_doc.py: \"\"\"The type-checker document states the rule that now holds, and what it costs.\n\nIt said elephc rejects `$x = 42; $x = \"hello\"",
+  "text": "wrote /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/type_checker_doc.py: \"\"\"The type-checker document states the rule that now holds, and what it costs.\n\nIt said elephc rejects `$x = 42; $x = \"hello\";` and called that intentional — \"it lets the compiler\nknow exactly what `$x` is at every point, without needing runtime type tags\". That trade is now\nmade per SLOT rather than per program: only a local actually reassigned across scalar types\nbecomes tagged, and it is what php does.\n\"\"\"\nimport pathlib\n\nROOT = pathlib.Path('/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature')\np = ROOT / 'docs/internals/the-type-checker.md'\nt = p.r",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "52808b613ce8f6c4c84e8c68",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-22T13:12:25.586Z",
+  "stored_at": "2026-08-22T13:12:25.587Z"
+}

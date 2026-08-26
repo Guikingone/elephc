@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && cat > ctstr.php <<'EOF'\n<?php\necho \"a ?> b\\n\";\necho 'c ?> d', \"\\n\";\n$h = <<<TXT\ninside ?> heredoc\nTXT;\necho $h, \"\\n\";\n?>\nafter\n<?php\necho \"end\\n\";\nEOF\nzsh difftests.sh ctstr 2>&1 | head -8",
+  "summary": "About to run: cd /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/probe2 && cat > ctstr.php <<'EOF'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "6c33b0b697e6f91e44495ad9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T07:14:47.081Z",
+  "stored_at": "2026-08-18T07:14:47.082Z"
+}

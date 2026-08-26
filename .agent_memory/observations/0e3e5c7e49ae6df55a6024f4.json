@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w37; mkdir -p $S/w37; cp $S/probes2/iter-trace.php $S/w37/p.php; cd $S/w37 && php -n p.php",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w37; mkdir -p $S/w37; cp $S/probes2/iter-trace.php $S/w37/p.php; cd $S/w37 && php -n p.php: file [0 v=1 e=0 c='a '] [1 v=1 e=0 c='bb '] [",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w37; mkdir -p $S/w37; cp $S/probes2/iter-trace.php $S/w37/p.php; cd $S/w37 && php -n p.php: file [0 v=1 e=0 c='a '] [1 v=1 e=0 c='bb '] [2 v=1 e=0 c=''] temp [0 v=1 e=0 c='a '] [1 v=1 e=0 c='bb ']",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "0e3e5c7e49ae6df55a6024f4",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:56:38.217Z",
+  "stored_at": "2026-08-24T20:56:38.217Z"
+}

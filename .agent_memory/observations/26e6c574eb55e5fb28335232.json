@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/file_on_wrapper.py 2>&1 | head -20",
+  "summary": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/file_on_wrapper.py 2>&1 | head -20: file() on a user wrapper same file() with IGNORE_NEW_LINES same file() on a real file same file() on php://me",
+  "text": "python3 /private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/uv/file_on_wrapper.py 2>&1 | head -20: file() on a user wrapper same file() with IGNORE_NEW_LINES same file() on a real file same file() on php://memory same file() on data:// same file() on compress.zlib:// same file() on php://filter same readfile() on a user wrapper same file_get_contents() on a user wrapper same file_put_contents() on a user wrapper DIFFERS php: 'Deprecated: Creation of dynamic property WW::$context is deprecated in p.php on line 9\\nwrote:payload\\nint(7)' elephc: 'Warning: file_put_contents(uww://x): Failed to open stream: No such file or directory in p.php on line 9\\nbool(false)'",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "26e6c574eb55e5fb28335232",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T18:04:46.764Z",
+  "stored_at": "2026-08-21T18:04:46.764Z"
+}

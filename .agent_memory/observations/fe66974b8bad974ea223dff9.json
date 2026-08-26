@@ -1,0 +1,15 @@
+{
+  "type": "file_change",
+  "tool": "Edit",
+  "path": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs",
+  "summary": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: use crate::codegen_support::runtime::resources::layout::{\n    STREAM_FD_OFFSET, STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET,\n    STREA -> ",
+  "text": "changed /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/src/codegen_support/runtime/io/stream_get_meta_data.rs: use crate::codegen_support::runtime::resources::layout::{\n    STREAM_FD_OFFSET, STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET,\n    STREA -> use crate::codegen_support::runtime::resources::layout::{\n    STREAM_BACKEND_DIRECTORY, STREAM_BACKEND_GLOB_DIRECTORY, STREAM_BACKEND_KIND_OFFSET,\n    STREAM_BACKEND_USER_DIRECTORY, STREAM_FD_OFFSET, STREAM_MODE_LEN_OFFSET,\n    STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,\n    STREAM_WRAPPER_ID_OFFSET,\n};",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "fe66974b8bad974ea223dff9",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-17T07:27:17.746Z",
+  "stored_at": "2026-08-17T07:27:17.747Z"
+}

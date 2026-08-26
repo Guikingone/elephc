@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -n \"popen_branch\\|dir_branch\\|compare\\|struct LadderShapes\\|LADDERS\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | head -20",
+  "summary": "grep -n \"popen_branch\\|dir_branch\\|compare\\|struct LadderShapes\\|LADDERS\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | head -20: #\", 323: popen_branch: \"b.eq __rt_mixed_free_deep_resource_popen\\n\", 324: dir_branch: \"b.eq __rt_mixed_free_deep_resource_dir\\n\", 329: compare: \"cmp r9, \", 330: popen_branch: \"je _",
+  "text": "grep -n \"popen_branch\\|dir_branch\\|compare\\|struct LadderShapes\\|LADDERS\" src/codegen_support/runtime/arrays/mixed_free_deep.rs | head -20: #\", 323: popen_branch: \"b.eq __rt_mixed_free_deep_resource_popen\\n\", 324: dir_branch: \"b.eq __rt_mixed_free_deep_resource_dir\\n\", 329: compare: \"cmp r9, \", 330: popen_branch: \"je __rt_mixed_free_deep_resource_popen\\n\", 331: dir_branch: \"je __rt_mixed_free_deep_resource_dir\\n\", 360: for shapes in LADDERS { 364: assert!(wide.contains(shapes.popen_branch), \"{arch:?}: popen arm must be emitted\"); 365: assert!(wide.contains(shapes.dir_branch), \"{arch:?}: directory arm must be emitted\"); 376: assert!(!narrow.contains(shapes.popen_branch), \"{arch:?}: popen arm must be gone\"); 377: assert!(!narrow.contains(shapes.dir_branch), \"{arch:?}: directory arm must be gone\"); 390: popen_only.contains(shapes.popen_branch) && !popen_only.contains(shapes.dir_branch), 396: dir_only.contains(shapes.dir_branch) && !dir_only.contains(shapes.popen_branch), 410: for shapes in LADDERS { 437: for shapes in LADDERS {",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "341bb3fa53a566a410ceeda0",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-20T20:47:48.485Z",
+  "stored_at": "2026-08-20T20:47:48.485Z"
+}

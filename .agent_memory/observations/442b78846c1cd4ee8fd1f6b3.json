@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn 'php://memory\\|_php_memory' src/codegen_support/runtime/data/fixed.rs | head -10; echo ---; grep -rln 'memory' src/codegen_support/runtime/io/*.rs | head -20",
+  "summary": "grep -rn 'php://memory\\|_php_memory' src/codegen_support/runtime/data/fixed.rs | head -10; echo ---; grep -rln 'memory' src/codegen_support/runtime/io/*.rs | head -20: n_support/runtime/io/fd_set_append.rs src/codegen_support/runtime/io/fgets.rs src/codegen_support/runtime/io/fwrite.rs src/codegen_support/runtime/io/fp",
+  "text": "grep -rn 'php://memory\\|_php_memory' src/codegen_support/runtime/data/fixed.rs | head -10; echo ---; grep -rln 'memory' src/codegen_support/runtime/io/*.rs | head -20: n_support/runtime/io/fd_set_append.rs src/codegen_support/runtime/io/fgets.rs src/codegen_support/runtime/io/fwrite.rs src/codegen_support/runtime/io/fputcsv.rs src/codegen_support/runtime/io/fread_filtered.rs src/codegen_support/runtime/io/fread.rs src/codegen_support/runtime/io/mod.rs src/codegen_support/runtime/io/print_r_buffer.rs src/codegen_support/runtime/io/php_wrapper_open.rs src/codegen_support/runtime/io/scandir.rs src/codegen_support/runtime/io/stream_get_meta_data.rs src/codegen_support/runtime/io/stream_pending.rs src/codegen_support/runtime/io/stream_select.rs src/codegen_support/runtime/io/stream_record_mode.rs src/codegen_support/runtime/io/stream_select_memory_guard.rs src/codegen_support/runtime/io/stream_supports_lock.rs src/codegen_support/runtime/io/stream_type_name.rs src/codegen_support/runtime/io/user_filter.rs src/codegen_support/runtime/io/user_wrapper_table.rs",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "442b78846c1cd4ee8fd1f6b3",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T18:01:54.582Z",
+  "stored_at": "2026-08-24T18:01:54.583Z"
+}

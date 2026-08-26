@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "rtk proxy rg -rn \"inject_if_used\" --glob '*.rs' src/pipeline*.rs src/pipeline/ 2>/dev/null | head -20",
+  "summary": "About to run: rtk proxy rg -rn \"inject_if_used\" --glob '*.rs' src/pipeline*.rs src/pipeline/ 2>/dev/null | head -20",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "1d2a885279283a189b9f9ff8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-16T15:45:10.840Z",
+  "stored_at": "2026-08-16T15:45:10.840Z"
+}

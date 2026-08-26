@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"may_throw\" src/optimize/effects.rs | head -20",
+  "summary": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"may_throw\" src/optimize/effects.rs | head -20: binary_op_may_throw(op: &BinOp, right: &Expr) -> bool { 52:/// Shorthand for checking `block_effect(stmts).may_throw`. 53:pub(super) fn block_may_throw(stmts: &[Stmt]) ",
+  "text": "cd /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature; grep -n \"may_throw\" src/optimize/effects.rs | head -20: binary_op_may_throw(op: &BinOp, right: &Expr) -> bool { 52:/// Shorthand for checking `block_effect(stmts).may_throw`. 53:pub(super) fn block_may_throw(stmts: &[Stmt]) -> bool { 54: block_effect(stmts).may_throw 58:/// Shorthand for `stmt_effect(stmt).may_throw`. 59:pub(super) fn stmt_may_throw(stmt: &Stmt) -> bool { 60: stmt_effect(stmt).may_throw 76: StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(), 84: expr_effect(value).with_side_effects().with_may_throw() 92: .with_may_throw() 98: .with_may_throw() 104: .with_may_throw() 110: .with_may_throw() 216: StmtKind::Include { .. } => Effect::PURE.with_side_effects().with_may_throw(), 254: .with_may_throw(), 257: if binary_op_may_throw(op, right) { 258: operands.with_may_throw() 266: ExprKind::Throw(inner) => expr_effect(inner).with_side_effects().with_may_throw(), 311: .with_may_throw() 316: .with_may_throw(),",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "d158cf54208d6535b0230d58",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-23T17:49:40.122Z",
+  "stored_at": "2026-08-23T17:49:40.122Z"
+}

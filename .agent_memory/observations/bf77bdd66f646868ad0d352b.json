@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "jq -r '.drifts[] | select(.category==\"constant-value\" or .category==\"extra-constant\" or .category==\"missing-constant\") | .symbol + \" :: \" + .category + \" :: elephc=\" + ((.elephc.value//.elephc)|tostring) + \" php=\" + ((.php.value//.php)|tostring)' tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json",
+  "summary": "jq -r '.drifts[] | select(.category==\"constant-value\" or .category==\"extra-constant\" or .category==\"missing-constant\") | .symbol + \" :: \" + .category + \" :: elephc=\" + ((.elephc.value//.elephc)|tostring) + \" php=\" + ((.php.value//.php)|tostring)' tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json:",
+  "text": "jq -r '.drifts[] | select(.category==\"constant-value\" or .category==\"extra-constant\" or .category==\"missing-constant\") | .symbol + \" :: \" + .category + \" :: elephc=\" + ((.elephc.value//.elephc)|tostring) + \" php=\" + ((.php.value//.php)|tostring)' tests/php_oracle/drift/streams/php-8.5.6/macos-aarch64/streams-full.json: LE_BINARY :: missing-constant :: elephc=null php=0 FILE_TEXT :: missing-constant :: elephc=null php=0 GLOB_AVAILABLE_FLAGS :: missing-constant :: elephc=null php=1073746108 LOCK_EX :: missing-constant :: elephc=null php=2 LOCK_NB :: missing-constant :: elephc=null php=4 LOCK_SH :: missing-constant :: elephc=null php=1 LOCK_UN :: missing-constant :: elephc=null php=3 STREAM_PF_INET6 :: missing-constant :: elephc=null php=30 STREAM_FROM_CUR :: extra-constant :: elephc=1 php=null STREAM_FROM_END :: extra-constant :: elephc=2 php=null STREAM_FROM_START :: extra-constant :: elephc=0 php=null STREAM_META_MODIFIED :: extra-constant :: elephc=7 php=null STREAM_OPTION_CHUNK_SIZE :: extra-constant :: elephc=5 php=null STREAM_CLIENT_ASYNC_CONNECT :: constant-value :: elephc=4 php=2 STREAM_CLIENT_CONNECT :: constant-value :: elephc=1 php=4 STREAM_CLIENT_PERSISTENT :: constant-value :: elephc=2 php=1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "bf77bdd66f646868ad0d352b",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-14T14:15:23.241Z",
+  "stored_at": "2026-08-14T14:15:23.242Z"
+}

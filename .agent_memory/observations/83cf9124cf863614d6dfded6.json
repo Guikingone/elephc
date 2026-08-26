@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w36 $S/e36; mkdir -p $S/w36 $S/e36; cp $S/probes2/eof-at-end.php $S/w36/p.php; cp $S/probes2/eof-at-end.php $S/e36/p.php; cd $S/w36 && php -n p.php; echo \"=== elephc ===\"; cd $S/e36 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php >/dev/null 2>&1 && ./p",
+  "summary": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w36 $S/e36; mkdir -p $S/w36 $S/e36; cp $S/probes2/eof-at-end.php $S/w36/p.php; cp $S/probes2/eof-at-end.php $S/e36/p.php; cd $S/w36 && ph",
+  "text": "S=/private/tmp/claude-501/-Users-guillaumeloulier-PhpstormProjects-oss-elephc--claude-worktrees-streams-csv-signature/c8dbe38f-1f79-484f-9b83-62bacab9ca56/scratchpad/sweep; rm -rf $S/w36 $S/e36; mkdir -p $S/w36 $S/e36; cp $S/probes2/eof-at-end.php $S/w36/p.php; cp $S/probes2/eof-at-end.php $S/e36/p.php; cd $S/w36 && php -n p.php; echo \"=== elephc ===\"; cd $S/e36 && /Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature/target/debug/elephc -q p.php >/dev/null 2>&1 && ./p: file-seek-end eof false file-drained eof true mem-after-write eof false mem-drained eof true mem-seek-end eof false temp-seek-end eof false === elephc === file-seek-end eof false file-drained eof true mem-after-write eof false mem-drained eof true mem-seek-end eof false temp-seek-end eof false",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "83cf9124cf863614d6dfded6",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-24T20:56:10.918Z",
+  "stored_at": "2026-08-24T20:56:10.919Z"
+}

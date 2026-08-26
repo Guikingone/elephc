@@ -1,0 +1,16 @@
+{
+  "type": "command_result",
+  "tool": "Bash",
+  "path": "",
+  "command": "grep -rn \"stream_select\" tests/codegen/io/streams.rs | head -8",
+  "summary": "grep -rn \"stream_select\" tests/codegen/io/streams.rs | head -8: tests/codegen/io/streams.rs:3466:/// Verifies php's two explanations for a stream `stream_select()` cannot represent. tests/codegen/io/streams.rs:3474:fn test_stream_select_explains_an_uncastable_stream() { tests/codegen/io/streams.rs:3486:stream_select($r",
+  "text": "grep -rn \"stream_select\" tests/codegen/io/streams.rs | head -8: tests/codegen/io/streams.rs:3466:/// Verifies php's two explanations for a stream `stream_select()` cannot represent. tests/codegen/io/streams.rs:3474:fn test_stream_select_explains_an_uncastable_stream() { tests/codegen/io/streams.rs:3486:stream_select($r, $w, $e, 0, 0); tests/codegen/io/streams.rs:3490: missing.contains(\"Warning: stream_select(): W::stream_cast is not implemented!\"), tests/codegen/io/streams.rs:3495: \"Warning: stream_select(): Cannot represent a stream of type user-space \\ tests/codegen/io/streams.rs:3514:stream_select($r, $w, $e, 0, 0); tests/codegen/io/streams.rs:3523: \"Warning: stream_select(): Cannot represent a stream of type user-space \\ tests/codegen/io/streams.rs:4292:/// refuses the pair rather than ignoring one half of it — `stream_select($r, $w, $e, null, 5)`",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "84f697101403d15b4635a1c8",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-18T11:20:10.791Z",
+  "stored_at": "2026-08-18T11:20:10.792Z"
+}

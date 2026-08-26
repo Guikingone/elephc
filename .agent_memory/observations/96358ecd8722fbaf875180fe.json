@@ -1,0 +1,15 @@
+{
+  "type": "tool_use",
+  "tool": "Bash",
+  "path": "",
+  "command": "git stash list | head -3; echo \"--- saving my work as a WIP commit instead ---\"; git add -A src tests && git commit -q -m \"WIP: diagnostic location (temporary)\" && git log --oneline -1",
+  "summary": "About to run: git stash list | head -3; echo \"--- saving my work as a WIP commit instead ---\"; git add -A src tests && git commit -q -m \"WIP: diagnostic location (temporary)\" && git log --oneline -1",
+  "session_id": "c8dbe38f-1f79-484f-9b83-62bacab9ca56",
+  "agent": "claude-code",
+  "schema_version": 1,
+  "id": "96358ecd8722fbaf875180fe",
+  "project_dir": "/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/streams-csv-signature",
+  "repo_key": "streams-csv-signature",
+  "timestamp": "2026-08-21T19:51:00.392Z",
+  "stored_at": "2026-08-21T19:51:00.392Z"
+}
