@@ -383,13 +383,24 @@ fn test_retype_rhs_reads_old_value() {
     assert_eq!(out, "n=1");
 }
 
-/// Retype after a loop that used the old binding.
+/// Retype after a loop that WROTE the old binding.
+///
+/// The accumulator is a string on purpose. An integer one (`$a = 0; … $a += $i;`)
+/// no longer reaches the retype path: PHP integer arithmetic can promote to float, so
+/// the compound assignment widens the slot and the later `"done"` store lands as an
+/// ordinary compatible write instead of an incompatible one. The loop is not what does
+/// it — probed without one, `$a = 0; $a += $argc; $a = "done";` is equally vacuous,
+/// while `$a = "x"; $a .= "y"; $a = 7;` still retypes, concatenation having no
+/// promotion to carry. The integer form still compiled and still printed the right
+/// answer, which is precisely the vacuity that
+/// `test_every_lowering_fixture_takes_the_retype_path` exists to catch; that guard is
+/// what flagged this fixture, and it holds the same source string.
 #[test]
 fn test_retype_after_loop() {
     let out = compile_and_run(
-        "<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a += $i; } $a = \"done\"; echo $a;",
+        "<?php $a = \"x\"; for ($i = 0; $i < $argc; $i++) { $a .= \"y\"; } $a = 7; echo $a;",
     );
-    assert_eq!(out, "done");
+    assert_eq!(out, "7");
 }
 
 /// A by-value closure capture keeps the old value across a later retype.

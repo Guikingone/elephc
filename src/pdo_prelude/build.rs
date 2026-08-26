@@ -1964,7 +1964,7 @@ fn pdo_getattribute() -> MethodBuilder {
 fn pdo_exec() -> MethodBuilder {
     method("exec")
         .param("statement", TypeExpr::Str)
-        .returns(t_union(vec![TypeExpr::Int, TypeExpr::Bool]))
+        .returns(t_union(vec![TypeExpr::Int, TypeExpr::False]))
         .body(vec![
             s_if(
                 e_binop(e_var("statement"), BinOp::StrictEq, e_str("")),
@@ -2040,7 +2040,7 @@ fn pdo_query() -> MethodBuilder {
 fn pdo_lastinsertid() -> MethodBuilder {
     method("lastInsertId")
         .param_default("name", t_nullable(TypeExpr::Str), e_null())
-        .returns(t_union(vec![TypeExpr::Str, TypeExpr::Bool]))
+        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
             s_prop_assign(e_this(), "hasOperation", e_bool(true)),
             s_assign("_id", e_call("elephc_pdo_last_insert_id_text", vec![e_this_prop("conn"), e_null_coalesce(e_var("name"), e_str(""))])),
@@ -2432,7 +2432,7 @@ fn pdo_pgsqlcopytofile() -> MethodBuilder {
 /// `pgsqlLOBCreate` — lifted out of `decl_class_pdo` so it builds in its own stack frame.
 fn pdo_pgsqllobcreate() -> MethodBuilder {
     method("pgsqlLOBCreate")
-        .returns(t_union(vec![TypeExpr::Str, TypeExpr::Bool]))
+        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
             s_if(
                 e_not(e_method_call(e_this(), "inTransaction", vec![])),
@@ -2573,7 +2573,7 @@ fn pdo_quote() -> MethodBuilder {
     method("quote")
         .param("string", TypeExpr::Str)
         .param_default("type", TypeExpr::Int, e_int(2))
-        .returns(t_union(vec![TypeExpr::Str, TypeExpr::Bool]))
+        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
             s_prop_assign(e_this(), "hasOperation", e_bool(true)),
             s_assign("_driver", e_call("elephc_pdo_driver_name", vec![e_this_prop("conn")])),
@@ -5035,7 +5035,7 @@ fn pdostatement_nextrowset() -> MethodBuilder {
 fn pdostatement_getcolumnmeta() -> MethodBuilder {
     method("getColumnMeta")
         .param("column", TypeExpr::Int)
-        .returns(t_union(vec![t_array(), TypeExpr::Bool]))
+        .returns(t_union(vec![t_array(), TypeExpr::False]))
         .body(vec![
             s_if(
                 e_binop(e_var("column"), BinOp::Lt, e_int(0)),
@@ -5879,7 +5879,7 @@ fn stmt_bootstrap_1_elephcdrainpgsqlnotices() -> MethodBuilder {
 fn stmt_bootstrap_1_exec() -> MethodBuilder {
     method("exec")
         .param("statement", TypeExpr::Str)
-        .returns(t_union(vec![TypeExpr::Int, TypeExpr::Bool]))
+        .returns(t_union(vec![TypeExpr::Int, TypeExpr::False]))
         .body(vec![
             s_assign("_result", e_parent_call("exec", vec![e_var("statement")])),
             s_expr(e_method_call(e_this(), "__elephcDrainPgsqlNotices", vec![])),
@@ -5924,7 +5924,7 @@ fn stmt_bootstrap_1_getpid() -> MethodBuilder {
 /// `lobCreate` — lifted out of `decl_stmt_bootstrap_1` so it builds in its own stack frame.
 fn stmt_bootstrap_1_lobcreate() -> MethodBuilder {
     method("lobCreate")
-        .returns(t_union(vec![TypeExpr::Str, TypeExpr::Bool]))
+        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
             s_if(
                 e_not(e_method_call(e_this(), "inTransaction", vec![])),
@@ -11454,7 +11454,7 @@ fn decl_class_pdo(php_version: PhpVersion, drivers: OptionalDrivers) -> Stmt {
                     .param("schemaType", TypeExpr::Int)
                     .param_default("className", t_nullable(TypeExpr::Str), e_null())
                     .param_default("attributeName", t_nullable(TypeExpr::Str), e_null())
-                    .returns(t_union(vec![t_array(), TypeExpr::Bool]))
+                    .returns(t_union(vec![t_array(), TypeExpr::False]))
                     .body(vec![
                         s_if(
                             e_binop(e_call("elephc_pdo_driver_name", vec![e_this_prop("conn")]), BinOp::StrictNotEq, e_str("cubrid")),
