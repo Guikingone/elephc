@@ -167,9 +167,35 @@ fn replay_entry(tag: u32, taken_at: i64) -> u64 {
     ((tag as u64) << 32) | (taken_at as u64 & 0xffff_ffff)
 }
 
-/// The tag half of a slot word; 0 means the slot has never been used.
+/// The tag half of a slot word.
+///
+/// Only the tests read it. Spending no longer needs to know WHICH signature holds
+/// a slot: used-and-live refuses either way — this signature again, which is a
+/// replay, or another that got there first, which is the collision policy — and
+/// an expired entry is taken over whatever its tag says. The tag still does the
+/// work it was added for; it is what makes a slot identify a signature at all,
+/// so a second presentation lands on the same word.
+#[cfg(test)]
 fn replay_entry_tag(word: u64) -> u32 {
     (word >> 32) as u32
+}
+
+/// Whether a slot has ever been written.
+///
+/// The WHOLE word, not the tag half. Reserving a tag value as the empty marker
+/// meant a signature folding to it had to be remapped onto its neighbour, which
+/// made those two indistinguishable — a collision manufactured by the sentinel
+/// rather than by the fold. A real entry always carries a timestamp, and a
+/// timestamp whose low 32 bits are zero is 1970 — refused by the window long
+/// before this table is consulted — so a zero word cannot be an entry, and every
+/// one of the 2^32 tags keeps its own value.
+///
+/// Total until 2106, and stated rather than assumed: the stored seconds are the
+/// LOW 32 bits, so the one second where they wrap to zero would encode a tag-0
+/// entry as the empty word. That needs a signature folding to tag 0 (one in
+/// 2^32, and unforgeable without the key) minted in that single second.
+fn replay_entry_is_used(word: u64) -> bool {
+    word != 0
 }
 
 /// The second half of a slot word.
@@ -260,7 +286,14 @@ pub fn event_report(base: usize) -> String {
     let count = unsafe {
         (*((base + RING_BYTES) as *const std::sync::atomic::AtomicU64)).load(Ordering::Acquire)
     } as usize;
-    for route_id in 0..EVENT_BUCKETS.min(count + 1) {
+    // `count + 2`, not `+ 1`. The counter stops at `OTHER_ROUTE_INDEX` because
+    // overflow returns the shared bucket WITHOUT claiming a slot, so it never
+    // reaches the id that bucket carries — `OTHER_ROUTE_INDEX + 1`. Bounding the
+    // walk at `count + 1` therefore stopped one short of it, and every exact I/O
+    // event charged to `<other>` was recorded and never reported. That is the
+    // silent understatement this table exists to avoid; a row nobody expected is
+    // the lesser problem, and `EVENT_BUCKETS` still bounds the walk.
+    for route_id in 0..EVENT_BUCKETS.min(count + 2) {
         let io = unsafe { event_word(base, route_id, 0) }.load(Ordering::Relaxed);
         let wait = unsafe { event_word(base, route_id, 1) }.load(Ordering::Relaxed);
         if io == 0 && wait == 0 {
@@ -654,8 +687,11 @@ unsafe fn record_program_text(table: *const SymtabEntry, len: usize) {
         return;
     }
     let mut low = u64::MAX;
+    let mut high_seen = 0u64;
     for index in 0..len {
-        low = low.min((*table.add(index)).address);
+        let address = (*table.add(index)).address;
+        low = low.min(address);
+        high_seen = high_seen.max(address);
     }
     // The high bound is the text-end sentinel, and that it is the LAST entry is
     // an agreement with the emitter rather than something this crate can see. So
@@ -670,7 +706,17 @@ unsafe fn record_program_text(table: *const SymtabEntry, len: usize) {
         return;
     }
     let high = last.address;
-    if high <= low {
+    // The sentinel must also be ABOVE every function, not merely last in the
+    // table. It is emitted after all of them, so it is — but that is an agreement
+    // with the emitter and with whatever the linker does to section order, and an
+    // agreement is worth checking. A sentinel that ended up below some function
+    // would put that function outside the range, and its frames would stop
+    // corroborating the chains they are in.
+    //
+    // Nothing is published when it fails, so the walk falls back to trusting the
+    // chain: losing corroboration beats corroborating against a bound that
+    // excludes real code.
+    if high <= low || high < high_seen {
         return;
     }
     TEXT_LOW.store(low, Ordering::Relaxed);
@@ -952,9 +998,17 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
     // thread's own stack, exactly as it did everywhere before this existed. So
     // this is a protection for the thread that matters, not a property of the
     // process — and sharing one static stack is safe only for as long as that
-    // stays true. The endpoint threads block SIGPROF, which is what keeps the
-    // other threads that exist today (the endpoint's, and the PDO bridge's tokio
-    // runtime) from reaching it; a future thread that samples would need its own.
+    // stays true. The endpoint's own threads block SIGPROF and so never reach the
+    // handler at all.
+    //
+    // The PDO bridge's tokio workers do NOT: they are built from the
+    // PHP-executing thread and inherit an unblocked mask, so a process-directed
+    // SIGPROF can land on one while it is inside a driver call. The handler then
+    // runs there, on that thread's own alternate stack, and samples the driver's
+    // stack under whatever route the PHP thread had set. That is profile
+    // pollution rather than corruption — the ring's per-slot sequence still keeps
+    // each sample whole — and it is written down here rather than denied, because
+    // an earlier version of this comment claimed the mask covered them.
     if SIGSTACK_BYTES >= libc::MINSIGSTKSZ as usize {
         let mut alt: libc::stack_t = std::mem::zeroed();
         alt.ss_sp = std::ptr::addr_of_mut!(SIGSTACK) as *mut libc::c_void;
@@ -1389,10 +1443,6 @@ unsafe fn spend_query_tag(base: usize, tag: u32, stamp: i64, now: i64) -> bool {
     if base == 0 {
         return false;
     }
-    // 0 marks a slot that has never been used, so a tag that folds to it takes
-    // the next value. One signature in 2^32 is thereby indistinguishable from
-    // its neighbour, which costs that request a refusal — the safe direction.
-    let tag = if tag == 0 { 1 } else { tag };
     // ONE slot per signature, chosen by the signature itself. Not a probe
     // sequence: probing is what let the same signature be spent twice.
     //
@@ -1413,6 +1463,7 @@ unsafe fn spend_query_tag(base: usize, tag: u32, stamp: i64, now: i64) -> bool {
     // fails in the safe direction, and it is why the table is sized far above
     // what a five-minute window ever holds rather than at the dozens that would
     // otherwise do.
+    //
     // What an entry RECORDS is the header's own timestamp; what judges it is the
     // server's clock. Those are two different clocks, and recording the wrong one
     // left a gap the size of the skew between them.
@@ -1432,7 +1483,7 @@ unsafe fn spend_query_tag(base: usize, tag: u32, stamp: i64, now: i64) -> bool {
     let slot = replay_slot(base, (tag as usize) % REPLAY_SLOTS);
     for _attempt in 0..SPEND_ATTEMPTS {
         let word = slot.load(Ordering::Acquire);
-        let occupied = replay_entry_tag(word) != 0 && replay_entry_is_live(word, now);
+        let occupied = replay_entry_is_used(word) && replay_entry_is_live(word, now);
         if occupied {
             // Either this very signature — a replay — or another one that got
             // here first. Same answer: this request is not honoured. Reading the
@@ -1547,8 +1598,10 @@ pub unsafe extern "C" fn elephc_probe_verify_query(ptr: *const u8, len: usize) -
     //
     // The verified HMAC folded to the slot's tag width identifies it: forging a
     // collision needs the key, and without the key no part of the tag can be
-    // chosen at all. Two distinct signatures colliding is one in 2^32 and costs
-    // the second one a refusal, which is the safe direction.
+    // chosen at all. Two distinct signatures landing on one SLOT is one chance in
+    // `REPLAY_SLOTS` and costs the second a refusal, which is the safe direction
+    // — the slot, not the tag, is what they have to share, and quoting 2^32 here
+    // understated it by six orders of magnitude.
     u32::from(unsafe {
         spend_query_tag(
             REGION.load(Ordering::Relaxed),
@@ -2801,6 +2854,80 @@ mod tests {
 
         REGION.store(saved_region, Ordering::Relaxed);
         KEY_PTR.store(saved_key, Ordering::Relaxed);
+    }
+
+    /// The `<other>` bucket's exact counters are reported, not merely recorded.
+    ///
+    /// Overflow returns the shared bucket without claiming a slot, so the route
+    /// counter stops one short of the id that bucket carries. Walking the event
+    /// table to `count + 1` therefore stopped short of it too, and every exact
+    /// I/O event charged to `<other>` was recorded and never printed — the silent
+    /// understatement this table exists to avoid, and the one thing its own
+    /// comments call worse than a row nobody expected.
+    #[test]
+    fn the_overflow_bucket_reports_the_events_charged_to_it() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+        REGION.store(base, Ordering::Relaxed);
+        let saved_route = CURRENT_ROUTE.swap(0, Ordering::Relaxed);
+
+        unsafe {
+            // Fill the table, then take the shared bucket.
+            for index in 0..OTHER_ROUTE_INDEX {
+                assert_eq!(intern_route(&format!("route-{index}")), index + 1);
+            }
+            let other = intern_route("one-too-many");
+            assert_eq!(other, OTHER_ROUTE_INDEX + 1);
+            CURRENT_ROUTE.store(other, Ordering::Relaxed);
+        }
+
+        elephc_probe_note_io();
+        elephc_probe_note_wait(4_000);
+
+        let report = event_report(base);
+        assert!(
+            report.contains(&format!("{OTHER_ROUTE_NAME} ops=1 wait_ns=4000")),
+            "events charged to the overflow bucket were recorded and never \
+             reported: {report}"
+        );
+
+        CURRENT_ROUTE.store(saved_route, Ordering::Relaxed);
+        REGION.store(0, Ordering::Relaxed);
+    }
+
+    /// A signature that folds to zero keeps its own slot value.
+    ///
+    /// Reserving a TAG value as the empty marker forced any signature folding to
+    /// it onto its neighbour, so those two became indistinguishable — a collision
+    /// manufactured by the sentinel rather than by the fold, and the second of
+    /// the pair was refused as a replay of the first. The whole word marks an
+    /// unused slot instead, which a real entry can never be: it always carries a
+    /// timestamp, and a zero timestamp is 1970, refused by the window long before
+    /// this table is reached.
+    #[test]
+    fn a_signature_that_folds_to_zero_is_not_confused_with_its_neighbour() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+        let now = 7_000_000i64;
+
+        // Both are honoured: they are different signatures and, since neither is
+        // remapped onto the other, they do not share a slot value.
+        assert!(unsafe { spend_query_tag(base, 0, now, now) }, "tag 0 is a tag");
+        assert!(unsafe { spend_query_tag(base, 1, now, now) }, "and so is tag 1");
+
+        // Each is spent once, on its own account.
+        assert!(!unsafe { spend_query_tag(base, 0, now, now) });
+        assert!(!unsafe { spend_query_tag(base, 1, now, now) });
+
+        // A never-written slot is the zero WORD, which a real entry cannot be.
+        let untouched = unsafe { replay_slot(base, 9) }.load(Ordering::Acquire);
+        assert!(!replay_entry_is_used(untouched));
+        assert!(replay_entry_is_used(replay_entry(0, now)), "tag 0 with a real time is an entry");
+
+        REGION.store(saved_region, Ordering::Relaxed);
     }
 
     /// A slot's age survives the 2106 rollover, and a clock two seconds behind.

@@ -262,8 +262,14 @@ impl State {
         // resolution asks for a throw deeper than the exiting frame's index and
         // every index is at least zero. Thirty-two of them filled the table and
         // the next real throw recycled a live record.
-        // Every activation dropped past the cap sat ABOVE this throw, so the
-        // unwind destroys all of them and not one of their exits will arrive.
+        //
+        // Every activation dropped past the cap that this unwind REACHES is
+        // destroyed by it, and not one of their exits will arrive. Not every one
+        // of them: a catcher can itself be past the cap, and the dropped
+        // activations between the cap and it survive. Clearing those too costs
+        // them their exit bookkeeping, which they never had — they were already
+        // untracked — and their addresses lie below every tracked frame, so they
+        // cannot be mistaken for one.
         // Their frame pointers are cleared for that reason and not as
         // housekeeping: left behind, they would be matched by the NEXT dropped
         // call to reuse the same address, and its exit would be swallowed as if
@@ -272,7 +278,7 @@ impl State {
         // Before the depth guard, not after. Nothing can be live above an empty
         // stack, so an identity still recorded there is stale by definition —
         // and returning early left exactly that behind.
-        self.dropped_fps.clear();
+        self.dropped_fps = Vec::new();
         if depth == 0 {
             return;
         }
@@ -362,17 +368,27 @@ impl State {
         // see `dropped_fps`, and the two tests that hold it.
         if self.stack.len() >= MAX_STACK {
             self.dropped += 1;
-            // Bounded, because the shadow stack is. Capping pushes at MAX_STACK
-            // is what keeps a runaway recursion from costing unbounded profiler
-            // memory, and recording an identity per dropped activation without a
-            // bound of its own put that cost straight back — one word per
-            // activation instead of a frame, but still without end.
+            // Recorded only while an unwind is in flight, and bounded even then.
             //
-            // Past this the identity is not recorded, so such an exit falls back
-            // to finding no frame of its own, which is right unless an unwind has
-            // left a stale frame at the same address. Reaching that needs twice
-            // MAX_STACK live frames, on a stack large enough to survive them.
-            if self.dropped_fps.len() < MAX_STACK {
+            // An identity is needed for exactly one reason: the shadow stack can
+            // hold frames that have RETURNED, whose addresses the native stack has
+            // already handed back out. That is true between a throw and its
+            // catcher exiting, and at no other time — outside it every frame here
+            // is live, so "this pointer is not on the stack, close nothing" is
+            // sound on its own, which is what it was before any of this.
+            //
+            // So the common case allocates nothing at all. Recording
+            // unconditionally made this a second shadow stack: `MAX_STACK` exists
+            // to stop a runaway recursion growing profiler state without bound,
+            // and a word per activation put that cost straight back, with the
+            // vector keeping its peak capacity for the life of the thread.
+            //
+            // The cap still stands for the pathological case. Past it an identity
+            // is not recorded and such an exit falls back to finding no frame of
+            // its own — right unless an unwind left a stale frame at that address,
+            // which needs twice MAX_STACK live frames on a stack that survives
+            // them.
+            if self.unwinding.is_some() && self.dropped_fps.len() < MAX_STACK {
                 self.dropped_fps.push(fp);
             }
             self.fns[id as usize].calls += 1;
@@ -416,6 +432,7 @@ impl State {
         // exit for a tracked frame — the first was reconciled by counting
         // dropped activations down, which a throw could desynchronise, and the
         // second resolved to whichever frame carried the same id.
+        //
         // A dropped activation is recognised by its OWN frame pointer, before the
         // stack is searched for one. Recognising it by absence — no frame here
         // carries this pointer — is what an unwind invalidates, because the dead
@@ -451,6 +468,18 @@ impl State {
             return;
         };
 
+        // The id is compared BEFORE anything is closed. It used to be checked
+        // after the resync loop and the pop, so an exit whose frame pointer
+        // aliased a dead frame destroyed every frame above it and only then
+        // noticed the names did not match — a late abort rather than a guard,
+        // and the ordering `Frame::fp` names as the original defect. Reaching it
+        // needs an exit belonging to neither the dropped list nor the stack, so
+        // it is out of reach in practice; the check costs one comparison and
+        // stops being a matter of reach.
+        if self.stack[index].id != id {
+            return;
+        }
+
         // Where this exit's frame sits, which is what says which throws it ends.
         //
         // A throw is caught below the depth it was raised at, so an exit at index
@@ -483,8 +512,20 @@ impl State {
                 // after it. Its own entry reports it as instantaneous, which
                 // understates it, where the subtraction would have wrapped.
                 Some((kt, ka, kf, kio, kw)) => {
-                    let at = if kt > stale.t_enter { kt } else { stale.t_enter };
-                    self.close_frame(stale, at, ka, kf, kio, kw)
+                    // All five clamped, not just the clock. `close_frame`
+                    // subtracts each of them from what the frame entered with,
+                    // and every one of those subtractions wraps the same way —
+                    // so guarding time alone left four counters able to produce
+                    // ~1.8e19 from the very case the guard exists for. Either
+                    // that case is unreachable and the guard describes a
+                    // phantom, or it is reachable and the counters wrap; the
+                    // asymmetry is what could not be right either way.
+                    let at = kt.max(stale.t_enter);
+                    let allocs = ka.max(stale.a_enter);
+                    let frees = kf.max(stale.f_enter);
+                    let io_ops = kio.max(stale.io_enter);
+                    let wait = kw.max(stale.w_enter);
+                    self.close_frame(stale, at, allocs, frees, io_ops, wait)
                 }
                 None => self.close_frame(stale, t, a, f, io, w),
             }
@@ -529,6 +570,13 @@ impl State {
             }
             if empty {
                 self.unwinding = None;
+                // The stale frames this unwind left are gone with it, so nothing
+                // recorded against it can still be needed — and a record that
+                // outlives its reason is the one thing this list must not hold.
+                // Its capacity goes too: keeping the peak of a pathological
+                // recursion for the life of the thread is the cost the cap was
+                // added to avoid.
+                self.dropped_fps = Vec::new();
             }
         }
         if TRACE_ON.load(Ordering::Relaxed) {
@@ -1819,8 +1867,13 @@ fn monotonic_seconds() -> u32 {
 /// revoking a claim is right. Start time is what both supported platforms
 /// expose and what both `ps` and every process-supervision tool uses for the
 /// same purpose. Folded to 32 bits because the header words are `u32` and this
-/// is a discriminator, not a timestamp: a collision leaves a stale claim
-/// standing until the age backstop, which is the safe outcome.
+/// is a discriminator, not a timestamp. A collision — a recycled pid whose start
+/// time folds to the recorded value, one in 2^32 given the reuse — reads as the
+/// SAME process, so the claim is kept and the age backstop never applies to it:
+/// not stale until the backstop, but held for as long as that process lives. The
+/// direction is safe (never a second writer on the payload) and the endpoint does
+/// not name it, since a blockage is only reported for a claim it cannot identify
+/// at all.
 #[cfg(target_os = "linux")]
 fn process_start_id(pid: i32) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -1908,6 +1961,13 @@ fn claim_is_same_process(recorded: &AtomicU32, claimer: i32) -> Option<bool> {
 /// gap reads as "no identity recorded" — which keeps the slot, the safe answer.
 fn clear_claim_identity(claim_id: &AtomicU32) {
     claim_id.store(0, Ordering::Release);
+}
+
+/// The same, for a caller that has the region but not the word in hand.
+fn clear_claim_identity_word() {
+    if let Some(claim_id) = capture_word(CLAIM_ID_WORD) {
+        clear_claim_identity(claim_id);
+    }
 }
 
 /// Clears a slice nobody is going to take, and leaves alone one being written.
@@ -2134,6 +2194,13 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
     let current = capture_word(CAPTURE_EPOCH_WORD).map(|e| e.load(Ordering::Acquire));
     let offered = capture_word(SLICE_EPOCH_WORD).map(|e| e.load(Ordering::Acquire));
     if current != offered {
+        // Re-armed, not merely discarded. The offer path refuses to publish for a
+        // capture that has ended, but its check and its store are two
+        // instructions apart, so a slice can still land here — and the worker
+        // that wrote it may have disarmed on the way. This caller is still inside
+        // its own poll and owns the capture, so putting the flag back is what
+        // lets the request it asked for be offered at all.
+        armed.store(1, Ordering::Release);
         clear_claim_identity(claim_id);
     // Released with a compare-exchange from READY, not a blind store. Today
     // nothing else can be transitioning this word — the endpoint serialises arm,
@@ -2203,17 +2270,23 @@ pub extern "C" fn elephc_instr_capture_cancel() {
 /// a log line, and printing it as well would put one request's profile in the
 /// service's log every time someone looked.
 fn offer_capture(text: &str) -> bool {
+    // The capture running when this request finished. Split out so a test can
+    // drive the real path with a STALE value; staging the same thing by writing
+    // header words by hand is how the first version of this fix came to assert a
+    // property the production path did not have.
+    let offered_for = capture_word(CAPTURE_EPOCH_WORD)
+        .map(|epoch| epoch.load(Ordering::Acquire))
+        .unwrap_or(0);
+    offer_capture_for(text, offered_for)
+}
+
+/// Hands `text` over as the answer to the capture identified by `offered_for`.
+fn offer_capture_for(text: &str, offered_for: u32) -> bool {
     let (Some(armed), Some(filled), Some(length)) =
         (capture_word(0), capture_word(1), capture_word(2))
     else {
         return false;
     };
-    // Read BEFORE the armed check, so it names the capture that was running when
-    // this request finished rather than whichever one is running by the time the
-    // slot is claimed.
-    let offered_for = capture_word(CAPTURE_EPOCH_WORD)
-        .map(|epoch| epoch.load(Ordering::Acquire))
-        .unwrap_or(0);
     if armed.load(Ordering::Acquire) == 0 {
         return false;
     }
@@ -2266,6 +2339,23 @@ fn offer_capture(text: &str) -> bool {
             process_start_id(mine as i32).unwrap_or(0),
             Ordering::Release,
         );
+    }
+    // Nothing is published for a capture that has since ended, and — this is the
+    // part the first version got wrong — nothing is DISARMED for it either. A
+    // stale slice was correctly discarded by the reader, but the winner had
+    // already stored `armed = 0`, which belongs to the capture now running: no
+    // later request offered, the endpoint waited out its whole timeout, and
+    // answered "no request completed" while requests were completing. That trades
+    // a wrong profile for no profile and a false reason, which is worse.
+    //
+    // The claim is given back so the capture that IS running can still be
+    // answered by the next request to finish.
+    if capture_word(CAPTURE_EPOCH_WORD)
+        .is_some_and(|epoch| epoch.load(Ordering::Acquire) != offered_for)
+    {
+        clear_claim_identity_word();
+        let _ = filled.compare_exchange(mine, EMPTY, Ordering::AcqRel, Ordering::Relaxed);
+        return false;
     }
     // The question has its answer, so stop asking it of everything else still
     // running. Leaving it armed kept every later request paying for a slice that
@@ -2519,18 +2609,24 @@ mod tests {
     /// Matching only the newest entry assumes dropped activations exit in the
     /// order they were entered. That is true of ordinary calls, and it is an
     /// assumption about the whole language rather than about this function —
-    /// which is reason enough not to rest on it here. Where it fails the entry
-    /// left behind is not dead weight: a later TRACKED frame reusing that
-    /// address matches it, returns early, and is never popped, so every
-    /// measurement after it is attributed to a frame that already returned.
+    /// reason enough not to rest on it. Where it fails the entry left behind is
+    /// not dead weight: a later TRACKED frame reusing that address matches it,
+    /// returns early, and is never popped, so every measurement after it is
+    /// attributed to a frame that already returned.
+    ///
+    /// Set up under an unwind, because that is the only state in which identities
+    /// are recorded at all — outside it every frame on the shadow stack is live,
+    /// so an unknown frame pointer closes nothing on its own.
     #[test]
     fn a_dropped_exit_out_of_order_leaves_nothing_behind() {
         let mut state = State::default();
         for depth in 0..MAX_STACK {
             state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
         }
+        // A throw puts stale frames on the stack; from here a dropped
+        // activation's address can alias one of them.
+        state.note_throw(5, 0, 0, 0, 0);
 
-        // Two dropped activations, exiting oldest-first.
         let first = 0x5000usize;
         let second = 0x6000usize;
         state.enter_at(8, first, 10, 0, 0, 0, 0);
@@ -2546,18 +2642,49 @@ mod tests {
         state.exit_at(9, second, 40, 0, 0, 0, 0);
         assert!(state.dropped_fps.is_empty());
         assert_eq!(state.stack.len(), MAX_STACK, "and neither touched the stack");
+    }
 
-        // The consequence of leaving one behind: a tracked frame at that address
-        // would be swallowed. Drain to below the cap so the next call is tracked.
-        let top = state.stack.last().expect("a full stack").fp;
-        state.exit_at(state.stack.last().expect("a full stack").id, top, 50, 0, 0, 0, 0);
-        state.enter_at(11, first, 60, 0, 0, 0, 0);
+    /// Nothing is recorded when no unwind is in flight.
+    ///
+    /// An identity exists for one reason: the shadow stack can hold frames that
+    /// have RETURNED, whose addresses the native stack has handed back out. That
+    /// is true between a throw and its catcher exiting and at no other time.
+    /// Recording unconditionally made a second shadow stack — a word per
+    /// activation past the cap, with the vector keeping its peak for the life of
+    /// the thread, which is the cost `MAX_STACK` exists to prevent.
+    #[test]
+    fn dropped_identities_cost_nothing_outside_an_unwind() {
+        let mut state = State::default();
+        for depth in 0..MAX_STACK {
+            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
+        }
+
+        // No throw: every frame here is live, so an unknown frame pointer closes
+        // nothing on its own and needs no identity.
+        state.enter_at(8, 0x5000, 10, 0, 0, 0, 0);
+        assert!(
+            state.dropped_fps.is_empty(),
+            "an identity was recorded with nothing stale for it to guard against"
+        );
+        assert_eq!(state.dropped_fps.capacity(), 0, "and nothing was allocated");
+
         let before = state.stack.len();
-        state.exit_at(11, first, 70, 0, 0, 0, 0);
+        state.exit_at(8, 0x5000, 20, 0, 0, 0, 0);
+        assert_eq!(state.stack.len(), before, "its exit still closes nothing");
+
+        // And the capacity is handed back when the unwind that needed it ends,
+        // rather than kept for the life of the thread.
+        state.note_throw(30, 0, 0, 0, 0);
+        state.enter_at(9, 0x6000, 40, 0, 0, 0, 0);
+        assert_eq!(state.dropped_fps, vec![0x6000usize]);
+        let catcher = state.stack[0].fp;
+        let catcher_id = state.stack[0].id;
+        state.exit_at(catcher_id, catcher, 50, 0, 0, 0, 0);
+        assert!(state.unwinding.is_none(), "the catcher ended the unwind");
         assert_eq!(
-            state.stack.len(),
-            before - 1,
-            "a tracked frame was swallowed by a stale dropped identity"
+            state.dropped_fps.capacity(),
+            0,
+            "the list outlived the unwind that gave it a reason"
         );
     }
 
@@ -2970,7 +3097,7 @@ mod tests {
     fn a_losing_offer_does_not_refresh_someone_elses_claim() {
         let source = include_str!("lib.rs");
         let offer = source
-            .split_once("fn offer_capture(")
+            .split_once("fn offer_capture_for(")
             .expect("the offer path must exist")
             .1;
         let body = offer.split_once("\n}\n").expect("a function body").0;
@@ -3086,7 +3213,7 @@ mod tests {
 
         let source = include_str!("lib.rs");
         let offer = source
-            .split_once("fn offer_capture(")
+            .split_once("fn offer_capture_for(")
             .expect("the offer path must exist")
             .1;
         let body = offer.split_once("\n}\n").expect("a function body").0;
@@ -3165,34 +3292,78 @@ mod tests {
         );
     }
 
-    /// A slice offered to a capture that has since ended is not served to the next.
+    /// A slice for a capture that has ended costs the next capture nothing.
     ///
     /// `armed` is a yes/no, so a capture that timed out and the one that armed
     /// after it read the same to a worker. A worker descheduled between reading
-    /// it and claiming the slot therefore published a slice rendered for the
-    /// FIRST capture, and the second received it — a complete, plausible profile
-    /// of a request that finished before the operator asked, with nothing in it
-    /// to say so. Found by an audit run before this branch was pushed.
+    /// it and claiming the slot published a slice rendered for the FIRST capture,
+    /// and the second received it — a complete, plausible profile of a request
+    /// that finished before the operator asked.
     ///
-    /// Staged rather than raced: the interleaving is a schedule, and what the
-    /// worker leaves behind is exactly a slice stamped with the earlier capture's
-    /// identity.
+    /// Discarding that slice and stopping there was worse than what it replaced:
+    /// the stale worker had already stored `armed = 0`, so no later request
+    /// offered, and the endpoint waited out its timeout and answered "no request
+    /// completed" while requests were completing.
+    ///
+    /// Driven through `offer_capture_for`, which is the production path with the
+    /// stale identity injected. The version of this test that came with the first
+    /// fix wrote the header words by hand, bypassing the disarm, and so asserted
+    /// "the capture stays armed" while the real path was clearing it.
     #[test]
-    fn a_slice_offered_to_a_finished_capture_is_not_served_to_the_next() {
+    fn a_slice_for_a_finished_capture_costs_the_next_one_nothing() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         reset_capture();
 
-        // Capture A arms; a worker reads its identity and is descheduled.
         elephc_instr_capture_arm();
-        let offered_for = capture_word(CAPTURE_EPOCH_WORD)
+        let stale = capture_word(CAPTURE_EPOCH_WORD)
             .expect("a mapped region")
             .load(Ordering::Acquire);
 
-        // A gives up, and capture B arms in its place.
+        elephc_instr_capture_cancel();
+        elephc_instr_capture_arm();
+        let live = capture_word(CAPTURE_EPOCH_WORD)
+            .expect("a mapped region")
+            .load(Ordering::Acquire);
+        assert_ne!(stale, live, "each arm takes a new identity");
+
+        let slice = "elephc-instr: stale calls=1 incl_ns=5\n";
+        assert!(
+            !super::offer_capture_for(slice, stale),
+            "a slice for a capture that ended must not be published"
+        );
+        assert_eq!(
+            capture_word(1).expect("a mapped region").load(Ordering::Acquire),
+            EMPTY,
+            "and the claim must be given back"
+        );
+        assert_ne!(
+            capture_word(0).expect("a mapped region").load(Ordering::Acquire),
+            0,
+            "B is still waiting for its own request, so it must still be armed"
+        );
+
+        assert!(super::offer_capture(slice), "B was starved by the stale offer");
+        let needed = unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) };
+        assert_eq!(needed, slice.len(), "B's own slice was withheld");
+    }
+
+    /// A stale slice that reaches the reader anyway leaves the capture armed.
+    ///
+    /// The offer path refuses to publish for a capture that has ended, but its
+    /// check and its store are two instructions apart, so a slice can still land,
+    /// written by a worker that disarmed on the way. Discarding it and stopping
+    /// there leaves the caller polling a flag nobody will answer.
+    #[test]
+    fn a_stale_slice_that_reaches_the_reader_leaves_the_capture_armed() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        reset_capture();
+        elephc_instr_capture_arm();
+        let stale = capture_word(CAPTURE_EPOCH_WORD)
+            .expect("a mapped region")
+            .load(Ordering::Acquire);
         elephc_instr_capture_cancel();
         elephc_instr_capture_arm();
 
-        // The worker resumes and publishes what it rendered for A.
         let slice = "elephc-instr: stale calls=1 incl_ns=5\n";
         let base = CAPTURE_REGION.load(Ordering::Acquire);
         unsafe {
@@ -3202,34 +3373,26 @@ mod tests {
                 slice.len(),
             );
         }
-        capture_word(2).expect("a mapped region").store(slice.len() as u32, Ordering::Relaxed);
+        capture_word(2)
+            .expect("a mapped region")
+            .store(slice.len() as u32, Ordering::Relaxed);
         capture_word(SLICE_EPOCH_WORD)
             .expect("a mapped region")
-            .store(offered_for, Ordering::Relaxed);
+            .store(stale, Ordering::Relaxed);
+        capture_word(0).expect("a mapped region").store(0, Ordering::Release);
         capture_word(1).expect("a mapped region").store(READY, Ordering::Release);
 
-        // B must not be handed A's answer.
-        let needed = unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) };
-        assert_eq!(needed, 0, "the next capture was served the previous one's slice");
         assert_eq!(
-            capture_word(1).expect("a mapped region").load(Ordering::Acquire),
-            EMPTY,
-            "and the stale slice must be cleared out of the way"
+            unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) },
+            0,
+            "the next capture was served the previous one's slice"
         );
         assert_ne!(
             capture_word(0).expect("a mapped region").load(Ordering::Acquire),
             0,
-            "B is still waiting for its own request, so it stays armed"
+            "the caller was left polling a flag nobody will answer"
         );
-
-        // A slice offered to B itself is served.
-        let current = capture_word(CAPTURE_EPOCH_WORD)
-            .expect("a mapped region")
-            .load(Ordering::Acquire);
-        assert_ne!(current, offered_for, "each arm takes a new identity");
-        assert!(super::offer_capture(slice), "an armed capture refused a slice");
-        let needed = unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) };
-        assert_eq!(needed, slice.len(), "B's own slice was withheld");
+        assert!(super::offer_capture(slice), "and its own request can be answered");
     }
 
     /// The READER refuses a length the mapping cannot back, whoever wrote it.
