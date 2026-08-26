@@ -104,9 +104,15 @@ pub(super) fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, s
 /// dropped both its ` in FILE:LINE` suffix and its `thrown in` tail — MEASURED against
 /// `(new SplFileInfo("nope"))->getSize()`, which php reports at the line of the call.
 ///
-/// Only calls into a class whose bodies are SYNTHETIC publish anything, so an ordinary method
-/// call costs nothing. NOT the primary scratch: `emit_store_reg_to_symbol` resolves the symbol's
-/// own address through it, which would overwrite the value before the store.
+/// Only calls into a class the PROGRAM DID NOT DECLARE publish anything, so an ordinary method
+/// call costs nothing. The predicate is the declaration's own span: a compiler-injected class
+/// carries `Span::dummy()`. Reading whether the emitted BODIES were synthetic answered the same
+/// question for the classes built from a synthesized AST and the wrong one for the rest —
+/// `SplFixedArray` has no PHP body at all, its `new` and its throws are runtime helpers, and it
+/// reported `line=0` where php reports the line of the `new`.
+///
+/// NOT the primary scratch: `emit_store_reg_to_symbol` resolves the symbol's own address through
+/// it, which would overwrite the value before the store.
 pub(super) fn publish_internal_call_line(
     ctx: &mut FunctionContext<'_>,
     inst: &crate::ir::Instruction,
@@ -115,7 +121,7 @@ pub(super) fn publish_internal_call_line(
     let Some(span) = inst.span else {
         return;
     };
-    if span.line == 0 || !class_bodies_are_synthetic(ctx, class_name) {
+    if span.line == 0 || !class_is_compiler_injected(ctx, class_name) {
         return;
     }
     let reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -131,15 +137,12 @@ pub(super) fn publish_internal_call_line(
     crate::codegen::lower_inst::publish_diagnostic_line(ctx, span.line);
 }
 
-/// Reports whether this class's method bodies were SYNTHESIZED rather than written by the user.
-fn class_bodies_are_synthetic(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
-    ctx.module.class_methods.iter().any(|function| {
-        function.flags.is_synthetic
-            && function
-                .name
-                .rsplit_once("::")
-                .is_some_and(|(candidate_class, _)| candidate_class == class_name)
-    })
+/// Reports whether this class came from the compiler rather than from the program's source.
+fn class_is_compiler_injected(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
+    ctx.module
+        .class_infos
+        .get(class_name)
+        .is_some_and(|class_info| class_info.declaration_span.line == 0)
 }
 
 /// Returns true when the current EIR module includes the target class method body.

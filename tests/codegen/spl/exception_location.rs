@@ -65,3 +65,40 @@ $info->getSize();
         out.located_diagnostics
     );
 }
+
+/// Verifies a throwable the RUNTIME builds carries the same location.
+///
+/// `SplFixedArray` has no PHP body at all — its `new` and its throws are runtime helpers — and
+/// that throw sequence wrote every field of the payload EXCEPT the creation line, so `getLine()`
+/// answered whatever the allocator had left there. The gate that decides which calls publish
+/// their line therefore reads the class's DECLARATION span rather than whether its emitted bodies
+/// were synthetic: a class with no bodies has no synthetic ones either.
+///
+/// MEASURED on `php -n` 8.5.6, which answers exactly these five lines — including the plain user
+/// `new` on the last one, which reports its own.
+#[test]
+fn a_runtime_built_throwable_reports_the_call_site() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function show(string $label, callable $f): void {
+    try { $f(); echo $label, " no throw\n"; }
+    catch (Throwable $e) { echo $label, " ", get_class($e), " ", $e->getLine(), "\n"; }
+}
+show("fixed", function () { new SplFixedArray(-1); });
+show("resize", function () { $a = new SplFixedArray(1); $a->setSize(-1); });
+show("range", function () { $a = new SplFixedArray(1); $a[5] = 1; });
+show("intdiv", function () { intdiv(1, 0); });
+$own = new LogicException("mine");
+echo "user ", $own->getLine(), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "fixed ValueError 6\n\
+         resize ValueError 7\n\
+         range OutOfBoundsException 8\n\
+         intdiv DivisionByZeroError 9\n\
+         user 10\n"
+    );
+}
