@@ -743,8 +743,55 @@ fn emit_raising_builtin_trace_frame(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_trace_frame_close");
 }
 
+/// Records php's frame for a call INTO a builtin class, at the call site.
+///
+/// `#0 p.php(13): SplFileInfo->getSize()` — php names the method and the line of the CALL, and
+/// this is that call. The frame is recorded here rather than where the exception is built because
+/// by then the arguments are gone: the synthesized body has its own parameters, not the operands
+/// the caller passed.
+///
+/// Only from `main`, and that is the whole point rather than a limitation. A trace is printed only
+/// when it is known COMPLETE, and `main` is the one frame this lowering can prove nothing hides:
+/// one builtin-class frame, then `{main}`. Inside a user function the chain would need that
+/// function's frame and its callers, which nothing here can walk — so the site publishes zero and
+/// the report stays silent, exactly as before.
+pub(super) fn emit_builtin_class_call_trace_frame(
+    ctx: &mut FunctionContext<'_>,
+    inst: &crate::ir::Instruction,
+    frame_name: &str,
+    arguments: &[crate::ir::ValueId],
+) {
+    let line = inst.span.map_or(0, |span| span.line);
+    let (name_label, name_len) = ctx.data.add_string(frame_name.as_bytes());
+    abi::emit_call_label(ctx.emitter, "__rt_trace_reset");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", i64::from(line));
+            abi::emit_symbol_address(ctx.emitter, "x1", &name_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", name_len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", i64::from(line));
+            abi::emit_symbol_address(ctx.emitter, "rsi", &name_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", name_len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_trace_frame_open");
+    for operand in arguments {
+        if emit_trace_argument(ctx, *operand).is_err() {
+            // See `emit_raising_builtin_trace_frame`: a shape with no php rendering ends the
+            // argument list rather than inventing a value for it.
+            break;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_trace_frame_close");
+}
+
 /// Renders one call argument into the open trace frame.
-fn emit_trace_argument(ctx: &mut FunctionContext<'_>, operand: crate::ir::ValueId) -> Result<()> {
+pub(super) fn emit_trace_argument(
+    ctx: &mut FunctionContext<'_>,
+    operand: crate::ir::ValueId,
+) -> Result<()> {
     use crate::types::PhpType;
 
     // The runtime tags `__rt_trace_arg` branches on: 0 int, 1 string, 2 float, 3 bool, 4 indexed

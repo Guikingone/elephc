@@ -582,6 +582,106 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");
 }
 
+/// Emits `__rt_trace_as_string`, php's `Throwable::getTraceAsString()` text.
+///
+/// Input: `x0`/`rdi` = the exception's own completeness proof. Output: the string result pair.
+///
+/// The same frames the report prints, without the `Stack trace:` header and without the tail —
+/// and, unlike the report, WITHOUT a trailing newline: php's frames are newline-SEPARATED, so the
+/// final `#N {main}` ends the string. Each recorded frame already ends in one, which is why the
+/// sentinel is appended from the shared `_rt_trace_main` literal one byte SHORT.
+///
+/// The sentinel is appended into the trace buffer itself and the length is then put back, so the
+/// buffer a later report reads is the one it would have read anyway. Calling this twice answers
+/// the same string twice.
+///
+/// A proof of zero answers the empty string. That is not php's answer — php always has at least
+/// `#0 {main}` — but it is the same silence the report keeps, and for the same reason: a trace
+/// that is SHORT asserts an empty stack, which is a wrong answer rather than a missing one.
+pub fn emit_trace_as_string(emitter: &mut Emitter) {
+    let main_len = trace_literal_len("_rt_trace_main") - 1;
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: trace_as_string ---");
+            emitter.label_global("__rt_trace_as_string");
+            emitter.instruction("stp x29, x30, [sp, #-32]!");
+            emitter.instruction("add x29, sp, #0");
+            emitter.instruction("cbz x0, __rt_trace_str_empty");                // no proof: the same silence the report keeps
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_trace_len", 0);
+            emitter.instruction("str x9, [sp, #16]");                           // the length to restore once the text is built
+
+            abi::emit_symbol_address(emitter, "x1", "_rt_trace_hash");
+            emitter.instruction(&format!("mov x2, #{}", trace_literal_len("_rt_trace_hash")));
+            emitter.instruction("bl __rt_trace_append");                        // "#"
+            abi::emit_load_symbol_to_reg(emitter, "x0", "_rt_trace_count", 0);
+            emitter.instruction("bl __rt_itoa");                                // php numbers {main} after the real frames
+            emitter.instruction("bl __rt_trace_append");
+            abi::emit_symbol_address(emitter, "x1", "_rt_trace_main");
+            emitter.instruction(&format!("mov x2, #{main_len}"));               // " {main}" without the report's newline
+            emitter.instruction("bl __rt_trace_append");
+
+            abi::emit_symbol_address(emitter, "x1", "_rt_trace_buf");
+            abi::emit_load_symbol_to_reg(emitter, "x2", "_rt_trace_len", 0);    // the assembled text
+            emitter.instruction("ldr x9, [sp, #16]");
+            emitter.instruction("str x2, [sp, #24]");                           // keep the text length across the store below
+            abi::emit_store_reg_to_symbol(emitter, "x9", "_rt_trace_len", 0);   // put the buffer back for the report
+            abi::emit_symbol_address(emitter, "x1", "_rt_trace_buf");
+            emitter.instruction("ldr x2, [sp, #24]");
+            emitter.instruction("bl __rt_str_persist");                         // hand the caller its own copy
+            emitter.instruction("ldp x29, x30, [sp], #32");
+            emitter.instruction("ret");
+
+            emitter.label("__rt_trace_str_empty");
+            abi::emit_symbol_address(emitter, "x1", "_rt_trace_buf");
+            emitter.instruction("mov x2, #0");                                  // the empty string
+            emitter.instruction("ldp x29, x30, [sp], #32");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: trace_as_string ---");
+            emitter.label_global("__rt_trace_as_string");
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 32");
+            emitter.instruction("test rdi, rdi");
+            emitter.instruction("jz __rt_trace_str_empty_x");                   // no proof: the same silence the report keeps
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_trace_len", 0);
+            emitter.instruction("mov QWORD PTR [rbp - 8], r10");                // the length to restore once the text is built
+
+            abi::emit_symbol_address(emitter, "rsi", "_rt_trace_hash");
+            emitter.instruction(&format!("mov rdx, {}", trace_literal_len("_rt_trace_hash")));
+            emitter.instruction("call __rt_trace_append");                      // "#"
+            abi::emit_load_symbol_to_reg(emitter, "rax", "_rt_trace_count", 0);
+            emitter.instruction("call __rt_itoa");                              // php numbers {main} after the real frames
+            emitter.instruction("mov rsi, rax");
+            emitter.instruction("call __rt_trace_append");
+            abi::emit_symbol_address(emitter, "rsi", "_rt_trace_main");
+            emitter.instruction(&format!("mov rdx, {main_len}"));               // " {main}" without the report's newline
+            emitter.instruction("call __rt_trace_append");
+
+            abi::emit_load_symbol_to_reg(emitter, "rdx", "_rt_trace_len", 0);   // the assembled text
+            emitter.instruction("mov QWORD PTR [rbp - 16], rdx");
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");
+            abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_trace_len", 0);  // put the buffer back for the report
+            abi::emit_symbol_address(emitter, "rax", "_rt_trace_buf");
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");
+            emitter.instruction("call __rt_str_persist");                       // hand the caller its own copy
+            emitter.instruction("mov rsp, rbp");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+
+            emitter.label("__rt_trace_str_empty_x");
+            abi::emit_symbol_address(emitter, "rax", "_rt_trace_buf");
+            emitter.instruction("xor edx, edx");                                // the empty string
+            emitter.instruction("mov rsp, rbp");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
 /// Emits php's `Stack trace:` block, AArch64.
 ///
 /// Input: `x0` = the line php prints in the tail, `x1` = a per-SITE completeness override.
@@ -601,7 +701,7 @@ fn emit_write_block_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_trace_write_block");
     emitter.instruction("stp x29, x30, [sp, #-32]!");
     emitter.instruction("add x29, sp, #0");
-    emitter.instruction("str x0, [sp, #16]");                                    // the line php prints in the tail
+    emitter.instruction("str x0, [sp, #16]");                                   // the line php prints in the tail
     emitter.instruction("cbnz x1, __rt_uncaught_trace_go");                     // the SITE proved this chain complete
     abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_trace_exact", 0);
     emitter.instruction("cbz x9, __rt_uncaught_trace_done");                    // this module can hide a frame: say nothing
@@ -672,7 +772,7 @@ fn emit_write_block_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");
     emitter.instruction("mov rbp, rsp");
     emitter.instruction("sub rsp, 16");
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                       // the line php prints in the tail
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // the line php prints in the tail
     emitter.instruction("test rsi, rsi");                                       // the SITE proved this chain complete
     emitter.instruction("jnz __rt_uncaught_trace_go_x86");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_trace_exact", 0);

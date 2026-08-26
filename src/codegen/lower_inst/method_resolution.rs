@@ -124,6 +124,7 @@ pub(super) fn publish_internal_call_line(
     if span.line == 0 || !class_is_compiler_injected(ctx, class_name) {
         return;
     }
+    publish_internal_call_trace_frame(ctx, inst, class_name);
     let reg = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(span.line));
     abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_rt_internal_call_line", 0);
@@ -135,6 +136,69 @@ pub(super) fn publish_internal_call_line(
     // `Undefined array key 7` with NO ` in FILE on line N` at all, while the `ArrayObject`
     // spelling of the same call, whose summary did resolve, named its line correctly.
     crate::codegen::lower_inst::publish_diagnostic_line(ctx, span.line);
+}
+
+/// Records php's frame for this call, and publishes whether the chain it belongs to is COMPLETE.
+///
+/// An exception raised inside a builtin class is reported with the CALL as its frame `#0` —
+/// `#0 p.php(13): SplFileInfo->getSize()` — and the arguments are the ones passed HERE, not the
+/// synthesized body's own parameters, so the frame has to be recorded at the call.
+///
+/// `main` is the one caller this lowering can prove nothing hides. Anywhere else the chain would
+/// need the enclosing function's frame and its callers, so the site publishes zero and the report
+/// stays silent rather than printing a trace that is short — `#0 {main}` where php names a
+/// function is a wrong answer, not a missing one.
+///
+/// The recording is skipped entirely off `main`, which is also what keeps it off hot paths: a
+/// method called in a loop inside a user function pays two stores, not a frame render.
+fn publish_internal_call_trace_frame(
+    ctx: &mut FunctionContext<'_>,
+    inst: &crate::ir::Instruction,
+    class_name: &str,
+) {
+    let reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(ctx.is_main));
+    abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_rt_trace_site_exact", 0);
+    if !ctx.is_main {
+        return;
+    }
+    let Some((frame_name, arguments)) = internal_call_frame_shape(ctx, inst, class_name) else {
+        return;
+    };
+    super::exceptions::emit_builtin_class_call_trace_frame(ctx, inst, &frame_name, &arguments);
+}
+
+/// Names the frame php would print for this call, and the operands it renders as its arguments.
+///
+/// A `new` is php's `Class->__construct(…)` — measured, `new DirectoryIterator("dtest")` reports
+/// `DirectoryIterator->__construct('dtest')`. An instance call is `Class->method(…)`, and its
+/// first operand is the RECEIVER rather than an argument.
+fn internal_call_frame_shape(
+    ctx: &FunctionContext<'_>,
+    inst: &crate::ir::Instruction,
+    class_name: &str,
+) -> Option<(String, Vec<crate::ir::ValueId>)> {
+    match inst.op {
+        crate::ir::Op::ObjectNew => Some((
+            format!("{class_name}->__construct"),
+            inst.operands.clone(),
+        )),
+        crate::ir::Op::MethodCall | crate::ir::Op::NullsafeMethodCall => {
+            let method = method_name_data(ctx, inst).ok()?;
+            // ASKING an exception about itself is not a frame in anyone's trace. The buffer holds
+            // one trace at a time, so recording here replaced the frames `getTraceAsString()` was
+            // being asked to render with a frame for the question — and left them replaced for
+            // whatever was reported next.
+            if super::throwable_methods::is_throwable_standard_method_key(&php_symbol_key(method)) {
+                return None;
+            }
+            Some((
+                format!("{class_name}->{method}"),
+                inst.operands.iter().skip(1).copied().collect(),
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Reports whether this class came from the compiler rather than from the program's source.

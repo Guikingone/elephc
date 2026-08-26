@@ -162,14 +162,15 @@ try {
 /// every run. `getLine()` is `1` because the whole probe is one line — and it is the line of the
 /// `new`, which is what PHP records; the two coincide here only because they are the same line.
 ///
-/// `getTrace()`/`getTraceAsString()` stay empty: elephc keeps no call stack to render, where
-/// reference PHP would report `#0 {main}`.
+/// `getTrace()` is empty and `getTraceAsString()` is `#0 {main}` — both php's answers, MEASURED:
+/// an exception built where nothing is above it has no FRAMES, and php still numbers the `{main}`
+/// sentinel after them. The empty string this once expected was elephc having no trace at all.
 #[test]
 fn test_builtin_throwable_catch_exposes_standard_api() {
     let out = compile_and_run(
         "<?php try { throw new Exception(\"caught\", 42); } catch (Throwable $e) { echo $e->getMessage(); echo \":\"; echo $e->getCode(); echo \":\"; echo $e->getFile() === __FILE__ ? \"file\" : \"BAD(\" . $e->getFile() . \")\"; echo \":\"; echo $e->getLine(); echo \":\"; echo count($e->getTrace()); echo \":\"; echo $e->getTraceAsString(); echo \":\"; echo $e->getPrevious() === null ? \"none\" : \"some\"; echo \":\"; echo $e->__toString(); }",
     );
-    assert_eq!(out, "caught:42:file:1:0::none:caught");
+    assert_eq!(out, "caught:42:file:1:0:#0 {main}:none:caught");
 }
 
 /// Tests a user-defined interface (AppThrowable) that extends Throwable and an

@@ -883,6 +883,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // for an exception an internal method raises, because the `new` is inside php-src and
     // has no php line of its own — the synthesized bodies here are in the same position.
     out.push_str(".globl _rt_internal_call_line\n_rt_internal_call_line:\n    .quad 0\n");
+    // Whether the frame list recorded so far is COMPLETE for the call now in progress into a
+    // builtin class. Published at that call site, read by the `new` inside the synthesized
+    // body, and stamped onto the Throwable — after which the site's own answer is irrelevant.
+    out.push_str(".globl _rt_trace_site_exact\n_rt_trace_site_exact:\n    .quad 0\n");
     out.push_str(".globl _rt_open_diag_name\n_rt_open_diag_name:\n    .quad 0\n");
     out.push_str(".globl _rt_open_diag_name_len\n_rt_open_diag_name_len:\n    .quad 0\n");
     out.push_str(".globl _diag_csv_escape_deprecated_fgetcsv_msg\n_diag_csv_escape_deprecated_fgetcsv_msg:\n    .ascii \"Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");

@@ -38,6 +38,8 @@ mod file_object_bounds;
 mod dynamic_method_name;
 #[path = "spl/exception_location.rs"]
 mod exception_location;
+#[path = "spl/exception_trace.rs"]
+mod exception_trace;
 #[path = "spl/array_object_missing_key.rs"]
 mod array_object_missing_key;
 #[path = "spl/file_object_read_ahead.rs"]

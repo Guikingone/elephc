@@ -62,7 +62,9 @@
 //!   memory access by AAPCS64, and `sub sp, sp, #16` preserves that.
 
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET;
+use crate::codegen_support::sentinels::{
+    THROWABLE_CREATION_LINE_OFFSET, THROWABLE_TRACE_EXACT_OFFSET,
+};
 use crate::codegen_support::{abi, emit::Emitter};
 
 /// Byte length of `"Fatal error: Uncaught "`.
@@ -227,7 +229,8 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");
     emitter.instruction("b.eq __rt_uncaught_last");                             // the thrown exception itself: print the tail and leave
     emitter.instruction("mov x0, #0");                                          // an inner link has no tail of its own
-    emitter.instruction("mov x1, #0");                                          // the unwinder cannot know whose frame it is on
+    emitter.instruction("ldr x9, [sp, #0]");                                    // the link just reported
+    emitter.instruction(&format!("ldr x1, [x9, #{THROWABLE_TRACE_EXACT_OFFSET}]")); // the proof its own construction site stamped
     emitter.instruction("bl __rt_trace_write_block");                           // php's Stack trace: block, when the frame list is complete
 
     // -- climb one link: the parent is whoever names this one as its previous --
@@ -248,7 +251,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.label("__rt_uncaught_last");
     emitter.instruction("ldr x9, [sp, #0]");
     emitter.instruction(&format!("ldr x0, [x9, #{}]", THROWABLE_CREATION_LINE_OFFSET));
-    emitter.instruction("mov x1, #0");                                          // the unwinder cannot know whose frame it is on
+    emitter.instruction(&format!("ldr x1, [x9, #{THROWABLE_TRACE_EXACT_OFFSET}]")); // the proof its own construction site stamped
     emitter.instruction("bl __rt_trace_write_block");                           // php's Stack trace: block, when the frame list is complete
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.syscall(1);
@@ -391,7 +394,10 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rsp], r10");
     emitter.instruction("je __rt_uncaught_last");                               // the thrown exception itself: print the tail and leave
     emitter.instruction("xor edi, edi");                                        // an inner link has no tail of its own
-    emitter.instruction("xor esi, esi");                                        // the unwinder cannot know whose frame it is on
+    emitter.instruction("mov r8, QWORD PTR [rsp]");                             // the link just reported
+    emitter.instruction(&format!(
+        "mov rsi, QWORD PTR [r8 + {THROWABLE_TRACE_EXACT_OFFSET}]"
+    ));                                                                         // the proof its own construction site stamped
     emitter.instruction("call __rt_trace_write_block");                         // php's Stack trace: block, when the frame list is complete
 
     // -- climb one link: the parent is whoever names this one as its previous --
@@ -413,7 +419,9 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uncaught_last");
     emitter.instruction("mov r10, QWORD PTR [rsp]");
     emitter.instruction(&format!("mov rdi, QWORD PTR [r10 + {}]", THROWABLE_CREATION_LINE_OFFSET));
-    emitter.instruction("xor esi, esi");                                        // the unwinder cannot know whose frame it is on
+    emitter.instruction(&format!(
+        "mov rsi, QWORD PTR [r10 + {THROWABLE_TRACE_EXACT_OFFSET}]"
+    ));                                                                         // the proof its own construction site stamped
     emitter.instruction("call __rt_trace_write_block");                         // php's Stack trace: block, when the frame list is complete
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit

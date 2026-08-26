@@ -278,6 +278,18 @@ pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
 /// Read by `Throwable::getLine()` in `lower_inst.rs` and by `__rt_report_uncaught_exception`.
 pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
 
+/// Byte offset of the "this Throwable's recorded trace is COMPLETE" proof.
+///
+/// A trace that is SHORT is not an approximation — `#0 {main}` where php names a frame asserts the
+/// stack was empty — so the report says nothing unless the chain is known whole. The proof travels
+/// ON THE VALUE rather than in a global because it is a property of the site that CONSTRUCTED this
+/// exception, and by report time that site is long gone: a global would still be holding whatever
+/// the last construction left, and would answer for an exception it knows nothing about.
+///
+/// The payload is 56 bytes — class_id@0, message@8/16, code@24, line@32, previous@40 — so this is
+/// the last slot, and it was unused.
+pub(crate) const THROWABLE_TRACE_EXACT_OFFSET: u64 = 48;
+
 /// Clears the creation-line slot of a freshly allocated Throwable payload in `payload_reg`.
 ///
 /// For the emitters that synthesize a Throwable with no user `new` behind it — an
