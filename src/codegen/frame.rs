@@ -1478,6 +1478,61 @@ fn emit_instr_exit(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Emits the `--instrument` hook that parks this activation across a coroutine's
+/// stack switch, preserving `live` registers across the call.
+///
+/// A `yield` and a `Fiber::suspend` do not return: they switch stacks, so the
+/// enter hook's frame stays open across everything the consumer does next. The
+/// runtime then reads it as the caller of the consumer's next call and charges
+/// the consumer's whole cost to it — measured on four lines of PHP, a generator
+/// body that ran 23 us reported 99.8% inclusive time and an edge to a function
+/// it never called.
+///
+/// Emitted at the switch and not before it, with the outgoing arguments already
+/// staged, so what the suspension itself costs to set up — boxing the yielded
+/// value allocates — is still charged to the body that is doing it.
+pub(super) fn emit_instr_suspend(ctx: &mut FunctionContext<'_>, live: &[&'static str]) {
+    emit_instr_coroutine_hook(ctx, "elephc_instr_suspend", "suspend", live);
+}
+
+/// Emits the `--instrument` hook that unparks this activation where a resumed
+/// coroutine picks up, preserving `live` registers across the call.
+///
+/// Placed immediately after the switch returns, which is that point: the value
+/// the resume delivered is in the result register and is what `live` protects.
+pub(super) fn emit_instr_resume(ctx: &mut FunctionContext<'_>, live: &[&'static str]) {
+    emit_instr_coroutine_hook(ctx, "elephc_instr_resume", "resume", live);
+}
+
+/// Shared body of the two coroutine hooks.
+///
+/// Nothing at all is emitted for a function the instrumentation does not cover,
+/// including the saves — `instr_id` is set by the enter hook, so a body without
+/// one has no frame to park and the pushes would bracket a call that never
+/// happens.
+fn emit_instr_coroutine_hook(
+    ctx: &mut FunctionContext<'_>,
+    hook: &str,
+    label: &str,
+    live: &[&'static str],
+) {
+    if !ctx.shared.instrument.is_on() {
+        return;
+    }
+    let Some(id) = ctx.instr_id else {
+        return;
+    };
+    ctx.emitter
+        .comment(&format!("instrument: {label} (--instrument)"));
+    for reg in live {
+        abi::emit_push_reg(ctx.emitter, reg);
+    }
+    emit_instr_hook_call(ctx, hook, id);
+    for reg in live.iter().rev() {
+        abi::emit_pop_reg(ctx.emitter, reg);
+    }
+}
+
 /// Loads `id` into the first integer argument register, the program's live
 /// allocation counter (`_gc_allocs`) into the second, the free counter
 /// (`_gc_frees`) into the third, and this activation's frame pointer into the

@@ -726,20 +726,41 @@ where a figure would otherwise be trusted further than it should be:
 - **Shares are relative to the largest inclusive time in the capture.** When
   `{main}` is not instrumented and a program has several independent top-level
   calls, their self shares can therefore sum past 100%.
-- **A suspended generator keeps its frame**, so work done between two resumes is
-  attributed as if it happened *inside* the generator. Self time is unaffected —
-  the hotspot table stays correct — but the generator's inclusive share, its
-  edges, and therefore the graph and flame shapes name the wrong caller:
+- **A suspended generator or fiber is off the stack while it is suspended.** A
+  `yield` and a `Fiber::suspend` switch stacks rather than returning, so the body
+  is not running between two resumes and is not counted as running: the frame is
+  closed at the suspension and opened again at the resume, and the span between
+  them belongs to whoever drove it.
 
   ```php
   foreach (produce($n) as $v) { burn($work); }   // burn is called by the LOOP
   ```
   ```text
-  elephc-instr-edge: produce -> burn count=200   # ... but recorded under produce
+  elephc-instr-edge: drain -> burn count=200     # and recorded under the loop
   ```
 
-  Read the exclusive column when generators are involved. Fixing this needs the
-  frame to be popped on yield and pushed on resume.
+  Before this, the body kept its frame and was read as the caller of everything
+  the consumer did next. Measured on the four lines above: a generator body that
+  ran for 23 µs reported **99.8% inclusive time** and an edge to a function it
+  never called. Self time was the one column that stayed right, because the
+  consumer's work was counted as a child.
+
+  Two things follow, both deliberate. A coroutine's `calls` counts entries, not
+  resumes — a resume is the same activation. And a coroutine that is abandoned
+  rather than finished still reports the time it ran, because a suspension is
+  accounted for when it happens rather than waiting for a return that never
+  comes.
+- **A suspension from inside a nested call parks only the innermost frame.**
+  `Fiber::suspend()` called from a function the fiber body called suspends the
+  whole coroutine, but what the hook is told is one frame pointer, and the frames
+  below it on that stack cannot be told from the consumer's without a record of
+  where the coroutine began. The outer body therefore keeps its frame, exactly as
+  every coroutine frame did before. Suspending directly from the body — which is
+  every `yield`, since `yield` is only ever lexically in the generator — is the
+  case that is exact.
+- **At most 4,096 coroutines can be suspended at once.** Past that a suspension
+  is refused and the frame is left where it was, which is the old attribution
+  rather than a new one; the report says how many.
 
 **Memory too.** `incl_allocs` / `excl_allocs` are the exact number of heap
 allocations attributed to each function — the same shadow-stack math applied to

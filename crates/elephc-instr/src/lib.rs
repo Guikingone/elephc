@@ -73,6 +73,21 @@ use std::sync::Mutex;
 /// nothing left to count.
 const MAX_STACK: usize = 65_536;
 
+/// How many suspended coroutines can be parked at once.
+///
+/// A `yield` does not return: the generator body's frame stays open while the
+/// consumer runs, so its own bookkeeping has to go somewhere until the resume.
+/// That somewhere is bounded for the same reason `MAX_STACK` is — an abandoned
+/// generator is never resumed, and a program that builds them in a loop and
+/// drops them would otherwise grow profiler state without limit.
+///
+/// Past the cap a suspension is REFUSED rather than parked: the frame stays on
+/// the shadow stack exactly as it did before any of this existed, so the
+/// measurement degrades to the old wrong one instead of to a wrong one nobody
+/// has seen. The refusal is counted and reported, because a silent truncation
+/// reads as a profile that covered everything.
+const MAX_PARKED: usize = 4_096;
+
 /// Per-function accumulators, indexed by the compiler-assigned function id.
 #[derive(Clone, Copy, Default)]
 struct FnAcc {
@@ -138,6 +153,35 @@ struct Frame {
     children_wait: u64,
 }
 
+/// One suspended coroutine's activations, off the shadow stack until it resumes.
+///
+/// A generator body and a fiber body are ordinary emitted functions — they get
+/// the same enter hook as anything else — but a `yield` or a `Fiber::suspend`
+/// switches stacks instead of returning. Left on the shadow stack, that frame is
+/// what `enter_at` reads as the caller of whatever the consumer does next, and
+/// what the consumer's whole cost is charged to. Measured on a four-line
+/// program: a generator whose body ran for 23 us reported 99.8% inclusive time
+/// and an edge to a function it never called.
+///
+/// A suspension CLOSES its frames and a resume opens fresh ones, rather than
+/// setting the old ones aside and rebasing their stamps on the way back. That
+/// buys the whole of `close_frame` unchanged — self time, the caller's child
+/// charge, the per-function inclusive span, the edge weight, the overdrawn
+/// check — and it is what makes a coroutine that is never resumed report the
+/// time it did run instead of nothing. What crosses the suspension is therefore
+/// only the identity needed to open them again.
+struct Parked {
+    /// The frame pointer of the activation that suspended — how a resume finds
+    /// its own group again.
+    ///
+    /// A coroutine stack that has been freed can be handed back out to the next
+    /// one, so this is not unique over time; the newest match wins and the id is
+    /// checked beside it, the same pairing `exit_at` uses.
+    fp: usize,
+    /// `(id, fp)` per parked activation, the suspending one first.
+    frames: Vec<(u32, usize)>,
+}
+
 /// Thread-local instrumentation state.
 #[derive(Default)]
 struct State {
@@ -165,6 +209,12 @@ struct State {
     /// than leaving a number to be counted down against exits belonging to
     /// somebody else.
     dropped_fps: Vec<usize>,
+    /// Coroutines suspended right now, one entry per `yield` / `Fiber::suspend`
+    /// that has not been resumed. See `Parked`.
+    parked: Vec<Parked>,
+    /// Suspensions refused at `MAX_PARKED` (reported: a refused park leaves the
+    /// old misattribution in place, which is a wrong row, not a missing one).
+    parks_refused: u64,
     /// Frames whose children outran their own span — impossible when the
     /// accounting is right, so it is reported rather than absorbed.
     overdrawn: u64,
@@ -418,6 +468,110 @@ impl State {
             children_io: 0,
             children_wait: 0,
         });
+    }
+
+    /// Closes a suspending coroutine's activations until it resumes.
+    ///
+    /// A `yield` and a `Fiber::suspend` switch stacks; they do not return. The
+    /// body's frame therefore stays open across everything the consumer does
+    /// next, and two things go wrong at once: `enter_at` reads that frame as the
+    /// caller of the consumer's next call, and the frame's own span keeps
+    /// running. Both were measured on a four-line program — a generator whose
+    /// body ran 23 us reported 99.8% inclusive time and an edge it never called.
+    ///
+    /// Closed rather than set aside, because a suspension really is the end of a
+    /// span: what the coroutine did up to here is finished, belongs to the
+    /// caller that drove it here, and is not going to change. Saying so with
+    /// `close_frame` is also the only way the coroutine that is never resumed —
+    /// an abandoned generator — reports the time it did run.
+    ///
+    /// What is closed is the suspending frame and anything above it, which is
+    /// normally nothing at all: a suspension is reached by a call, so whatever
+    /// the body called has already returned. A body that suspends from INSIDE a
+    /// nested call closes only the inner frame and leaves the outer one standing;
+    /// that case is no better than before this existed and no worse, and the
+    /// test named for it says so rather than a comment claiming otherwise.
+    fn suspend_at(&mut self, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+        // Paired with the id, the way `exit_at` pairs them: a freed coroutine
+        // stack is handed back out, so a frame pointer alone names an activation
+        // only among the live ones.
+        let Some(index) = self.stack.iter().rposition(|frame| frame.fp == fp) else {
+            return;
+        };
+        if self.stack[index].id != id {
+            return;
+        }
+        if self.parked.len() >= MAX_PARKED {
+            self.parks_refused += 1;
+            return;
+        }
+        // Innermost first, with the rest still standing, so each span is charged
+        // to its own caller exactly as its return would have charged it.
+        let mut frames = Vec::new();
+        while self.stack.len() > index {
+            let frame = self.stack.pop().expect("the index is inside the stack");
+            frames.push((frame.id, frame.fp));
+            self.close_frame(frame, t, a, f, io, w);
+        }
+        frames.reverse();
+        self.parked.push(Parked { fp, frames });
+    }
+
+    /// Opens a resumed coroutine's activations again, at this instant.
+    ///
+    /// Fresh frames, not the closed ones brought back: the span that ended at
+    /// the suspension is accounted for, and this is a new one. `calls` is not
+    /// touched and no edge is recorded — a resume is the same activation the
+    /// enter already counted, arriving through the same caller.
+    fn resume_at(&mut self, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+        let Some(at) = self.parked.iter().rposition(|group| group.fp == fp) else {
+            return;
+        };
+        // The suspending frame is the group's first, so this is the same
+        // (pointer, id) pairing the park was keyed on. A coroutine stack reused
+        // by a different function fails it and resumes nothing rather than
+        // handing one coroutine's activations to another.
+        if self.parked[at].frames.first().is_none_or(|(first, _)| *first != id) {
+            return;
+        }
+        let group = self.parked.remove(at);
+        // Restoring past the cap would push frames the stack has no room for and
+        // silently lose whichever fell off. Refusing outright loses the same
+        // frames, but their exits then find nothing and close nothing, which is
+        // the behaviour an activation dropped at the cap already has.
+        if self.stack.len() + group.frames.len() > MAX_STACK {
+            self.dropped += group.frames.len() as u64;
+            return;
+        }
+        // The group is stored suspending-frame first, which for a coroutine IS
+        // outermost first — so it is walked forwards. Reversing it put the
+        // callee underneath its own caller, and every depth-ordered thing after
+        // that read the stack upside down.
+        for (frame_id, frame_fp) in group.frames {
+            let acc = &mut self.fns[frame_id as usize];
+            if acc.depth == 0 {
+                acc.t_outer = t;
+                acc.a_outer = a;
+                acc.f_outer = f;
+                acc.io_outer = io;
+                acc.w_outer = w;
+            }
+            acc.depth += 1;
+            self.stack.push(Frame {
+                id: frame_id,
+                fp: frame_fp,
+                t_enter: t,
+                a_enter: a,
+                f_enter: f,
+                io_enter: io,
+                w_enter: w,
+                children_ns: 0,
+                children_allocs: 0,
+                children_frees: 0,
+                children_io: 0,
+                children_wait: 0,
+            });
+        }
     }
 
     /// Records exit from `id` with timestamp `t`, allocation counter `a`, free
@@ -677,6 +831,12 @@ impl State {
         // The stack these belonged to has just been cleared, so nothing they
         // could be matched against remains.
         self.dropped_fps.clear();
+        // A coroutine suspended across a slice boundary would resume into a
+        // stack that no longer holds its consumer, and its accrued span belongs
+        // to the request that opened it. Released rather than cleared, so an
+        // abandoned generator's peak does not outlive the slice that made it.
+        self.parked = Vec::new();
+        self.parks_refused = 0;
         self.overdrawn = 0;
         self.throws_merged = 0;
         // The stack goes with the slice, so the frame this unwind was holding a
@@ -727,6 +887,13 @@ impl State {
                 "elephc-instr: note: {} frames were charged more by their callees than \
                  they ran for; their self time reads as zero\n",
                 self.overdrawn
+            ));
+        }
+        if self.parks_refused > 0 {
+            out.push_str(&format!(
+                "elephc-instr: note: {} suspension(s) past {} parked coroutines were not \
+                 parked; their consumers' time is charged to them\n",
+                self.parks_refused, MAX_PARKED
             ));
         }
         if tick_rate().is_none() {
@@ -1703,6 +1870,44 @@ pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64, frame: usi
     STATE.with(|s| s.borrow_mut().exit_at(id, frame, t, allocs, frees, io, w));
 }
 
+/// Records that the function `id` is suspending a coroutine at a `yield` or a
+/// `Fiber::suspend`; `frame` is this activation's frame pointer, the same one
+/// its entry passed.
+///
+/// Emitted immediately before the stack switch. Between this and the matching
+/// resume the activation is not running, and a profiler that says otherwise is
+/// not reporting a small error: a generator body measured at 23 us of work
+/// claimed 99.8% of a program's inclusive time, and the call graph gained an
+/// edge from it to a function the consumer called.
+#[no_mangle]
+pub extern "C" fn elephc_instr_suspend(id: u32, allocs: u64, frees: u64, frame: usize) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let t = now_ticks();
+    let io = IO_OPS.load(Ordering::Relaxed);
+    let w = WAIT_NS.load(Ordering::Relaxed);
+    STATE.with(|s| s.borrow_mut().suspend_at(id, frame, t, allocs, frees, io, w));
+}
+
+/// Records that the function `id` has been resumed at the suspension point
+/// `frame` named; the counters are read the same way its entry read them.
+///
+/// Emitted immediately after the stack switch returns, which is where execution
+/// picks up. A resume whose park was refused at `MAX_PARKED`, or whose frame the
+/// stack has no room for, finds no group and restores nothing — the same
+/// nothing an exit for an untracked activation does.
+#[no_mangle]
+pub extern "C" fn elephc_instr_resume(id: u32, allocs: u64, frees: u64, frame: usize) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let t = now_ticks();
+    let io = IO_OPS.load(Ordering::Relaxed);
+    let w = WAIT_NS.load(Ordering::Relaxed);
+    STATE.with(|s| s.borrow_mut().resume_at(id, frame, t, allocs, frees, io, w));
+}
+
 /// The rendezvous where an endpoint asks for a slice and a worker leaves it.
 ///
 /// Mapped MAP_SHARED at init, BEFORE any `--web` fork, for exactly the reason
@@ -2601,6 +2806,288 @@ mod tests {
             before,
             "a dropped activation's exit closed {} frames it never owned",
             before - state.stack.len()
+        );
+    }
+
+    /// Where a simulated COROUTINE stack starts.
+    ///
+    /// Far from `SIM_BASE`, because that is what a real one is: a generator body
+    /// runs on its own allocation, not on the consumer's stack, and a test that
+    /// let the two ranges meet would be testing address arithmetic instead of
+    /// the matching.
+    const CORO_BASE: usize = 0x7ffe_0000_0000;
+
+    /// A suspended coroutine is not the caller of what the consumer does next.
+    ///
+    /// `yield` switches stacks; it does not return. Left on the shadow stack the
+    /// generator's frame is what `enter_at` reads as the caller of the next
+    /// call, and what that call's whole cost is charged to. Measured on four
+    /// lines of PHP before this existed: a body that ran 23 us reported 99.8%
+    /// inclusive time, and the call graph carried `producer -> heavy x3` — an
+    /// edge to a function the consumer called and the generator never did.
+    #[test]
+    fn a_suspended_coroutine_is_not_the_caller_of_what_runs_next() {
+        let mut state = State::default();
+        // drain() on the main stack, then the generator body on its own.
+        state.enter_sim(0, 0, 0, 0, 0, 0);
+        state.enter_at(1, CORO_BASE, 10, 0, 0, 0, 0);
+        // The body runs 20 ns of its own, then yields.
+        state.suspend_at(1, CORO_BASE, 30, 0, 0, 0, 0);
+        assert!(
+            state.stack.iter().all(|frame| frame.id != 1),
+            "a suspended body must not sit on the stack the consumer is running on"
+        );
+
+        // The consumer's work, which the generator neither did nor called.
+        state.enter_sim(2, 30, 0, 0, 0, 0);
+        state.exit_sim(2, 1030, 0, 0, 0, 0);
+        assert_eq!(
+            state.edges.get(&(0, 2)).map(|e| e.0),
+            Some(1),
+            "the consumer's call must be attributed to the consumer"
+        );
+        assert!(
+            !state.edges.contains_key(&(1, 2)),
+            "the profile invented an edge from a coroutine that was not running"
+        );
+
+        state.resume_at(1, CORO_BASE, 1030, 0, 0, 0, 0);
+        state.exit_at(1, CORO_BASE, 1040, 0, 0, 0, 0);
+        state.exit_sim(0, 1040, 0, 0, 0, 0);
+
+        assert_eq!(
+            state.fns[1].incl_ns, 30,
+            "the body ran 20 ns before the yield and 10 ns after; the 1000 ns \
+             between them belong to the consumer"
+        );
+        assert_eq!(state.fns[2].incl_ns, 1000, "the consumer's own work is untouched");
+        assert_eq!(
+            state.fns[0].excl_ns, 10,
+            "and drain's self time is its span minus its two real children"
+        );
+    }
+
+    /// Every dimension survives the suspension, not just the clock.
+    ///
+    /// `close_frame` subtracts five counters the same way, so parking has to
+    /// exclude the suspended span from five or the ones it forgot report the
+    /// consumer's work as the coroutine's. Allocations are the one that gives
+    /// the recommendation engine its "allocates the most" line.
+    #[test]
+    fn a_resumed_coroutine_excludes_the_suspended_span_in_every_dimension() {
+        let mut state = State::default();
+        state.enter_at(0, CORO_BASE, 100, 10, 5, 2, 50);
+        // 20 ns, 3 allocs, 1 free, 1 io op and 10 ns of wait before the yield.
+        state.suspend_at(0, CORO_BASE, 120, 13, 6, 3, 60);
+        // The consumer spends a great deal of everything while it is away.
+        state.resume_at(0, CORO_BASE, 5_120, 913, 406, 303, 5_060);
+        // Then 5 ns, 2 allocs, 1 free, 1 io op and 5 ns of wait after it.
+        state.exit_at(0, CORO_BASE, 5_125, 915, 407, 304, 5_065);
+
+        let acc = &state.fns[0];
+        assert_eq!(acc.excl_ns, 25, "time");
+        assert_eq!(acc.excl_allocs, 5, "allocations");
+        assert_eq!(acc.excl_frees, 2, "frees");
+        assert_eq!(acc.excl_io, 2, "io operations");
+        assert_eq!(acc.excl_wait, 15, "io wait");
+        assert_eq!(acc.incl_ns, 25, "and the inclusive span agrees with the self time");
+        assert_eq!(acc.calls, 1, "a resume is the same activation, not a second call");
+    }
+
+    /// A coroutine that is never resumed still reports the time it ran.
+    ///
+    /// Most generators are abandoned: a `foreach` that breaks early, a
+    /// `current()` with no `next()`. Its body never returns, so no exit hook
+    /// ever arrives for it, and setting its frame aside to be rebased at a
+    /// resume that never comes would report a function that ran as one that did
+    /// not. A suspension closing the frame is what makes the work it did visible
+    /// — and is why this is not the shape it was first written in.
+    #[test]
+    fn an_abandoned_coroutine_still_reports_what_it_ran() {
+        let mut state = State::default();
+        state.enter_sim(0, 0, 0, 0, 0, 0); // consumer
+        state.enter_at(1, CORO_BASE, 10, 0, 0, 0, 0); // the body, on its own stack
+        state.suspend_at(1, CORO_BASE, 40, 0, 0, 0, 0); // 30 ns, then it yields
+        // Nobody ever resumes it. The consumer goes on and returns.
+        state.exit_sim(0, 1_040, 0, 0, 0, 0);
+
+        assert_eq!(
+            state.fns[1].excl_ns, 30,
+            "the body's own 30 ns were lost with the resume that never came"
+        );
+        assert_eq!(state.fns[1].incl_ns, 30, "and its inclusive span agrees");
+        assert_eq!(
+            state.fns[0].excl_ns, 1_010,
+            "the consumer keeps its own 1010 ns and is charged the body's 30 as a child"
+        );
+        assert_eq!(
+            state.edges.get(&(0, 1)).map(|edge| edge.1),
+            Some(30),
+            "the edge carries the span the body actually ran, not the consumer's"
+        );
+        assert_eq!(state.parked.len(), 1, "the group is still parked, and bounded");
+    }
+
+    /// A nested activation suspending does not end the outer one's span.
+    ///
+    /// Inclusive time is per FUNCTION, spanning its outermost activation, so
+    /// that recursion is counted once — `depth` is what says whether the
+    /// outermost one is still running. A suspension closes a frame and a resume
+    /// opens one, so both have to move that counter, and the resume's half is
+    /// invisible until two activations of the same function are live: with one,
+    /// the span is reopened by the restamp either way and the totals agree by
+    /// accident. A generator delegating to another instance of itself is the
+    /// ordinary way to have two.
+    #[test]
+    fn a_nested_activation_suspending_does_not_end_the_outer_ones_span() {
+        let mut state = State::default();
+        let outer = CORO_BASE;
+        let inner = CORO_BASE - 64;
+        state.enter_at(0, outer, 0, 0, 0, 0, 0);
+        state.enter_at(0, inner, 10, 0, 0, 0, 0);
+
+        state.suspend_at(0, inner, 20, 0, 0, 0, 0);
+        assert_eq!(
+            state.fns[0].depth, 1,
+            "the outer activation is still running and still holds the span"
+        );
+        assert_eq!(
+            state.fns[0].incl_ns, 0,
+            "no inclusive time is credited while the outermost activation runs"
+        );
+
+        state.resume_at(0, inner, 1_020, 0, 0, 0, 0);
+        assert_eq!(state.fns[0].depth, 2, "and the resume puts the activation back");
+        state.exit_at(0, inner, 1_030, 0, 0, 0, 0);
+        state.exit_at(0, outer, 1_040, 0, 0, 0, 0);
+
+        assert_eq!(
+            state.fns[0].incl_ns, 1_040,
+            "the outermost activation's span, counted once"
+        );
+        assert_eq!(state.fns[0].calls, 2, "and neither resume counted as a call");
+    }
+
+    /// A group of parked activations comes back in the order it went away.
+    ///
+    /// More than one frame is parked when frames sit ABOVE the suspending one —
+    /// which an unwind leaves behind, since the frames an exception destroyed
+    /// stay on the shadow stack until the catcher exits. Restoring them
+    /// innermost-first would put the callee under its own caller, and every
+    /// depth-ordered thing after that — the caller an `enter_at` reads, the
+    /// frames a resync closes — would be reading the stack upside down.
+    #[test]
+    fn a_parked_group_comes_back_in_the_order_it_went_away() {
+        let mut state = State::default();
+        let base = CORO_BASE;
+        let above = CORO_BASE - 64;
+        state.enter_at(3, base, 0, 0, 0, 0, 0);
+        state.enter_at(4, above, 5, 0, 0, 0, 0);
+
+        state.suspend_at(3, base, 10, 0, 0, 0, 0);
+        assert_eq!(
+            state.parked.first().map(|group| group.frames.len()),
+            Some(2),
+            "both frames belong to the coroutine that suspended"
+        );
+        assert!(state.stack.is_empty());
+
+        state.resume_at(3, base, 20, 0, 0, 0, 0);
+        assert_eq!(
+            state.stack.iter().map(|frame| frame.id).collect::<Vec<_>>(),
+            vec![3, 4],
+            "the callee came back underneath its own caller"
+        );
+    }
+
+    /// A suspension past the cap is refused, and the refusal is reported.
+    ///
+    /// Parking is bounded for the reason `MAX_STACK` is: an abandoned generator
+    /// is never resumed, so a program that builds them in a loop and drops them
+    /// would grow this without limit. Past the cap the frame stays where it was,
+    /// which is the old wrong measurement rather than a new one — and the note
+    /// is what stops that from being a silent truncation.
+    #[test]
+    fn a_suspension_past_the_cap_is_refused_and_reported() {
+        let mut state = State::default();
+        for index in 0..MAX_PARKED {
+            let fp = CORO_BASE + index * 64;
+            state.enter_at(0, fp, index as u64, 0, 0, 0, 0);
+            state.suspend_at(0, fp, index as u64, 0, 0, 0, 0);
+        }
+        assert_eq!(state.parked.len(), MAX_PARKED);
+        assert_eq!(state.parks_refused, 0, "everything up to the cap is parked");
+
+        let over = CORO_BASE + MAX_PARKED * 64;
+        state.enter_at(0, over, 1_000, 0, 0, 0, 0);
+        state.suspend_at(0, over, 1_000, 0, 0, 0, 0);
+        assert_eq!(state.parked.len(), MAX_PARKED, "the cap holds");
+        assert_eq!(state.parks_refused, 1);
+        assert_eq!(
+            state.stack.last().map(|frame| frame.fp),
+            Some(over),
+            "a refused park must leave the frame alone, not lose it"
+        );
+
+        let report = state.render(&["body".into()]);
+        assert!(
+            report.contains(&format!("1 suspension(s) past {MAX_PARKED} parked")),
+            "a refused park was not reported: {report}"
+        );
+    }
+
+    /// A coroutine stack handed back out does not resume somebody else's frames.
+    ///
+    /// A freed coroutine stack is reused, so a frame pointer names an activation
+    /// only among the live ones — the same reason `exit_at` pairs it with the id
+    /// rather than trusting it alone. Here an abandoned generator's group is
+    /// still parked when a different function starts on its address.
+    #[test]
+    fn a_resume_at_a_reused_coroutine_address_restores_nothing() {
+        let mut state = State::default();
+        state.enter_at(7, CORO_BASE, 0, 0, 0, 0, 0);
+        state.suspend_at(7, CORO_BASE, 10, 0, 0, 0, 0);
+        assert_eq!(state.parked.len(), 1);
+
+        // Another function, the same address, never parked.
+        state.resume_at(9, CORO_BASE, 20, 0, 0, 0, 0);
+        assert_eq!(
+            state.parked.len(),
+            1,
+            "one coroutine's frames were handed to another"
+        );
+        assert!(state.stack.is_empty(), "and nothing was pushed for it");
+
+        // Its rightful owner still finds them.
+        state.resume_at(7, CORO_BASE, 20, 0, 0, 0, 0);
+        assert_eq!(state.stack.len(), 1);
+        assert!(state.parked.is_empty());
+    }
+
+    /// A suspension from inside a nested call parks only the inner frame.
+    ///
+    /// The whole coroutine stack suspends, but what this is told is one frame
+    /// pointer, and the frames below it on that stack are indistinguishable from
+    /// the consumer's without a record of where the coroutine began. So the
+    /// outer body keeps running in the profile, exactly as it did before any of
+    /// this — no better and no worse.
+    ///
+    /// Written down as a test rather than as a comment because a sentence
+    /// claiming a limit is the thing this branch keeps finding to be wrong. If
+    /// the coroutine's root is ever recorded, this test is what changes.
+    #[test]
+    fn a_suspension_from_a_nested_call_parks_only_the_inner_frame() {
+        let mut state = State::default();
+        // body() on the coroutine stack, then inner() above it, which suspends.
+        state.enter_at(0, CORO_BASE, 0, 0, 0, 0, 0);
+        state.enter_at(1, CORO_BASE - 64, 10, 0, 0, 0, 0);
+        state.suspend_at(1, CORO_BASE - 64, 20, 0, 0, 0, 0);
+
+        assert_eq!(state.parked.len(), 1);
+        assert_eq!(
+            state.stack.last().map(|frame| frame.id),
+            Some(0),
+            "the outer body is still standing, and is still read as the caller"
         );
     }
 

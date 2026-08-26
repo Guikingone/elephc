@@ -64,7 +64,14 @@ pub(super) fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instru
     } else {
         "__rt_gen_suspend"
     };
+    // The yielded key and value are staged; parking here keeps the cost of
+    // staging them on the body that is suspending, and the two registers are
+    // saved because the hook is an ordinary call that takes its own arguments.
+    crate::codegen::frame::emit_instr_suspend(ctx, &[key_arg, value_arg]);
     abi::emit_call_label(ctx.emitter, suspend_symbol);
+    // Execution picks up HERE on the next send()/next(), with the sent value in
+    // the result register — which is why the result register is what is saved.
+    crate::codegen::frame::emit_instr_resume(ctx, &[result_reg]);
     store_call_result(ctx, inst, &PhpType::Mixed)
 }
 
