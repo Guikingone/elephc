@@ -97,6 +97,14 @@ const REPLAY_SLOTS: usize = 64;
 /// Bytes per remembered signature: the tag's first eight bytes, then the second
 /// it was accepted at.
 const REPLAY_SLOT_BYTES: usize = 16;
+/// How many times a spend re-searches after losing a slot to another process.
+///
+/// Each loss means somebody else wrote a slot we had picked, and what they wrote
+/// may be this very tag — which only a fresh search can see. Bounded because a
+/// caller is inside an HTTP request: three passes over sixty-four words costs
+/// nothing and needs every one of sixty-three other processes to beat this one
+/// twice in a row to run out.
+const SPEND_ATTEMPTS: usize = 3;
 /// Replay-table bytes, in the shared mapping because the check has to hold
 /// ACROSS `--web` workers: a captured header replayed against a different worker
 /// than the one that served the original would otherwise meet a process that had
@@ -1262,27 +1270,56 @@ unsafe fn spend_query_tag(base: usize, tag: u64, now: i64) -> bool {
     // costs that request a retry and nothing else.
     let tag = if tag == 0 { 1 } else { tag };
     let start = (tag % REPLAY_SLOTS as u64) as usize;
-    for step in 0..REPLAY_SLOTS {
-        let index = (start + step) % REPLAY_SLOTS;
-        let (tag_word, taken_at) = replay_slot(base, index);
-        let seen = tag_word.load(Ordering::Acquire);
-        let live = seen != 0 && within_query_window(now, taken_at.load(Ordering::Acquire) as i64);
-        if live {
+    // Two passes, and the split is the whole correctness argument. Taking the
+    // first reusable slot DURING the search let a replay be accepted: a tag whose
+    // home slot was busy at first use sits further along the probe, and when the
+    // slot that displaced it later expires, the replay stops there, finds it
+    // free, and takes it — without ever reaching the entry that says it was
+    // already spent. The search has to finish before anything is taken.
+    for _attempt in 0..SPEND_ATTEMPTS {
+        let mut reusable: Option<usize> = None;
+        for step in 0..REPLAY_SLOTS {
+            let index = (start + step) % REPLAY_SLOTS;
+            let (tag_word, taken_at) = replay_slot(base, index);
+            let seen = tag_word.load(Ordering::Acquire);
             if seen == tag {
+                // Spent, whatever the slot's age says. Deliberately NOT gated on
+                // the entry still being live: a matching tag is a matching
+                // TIMESTAMP, and a timestamp old enough for this entry to have
+                // expired was already refused by the window check upstream. So
+                // this can only fire on a genuine replay — and not reading the
+                // time here is what closes the window between a winner's
+                // compare-exchange and the store of its timestamp, in which a
+                // concurrent racer saw its own tag with a stale time, called the
+                // slot reusable, and took it from the request that had just won.
                 return false;
             }
-            continue;
-        }
-        match tag_word.compare_exchange(seen, tag, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => {
-                taken_at.store(now as u64, Ordering::Release);
-                return true;
+            if reusable.is_none()
+                && (seen == 0 || !within_query_window(now, taken_at.load(Ordering::Acquire) as i64))
+            {
+                reusable = Some(index);
             }
-            // Someone took this slot between the load and the exchange. If they
-            // took it with OUR tag they are the request this one is a replay of.
-            Err(actual) if actual == tag => return false,
-            Err(_) => continue,
         }
+        // Every slot holds a signature still inside the window. Sixty-four of
+        // those need sixty-four VERIFIED asks in five minutes, which only the key
+        // holder can produce — so this is a burst, not an attack, and it is
+        // refused rather than admitted: a signature nobody can account for cannot
+        // be promised to be used once.
+        let Some(index) = reusable else {
+            return false;
+        };
+        let (tag_word, taken_at) = replay_slot(base, index);
+        let seen = tag_word.load(Ordering::Acquire);
+        if tag_word
+            .compare_exchange(seen, tag, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            taken_at.store(now as u64, Ordering::Release);
+            return true;
+        }
+        // Somebody took this slot between the search and the exchange. Search
+        // again rather than moving to the next one: what they wrote may be THIS
+        // tag, and only a fresh pass can see that.
     }
     false
 }
@@ -1658,15 +1695,29 @@ mod tests {
     /// Asking is what starts collection, and asking twice changes nothing.
     #[test]
     fn sampled_collection_starts_when_a_client_asks_for_it() {
+        // Serialized, and with the region forced empty for the duration.
+        //
+        // This calls the REAL `begin_sampled`, whose comment used to say "no ring
+        // is mapped in a test binary, so this stops short of the syscall". That
+        // holds for this test alone and not for the suite: `REGION` is a static
+        // that the route and replay tests swap to a heap buffer while they run,
+        // and with one of those in flight this reached `arm_timer` for real — in
+        // a binary where no SIGPROF handler is installed, so the default action
+        // terminated the process. It killed roughly one run in seven, printing no
+        // failing test at all because the process simply died. Taking the lock
+        // also stops `ASKED` from leaking into the tests that assert a build
+        // starts unasked.
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved_region = REGION.swap(0, super::Ordering::Relaxed);
         let restore = super::ASKED.load(super::Ordering::Relaxed);
         super::ASKED.store(false, super::Ordering::Relaxed);
         assert!(
             !super::should_arm(super::ASKED.load(super::Ordering::Relaxed), 0x1000),
             "a reachable service fills nothing until someone asks",
         );
-        // No ring is mapped in a test binary, so this decides and stops short of
-        // the syscall — which is the behaviour under test: the DECISION is what
-        // an authenticated client changes.
+        // The DECISION is what an authenticated client changes; `should_arm` is
+        // asked about a mapped ring with a literal, so the decision is observable
+        // without this process owning one.
         super::begin_sampled();
         assert!(
             super::should_arm(super::ASKED.load(super::Ordering::Relaxed), 0x1000),
@@ -1678,6 +1729,7 @@ mod tests {
             "a second poll finds collection already running",
         );
         super::ASKED.store(restore, super::Ordering::Relaxed);
+        REGION.store(saved_region, super::Ordering::Relaxed);
     }
 
     /// A worker only starts sampling because someone asked, never because the
@@ -1696,6 +1748,11 @@ mod tests {
     /// process stopped, so a dump that returns early leaves that flag alone.
     #[test]
     fn a_dump_on_a_binary_nobody_asked_does_nothing() {
+        // Reads `ASKED`, which other tests set and restore, so it has to hold the
+        // same lock they do — otherwise this fails whenever it lands between an
+        // ask and its restore, and the failure describes a defect that is not
+        // there.
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         assert!(
             !super::ASKED.load(super::Ordering::Relaxed),
             "a test build must start unasked, or this proves nothing"
@@ -2572,6 +2629,57 @@ mod tests {
 
         REGION.store(saved_region, Ordering::Relaxed);
         KEY_PTR.store(saved_key, Ordering::Relaxed);
+    }
+
+    /// A tag displaced from its home slot is still found when that slot frees up.
+    ///
+    /// Slots are probed from the tag's own value, so a tag whose home slot was
+    /// occupied at first use lives further along the probe. Taking the first
+    /// reusable slot DURING the search then accepted the replay: it stopped at
+    /// the home slot the moment the entry displacing it expired, found it free,
+    /// and took it without ever reaching the entry recording that this tag was
+    /// already spent. The search has to finish before anything is taken.
+    ///
+    /// Driven through `spend_query_tag` rather than the HTTP entry point because
+    /// the setup — one slot occupied at first use and expired by the replay — is a
+    /// state of the table, and reaching it through signatures would mean minting
+    /// two headers that collide modulo the table size.
+    #[test]
+    fn a_replay_is_caught_after_its_home_slot_frees_up() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+        let now = 1_000_000i64;
+
+        // A different signature already holds the home slot of the tag below.
+        let tag = 7u64;
+        let home = (tag % REPLAY_SLOTS as u64) as usize;
+        let (squatter_tag, squatter_at) = unsafe { replay_slot(base, home) };
+        squatter_tag.store(tag + REPLAY_SLOTS as u64, Ordering::Release);
+        squatter_at.store(now as u64, Ordering::Release);
+
+        // First use is honoured, and lands somewhere past its home slot.
+        assert!(unsafe { spend_query_tag(base, tag, now) });
+        assert_ne!(
+            squatter_tag.load(Ordering::Acquire),
+            tag,
+            "the home slot was taken, so the tag went further along"
+        );
+
+        // The squatter ages out. Its slot is now reusable — and it is the FIRST
+        // slot the replay meets.
+        squatter_at.store((now - QUERY_WINDOW_SECS - 60) as u64, Ordering::Release);
+        assert!(
+            !unsafe { spend_query_tag(base, tag, now) },
+            "a replay must be found wherever the tag actually sits"
+        );
+
+        // A genuinely new tag still gets that freed slot, so the fix bought
+        // correctness without leaking the table.
+        assert!(unsafe { spend_query_tag(base, tag + 1, now) });
+
+        REGION.store(saved_region, Ordering::Relaxed);
     }
 
     #[test]
