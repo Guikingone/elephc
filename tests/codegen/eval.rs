@@ -8220,7 +8220,7 @@ echo ":"; echo function_exists("disk_free_space"); echo function_exists("disk_to
 }
 
 /// Verifies dynamic eval uses PHP runtime ordering for false and preserves unordered NaN
-/// semantics separately for relational and spaceship operators.
+/// semantics for numeric and string operands separately from spaceship ordering.
 #[test]
 fn test_dynamic_eval_relational_and_spaceship_use_php_ordering() {
     let out = compile_and_run(
@@ -8235,14 +8235,24 @@ var_dump($nan < 0);
 var_dump($nan <= 0);
 var_dump($nan > 0);
 var_dump($nan >= 0);
-var_dump($nan <=> 0);';
+var_dump($nan <=> 0);
+foreach (["1", "a"] as $string) {
+    var_dump($string <=> $nan);
+    var_dump($nan <=> $string);
+    var_dump($string < $nan);
+    var_dump($string > $nan);
+    var_dump($nan < $string);
+    var_dump($nan > $string);
+}';
 eval($code);
 "#,
     );
     assert_eq!(
         out,
         "bool(false)\nbool(true)\nint(-1)\nint(1)\nbool(false)\nbool(false)\n\
-         bool(false)\nbool(false)\nint(1)\n"
+         bool(false)\nbool(false)\nint(1)\nint(1)\nint(1)\nbool(false)\n\
+         bool(false)\nbool(false)\nbool(false)\nint(1)\nint(1)\nbool(false)\n\
+         bool(false)\nbool(false)\nbool(false)\n"
     );
 }
 

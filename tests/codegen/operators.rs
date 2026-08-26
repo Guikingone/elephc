@@ -476,8 +476,8 @@ var_dump($failure >= 0);
 }
 
 
-/// Regression: boxed float unions preserve PHP's distinction between relational and
-/// spaceship handling of unordered NaN comparisons.
+/// Regression: boxed float unions preserve PHP's unordered NaN rules for numeric and string
+/// operands, including the always-positive spaceship result in either operand order.
 #[test]
 fn test_float_or_false_union_relational_nan_is_unordered() {
     let out = compile_and_run(
@@ -486,17 +486,32 @@ function nan_or_false(bool $ok): float|false {
     return $ok ? NAN : false;
 }
 
+function string_or_float(string $value): float|string {
+    return $value;
+}
+
 $nan = nan_or_false(true);
 var_dump($nan < 0);
 var_dump($nan <= 0);
 var_dump($nan > 0);
 var_dump($nan >= 0);
 var_dump($nan <=> 0);
+foreach (["1", "a"] as $raw) {
+    $string = string_or_float($raw);
+    var_dump($string <=> $nan);
+    var_dump($nan <=> $string);
+    var_dump($string < $nan);
+    var_dump($string > $nan);
+    var_dump($nan < $string);
+    var_dump($nan > $string);
+}
 "#,
     );
     assert_eq!(
         out,
-        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nint(1)\n"
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nint(1)\n\
+         int(1)\nint(1)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n\
+         int(1)\nint(1)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n"
     );
 }
 

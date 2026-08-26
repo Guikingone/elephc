@@ -273,6 +273,14 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #80]");                               // stage the string's pointer and length
 
     emitter.label("__rt_pcmp_num_str_body");
+    emitter.instruction("ldr x9, [sp, #64]");                                   // reload the staged number's runtime tag
+    emitter.instruction("cmp x9, #2");                                          // is the numeric operand a double that may be NaN?
+    emitter.instruction("b.ne __rt_pcmp_num_str_parse");                        // integers cannot be unordered
+    emitter.instruction("ldr x10, [sp, #72]");                                  // reload the staged double payload bits
+    emitter.instruction("fmov d0, x10");                                        // reinterpret the payload for the NaN self-comparison
+    emitter.instruction("fcmp d0, d0");                                         // NaN is the only double unordered with itself
+    emitter.instruction("b.vs __rt_pcmp_num_str_unordered");                    // bypass parsing, formatting, and swap correction for NaN
+    emitter.label("__rt_pcmp_num_str_parse");
     emitter.instruction("ldr x1, [sp, #80]");                                   // pass the string pointer to the numeric parser
     emitter.instruction("ldr x2, [sp, #88]");                                   // pass the string length to the numeric parser
     emitter.instruction("bl __rt_str_to_number");                               // parse the string under PHP's numeric-string grammar
@@ -296,7 +304,7 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_pcmp_num_str_unordered");
     emitter.instruction("mov x9, #1");                                          // mark the number/string comparison as IEEE unordered
     emitter.instruction("str x9, [sp, #104]");                                  // expose unordered state to relational consumers
-    emitter.instruction("b __rt_pcmp_maybe_pos");                               // preserve the existing spaceship ordering result
+    emitter.instruction("b __rt_pcmp_pos");                                     // PHP spaceship returns 1 whenever either operand is NaN
 
     emitter.label("__rt_pcmp_num_str_bytes");
     abi::emit_symbol_address(emitter, "x9", "_concat_off");
@@ -594,6 +602,14 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 96], rdx");                       // stage the string's length
 
     emitter.label("__rt_pcmp_num_str_body");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // reload the staged number's runtime tag
+    emitter.instruction("cmp r10, 2");                                          // is the numeric operand a double that may be NaN?
+    emitter.instruction("jne __rt_pcmp_num_str_parse");                         // integers cannot be unordered
+    emitter.instruction("mov r11, QWORD PTR [rbp - 80]");                       // reload the staged double payload bits
+    emitter.instruction("movq xmm0, r11");                                      // reinterpret the payload for the NaN self-comparison
+    emitter.instruction("ucomisd xmm0, xmm0");                                  // NaN is the only double unordered with itself
+    emitter.instruction("jp __rt_pcmp_num_str_unordered");                      // bypass parsing, formatting, and swap correction for NaN
+    emitter.label("__rt_pcmp_num_str_parse");
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // pass the string pointer to the numeric parser
     emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                       // pass the string length to the numeric parser
     emitter.instruction("call __rt_str_to_number");                             // parse the string under PHP's numeric-string grammar
@@ -617,7 +633,7 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_pcmp_maybe_pos");                             // the number is larger, before any swap correction
     emitter.label("__rt_pcmp_num_str_unordered");
     emitter.instruction("mov QWORD PTR [rbp - 112], 1");                        // expose unordered state to relational consumers
-    emitter.instruction("jmp __rt_pcmp_maybe_pos");                             // preserve the existing spaceship ordering result
+    emitter.instruction("jmp __rt_pcmp_pos");                                   // PHP spaceship returns 1 whenever either operand is NaN
 
     emitter.label("__rt_pcmp_num_str_bytes");
     abi::emit_symbol_address(emitter, "r10", "_concat_off");
@@ -693,5 +709,41 @@ mod tests {
         assert!(x86_64.contains("mov QWORD PTR [rbp - 112], 0"), "{x86_64}");
         assert!(x86_64.contains("jp __rt_pcmp_unordered"), "{x86_64}");
         assert!(x86_64.contains("mov rdx, QWORD PTR [rbp - 112]"), "{x86_64}");
+    }
+
+    /// Verifies number/string NaN comparisons bypass operand-swap negation on both targets.
+    #[test]
+    fn php_compare_number_string_unordered_is_always_positive_on_both_targets() {
+        let mut aarch64 = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_php_compare(&mut aarch64);
+        let aarch64 = aarch64.output();
+        assert!(
+            aarch64.contains(
+                "fcmp d0, d0\n    b.vs __rt_pcmp_num_str_unordered\n__rt_pcmp_num_str_parse:"
+            ),
+            "{aarch64}"
+        );
+        assert!(
+            aarch64.contains(
+                "__rt_pcmp_num_str_unordered:\n    mov x9, #1\n    str x9, [sp, #104]\n    b __rt_pcmp_pos"
+            ),
+            "{aarch64}"
+        );
+
+        let mut x86_64 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_php_compare(&mut x86_64);
+        let x86_64 = x86_64.output();
+        assert!(
+            x86_64.contains(
+                "ucomisd xmm0, xmm0\n    jp __rt_pcmp_num_str_unordered\n__rt_pcmp_num_str_parse:"
+            ),
+            "{x86_64}"
+        );
+        assert!(
+            x86_64.contains(
+                "__rt_pcmp_num_str_unordered:\n    mov QWORD PTR [rbp - 112], 1\n    jmp __rt_pcmp_pos"
+            ),
+            "{x86_64}"
+        );
     }
 }
