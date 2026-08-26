@@ -262,16 +262,20 @@ impl State {
         // resolution asks for a throw deeper than the exiting frame's index and
         // every index is at least zero. Thirty-two of them filled the table and
         // the next real throw recycled a live record.
-        if depth == 0 {
-            return;
-        }
         // Every activation dropped past the cap sat ABOVE this throw, so the
         // unwind destroys all of them and not one of their exits will arrive.
-        // Their frame pointers are cleared here for that reason and not as
+        // Their frame pointers are cleared for that reason and not as
         // housekeeping: left behind, they would be matched by the NEXT dropped
         // call to reuse the same address, and its exit would be swallowed as if
         // it belonged to an activation that no longer exists.
+        //
+        // Before the depth guard, not after. Nothing can be live above an empty
+        // stack, so an identity still recorded there is stale by definition —
+        // and returning early left exactly that behind.
         self.dropped_fps.clear();
+        if depth == 0 {
+            return;
+        }
         let unwind = self.unwinding.get_or_insert_with(Unwind::default);
         // A throw raised while another is in flight joins it rather than
         // replacing it: the frames the first one killed died then, and only its
@@ -417,9 +421,26 @@ impl State {
         // carries this pointer — is what an unwind invalidates, because the dead
         // frames it leaves behind carry pointers the native stack has already
         // handed back out.
-        if self.dropped_fps.last() == Some(&fp) {
-            self.dropped_fps.pop();
-            return;
+        if !self.dropped_fps.is_empty() {
+            // Matched by MEMBERSHIP, not by position. Checking only the last
+            // entry assumes dropped activations exit in the order they were
+            // entered — true of ordinary calls, and an assumption about the
+            // whole language rather than about this function. Where it fails the
+            // entry left behind is not dead weight: a later TRACKED frame
+            // reusing that address matches it, returns early, and is never
+            // popped — a ghost frame misattributing everything after it.
+            //
+            // The scan runs only past `MAX_STACK`, where this list is non-empty
+            // at all, and the last entry is still tried first because that is
+            // what the ordinary case gives.
+            if self.dropped_fps.last() == Some(&fp) {
+                self.dropped_fps.pop();
+                return;
+            }
+            if let Some(index) = self.dropped_fps.iter().rposition(|entry| *entry == fp) {
+                self.dropped_fps.remove(index);
+                return;
+            }
         }
         let Some(index) = (match self.stack.last() {
             // The overwhelmingly common case, and the reason the search below
@@ -2114,7 +2135,13 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
     let offered = capture_word(SLICE_EPOCH_WORD).map(|e| e.load(Ordering::Acquire));
     if current != offered {
         clear_claim_identity(claim_id);
-        filled.store(EMPTY, Ordering::Release);
+    // Released with a compare-exchange from READY, not a blind store. Today
+    // nothing else can be transitioning this word — the endpoint serialises arm,
+    // take and cancel behind one lock — but that lock lives in ANOTHER crate, and
+    // a rendezvous whose correctness depends on a caller's discipline is one
+    // refactor away from being wrong. Failing the exchange means the slot is no
+    // longer this call's to free, and the right answer is to leave it alone.
+        let _ = filled.compare_exchange(READY, EMPTY, Ordering::AcqRel, Ordering::Relaxed);
         return 0;
     }
     let len = length.load(Ordering::Relaxed) as usize;
@@ -2123,7 +2150,7 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
     // from any one writer.
     if len > CAPTURE_BYTES - CAPTURE_HEADER {
         clear_claim_identity(claim_id);
-        filled.store(EMPTY, Ordering::Relaxed);
+        let _ = filled.compare_exchange(READY, EMPTY, Ordering::AcqRel, Ordering::Relaxed);
         armed.store(0, Ordering::Relaxed);
         return 0;
     }
@@ -2146,7 +2173,10 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
     // recorded — which reads as "no identity", and is safe, but leaves the word
     // saying nothing about a slot that is in fact held.
     clear_claim_identity(claim_id);
-    filled.store(EMPTY, Ordering::Release);
+    // The copy above is done either way, so the length is returned whatever the
+    // exchange says: losing it means somebody else already freed the slot, not
+    // that this caller failed to read it.
+    let _ = filled.compare_exchange(READY, EMPTY, Ordering::AcqRel, Ordering::Relaxed);
     armed.store(0, Ordering::Relaxed);
     len
 }
@@ -2481,6 +2511,70 @@ mod tests {
             before,
             "a dropped activation's exit closed {} frames it never owned",
             before - state.stack.len()
+        );
+    }
+
+    /// A dropped activation is recognised whatever order its exit arrives in.
+    ///
+    /// Matching only the newest entry assumes dropped activations exit in the
+    /// order they were entered. That is true of ordinary calls, and it is an
+    /// assumption about the whole language rather than about this function —
+    /// which is reason enough not to rest on it here. Where it fails the entry
+    /// left behind is not dead weight: a later TRACKED frame reusing that
+    /// address matches it, returns early, and is never popped, so every
+    /// measurement after it is attributed to a frame that already returned.
+    #[test]
+    fn a_dropped_exit_out_of_order_leaves_nothing_behind() {
+        let mut state = State::default();
+        for depth in 0..MAX_STACK {
+            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
+        }
+
+        // Two dropped activations, exiting oldest-first.
+        let first = 0x5000usize;
+        let second = 0x6000usize;
+        state.enter_at(8, first, 10, 0, 0, 0, 0);
+        state.enter_at(9, second, 20, 0, 0, 0, 0);
+        assert_eq!(state.dropped_fps, vec![first, second]);
+
+        state.exit_at(8, first, 30, 0, 0, 0, 0);
+        assert_eq!(
+            state.dropped_fps,
+            vec![second],
+            "an out-of-order dropped exit must take its own identity with it"
+        );
+        state.exit_at(9, second, 40, 0, 0, 0, 0);
+        assert!(state.dropped_fps.is_empty());
+        assert_eq!(state.stack.len(), MAX_STACK, "and neither touched the stack");
+
+        // The consequence of leaving one behind: a tracked frame at that address
+        // would be swallowed. Drain to below the cap so the next call is tracked.
+        let top = state.stack.last().expect("a full stack").fp;
+        state.exit_at(state.stack.last().expect("a full stack").id, top, 50, 0, 0, 0, 0);
+        state.enter_at(11, first, 60, 0, 0, 0, 0);
+        let before = state.stack.len();
+        state.exit_at(11, first, 70, 0, 0, 0, 0);
+        assert_eq!(
+            state.stack.len(),
+            before - 1,
+            "a tracked frame was swallowed by a stale dropped identity"
+        );
+    }
+
+    /// A throw clears the dropped identities even with nothing on the stack.
+    ///
+    /// The clear used to sit after the depth guard, so a throw raised with an
+    /// empty shadow stack returned first and left whatever was recorded. Nothing
+    /// can be live above an empty stack, so an identity still there is stale by
+    /// definition — and stale is the one thing this list must never hold.
+    #[test]
+    fn a_throw_on_an_empty_stack_still_forgets_dropped_identities() {
+        let mut state = State::default();
+        state.dropped_fps.push(0x7000);
+        state.note_throw(10, 0, 0, 0, 0);
+        assert!(
+            state.dropped_fps.is_empty(),
+            "a throw at depth zero kept an identity nothing can vouch for"
         );
     }
 
