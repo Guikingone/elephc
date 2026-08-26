@@ -38,6 +38,22 @@ pub(crate) struct SharedCodegenState {
     mixed_string_sharing: [Option<bool>; 2],
     /// Memoized "does this module share the `count()` countable guard", for the same reason.
     count_guard_sharing: Option<bool>,
+    /// `--counters`: every non-synthetic PHP function prologue increments a BSS slot.
+    pub(super) counters: bool,
+    /// `--instrument`: every non-synthetic PHP function calls
+    /// `elephc_instr_enter(id)`/`_exit(id)` around its body for exact timing.
+    pub(super) instrument: crate::codegen::Instrumentation,
+    /// `--probe`: the embedded symbol table `(data label, entry count)` main's
+    /// prologue hands to `elephc_probe_init`. `None` unless the probe is enabled.
+    pub(super) probe_table: Option<(String, usize)>,
+    /// Counted functions as `(display name, counter symbol)`, in emission order. Main's
+    /// epilogue renders the exit dump from this list — main is emitted last, so the
+    /// registry is complete by then.
+    counter_registry: Vec<(String, String)>,
+    /// Instrumented function names, in id order (id = index). Main emits the
+    /// name table `elephc_instr_init` reads; main is emitted last, so it is
+    /// complete by then.
+    instr_registry: Vec<String>,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -100,6 +116,29 @@ impl SharedCodegenState {
     /// Records the `count()` guard sharing decision so later sites reuse it.
     pub(super) fn set_count_guard_sharing(&mut self, shares: bool) {
         self.count_guard_sharing = Some(shares);
+    }
+
+    /// Records one counted function for the exit dump.
+    pub(super) fn register_counter(&mut self, display_name: String, symbol: String) {
+        self.counter_registry.push((display_name, symbol));
+    }
+
+    /// Returns the counted functions in emission order.
+    pub(super) fn counter_registry(&self) -> &[(String, String)] {
+        &self.counter_registry
+    }
+
+    /// Registers one instrumented function and returns its stable id (its index
+    /// in the name table `elephc_instr_init` receives).
+    pub(super) fn register_instr(&mut self, display_name: String) -> usize {
+        let id = self.instr_registry.len();
+        self.instr_registry.push(display_name);
+        id
+    }
+
+    /// Returns the instrumented function names in id order.
+    pub(super) fn instr_registry(&self) -> &[String] {
+        &self.instr_registry
     }
 
     /// Returns cached runtime string-callable cases for the requested specialization.

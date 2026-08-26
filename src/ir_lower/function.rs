@@ -90,6 +90,7 @@ pub(crate) fn lower_main(
         constants,
         None,
         PhpType::Void,
+        false,
         &[],
         None,
         true,
@@ -211,6 +212,7 @@ pub(crate) fn lower_user_function(
         constants,
         None,
         body_return_type.clone(),
+        signature.declared_return,
         &eir_signature.params,
         None,
         false,
@@ -316,6 +318,7 @@ pub(crate) fn lower_class_method(
         constants,
         Some(class_name.to_string()),
         method_body_return_type.clone(),
+        signature.declared_return,
         &body_params,
         None,
         false,
@@ -411,6 +414,7 @@ pub(crate) fn lower_eval_aot_function(
         constants,
         None,
         return_type,
+        signature.declared_return,
         &[],
         None,
         false,
@@ -521,6 +525,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         constants,
         None,
         return_type,
+        signature.declared_return,
         &signature.params,
         None,
         false,
@@ -624,6 +629,7 @@ pub(crate) fn lower_property_init_thunk(
         constants,
         Some(class_name.to_string()),
         PhpType::Void,
+        false,
         &params,
         None,
         false,
@@ -737,6 +743,11 @@ fn coercible_or_throw_stmt(
     )
 }
 
+/// Lowers the thunk that `new $class(...)` calls when the class is only known
+/// at run time.
+///
+/// The thunk pads the call with the constructor's declared defaults for the
+/// arguments the site did not provide, which a dynamic call site cannot know.
 pub(crate) fn lower_dynamic_constructor_thunk(
     class_name: &str,
     class_info: &ClassInfo,
@@ -973,6 +984,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         constants,
         Some(class_name.to_string()),
         PhpType::Void,
+        false,
         &params,
         None,
         false,
@@ -1178,6 +1190,7 @@ fn lower_closure_function_with_signature(
         &parent.constants,
         parent.current_class.clone(),
         closure_body_return_type.clone(),
+        signature.declared_return,
         &lowered_params,
         recursive_binding,
         false,
@@ -1221,6 +1234,7 @@ fn lower_body_into_function(
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
     return_php_type: PhpType,
+    return_type_is_declared: bool,
     params: &[(String, PhpType)],
     recursive_closure_binding: Option<RecursiveClosureBinding>,
     in_main: bool,
@@ -1278,6 +1292,7 @@ fn lower_body_into_function(
         web,
     );
     ctx.by_ref_return = function_by_ref_return;
+    ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);
     }

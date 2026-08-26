@@ -14,6 +14,7 @@ use std::fs::File;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 
 use crate::handler_ipc;
+use crate::probe_route;
 use crate::request_state::{self, RequestMeta};
 
 use super::super::MAX_EXEC_SECS;
@@ -39,6 +40,26 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
         }
     };
     crate::session::elephc_web_session_reset();
+    // Read out of the request before `set_request` moves it, exactly as the
+    // default worker does before its own move. PHP runs HERE, in the handler
+    // child, not in the worker that accepted the connection — so this is the
+    // process that has to tag its samples, adopt an ask, and open an exact
+    // slice. None of it happened in the isolated modes, which is why
+    // `--web-isolation=pool|request` reported nothing at all.
+    let probe_route_label = probe_route::route_label(&request.method, &request.path);
+    let req_traceparent = request
+        .headers
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("traceparent"))
+        .map(|(_, v)| v.clone());
+    // Signed, not merely present — the same authenticity check the default
+    // worker applies, so a header captured from a log stops working within
+    // minutes and an invented one never does.
+    let profile_this = request
+        .headers
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("x-elephc-query"))
+        .is_some_and(|(_, value)| probe_route::query_is_authentic(value));
     request_state::set_request(
         request.method,
         request.uri,
@@ -56,6 +77,17 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
     );
     request_state::begin_response_stream(stream.as_raw_fd());
     request_state::set_capture(true);
+    // Route first: `probe_route::set` is also where a child adopts an ask that
+    // reached the shared mapping after it was forked, which for a disposable
+    // request child is every ask there has ever been.
+    probe_route::set(&probe_route_label);
+    // A signed header authorizes this request outright; without one, offer it
+    // anyway — the instrumentation opens a slice only if something is waiting
+    // for one, which is how `monitor <address> --exact` gets an answer without a
+    // second way into the request path. Before the trace, because this call is
+    // what decides whether the request is profiled at all.
+    probe_route::profile_request_kind(if profile_this { 1 } else { 2 });
+    probe_route::trace_begin(req_traceparent.as_deref(), &probe_route_label);
     let seconds = MAX_EXEC_SECS.load(std::sync::atomic::Ordering::Relaxed);
     if seconds > 0 {
         libc::alarm(seconds);
@@ -64,6 +96,12 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
     if seconds > 0 {
         libc::alarm(0);
     }
+    // Unconditional and idempotent, as in the default worker: a request that
+    // started no slice ends none, and consecutive profiled requests stay
+    // separate captures. A pool child serves many requests, so leaving a slice
+    // open here would merge the next one into it.
+    probe_route::profile_request_kind(0);
+    probe_route::clear();
     let complete = request_state::finish_response_stream();
     if !complete {
         eprintln!("elephc-web: handler could not finish response stream");

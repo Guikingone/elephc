@@ -311,6 +311,8 @@ fn validate_instruction_immediate(
         | EvalStaticMethodCall
         | EnumBackingStringToInt
         | EnumBackingMixedToInt
+        | PackedFieldMixedToInt
+        | ReturnBoundaryMixedToInt
         | PropInitialized
         | StaticPropInitialized
         | ReflectionStaticPropertyInitialized => {

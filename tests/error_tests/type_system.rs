@@ -2885,7 +2885,7 @@ fn test_every_lowering_fixture_takes_the_retype_path() {
         "<?php $a = $argc; $a = \"ciao\"; echo $a;",
         "<?php $a = \"ciao\" . $argc; $a = 7; echo $a;",
         "<?php $a = $argc; $a = \"n=\" . $a; echo $a;",
-        "<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a += $i; } $a = \"done\"; echo $a;",
+        "<?php $a = \"x\"; for ($i = 0; $i < $argc; $i++) { $a .= \"y\"; } $a = 7; echo $a;",
         "<?php $a = $argc; $f = function() use ($a) { return $a; }; $a = \"x\"; echo $f() . $a;",
         "<?php $a = 3; $a = \"ciao\"; echo $a;",
         "<?php $a = \"s\" . $argc; if ($argc > 1) { unset($a); } $a = 7; echo $a;",
