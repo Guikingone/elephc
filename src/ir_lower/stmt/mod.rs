@@ -58,7 +58,7 @@ mod metadata_control;
 mod nested_append;
 mod return_coercions;
 mod repr_fixpoint;
-mod static_property_helpers;
+pub(crate) mod static_property_helpers;
 
 use statement_basics::*;
 use local_assignments::*;

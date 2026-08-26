@@ -20,6 +20,8 @@ mod type_annotations;
 mod narrowing;
 #[path = "types/static_property_hash.rs"]
 mod static_property_hash;
+#[path = "types/property_element_unset.rs"]
+mod property_element_unset;
 #[path = "types/param_coercion.rs"]
 mod param_coercion;
 #[path = "types/strict_types.rs"]
