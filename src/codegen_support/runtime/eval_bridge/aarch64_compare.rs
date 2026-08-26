@@ -62,13 +62,13 @@ pub(super) fn emit_aarch64_compare(emitter: &mut Emitter) {
     emitter.instruction("mov x11, x1");                                         // preserve the unordered flag for relational predicates
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the eval comparison opcode for dispatch
     emitter.instruction("cmp x9, #2");                                          // is this a less-than comparison?
-    emitter.instruction("b.eq __elephc_eval_value_compare_lt");                 // materialize left < right from float comparison flags
+    emitter.instruction("b.eq __elephc_eval_value_compare_lt");                 // materialize left < right from normalized PHP ordering
     emitter.instruction("cmp x9, #3");                                          // is this a less-than-or-equal comparison?
-    emitter.instruction("b.eq __elephc_eval_value_compare_lte");                // materialize left <= right from float comparison flags
+    emitter.instruction("b.eq __elephc_eval_value_compare_lte");                // materialize left <= right from normalized PHP ordering
     emitter.instruction("cmp x9, #4");                                          // is this a greater-than comparison?
-    emitter.instruction("b.eq __elephc_eval_value_compare_gt");                 // materialize left > right from float comparison flags
+    emitter.instruction("b.eq __elephc_eval_value_compare_gt");                 // materialize left > right from normalized PHP ordering
     emitter.instruction("cmp x9, #5");                                          // is this a greater-than-or-equal comparison?
-    emitter.instruction("b.eq __elephc_eval_value_compare_gte");                // materialize left >= right from float comparison flags
+    emitter.instruction("b.eq __elephc_eval_value_compare_gte");                // materialize left >= right from normalized PHP ordering
     emitter.instruction("mov x1, #0");                                          // unknown comparison opcodes fail closed as false
     emitter.instruction("b __elephc_eval_value_compare_box");                   // box the fallback false result
     emitter.label("__elephc_eval_value_compare_eq");

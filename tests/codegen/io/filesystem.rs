@@ -244,15 +244,7 @@ echo $total >= $free ? "o" : "O";
     assert_eq!(out, "fto");
 }
 
-/// Verifies `disk_free_space()` and `disk_total_space()` return strict `false` for a path that
-/// cannot be stat'ed, as PHP does.
-///
-/// This test was named `..._returns_zero` and asserted `float(0)` — the name pinned the defect.
-/// `0.0` is a legitimate byte count: a full filesystem reports zero bytes available, so
-/// answering it on failure made "out of space" and "no such directory" the same value and
-/// `=== false` could never match. Both functions share one runtime helper and one lowering, so
-/// both are asserted here: a change that reached only one of them would leave a single helper
-/// feeding a boxed caller and a raw one.
+/// Verifies invalid disk-space paths return strict PHP `false`, not a successful `0.0` byte count.
 #[test]
 fn test_disk_space_invalid_path_is_strict_false() {
     let out = compile_and_run(
