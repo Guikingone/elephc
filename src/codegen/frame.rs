@@ -1480,11 +1480,27 @@ fn emit_instr_exit(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Loads `id` into the first integer argument register, the program's live
-/// allocation counter (`_gc_allocs`) into the second, and the free counter
-/// (`_gc_frees`) into the third, then calls a `elephc_instr_*` hook. Reading
-/// both counters at the call site lets the runtime attribute allocations — and
-/// net retained objects (allocs minus frees) — per function exactly the way it
-/// attributes time.
+/// allocation counter (`_gc_allocs`) into the second, the free counter
+/// (`_gc_frees`) into the third, and this activation's frame pointer into the
+/// fourth, then calls a `elephc_instr_*` hook. Reading both counters at the call
+/// site lets the runtime attribute allocations — and net retained objects
+/// (allocs minus frees) — per function exactly the way it attributes time.
+///
+/// The frame pointer is what tells the runtime WHICH activation this is. An id
+/// alone cannot: two activations of a recursive function are the same thing to
+/// it, so an exception caught across them was charged to whichever frame the
+/// search found first, and an exit for an activation past the shadow-stack cap
+/// was indistinguishable from an exit for one that was tracked. Both were known
+/// defects with the same cause, and both close here.
+///
+/// It costs one `mov`. Every emitted function establishes a frame pointer in its
+/// prologue — unconditionally; there is no leaf or frameless variant — the enter
+/// hook runs last in that prologue and the exit hook first in the epilogue,
+/// before the teardown, so the register already holds this activation's own frame
+/// address at both sites. Live frames have distinct addresses by construction,
+/// which is exactly the property the runtime needs and the only one it uses; an
+/// address reused by a later call is never compared against a frame that has
+/// already returned.
 fn emit_instr_hook_call(ctx: &mut FunctionContext<'_>, hook: &str, id: usize) {
     let target = ctx.emitter.target;
     let id_arg = abi::int_arg_reg_name(target, 0);
@@ -1493,6 +1509,12 @@ fn emit_instr_hook_call(ctx: &mut FunctionContext<'_>, hook: &str, id: usize) {
     abi::emit_load_symbol_to_reg(ctx.emitter, allocs_arg, "_gc_allocs", 0);
     let frees_arg = abi::int_arg_reg_name(target, 2);
     abi::emit_load_symbol_to_reg(ctx.emitter, frees_arg, "_gc_frees", 0);
+    // Last, because the symbol loads above borrow a scratch register and this
+    // one must survive to the call.
+    let frame_arg = abi::int_arg_reg_name(target, 3);
+    let frame_ptr = abi::frame_pointer_reg(ctx.emitter);
+    ctx.emitter
+        .instruction(&format!("mov {frame_arg}, {frame_ptr}"));
     let entry = target.extern_symbol(hook);
     abi::emit_call_label(ctx.emitter, &entry);
 }

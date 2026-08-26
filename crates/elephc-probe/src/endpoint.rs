@@ -53,6 +53,10 @@ extern "C" {
     /// Disarms a rendezvous this thread armed, so a client that gave up waiting
     /// does not leave the next request handing its profile to nobody.
     fn elephc_instr_capture_cancel();
+    /// The pid of a process holding the rendezvous that the instrumentation
+    /// declined to revoke because it could not tell whether that process was
+    /// still writing, or 0. Only ever consulted after a capture times out.
+    fn elephc_instr_capture_blocked_by() -> i32;
 }
 
 /// Arms the exact profiler and waits for the slice it renders next.
@@ -125,11 +129,25 @@ fn exact_answer() -> String {
     let _turn = turn;
     match exact_slice() {
         Some(profile) if !profile.is_empty() => profile,
-        _ => format!(
-            "elephc-instr: note: no request completed within {}s, or its profile \
-             could not be handed over\n",
-            EXACT_WAIT.as_secs()
-        ),
+        // "No request completed" is one explanation for an empty wait, and it is
+        // the wrong one when requests ARE completing and being refused the
+        // rendezvous. A slot held by a process the instrumentation could not
+        // vouch for is never taken back — the alternative is two writers in one
+        // payload — so it can outlast this wait, and saying which process holds
+        // it is the difference between an operator restarting that worker and an
+        // operator concluding the profiler does not work.
+        _ => match unsafe { elephc_instr_capture_blocked_by() } {
+            0 => format!(
+                "elephc-instr: note: no request completed within {}s, or its profile \
+                 could not be handed over\n",
+                EXACT_WAIT.as_secs()
+            ),
+            pid => format!(
+                "elephc-instr: note: the capture slot is held by pid {pid}, which this \
+                 platform cannot confirm is still writing; it is left alone rather than \
+                 handed to a second writer. Restart that worker to clear it.\n"
+            ),
+        },
     }
 }
 
@@ -866,19 +884,25 @@ mod tests {
             .expect("nothing to remove is not a failure");
     }
 
-    #[no_mangle]
     /// Stub: this crate's tests link without the instrumentation runtime.
+    #[no_mangle]
     extern "C" fn elephc_instr_capture_arm() {}
 
-    #[no_mangle]
     /// Stub: no slice is ever waiting, which is the dormant case.
+    #[no_mangle]
     extern "C" fn elephc_instr_capture_take(_out: *mut u8, _cap: usize) -> usize {
         0
     }
 
-    #[no_mangle]
     /// Stub: nothing was armed, so cancelling is a no-op.
+    #[no_mangle]
     extern "C" fn elephc_instr_capture_cancel() {}
+
+    /// Stub: nothing holds a rendezvous these tests never open.
+    #[no_mangle]
+    extern "C" fn elephc_instr_capture_blocked_by() -> i32 {
+        0
+    }
 
     /// A second exact request while one is running is told so, not served silence.
     ///

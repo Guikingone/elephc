@@ -1,8 +1,11 @@
 //! Purpose:
 //! Exact per-function instrumentation runtime for programs compiled with
-//! `--instrument`. The compiler calls `elephc_instr_enter(id, allocs, frees)` in
-//! every PHP function's prologue and `elephc_instr_exit(id, allocs, frees)` in
-//! its epilogue; this crate maintains a shadow call stack and, from it, exact
+//! `--instrument`. The compiler calls `elephc_instr_enter(id, allocs, frees,
+//! frame)` in every PHP function's prologue and `elephc_instr_exit(id, allocs,
+//! frees, frame)` in its epilogue, where `frame` is that activation's frame
+//! pointer — already in a register at both sites, and what tells one activation
+//! of a recursive function from another;
+//! this crate maintains a shadow call stack and, from it, exact
 //! per-function **inclusive** time, **exclusive** (self) time, **call counts**,
 //! exact **allocation counts**, **retained** objects (allocated minus freed),
 //! and caller→callee **edges** — the deterministic complement to the statistical
@@ -61,28 +64,13 @@ use std::sync::Mutex;
 /// real programs travel. It is not dead, though: a bigger `ulimit -s`, or frames
 /// smaller than this fixture's, move that ceiling.
 ///
-/// That matters because the drop path has a known defect. A throw that unwinds
-/// OUT of the dropped region and is caught by a tracked frame leaves that frame's
-/// own exit arriving while the stack is still full and the dropped count still
-/// positive, so a real exit is swallowed and the frame never closes. Reproduced
-/// against this structure directly. Fixing it needs what the exit hook does not
-/// have — a way to tell which activation is ending — the same thing the
-/// recursive-catcher case needs, so both wait on one decision rather than two
-/// patches.
-///
-/// The recursive half of that is reachable at any depth and needs no cap: what
-/// the exit hook carries is a function id, so two activations of one function
-/// are indistinguishable to it. When the throw comes from a function of its own,
-/// the catcher IS the innermost activation and the resolution is right
-/// (`a_recursive_function_that_catches_around_its_own_call_accounts_exactly`).
-/// When the recursive call itself throws — ordinary recursive descent with error
-/// recovery — it is not: the topmost frame with that id is the corpse of the
-/// thrower, and the handler's cost lands there
-/// (`a_recursive_call_that_throws_is_reported_as_an_unresolvable_catch`, where
-/// 20 of 120 ticks move onto the recursive function). A function that throws and
-/// catches within one activation leaves the identical shadow stack, so nothing
-/// over ids alone can separate the two; `ambiguous_catch` counts the times the
-/// choice had to be made and the report says so.
+/// Dropped activations used to need reconciling, because an exit could not say
+/// which activation it belonged to: they were counted, and their exits counted
+/// down against — which a throw desynchronised, since it destroys them without
+/// any exit arriving, so the count went on to eat the exit of a frame that WAS
+/// tracked. The hooks now carry a frame pointer, so an exit for an activation
+/// that was never pushed simply finds no frame and closes nothing. There is
+/// nothing left to count.
 const MAX_STACK: usize = 65_536;
 
 /// Per-function accumulators, indexed by the compiler-assigned function id.
@@ -120,6 +108,14 @@ struct FnAcc {
 /// One live call-stack frame.
 struct Frame {
     id: u32,
+    /// This activation's frame pointer, passed by the hook that opened it.
+    ///
+    /// What separates one activation from another. A function id cannot: two
+    /// activations of a recursive function share it, and the exit hook then has
+    /// no way to say which one is returning. Live frames have distinct addresses
+    /// by construction, and an address reused by a later call is never compared
+    /// against a frame that has already returned.
+    fp: usize,
     t_enter: u64,
     a_enter: u64,
     f_enter: u64,
@@ -148,20 +144,6 @@ struct State {
     overdrawn: u64,
     /// Throws that had to share a record with an older one at the nesting cap.
     throws_merged: u64,
-    /// Caught exceptions where which activation caught could not be determined.
-    ///
-    /// Only recursion produces them, and only then: the exit hook carries a
-    /// function id and no activation identity, so a function that threw and
-    /// caught in one activation looks exactly like one whose outer activation
-    /// caught for an inner. The two attribute the handler's work to different
-    /// rows, and the profile picks one. Counting them is what keeps the choice
-    /// from being silent.
-    ambiguous_catch: u64,
-    /// Activations running right now that were never pushed, because the stack
-    /// was already full. Their exits must be ignored symmetrically: an exit
-    /// looking for a frame that was never pushed would resync-pop the entire
-    /// stack, discarding every enclosing function's accounting.
-    dropped_depth: u32,
     /// The exception in flight, if one is.
     unwinding: Option<Unwind>,
     /// Per-call spans `(id, enter_ns, exit_ns)` recorded only when tracing is on
@@ -241,12 +223,7 @@ impl Unwind {
 }
 
 impl State {
-    /// Marks the start of an unwind, and forgets the activations it destroys.
-    ///
-    /// Dropped activations past `MAX_STACK` never run an exit, so an exception
-    /// that unwinds through them leaves the count describing frames that no
-    /// longer exist. Counting it down against exits that DO arrive is what let a
-    /// tracked frame's own exit be swallowed while the stack was still full.
+    /// Marks the start of an unwind.
     fn note_throw(&mut self, t: u64, a: u64, f: u64, io: u64, w: u64) {
         // A throw inside a catch handler replaces the unwind, but must not drop
         // what the previous one was still holding: that cost has already been
@@ -283,7 +260,6 @@ impl State {
             last.io = io;
             last.w = w;
         }
-        self.dropped_depth = 0;
     }
 
     /// The unwind holding the charge for work at the current depth, if the
@@ -321,7 +297,7 @@ impl State {
     /// Records entry to `id` with the timestamp `t`, allocation counter `a`,
     /// free counter `f`, io counter `io`, and io-wait nanoseconds `w` sampled
     /// at the call site.
-    fn enter_at(&mut self, id: u32, t: u64, a: u64, f: u64, io: u64, w: u64) {
+    fn enter_at(&mut self, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
         self.ensure(id);
         // A call made while an exception is still unwinding sits on top of the
         // frames it destroyed, so the frame below is not the caller — the
@@ -339,12 +315,12 @@ impl State {
         }
         // Past the cap this activation cannot be timed, and must not pretend to
         // be: raising its depth would leave the function permanently "active",
-        // so its inclusive time is never credited, while its exit would hunt
-        // the stack for a frame that was never pushed and pop everything on the
-        // way. The call still counts — it did happen — but nothing else does.
+        // so its inclusive time is never credited. Its exit will arrive carrying
+        // a frame pointer that is not on the stack and close nothing, which is
+        // what makes this safe to do without tracking how many were dropped. The
+        // call still counts — it did happen — but nothing else does.
         if self.stack.len() >= MAX_STACK {
             self.dropped += 1;
-            self.dropped_depth = self.dropped_depth.saturating_add(1);
             self.fns[id as usize].calls += 1;
             return;
         }
@@ -360,6 +336,7 @@ impl State {
         acc.calls += 1;
         self.stack.push(Frame {
             id,
+            fp,
             t_enter: t,
             a_enter: a,
             f_enter: f,
@@ -376,33 +353,20 @@ impl State {
     /// Records exit from `id` with timestamp `t`, allocation counter `a`, free
     /// counter `f`, io counter `io`, and io-wait nanoseconds `w`, resyncing past
     /// any frames left by exception unwinding.
-    fn exit_at(&mut self, id: u32, t: u64, a: u64, f: u64, io: u64, w: u64) {
-        // Dropped activations can only exist while the stack is full, so a
-        // shorter stack means the count is stale — left behind by an exception
-        // that unwound the dropped region — and is cleared rather than eating
-        // the exits of frames that WERE tracked.
+    fn exit_at(&mut self, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+        // Which activation is ending, and whether it was ever tracked at all.
         //
-        // A throw clears the count outright (see `note_throw`): the activations
-        // it unwound will never run their exits, and counting them down against
-        // exits that DO arrive is what swallowed a tracked frame's own exit
-        // while the stack was still full.
-        if self.stack.len() < MAX_STACK {
-            self.dropped_depth = 0;
-        } else if self.dropped_depth > 0 {
-            self.dropped_depth -= 1;
-            return;
-        }
-        // An exit for a frame that is not on the stack has nothing to close.
-        // The resync loop below stops only when it finds the id, so an exit for
-        // one that was never pushed — past the shadow-stack cap, or after the
-        // hooks were switched on mid-run — used to answer by popping every frame
-        // down to the bottom and discarding every enclosing function's
-        // accounting. Measured: one such exit emptied a two-frame stack.
+        // An exit for a frame that is not on the stack has nothing to close: it
+        // was dropped past the shadow-stack cap, or destroyed by an exception
+        // that has since been caught. Both used to be indistinguishable from an
+        // exit for a tracked frame — the first was reconciled by counting
+        // dropped activations down, which a throw could desynchronise, and the
+        // second resolved to whichever frame carried the same id.
         let Some(index) = (match self.stack.last() {
             // The overwhelmingly common case, and the reason the search below
             // costs nothing in a program without exceptions.
-            Some(top) if top.id == id => Some(self.stack.len() - 1),
-            _ => self.stack.iter().rposition(|frame| frame.id == id),
+            Some(top) if top.fp == fp => Some(self.stack.len() - 1),
+            _ => self.stack.iter().rposition(|frame| frame.fp == fp),
         }) else {
             return;
         };
@@ -417,20 +381,6 @@ impl State {
         // caught inside such a call ended the outer one from the wrong place
         // entirely.
         //
-        // Which activation this is cannot always be known. When the frame the
-        // exit resolves to is the one that threw — the deepest frame at the
-        // throw — and the same function is on the stack again below it, a
-        // self-catch and an outer activation catching for an inner one produce
-        // the identical shadow stack. The choice made here (the topmost) is
-        // right for the first and wrong for the second, and either way the
-        // report now says how many times it had to make it.
-        if let Some(u) = &self.unwinding {
-            let thrower = u.throws.iter().any(|throw| throw.depth == index + 1);
-            if thrower && self.stack[..index].iter().any(|frame| frame.id == id) {
-                self.ambiguous_catch = self.ambiguous_catch.saturating_add(1);
-            }
-        }
-
         // Frames an exception unwound never ran their own exit hook. Closing
         // them HERE, at the instant the throw is observed passing them, keeps
         // their cost on them; simply discarding them left it inside the
@@ -597,9 +547,7 @@ impl State {
         self.edges.clear();
         self.dropped = 0;
         self.overdrawn = 0;
-        self.ambiguous_catch = 0;
         self.throws_merged = 0;
-        self.dropped_depth = 0;
         // The stack goes with the slice, so the frame this unwind was holding a
         // charge for goes with it too. Carrying it across would hand the next
         // slice's first catcher the previous one's handler work.
@@ -634,14 +582,6 @@ impl State {
                 "elephc-instr: note: {} throw(s) past {} nested unwinds shared a record \
                  with an older one; their handlers' calls are merged onto one caller\n",
                 self.throws_merged, MAX_NESTED_THROWS
-            ));
-        }
-        if self.ambiguous_catch > 0 {
-            out.push_str(&format!(
-                "elephc-instr: note: {} exception(s) were caught inside a recursive \
-                 function; which activation caught could not be determined, so the \
-                 handler's cost may sit on the wrong activation of it\n",
-                self.ambiguous_catch
             ));
         }
         if !self.stack.is_empty() {
@@ -1604,7 +1544,7 @@ pub extern "C" fn elephc_instr_throw(allocs: u64, frees: u64) {
 /// Records entry to the function `id`; `allocs` / `frees` are the program's
 /// live heap counters (`_gc_allocs` / `_gc_frees`) at the call site.
 #[no_mangle]
-pub extern "C" fn elephc_instr_enter(id: u32, allocs: u64, frees: u64) {
+pub extern "C" fn elephc_instr_enter(id: u32, allocs: u64, frees: u64, frame: usize) {
     // Checked before the clock reads: those are the expensive part, and a
     // dormant binary must not pay them.
     if !ENABLED.load(Ordering::Relaxed) {
@@ -1613,22 +1553,23 @@ pub extern "C" fn elephc_instr_enter(id: u32, allocs: u64, frees: u64) {
     let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
-    STATE.with(|s| s.borrow_mut().enter_at(id, t, allocs, frees, io, w));
+    STATE.with(|s| s.borrow_mut().enter_at(id, frame, t, allocs, frees, io, w));
 }
 
 /// Records exit from the function `id`; `allocs` / `frees` are the program's
-/// live heap counters (`_gc_allocs` / `_gc_frees`) at the call site.
+/// live heap counters (`_gc_allocs` / `_gc_frees`) at the call site, and `frame`
+/// is this activation's frame pointer — the same one its entry passed.
 #[no_mangle]
-pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64) {
+pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64, frame: usize) {
     // Symmetrical with enter: a frame that was never pushed must not be popped,
-    // or a disable mid-call would unwind accounting that was never recorded.
+    // and the frame pointer is what makes that decidable rather than inferred.
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
     let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
-    STATE.with(|s| s.borrow_mut().exit_at(id, t, allocs, frees, io, w));
+    STATE.with(|s| s.borrow_mut().exit_at(id, frame, t, allocs, frees, io, w));
 }
 
 /// The rendezvous where an endpoint asks for a slice and a worker leaves it.
@@ -1720,12 +1661,21 @@ fn process_is_alive(pid: i32) -> bool {
 /// together. `ABANDONED_CLAIM_SECS` is not a property of the writer, so it
 /// cannot be allowed to speak for one that is demonstrably alive.
 ///
-/// A claimer that is alive but is NOT that process — its pid was recycled — or
-/// one whose identity cannot be established falls back to the age rule, which
-/// is the only thing left. That covers both the platform where start identity
-/// is unavailable and the few instructions between winning the claim and
-/// recording it, during which the word still holds the previous claimer's
-/// value: a mismatch that persists for a full minute is not that window.
+/// A claimer that is alive and is provably a DIFFERENT process — its pid was
+/// recycled — is taken once the age backstop passes. The backstop rather than at
+/// once, because the few instructions between winning the claim and recording
+/// the identity also read as a mismatch, and a mismatch that persists for a full
+/// minute is not that window.
+///
+/// A claimer that is alive and cannot be identified at all keeps its slot. That
+/// is the last case that could still take the payload from a writer holding it,
+/// and it is the one with no evidence either way: the process is there, and
+/// nothing available says whether it is the one that claimed. Between serving a
+/// profile spliced from two writers and serving none, this crate has said all
+/// along that none is the honest answer, and a wedge announces itself where a
+/// stitched profile does not. What it costs is recovery from a crashed worker
+/// whose pid was recycled, on a platform with no way to ask — the rarest branch
+/// of the rarest case, traded for never corrupting.
 ///
 /// Split out as a pure function because the interesting rows need a writer that
 /// is frozen, or dead, or a pid that has been reused — none of which a test can
@@ -1734,10 +1684,10 @@ fn claim_may_be_taken(claimer_alive: bool, same_process: Option<bool>, age_secs:
     if !claimer_alive {
         return true;
     }
-    if same_process == Some(true) {
-        return false;
+    match same_process {
+        Some(false) => age_secs > ABANDONED_CLAIM_SECS,
+        Some(true) | None => false,
     }
-    age_secs > ABANDONED_CLAIM_SECS
 }
 
 /// Seconds on a clock that is the same for every process sharing the mapping
@@ -1833,9 +1783,9 @@ fn fold_start_id(value: u64) -> u32 {
 ///
 /// `None` when there is nothing to compare: no identity was recorded (a claim
 /// still inside the few instructions between winning and recording, or one made
-/// by a build without this word), or the kernel will not tell us. Both fall back
-/// to the age rule rather than guessing, because guessing "different" revokes a
-/// live writer.
+/// by a build without this word), or the kernel will not tell us. Neither is
+/// evidence, and guessing "different" is what revokes a live writer, so both
+/// leave the claim standing.
 fn claim_is_same_process(recorded: &AtomicU32, claimer: i32) -> Option<bool> {
     let recorded = recorded.load(Ordering::Acquire);
     if recorded == 0 {
@@ -1844,17 +1794,54 @@ fn claim_is_same_process(recorded: &AtomicU32, claimer: i32) -> Option<bool> {
     Some(process_start_id(claimer)? == recorded)
 }
 
+/// Forgets who held a slot, so the next claimer's window cannot be judged on the
+/// last one's identity.
+///
+/// This word is only ever evidence ABOUT the pid in `filled`, and it outlived
+/// that pid: a worker's identity stayed behind after its slice was consumed, so
+/// a later claimer stopped between winning the claim and recording its own was
+/// judged against its predecessor's — read as "a different process", and with
+/// the age past the backstop, revoked while it was alive and holding the
+/// payload. That is the corruption the identity was added to prevent, reached
+/// through the identity itself, and it lands in exactly the case the whole fix
+/// exists for: a writer frozen mid-claim.
+///
+/// Cleared whenever the slot is freed, so a free slot carries no opinion and the
+/// gap reads as "no identity recorded" — which keeps the slot, the safe answer.
+fn clear_claim_identity(claim_id: &AtomicU32) {
+    claim_id.store(0, Ordering::Release);
+}
+
 /// Clears a slice nobody is going to take, and leaves alone one being written.
 ///
 /// Storing EMPTY outright is what let a second worker's claim succeed while the
 /// first was still copying into the region.
 fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32, claim_id: &AtomicU32) {
+    // Cleared BEFORE the slot is published free, matching what `capture_take`
+    // does and what its comment says. Clearing afterwards left a window in which
+    // a new claimer had already won the slot and recorded its identity, and this
+    // store wiped it — which reads as "nothing recorded", so the claim is KEPT
+    // rather than revoked, and the only cost is a live claim reported as
+    // unverifiable. Safe, and still wrong to do in the other order.
+    //
+    // Clearing first is free here because READY means the writer finished: the
+    // identity it leaves behind is spent whoever consumes the slice, and if the
+    // exchange below loses, whoever won publishes their own.
+    if filled.load(Ordering::Acquire) == READY {
+        clear_claim_identity(claim_id);
+    }
     if filled
         .compare_exchange(READY, EMPTY, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
+        HELD_BY.store(0, Ordering::Relaxed);
         return;
     }
+    // Recomputed on every pass and stored once at the end, so a blockage that
+    // clears stops being reported. Raising it and never lowering it would leave
+    // the endpoint naming a process that finished minutes ago — a diagnostic
+    // that goes stale is worse than none, because it is believed.
+    let mut blocked = 0;
     let state = filled.load(Ordering::Acquire);
     if state != EMPTY && state != READY {
         // Anything else is the claimer's pid, written by the compare-exchange
@@ -1869,17 +1856,54 @@ fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32, claim_id: &At
         // claimer is still there, and whether it is still the SAME process,
         // since a pid that has been recycled is alive and yet gone. Age decides
         // only what the kernel cannot.
-        if claim_may_be_taken(
-            process_is_alive(claimer),
-            claim_is_same_process(claim_id, claimer),
-            age,
-        ) {
+        let identity = claim_is_same_process(claim_id, claimer);
+        if claim_may_be_taken(process_is_alive(claimer), identity, age) {
             // Against `state`, not a constant: only the claim we judged may be
             // released, so a claimer that finished and a successor that took the
             // slot in the meantime are both left alone.
+            // Cleared BEFORE the slot is published free, for the same reason
+            // as the path above: afterwards leaves a window in which a new
+            // claimer has already won the slot and recorded its identity, and
+            // this store wipes it. A claimer with no identity is KEPT rather
+            // than revoked, so the direction is safe either way — but the state
+            // it leaves is "a live claim nobody can vouch for", which the
+            // endpoint then reports as a blockage that is not one.
+            //
+            // Losing the exchange below has the mirror cost: a claimer that took
+            // the slot between the decision and here loses its identity to this
+            // store. Same safe direction, and it cannot be closed without
+            // moving identity into the claim word itself.
+            clear_claim_identity(claim_id);
             let _ = filled.compare_exchange(state, EMPTY, Ordering::AcqRel, Ordering::Relaxed);
+        } else if identity.is_none() && age > ABANDONED_CLAIM_SECS {
+            // Left standing, and said so. A claim this old that cannot be
+            // identified means every later `--exact` answers "no request
+            // completed", which is true of nothing: requests are completing and
+            // being refused the slot. Publishing who holds it turns a silent
+            // timeout into a fact an operator can act on — restart that worker —
+            // and it is the only cost of never revoking what we cannot verify.
+            blocked = claimer;
         }
     }
+    HELD_BY.store(blocked, Ordering::Relaxed);
+}
+
+/// The pid of a claim this process declined to revoke because it could not tell
+/// whether the holder was still writing, or 0.
+///
+/// Process-local on purpose: it is a diagnostic about a decision THIS process
+/// made, read by the endpoint that lives in the same process, and putting it in
+/// the shared mapping would have every worker overwrite every other's.
+static HELD_BY: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// Reports a capture slot held by a process this one could not vouch for, or 0.
+///
+/// The endpoint asks after a capture times out, so an answer nobody can explain
+/// — traffic flowing, requests completing, and no slice — names the process that
+/// is holding the rendezvous instead of leaving the operator to guess.
+#[no_mangle]
+pub extern "C" fn elephc_instr_capture_blocked_by() -> i32 {
+    HELD_BY.load(Ordering::Relaxed)
 }
 /// Base address of that mapping, or 0 when it could not be established — in
 /// which case the capture is simply unavailable and the dump keeps logging.
@@ -1973,9 +1997,12 @@ pub extern "C" fn elephc_instr_capture_arm() {
 /// `out` must point to at least `cap` writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> usize {
-    let (Some(armed), Some(filled), Some(length)) =
-        (capture_word(0), capture_word(1), capture_word(2))
-    else {
+    let (Some(armed), Some(filled), Some(length), Some(claim_id)) = (
+        capture_word(0),
+        capture_word(1),
+        capture_word(2),
+        capture_word(CLAIM_ID_WORD),
+    ) else {
         return 0;
     };
     // A claimed-but-unfinished slot reads as nothing: the writer is mid-copy,
@@ -1988,6 +2015,7 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
     // past the end of the mapping, so this is checked here rather than trusted
     // from any one writer.
     if len > CAPTURE_BYTES - CAPTURE_HEADER {
+        clear_claim_identity(claim_id);
         filled.store(EMPTY, Ordering::Relaxed);
         armed.store(0, Ordering::Relaxed);
         return 0;
@@ -2006,6 +2034,11 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
     // worker could observe EMPTY, claim the slot, and start overwriting the bytes
     // this call is still reading — a profile stitched from two slices, with
     // nothing to detect it.
+    // Before the slot is freed: once EMPTY is visible a new claimer can win it,
+    // and clearing afterwards would wipe the identity that claimer had just
+    // recorded — which reads as "no identity", and is safe, but leaves the word
+    // saying nothing about a slot that is in fact held.
+    clear_claim_identity(claim_id);
     filled.store(EMPTY, Ordering::Release);
     armed.store(0, Ordering::Relaxed);
     len
@@ -2048,22 +2081,6 @@ fn offer_capture(text: &str) -> bool {
     // other, which the reader then served as one — valid UTF-8 often enough to
     // be believed.
     //
-    // Stamp the time BEFORE the claim, so a slot that reads as claimed always
-    // carries a time at least as fresh as its claim. Stamping after left a
-    // window: a claimer preempted in it published its claim over a stale time —
-    // zero on the first ever claim, the mapping being zeroed — and
-    // `release_stale_slice`, which the endpoint runs whenever an operator arms,
-    // judged that fresh claim ancient and handed the slot to a second writer.
-    //
-    // A loser of the race stamps a slightly later time onto the winner's claim,
-    // which only makes it look FRESHER — reclamation waits a moment longer. The
-    // dangerous direction, a live claim looking old, is the one this removes.
-    // Time is safe to publish this way precisely because it is monotonic;
-    // identity is not, which is why the pid rides inside the claim below rather
-    // than in a word of its own.
-    if let Some(claimed_at) = capture_word(3) {
-        claimed_at.store(monotonic_seconds(), Ordering::Relaxed);
-    }
     // The claim and the claimer's name are ONE store. Winning this is what makes
     // the slot ours, and it carries our pid in the same instant — so there is no
     // interval in which the slot reads as claimed while naming somebody else,
@@ -2084,6 +2101,23 @@ fn offer_capture(text: &str) -> bool {
     // claimer can do is look like a mismatch, which merely defers to the age
     // rule. The reverse order would revoke live writers, which is the failure
     // this whole word exists to remove.
+    // The time is published by the WINNER, after winning — never before, and
+    // never by a loser. Stamping before the claim was defended as harmless
+    // because a loser only makes a claim look fresher, and that is true of one
+    // loser and false of a stream of them: under traffic every request reaching
+    // here refreshes the age of whatever claim is standing, so a claim held by a
+    // pid that has been recycled never reaches the backstop that exists to
+    // recover it. The rendezvous stayed blocked for as long as the service kept
+    // serving, which is exactly when an operator wants it.
+    //
+    // What made stamping early necessary is gone: a claimer preempted between
+    // winning and publishing leaves the identity word at 0, and an unidentifiable
+    // claim is KEPT rather than judged on its age. The age is now read only for a
+    // claim whose identity proves a different process, and that identity is
+    // published here, after this store.
+    if let Some(claimed_at) = capture_word(3) {
+        claimed_at.store(monotonic_seconds(), Ordering::Relaxed);
+    }
     if let Some(claim_id) = capture_word(CLAIM_ID_WORD) {
         claim_id.store(
             process_start_id(mine as i32).unwrap_or(0),
@@ -2251,34 +2285,42 @@ mod tests {
     }
     /// A throw out of the dropped region must not swallow a tracked frame's exit.
     ///
-    /// Past `MAX_STACK` activations are counted, not pushed, and their exits are
-    /// reconciled by counting. An exception that unwinds out of that region and
-    /// is caught by a TRACKED frame leaves that frame's own exit arriving while
-    /// the stack is still full and the count still positive — so before the
-    /// throw hook, a real exit was swallowed and the frame never closed.
+    /// Past `MAX_STACK` activations are counted rather than pushed. Reconciling
+    /// their exits used to mean counting them down, and a throw destroys them
+    /// without any exit arriving — so the count went on to eat the exit of a
+    /// frame that WAS tracked, which then never closed. There is no count now:
+    /// an exit carries the frame it belongs to, and one that is not on the stack
+    /// closes nothing on its own.
     #[test]
     fn a_throw_out_of_the_dropped_region_does_not_swallow_a_real_exit() {
         let mut state = State::default();
         for depth in 0..MAX_STACK {
-            state.enter_at((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
+            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
         }
-        for _ in 0..3 {
-            state.enter_at(7, 1_000, 0, 0, 0, 0);
-        }
-        assert_eq!(state.dropped_depth, 3, "the deeper calls should have been dropped");
+        let dropped: Vec<usize> = (0..3)
+            .map(|_| state.enter_sim(7, 1_000, 0, 0, 0, 0))
+            .collect();
+        assert_eq!(state.dropped, 3, "the deeper calls should have been dropped");
+        assert_eq!(state.stack.len(), MAX_STACK, "and none of them pushed");
 
         // The throw destroys those activations; none of them will ever exit.
         state.note_throw(1_500, 0, 0, 0, 0);
-        assert_eq!(state.dropped_depth, 0, "the unwound activations are still counted");
 
         let catcher = state.stack.last().expect("full stack").id;
+        let catcher_fp = state.stack.last().expect("full stack").fp;
         let before = state.stack.len();
-        state.exit_at(catcher, 2_000, 0, 0, 0, 0);
+        state.exit_at(catcher, catcher_fp, 2_000, 0, 0, 0, 0);
         assert!(
             state.stack.len() < before,
             "the catching frame's exit was swallowed: stack still {} deep",
             state.stack.len()
         );
+
+        // And an exit that DOES arrive for a dropped activation still closes
+        // nothing, throw or no throw.
+        let after = state.stack.len();
+        state.exit_at(7, dropped[0], 2_100, 0, 0, 0, 0);
+        assert_eq!(state.stack.len(), after, "a dropped exit disturbed the stack");
     }
 
     /// What a catch handler does belongs to the catcher, not to the thrower.
@@ -2290,12 +2332,12 @@ mod tests {
     #[test]
     fn a_catch_handler_is_not_charged_to_the_frames_it_unwound() {
         let mut state = State::default();
-        state.enter_at(0, 0, 0, 0, 0, 0); // catcher
-        state.enter_at(1, 10, 0, 0, 0, 0); // thrower, runs 10..20
+        state.enter_sim(0, 0, 0, 0, 0, 0); // catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower, runs 10..20
 
         state.note_throw(20, 0, 0, 0, 0);
         // The handler then works for a long time before the catcher returns.
-        state.exit_at(0, 1_020, 0, 0, 0, 0);
+        state.exit_sim(0, 1_020, 0, 0, 0, 0);
 
         let thrower = state.fns[1].incl_ns;
         assert_eq!(
@@ -2318,14 +2360,14 @@ mod tests {
     #[test]
     fn a_catch_handler_that_calls_something_still_leaves_the_unwound_frames_alone() {
         let mut state = State::default();
-        state.enter_at(0, 0, 0, 0, 0, 0); // catcher
-        state.enter_at(1, 10, 0, 0, 0, 0); // thrower, runs 10..20
+        state.enter_sim(0, 0, 0, 0, 0, 0); // catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower, runs 10..20
         state.note_throw(20, 0, 0, 0, 0);
 
         // The handler calls one instrumented function, which returns normally.
-        state.enter_at(2, 30, 0, 0, 0, 0);
-        state.exit_at(2, 1_000, 0, 0, 0, 0);
-        state.exit_at(0, 1_020, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0);
+        state.exit_sim(2, 1_000, 0, 0, 0, 0);
+        state.exit_sim(0, 1_020, 0, 0, 0, 0);
 
         assert_eq!(
             state.fns[1].incl_ns, 10,
@@ -2500,8 +2542,9 @@ mod tests {
             "a dead writer's slot is free immediately, with no timeout to serve"
         );
         assert!(
-            super::claim_may_be_taken(true, None, super::ABANDONED_CLAIM_SECS + 1),
-            "an unidentifiable claimer past the backstop: the pid was reused"
+            !super::claim_may_be_taken(true, None, super::ABANDONED_CLAIM_SECS + 1),
+            "a live claimer nobody can identify keeps its slot: the age says \
+             nothing about it, and the alternative is two writers in one payload"
         );
         assert!(
             !super::claim_may_be_taken(true, Some(true), u32::MAX),
@@ -2519,6 +2562,153 @@ mod tests {
         // There is no "unknown claimer" row any more: the claim IS the pid, so a
         // slot that is claimed at all names the process holding it. The identity
         // above answers a different question — WHICH incarnation of that pid.
+    }
+
+    /// A freed slot carries no opinion about who held it.
+    ///
+    /// The identity word is evidence ABOUT the pid in `filled`, and it used to
+    /// outlive that pid: a worker's identity stayed behind after its slice was
+    /// consumed, so the NEXT claimer — stopped in the few instructions between
+    /// winning the claim and recording its own identity — was judged against its
+    /// predecessor's. That reads as "a different process", and with the age past
+    /// the backstop the reclaimer revoked a writer that was alive and holding the
+    /// payload. It is the corruption the identity exists to prevent, reached
+    /// through the identity itself, and it lands in exactly the case the fix is
+    /// for: a writer frozen mid-claim.
+    #[test]
+    fn a_freed_slot_forgets_who_held_it() {
+        let mine = std::process::id();
+        let filled = AtomicU32::new(READY);
+        let claimed_at = AtomicU32::new(0);
+        // A previous holder's identity, of some other process.
+        let claim_id = AtomicU32::new(0xDEAD_BEEF);
+
+        // Releasing a finished slice must take the identity with it.
+        super::release_stale_slice(&filled, &claimed_at, &claim_id);
+        assert_eq!(filled.load(Ordering::Acquire), EMPTY);
+        assert_eq!(
+            claim_id.load(Ordering::Acquire),
+            0,
+            "a free slot must say nothing about who held it"
+        );
+
+        // Now the scene the stale word produced. A new claimer wins the slot and
+        // is stopped before recording its identity — so the word is whatever the
+        // release left. With a predecessor's value there, this process reads as
+        // "not the claimer" and an old claim is revoked while it is alive.
+        filled.store(mine, Ordering::Release);
+        claimed_at.store(0, Ordering::Relaxed);
+        super::release_stale_slice(&filled, &claimed_at, &claim_id);
+        assert_eq!(
+            filled.load(Ordering::Acquire),
+            mine,
+            "a live claimer with no identity recorded keeps its slot"
+        );
+
+        // And with a predecessor's identity left behind, it would not have.
+        claim_id.store(0xDEAD_BEEF, Ordering::Release);
+        assert!(
+            super::claim_may_be_taken(true, super::claim_is_same_process(&claim_id, mine as i32), u32::MAX),
+            "which is what the stale word did: a live writer judged a stranger"
+        );
+        super::HELD_BY.store(0, Ordering::Relaxed);
+    }
+
+    /// Only the winner of a claim publishes its time.
+    ///
+    /// The time used to be stamped BEFORE the compare-exchange, defended on the
+    /// grounds that a loser only makes a claim look fresher and so delays
+    /// reclamation by a moment. That is true of one loser and false of a stream
+    /// of them: under `--web` every request reaching the offer stamps the age of
+    /// whatever claim is standing, so a claim held by a pid that has since been
+    /// recycled never reaches the backstop that exists to recover it. The
+    /// rendezvous stayed blocked for as long as the service kept serving —
+    /// exactly when an operator wants it.
+    ///
+    /// Reading the source because the property is an ORDER between statements,
+    /// which no executable test can schedule; the same guard shape this file
+    /// already uses for the identity store.
+    #[test]
+    fn a_losing_offer_does_not_refresh_someone_elses_claim() {
+        let source = include_str!("lib.rs");
+        let offer = source
+            .split_once("fn offer_capture(")
+            .expect("the offer path must exist")
+            .1;
+        let body = offer.split_once("\n}\n").expect("a function body").0;
+        let claim = body
+            .find(".compare_exchange(EMPTY, mine")
+            .expect("the claim must be a compare-exchange to this pid");
+        let stamp = body
+            .find("claimed_at.store(monotonic_seconds()")
+            .expect("the claim's time must be published somewhere");
+        assert!(
+            claim < stamp,
+            "the time is published by the winner, after winning — a loser that \
+             stamped first would keep another process's claim permanently young"
+        );
+
+        // And the reason it is now safe to publish late: a claim whose identity
+        // has not been recorded yet is KEPT, so a zero or stale time cannot cost
+        // a live writer its slot the way it could before.
+        assert!(
+            !super::claim_may_be_taken(true, None, u32::MAX),
+            "an unidentifiable live claim is kept whatever its age reads"
+        );
+    }
+
+    /// A claim left standing because it could not be verified is REPORTED.
+    ///
+    /// Refusing to revoke what cannot be identified is the safe half; the other
+    /// half is that such a claim can outlast every later capture, and "no request
+    /// completed within 30s" is then false — requests are completing and being
+    /// refused the slot. The endpoint reads this to say which process is holding
+    /// it, so the operator restarts that worker instead of concluding the
+    /// profiler is broken.
+    #[test]
+    fn a_claim_that_cannot_be_verified_is_kept_and_announced() {
+        let mine = std::process::id();
+        let filled = AtomicU32::new(mine);
+        let claimed_at = AtomicU32::new(0);
+        // 0 is "no identity recorded", which is what an unsupported platform
+        // leaves and what the instant between winning a claim and recording it
+        // looks like. This process is unquestionably alive, so the pair is
+        // exactly the row that used to hand the payload to a second writer.
+        let claim_id = AtomicU32::new(0);
+        super::HELD_BY.store(0, Ordering::Relaxed);
+
+        super::release_stale_slice(&filled, &claimed_at, &claim_id);
+
+        assert_eq!(
+            filled.load(Ordering::Acquire),
+            mine,
+            "an unverifiable live claim is not taken"
+        );
+        assert_eq!(
+            super::elephc_instr_capture_blocked_by(),
+            mine as i32,
+            "and the endpoint can name who is holding it"
+        );
+
+        // Recording the identity makes it verifiable, the claim resolves as the
+        // same process, and there is nothing to announce.
+        claim_id.store(
+            super::process_start_id(mine as i32).expect("this platform identifies a process"),
+            Ordering::Release,
+        );
+        super::release_stale_slice(&filled, &claimed_at, &claim_id);
+        assert_eq!(filled.load(Ordering::Acquire), mine);
+        assert_eq!(
+            super::elephc_instr_capture_blocked_by(),
+            0,
+            "a claim the kernel accounts for is not a blockage"
+        );
+
+        // And a slice waiting to be read is released as it always was, without
+        // any of this: READY is not a claim.
+        filled.store(READY, Ordering::Release);
+        super::release_stale_slice(&filled, &claimed_at, &claim_id);
+        assert_eq!(filled.load(Ordering::Acquire), EMPTY);
     }
 
     /// The kernel identifies this process, stably, and the claim path records it.
@@ -2787,12 +2977,12 @@ mod tests {
     #[test]
     fn a_call_made_by_a_handler_is_an_edge_from_the_catcher() {
         let mut state = State::default();
-        state.enter_at(0, 0, 0, 0, 0, 0); // catcher
-        state.enter_at(1, 10, 0, 0, 0, 0); // thrower
+        state.enter_sim(0, 0, 0, 0, 0, 0); // catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower
         state.note_throw(20, 0, 0, 0, 0);
-        state.enter_at(2, 30, 0, 0, 0, 0); // what the handler calls
-        state.exit_at(2, 900, 0, 0, 0, 0);
-        state.exit_at(0, 1_000, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0); // what the handler calls
+        state.exit_sim(2, 900, 0, 0, 0, 0);
+        state.exit_sim(0, 1_000, 0, 0, 0, 0);
 
         assert_eq!(
             state.edges.get(&(0, 2)),
@@ -2813,12 +3003,12 @@ mod tests {
     #[test]
     fn a_handlers_work_does_not_underflow_the_frame_it_unwound() {
         let mut state = State::default();
-        state.enter_at(0, 0, 0, 0, 0, 0);
-        state.enter_at(1, 10, 0, 0, 0, 0);
+        state.enter_sim(0, 0, 0, 0, 0, 0);
+        state.enter_sim(1, 10, 0, 0, 0, 0);
         state.note_throw(20, 0, 0, 0, 0);
-        state.enter_at(2, 30, 0, 0, 0, 0);
-        state.exit_at(2, 900, 0, 0, 0, 0);
-        state.exit_at(0, 1_000, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0);
+        state.exit_sim(2, 900, 0, 0, 0, 0);
+        state.exit_sim(0, 1_000, 0, 0, 0, 0);
 
         let total: u64 = state.fns.iter().map(|a| a.excl_ns).sum();
         assert_eq!(
@@ -2840,13 +3030,13 @@ mod tests {
     #[test]
     fn an_unwound_frame_does_not_inherit_the_handlers_allocations() {
         let mut state = State::default();
-        state.enter_at(0, 0, 0, 0, 0, 0); // catcher
-        state.enter_at(1, 10, 0, 0, 0, 0); // thrower
+        state.enter_sim(0, 0, 0, 0, 0, 0); // catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower
 
         // The thrower allocates ten objects and frees two, then throws.
         state.note_throw(20, 10, 2, 0, 0);
         // The handler allocates ninety more and frees eight.
-        state.exit_at(0, 1_000, 100, 10, 0, 0);
+        state.exit_sim(0, 1_000, 100, 10, 0, 0);
 
         assert_eq!(
             state.fns[1].incl_allocs, 10,
@@ -2874,14 +3064,14 @@ mod tests {
     #[test]
     fn a_function_that_catches_its_own_throw_keeps_the_handlers_work() {
         let mut state = State::default();
-        state.enter_at(0, 0, 0, 0, 0, 0); // caller
-        state.enter_at(1, 10, 0, 0, 0, 0); // throws and catches, all its own
+        state.enter_sim(0, 0, 0, 0, 0, 0); // caller
+        state.enter_sim(1, 10, 0, 0, 0, 0); // throws and catches, all its own
 
         state.note_throw(20, 0, 0, 0, 0);
-        state.enter_at(2, 30, 0, 0, 0, 0); // the handler calls something
-        state.exit_at(2, 900, 0, 0, 0, 0);
-        state.exit_at(1, 950, 0, 0, 0, 0);
-        state.exit_at(0, 1_000, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0); // the handler calls something
+        state.exit_sim(2, 900, 0, 0, 0, 0);
+        state.exit_sim(1, 950, 0, 0, 0, 0);
+        state.exit_sim(0, 1_000, 0, 0, 0, 0);
 
         assert_eq!(
             state.edges.get(&(1, 2)).map(|e| e.0),
@@ -2901,14 +3091,14 @@ mod tests {
     #[test]
     fn a_rethrow_carries_the_first_unwinds_charge_to_the_next_catcher() {
         let mut state = State::default();
-        state.enter_at(0, 0, 0, 0, 0, 0); // outer catcher
-        state.enter_at(1, 10, 0, 0, 0, 0); // thrower
+        state.enter_sim(0, 0, 0, 0, 0, 0); // outer catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower
 
         state.note_throw(20, 0, 0, 0, 0);
-        state.enter_at(2, 30, 0, 0, 0, 0); // the handler works
-        state.exit_at(2, 500, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0); // the handler works
+        state.exit_sim(2, 500, 0, 0, 0, 0);
         state.note_throw(600, 0, 0, 0, 0); // and then throws again
-        state.exit_at(0, 1_000, 0, 0, 0, 0);
+        state.exit_sim(0, 1_000, 0, 0, 0, 0);
 
         let total: u64 = state.fns.iter().map(|a| a.excl_ns).sum();
         assert_eq!(
@@ -2929,15 +3119,15 @@ mod tests {
     #[test]
     fn an_exception_caught_inside_a_handlers_callee_leaves_the_outer_one_alone() {
         let mut state = State::default();
-        state.enter_at(0, 0, 0, 0, 0, 0); // outer catcher
-        state.enter_at(1, 10, 0, 0, 0, 0); // throws at 20
+        state.enter_sim(0, 0, 0, 0, 0, 0); // outer catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0); // throws at 20
 
         state.note_throw(20, 0, 0, 0, 0);
-        state.enter_at(2, 30, 0, 0, 0, 0); // the handler calls the logger
-        state.enter_at(3, 40, 0, 0, 0, 0); // which calls something that throws
+        state.enter_sim(2, 30, 0, 0, 0, 0); // the handler calls the logger
+        state.enter_sim(3, 40, 0, 0, 0, 0); // which calls something that throws
         state.note_throw(50, 0, 0, 0, 0);
-        state.exit_at(2, 100, 0, 0, 0, 0); // and the logger catches it itself
-        state.exit_at(0, 1_000, 0, 0, 0, 0);
+        state.exit_sim(2, 100, 0, 0, 0, 0); // and the logger catches it itself
+        state.exit_sim(0, 1_000, 0, 0, 0, 0);
 
         assert!(state.stack.is_empty(), "the outer catcher did not resync");
         let total: u64 = state.fns.iter().map(|a| a.excl_ns).sum();
@@ -2979,16 +3169,16 @@ mod tests {
     #[test]
     fn a_second_throw_from_an_open_handler_frame_still_ends_at_the_catcher() {
         let mut state = State::default();
-        state.enter_at(0, 0, 0, 0, 0, 0); // outer catcher
-        state.enter_at(1, 10, 0, 0, 0, 0); // thrower
+        state.enter_sim(0, 0, 0, 0, 0, 0); // outer catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower
 
         state.note_throw(20, 0, 0, 0, 0);
-        state.enter_at(2, 30, 0, 0, 0, 0); // the handler calls this...
-        state.enter_at(3, 40, 0, 0, 0, 0); // ...which calls this
-        state.exit_at(3, 50, 0, 0, 0, 0); // only the inner one returns
+        state.enter_sim(2, 30, 0, 0, 0, 0); // the handler calls this...
+        state.enter_sim(3, 40, 0, 0, 0, 0); // ...which calls this
+        state.exit_sim(3, 50, 0, 0, 0, 0); // only the inner one returns
         state.note_throw(600, 0, 0, 0, 0); // and then the handler throws again
 
-        state.exit_at(0, 1_000, 0, 0, 0, 0);
+        state.exit_sim(0, 1_000, 0, 0, 0, 0);
 
         assert!(state.stack.is_empty(), "the catcher's exit did not resync");
         assert_eq!(
@@ -3013,14 +3203,14 @@ mod tests {
     #[test]
     fn a_nested_unwind_still_accounts_for_exactly_the_roots_span() {
         let mut state = State::default();
-        state.enter_at(0, 0, 0, 0, 0, 0);
-        state.enter_at(1, 10, 0, 0, 0, 0);
+        state.enter_sim(0, 0, 0, 0, 0, 0);
+        state.enter_sim(1, 10, 0, 0, 0, 0);
         state.note_throw(20, 0, 0, 0, 0);
-        state.enter_at(2, 30, 0, 0, 0, 0);
-        state.enter_at(3, 40, 0, 0, 0, 0);
-        state.exit_at(3, 50, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0);
+        state.enter_sim(3, 40, 0, 0, 0, 0);
+        state.exit_sim(3, 50, 0, 0, 0, 0);
         state.note_throw(600, 0, 0, 0, 0);
-        state.exit_at(0, 1_000, 0, 0, 0, 0);
+        state.exit_sim(0, 1_000, 0, 0, 0, 0);
 
         for (id, acc) in state.fns.iter().enumerate() {
             assert!(
@@ -3053,10 +3243,10 @@ mod tests {
         let mut state = State::default();
         state.note_throw(0, 0, 0, 0, 0);
 
-        state.enter_at(0, 100, 0, 0, 0, 0);
-        state.enter_at(1, 110, 0, 0, 0, 0);
-        state.exit_at(1, 200, 0, 0, 0, 0);
-        state.exit_at(0, 300, 0, 0, 0, 0);
+        state.enter_sim(0, 100, 0, 0, 0, 0);
+        state.enter_sim(1, 110, 0, 0, 0, 0);
+        state.exit_sim(1, 200, 0, 0, 0, 0);
+        state.exit_sim(0, 300, 0, 0, 0, 0);
 
         assert_eq!(state.fns[1].excl_ns, 90, "the callee ran for 90");
         assert_eq!(state.fns[0].excl_ns, 110, "the caller ran for 110");
@@ -3071,16 +3261,16 @@ mod tests {
     #[test]
     fn a_reset_mid_unwind_does_not_charge_the_next_slice() {
         let mut state = State::default();
-        state.enter_at(0, 0, 0, 0, 0, 0);
-        state.enter_at(1, 10, 0, 0, 0, 0);
+        state.enter_sim(0, 0, 0, 0, 0, 0);
+        state.enter_sim(1, 10, 0, 0, 0, 0);
         state.note_throw(20, 0, 0, 0, 0);
-        state.enter_at(2, 30, 0, 0, 0, 0);
-        state.exit_at(2, 900, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0);
+        state.exit_sim(2, 900, 0, 0, 0, 0);
         state.reset();
 
         // A fresh slice: one call, ten ticks, and nothing else.
-        state.enter_at(0, 1_000, 0, 0, 0, 0);
-        state.exit_at(0, 1_010, 0, 0, 0, 0);
+        state.enter_sim(0, 1_000, 0, 0, 0, 0);
+        state.exit_sim(0, 1_010, 0, 0, 0, 0);
         assert_eq!(
             state.fns[0].excl_ns, 10,
             "the previous slice's handler work followed the reset"
@@ -3167,6 +3357,38 @@ mod tests {
     /// test asserting rendered nanoseconds against hand-written timestamps is
     /// therefore asserting something about the host's counter unless it says
     /// which rate it means — on this machine, 24 MHz, `30` renders as `1250`.
+    /// Where a simulated stack starts. High enough that the deepest frame a test
+    /// can reach is still a plausible address, and never zero.
+    const SIM_BASE: usize = 0x7fff_0000_0000;
+
+    impl State {
+        /// Enters `id` at the frame pointer a real stack would hand this depth,
+        /// and returns it, so a test can hold on to a particular activation.
+        fn enter_sim(&mut self, id: u32, t: u64, a: u64, f: u64, io: u64, w: u64) -> usize {
+            let fp = SIM_BASE - self.stack.len() * 64;
+            self.enter_at(id, fp, t, a, f, io, w);
+            fp
+        }
+
+        /// Exits the innermost live activation of `id`.
+        ///
+        /// Which is what the hook used to resolve to when it had only an id, and
+        /// what every non-recursive test means: with one activation live there is
+        /// nothing to choose between. A test about recursion says which
+        /// activation it means by passing the frame pointer `enter_sim` returned.
+        fn exit_sim(&mut self, id: u32, t: u64, a: u64, f: u64, io: u64, w: u64) {
+            let fp = self
+                .stack
+                .iter()
+                .rposition(|frame| frame.id == id)
+                .map(|index| self.stack[index].fp)
+                // Not on the stack: dropped past the cap, or never entered. The
+                // address cannot collide with a live frame, which is the point.
+                .unwrap_or(SIM_BASE + 64);
+            self.exit_at(id, fp, t, a, f, io, w);
+        }
+    }
+
     fn ticks_are_nanoseconds() -> std::sync::MutexGuard<'static, ()> {
         // The guard comes back with it: the rate is one global, every test that
         // switches the profiler on replaces it with the hardware's, and these run
@@ -3300,12 +3522,12 @@ mod tests {
         // Timestamps then allocation counters. a=main, b=child.
         // main enters @t0/alloc0, a enters, b enters @t10/alloc3, unwinds.
         // Args: (id, ns, allocs, frees, io). Only b does io (2 queries).
-        s.enter_at(0, 0, 0, 0, 0, 0); // main
-        s.enter_at(1, 0, 0, 0, 0, 0); // a
-        s.enter_at(2, 10, 3, 0, 0, 0); // b
-        s.exit_at(2, 40, 8, 0, 2, 0); // b: 30ns, 5 allocs, 2 io
-        s.exit_at(1, 50, 9, 0, 2, 0); // a: children 30/5/2 -> excl 20ns/4allocs/0io
-        s.exit_at(0, 60, 12, 0, 2, 0); // main: excl 10ns/3allocs/0io
+        s.enter_sim(0, 0, 0, 0, 0, 0); // main
+        s.enter_sim(1, 0, 0, 0, 0, 0); // a
+        s.enter_sim(2, 10, 3, 0, 0, 0); // b
+        s.exit_sim(2, 40, 8, 0, 2, 0); // b: 30ns, 5 allocs, 2 io
+        s.exit_sim(1, 50, 9, 0, 2, 0); // a: children 30/5/2 -> excl 20ns/4allocs/0io
+        s.exit_sim(0, 60, 12, 0, 2, 0); // main: excl 10ns/3allocs/0io
         assert_eq!(s.fns[2].incl_ns, 30);
         assert_eq!(s.fns[2].excl_ns, 30);
         assert_eq!(s.fns[2].incl_allocs, 5);
@@ -3334,12 +3556,12 @@ mod tests {
     /// function does not accumulate its own nested time repeatedly.
     fn recursion_does_not_double_count() {
         let mut s = State::default();
-        s.enter_at(0, 0, 0, 0, 0, 0);
-        s.enter_at(0, 0, 1, 0, 0, 0);
-        s.enter_at(0, 0, 2, 0, 0, 0);
-        s.exit_at(0, 30, 5, 0, 0, 0);
-        s.exit_at(0, 60, 7, 0, 0, 0);
-        s.exit_at(0, 90, 10, 0, 0, 0); // outermost span 0..90 ns, 0..10 allocs
+        s.enter_sim(0, 0, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 1, 0, 0, 0);
+        s.enter_sim(0, 0, 2, 0, 0, 0);
+        s.exit_sim(0, 30, 5, 0, 0, 0);
+        s.exit_sim(0, 60, 7, 0, 0, 0);
+        s.exit_sim(0, 90, 10, 0, 0, 0); // outermost span 0..90 ns, 0..10 allocs
         assert_eq!(s.fns[0].calls, 3);
         assert_eq!(s.fns[0].incl_ns, 90);
         assert_eq!(s.fns[0].incl_allocs, 10);
@@ -3353,10 +3575,10 @@ mod tests {
     /// how the stack recovers from an unwind it never saw.
     fn exit_resyncs_past_unwound_frames() {
         let mut s = State::default();
-        s.enter_at(0, 0, 0, 0, 0, 0); // a
-        s.enter_at(1, 5, 1, 0, 0, 0); // b
-        s.enter_at(2, 10, 2, 0, 0, 0); // c — unwound, no exits for c or b
-        s.exit_at(0, 100, 9, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0); // a
+        s.enter_sim(1, 5, 1, 0, 0, 0); // b
+        s.enter_sim(2, 10, 2, 0, 0, 0); // c — unwound, no exits for c or b
+        s.exit_sim(0, 100, 9, 0, 0, 0);
         assert_eq!(s.stack.len(), 0, "stack fully unwound");
         assert_eq!(s.fns[0].incl_ns, 100);
         assert_eq!(s.fns[0].incl_allocs, 9);
@@ -3373,14 +3595,14 @@ mod tests {
     #[test]
     fn a_recursive_function_that_catches_around_its_own_call_accounts_exactly() {
         let mut s = State::default();
-        s.enter_at(0, 0, 0, 0, 0, 0); // main, 0..1000
-        s.enter_at(1, 10, 0, 0, 0, 0); // rec, outer, 10..600
-        s.enter_at(1, 20, 0, 0, 0, 0); // rec, inner, 20..500
-        s.enter_at(2, 30, 0, 0, 0, 0); // its callee, 30..40, killed by the throw
+        s.enter_sim(0, 0, 0, 0, 0, 0); // main, 0..1000
+        s.enter_sim(1, 10, 0, 0, 0, 0); // rec, outer, 10..600
+        s.enter_sim(1, 20, 0, 0, 0, 0); // rec, inner, 20..500
+        s.enter_sim(2, 30, 0, 0, 0, 0); // its callee, 30..40, killed by the throw
         s.note_throw(40, 0, 0, 0, 0);
-        s.exit_at(1, 500, 0, 0, 0, 0); // the inner activation catches
-        s.exit_at(1, 600, 0, 0, 0, 0); // and the outer one returns normally
-        s.exit_at(0, 1_000, 0, 0, 0, 0);
+        s.exit_sim(1, 500, 0, 0, 0, 0); // the inner activation catches
+        s.exit_sim(1, 600, 0, 0, 0, 0); // and the outer one returns normally
+        s.exit_sim(0, 1_000, 0, 0, 0, 0);
 
         assert!(s.stack.is_empty(), "the stack did not unwind");
         assert_eq!(s.fns[2].excl_ns, 10, "the callee ran ten ticks before the throw");
@@ -3394,8 +3616,7 @@ mod tests {
         assert_eq!(total, 1_000, "self time did not partition the root");
     }
 
-    /// Recursion where the recursive call itself throws — and the profile says
-    /// it could not tell which activation caught.
+    /// Recursion where the recursive call itself throws.
     ///
     /// ```php
     /// function f(int $n): void {
@@ -3404,41 +3625,38 @@ mod tests {
     /// }
     /// ```
     ///
-    /// Every activation carries the `try`, and the catcher is still not the frame
-    /// the exit resolves to: the deepest activation took the `else` branch and
-    /// threw, so the topmost frame with that id is the corpse of the thrower
-    /// rather than the frame returning. A function that throws and catches within
-    /// one activation produces the identical shadow stack, so no rule over ids
-    /// alone can separate them — which is exactly what the note has to say.
+    /// Every activation carries the `try`, and the one that catches is not the
+    /// one the id alone would find: the deepest took the `else` branch and threw,
+    /// so the topmost frame carrying that id is the corpse of the thrower rather
+    /// than the frame returning. With an id and nothing else this cost 20 ticks
+    /// of 120 — off `{main}`, onto `f` — with the self times still summing to the
+    /// root, so nothing looked wrong. The exit says which activation it is now.
     #[test]
-    fn a_recursive_call_that_throws_is_reported_as_an_unresolvable_catch() {
+    fn a_recursive_call_that_throws_is_charged_to_the_activation_that_caught() {
         let mut s = State::default();
-        s.enter_at(0, 0, 0, 0, 0, 0); // {main}, 0..120
-        s.enter_at(1, 10, 0, 0, 0, 0); // f(1), carries the try, 10..100
-        s.enter_at(1, 20, 0, 0, 0, 0); // f(0), throws at 30
+        s.enter_sim(0, 0, 0, 0, 0, 0); // {main}, 0..120
+        let outer = s.enter_sim(1, 10, 0, 0, 0, 0); // f(1), carries the try, 10..100
+        s.enter_sim(1, 20, 0, 0, 0, 0); // f(0), throws at 30
         s.note_throw(30, 0, 0, 0, 0);
-        s.enter_at(2, 40, 0, 0, 0, 0); // recover(), 40..70
-        s.exit_at(2, 70, 0, 0, 0, 0);
-        s.exit_at(1, 100, 0, 0, 0, 0); // f(1) returns
-        s.exit_at(0, 120, 0, 0, 0, 0);
+        s.enter_sim(2, 40, 0, 0, 0, 0); // recover(), 40..70
+        s.exit_sim(2, 70, 0, 0, 0, 0);
+        s.exit_at(1, outer, 100, 0, 0, 0, 0); // f(1) — the OUTER one — returns
+        s.exit_sim(0, 120, 0, 0, 0, 0);
 
         assert!(s.stack.is_empty(), "the stack did not unwind");
         assert_eq!(
-            s.ambiguous_catch, 1,
-            "the profile picked an activation without admitting it had to"
+            s.fns[1].excl_ns, 60,
+            "f: 10 for the activation that threw, 50 for the one that caught"
         );
-        let names = ["{main}".to_string(), "f".to_string(), "recover".to_string()];
-        assert!(
-            s.render(&names).contains("which activation caught could not be determined"),
-            "the report does not carry the note"
-        );
-        // The choice costs 20 ticks here: they sit on `f` instead of `{main}`.
-        // Asserted so the day an activation identity reaches the exit hook, this
-        // test fails and says what it is worth.
-        assert_eq!(s.fns[1].excl_ns, 80, "f: 60 is the truth, 80 is what the id alone can say");
-        assert_eq!(s.fns[0].excl_ns, 10, "{{main}}: 30 is the truth");
+        assert_eq!(s.fns[0].excl_ns, 30, "{{main}} keeps what it actually ran");
+        assert_eq!(s.fns[2].excl_ns, 30, "recover ran 40..70");
         let total: u64 = s.fns.iter().map(|a| a.excl_ns).sum();
-        assert_eq!(total, 120, "self time still partitions the root");
+        assert_eq!(total, 120, "self time did not partition the root");
+        assert_eq!(
+            s.edges.get(&(1, 2)).map(|e| e.0),
+            Some(1),
+            "the handler's call belongs to the activation that ran it"
+        );
     }
 
     /// A dump taken while frames are still running says so.
@@ -3452,9 +3670,9 @@ mod tests {
     fn a_dump_with_frames_still_running_says_how_many() {
         let _serial = ticks_are_nanoseconds();
         let mut s = State::default();
-        s.enter_at(0, 0, 0, 0, 0, 0); // {main}, still running
-        s.enter_at(1, 10, 0, 0, 0, 0); // and its callee
-        s.exit_at(1, 40, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0); // {main}, still running
+        s.enter_sim(1, 10, 0, 0, 0, 0); // and its callee
+        s.exit_sim(1, 40, 0, 0, 0, 0);
 
         let names = ["{main}".to_string(), "work".to_string()];
         let out = s.render(&names);
@@ -3468,7 +3686,7 @@ mod tests {
         );
 
         // And a complete capture says nothing of the kind.
-        s.exit_at(0, 100, 0, 0, 0, 0);
+        s.exit_sim(0, 100, 0, 0, 0, 0);
         assert!(
             !s.render(&names).contains("still open at this dump"),
             "a complete capture claimed to be truncated"
@@ -3527,10 +3745,10 @@ mod tests {
         );
 
         // And a real throw afterwards still works.
-        s.enter_at(0, 100, 0, 0, 0, 0);
-        s.enter_at(1, 110, 0, 0, 0, 0);
+        s.enter_sim(0, 100, 0, 0, 0, 0);
+        s.enter_sim(1, 110, 0, 0, 0, 0);
         s.note_throw(120, 0, 0, 0, 0);
-        s.exit_at(0, 200, 0, 0, 0, 0);
+        s.exit_sim(0, 200, 0, 0, 0, 0);
         assert_eq!(s.fns[1].excl_ns, 10, "the thrower died at its throw");
         let total: u64 = s.fns.iter().map(|a| a.excl_ns).sum();
         assert_eq!(total, 100, "self time did not partition the root");
@@ -3545,9 +3763,9 @@ mod tests {
     fn throws_past_the_nesting_cap_share_a_record_and_the_report_says_so() {
         let _serial = ticks_are_nanoseconds();
         let mut s = State::default();
-        s.enter_at(0, 0, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0);
         for tick in 0..(MAX_NESTED_THROWS as u64 + 4) {
-            s.enter_at(1, 10 + tick, 0, 0, 0, 0);
+            s.enter_sim(1, 10 + tick, 0, 0, 0, 0);
             s.note_throw(20 + tick, 0, 0, 0, 0);
         }
         assert_eq!(
@@ -3555,7 +3773,7 @@ mod tests {
             "records were recycled without the report admitting it"
         );
 
-        s.exit_at(0, 10_000, 0, 0, 0, 0);
+        s.exit_sim(0, 10_000, 0, 0, 0, 0);
         let names = ["{main}".to_string(), "f".to_string()];
         assert!(
             s.render(&names).contains("shared a record with an older one"),
@@ -3573,18 +3791,18 @@ mod tests {
     #[test]
     fn an_exit_for_a_frame_that_was_never_pushed_leaves_the_stack_alone() {
         let mut s = State::default();
-        s.enter_at(0, 0, 0, 0, 0, 0);
-        s.enter_at(1, 10, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0);
+        s.enter_sim(1, 10, 0, 0, 0, 0);
 
-        s.exit_at(9, 50, 0, 0, 0, 0);
+        s.exit_sim(9, 50, 0, 0, 0, 0);
 
         assert_eq!(s.stack.len(), 2, "an unknown exit emptied the stack");
         assert_eq!(s.fns[0].excl_ns, 0, "an enclosing frame was closed by it");
         assert_eq!(s.fns[1].excl_ns, 0, "an enclosing frame was closed by it");
 
         // And the real exits still work afterwards.
-        s.exit_at(1, 60, 0, 0, 0, 0);
-        s.exit_at(0, 100, 0, 0, 0, 0);
+        s.exit_sim(1, 60, 0, 0, 0, 0);
+        s.exit_sim(0, 100, 0, 0, 0, 0);
         assert_eq!(s.fns[1].excl_ns, 50);
         assert_eq!(s.fns[0].excl_ns, 50);
     }
@@ -3595,10 +3813,10 @@ mod tests {
     fn render_lists_metrics_and_edges() {
         let _serial = ticks_are_nanoseconds();
         let mut s = State::default();
-        s.enter_at(0, 0, 0, 0, 0, 0);
-        s.enter_at(1, 0, 0, 0, 0, 0);
-        s.exit_at(1, 40, 7, 5, 3, 0); // hot: 7 allocs, 5 frees, 3 io ops
-        s.exit_at(0, 50, 8, 5, 3, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0);
+        s.enter_sim(1, 0, 0, 0, 0, 0);
+        s.exit_sim(1, 40, 7, 5, 3, 0); // hot: 7 allocs, 5 frees, 3 io ops
+        s.exit_sim(0, 50, 8, 5, 3, 0);
         let names = vec!["{main}".to_string(), "hot".to_string()];
         let out = s.render(&names);
         // Retained = allocs - frees: hot keeps 2 of its 7; main's own 1 alloc is
@@ -3616,10 +3834,10 @@ mod tests {
         // `cleanup` frees more than it allocates (it releases what main built),
         // so its retained is negative — the dimension must not clamp at zero.
         let mut s = State::default();
-        s.enter_at(0, 0, 0, 0, 0, 0); // main
-        s.enter_at(1, 10, 10, 0, 0, 0); // cleanup, entered after main made 10 objects
-        s.exit_at(1, 20, 10, 8, 0, 0); // cleanup: 0 allocs, 8 frees -> retained -8
-        s.exit_at(0, 30, 10, 8, 0, 0); // main: 10 allocs, 8 frees -> retained +2
+        s.enter_sim(0, 0, 0, 0, 0, 0); // main
+        s.enter_sim(1, 10, 10, 0, 0, 0); // cleanup, entered after main made 10 objects
+        s.exit_sim(1, 20, 10, 8, 0, 0); // cleanup: 0 allocs, 8 frees -> retained -8
+        s.exit_sim(0, 30, 10, 8, 0, 0); // main: 10 allocs, 8 frees -> retained +2
         let names = vec!["{main}".to_string(), "cleanup".to_string()];
         let out = s.render(&names);
         assert!(out.contains("cleanup calls=1 incl_ns=10 excl_ns=10 incl_allocs=0 excl_allocs=0 incl_io=0 excl_io=0 incl_ret=-8 excl_ret=-8"), "{out}");
@@ -3741,14 +3959,14 @@ mod tests {
         // Two identical "requests" on one worker. Without the reset the second
         // reports calls=2 and double the time — the --web bug this fixes.
         let mut s = State::default();
-        s.enter_at(0, 0, 0, 0, 0, 0);
-        s.exit_at(0, 100, 5, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0);
+        s.exit_sim(0, 100, 5, 0, 0, 0);
         let names = vec!["work".to_string()];
         let first = s.render(&names);
         assert!(first.contains("work calls=1 incl_ns=100"), "{first}");
         s.reset();
-        s.enter_at(0, 1_000, 90, 0, 0, 0);
-        s.exit_at(0, 1_100, 95, 0, 0, 0);
+        s.enter_sim(0, 1_000, 90, 0, 0, 0);
+        s.exit_sim(0, 1_100, 95, 0, 0, 0);
         let second = s.render(&names);
         assert!(
             second.contains("work calls=1 incl_ns=100 excl_ns=100 incl_allocs=5"),
@@ -3780,10 +3998,10 @@ mod tests {
         let mut s = State::default();
         // catcher(0) -> middle(1) -> inner(2); inner and middle are unwound by
         // a throw, so only catcher's exit hook ever runs.
-        s.enter_at(0, 0, 0, 0, 0, 0);
-        s.enter_at(1, 10, 0, 0, 0, 0);
-        s.enter_at(2, 30, 0, 0, 0, 0);
-        s.exit_at(0, 100, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0);
+        s.enter_sim(1, 10, 0, 0, 0, 0);
+        s.enter_sim(2, 30, 0, 0, 0, 0);
+        s.exit_sim(0, 100, 0, 0, 0, 0);
 
         assert!(s.stack.is_empty(), "the throw unwound everything");
         // Each unwound frame is closed at the instant the throw was observed.
@@ -3806,30 +4024,29 @@ mod tests {
     fn overflowing_the_shadow_stack_keeps_the_frames_it_did_hold() {
         let mut s = State::default();
         // id 0 wraps everything and must survive intact.
-        s.enter_at(0, 0, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0);
         // Fill the stack to the cap with id 1. The timestamps only ever move
         // forward, as the counter this stands in for does: an exit stamped
         // before its own entry produces a negative span, and the totals below
         // then hold by wrapping around rather than by adding up.
         for i in 0..(MAX_STACK - 1) {
-            s.enter_at(1, 1 + i as u64, 0, 0, 0, 0);
+            s.enter_sim(1, 1 + i as u64, 0, 0, 0, 0);
         }
         assert_eq!(s.stack.len(), MAX_STACK);
         // Two further activations of a DIFFERENT id cannot be pushed.
-        s.enter_at(2, 70_000, 0, 0, 0, 0);
-        s.enter_at(2, 70_001, 0, 0, 0, 0);
+        s.enter_sim(2, 70_000, 0, 0, 0, 0);
+        s.enter_sim(2, 70_001, 0, 0, 0, 0);
         assert_eq!(s.dropped, 2);
         assert_eq!(s.stack.len(), MAX_STACK, "nothing was pushed past the cap");
         // Their exits must not disturb the stack.
-        s.exit_at(2, 70_002, 0, 0, 0, 0);
-        s.exit_at(2, 70_003, 0, 0, 0, 0);
+        s.exit_sim(2, 70_002, 0, 0, 0, 0);
+        s.exit_sim(2, 70_003, 0, 0, 0, 0);
         assert_eq!(s.stack.len(), MAX_STACK, "a dropped exit pops nothing");
-        assert_eq!(s.dropped_depth, 0);
         // Unwind normally.
         for i in 0..(MAX_STACK - 1) {
-            s.exit_at(1, 80_000 + i as u64, 0, 0, 0, 0);
+            s.exit_sim(1, 80_000 + i as u64, 0, 0, 0, 0);
         }
-        s.exit_at(0, 200_000, 0, 0, 0, 0);
+        s.exit_sim(0, 200_000, 0, 0, 0, 0);
         assert!(s.stack.is_empty(), "fully unwound");
         // The outermost frame kept its span, which is what used to be destroyed.
         assert_eq!(s.fns[0].incl_ns, 200_000);
@@ -3852,12 +4069,12 @@ mod tests {
         // 50ns of pure CPU. Wait is attributed like every other dimension, so
         // the caller's own wait excludes what its callees waited on.
         let mut s = State::default();
-        s.enter_at(0, 0, 0, 0, 0, 0); // main
-        s.enter_at(1, 10, 0, 0, 0, 0); // query
-        s.exit_at(1, 110, 0, 0, 1, 80); // 100ns elapsed, 80ns of it waiting
-        s.enter_at(2, 110, 0, 0, 1, 80); // compute
-        s.exit_at(2, 160, 0, 0, 1, 80); // 50ns, no wait
-        s.exit_at(0, 170, 0, 0, 1, 80); // main: 170ns total, 80 waited by a child
+        s.enter_sim(0, 0, 0, 0, 0, 0); // main
+        s.enter_sim(1, 10, 0, 0, 0, 0); // query
+        s.exit_sim(1, 110, 0, 0, 1, 80); // 100ns elapsed, 80ns of it waiting
+        s.enter_sim(2, 110, 0, 0, 1, 80); // compute
+        s.exit_sim(2, 160, 0, 0, 1, 80); // 50ns, no wait
+        s.exit_sim(0, 170, 0, 0, 1, 80); // main: 170ns total, 80 waited by a child
         assert_eq!(s.fns[1].incl_wait, 80);
         assert_eq!(s.fns[1].excl_wait, 80);
         assert_eq!(s.fns[2].excl_wait, 0, "pure CPU function waits for nothing");
