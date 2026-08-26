@@ -331,8 +331,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_query_fn"), 8, target));
     // elephc_instr_wait_fn: third companion slot, filled with elephc_instr_wait
     // under --instrument. The PDO bridge times the actual driver call and
-    // reports the nanoseconds through it, which is what splits each function's
-    // self time into CPU and I/O wait. Zero (inert) in a normal binary.
+    // reports the nanoseconds through it, which separates recorded DB wait from
+    // each function's remaining wall time. Zero (inert) in a normal binary.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_wait_fn"), 8, target));
     // elephc_instr_trace_fn: fourth companion slot, filled with
     // elephc_instr_trace_begin under --instrument. The web bridge calls it at

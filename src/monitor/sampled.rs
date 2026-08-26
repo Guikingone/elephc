@@ -41,7 +41,8 @@ pub(crate) fn build_call_graph(display: &[(Vec<(String, Kind)>, u64)]) -> crate:
                 exclusive: stats.selfs.get(*name).copied().unwrap_or(0),
                 // Sampling gives no exact count; --counters is the exact path.
                 call_count: None,
-                // Allocation and I/O counts are exact-only (--instrument).
+                // Per-node allocation and DB metrics need the exact call graph;
+                // the sampled service summary reports only window-level deltas.
                 alloc_inclusive: 0,
                 alloc_exclusive: 0,
                 io_inclusive: 0,
@@ -88,7 +89,7 @@ pub(crate) fn build_call_graph(display: &[(Vec<(String, Kind)>, u64)]) -> crate:
     }
 }
 
-/// Renders the probe's per-route I/O counters, when the capture carries any.
+/// Renders the probe's per-route database counters, when the capture carries any.
 ///
 /// Printed apart from the cause table and labelled, because these numbers are a
 /// different KIND from everything around them: the table's shares are sampled at
@@ -122,7 +123,7 @@ pub(crate) fn probe_io_summary(text: &str) -> String {
     let total_ops: u64 = rows.iter().map(|r| r.1).sum();
     let total_wait: u64 = rows.iter().map(|r| r.2).sum();
     let mut out = format!(
-        "\nI/O — {total_ops} operation(s), {} waiting. Exact, not sampled: a driver call \
+        "\nDatabase — {total_ops} query operation(s), {} driver wait. Exact, not sampled: a driver call \
          reports itself,\nso these counts do not depend on how often the profiler looked.\n\n",
         fmt_ns(total_wait)
     );
@@ -135,12 +136,11 @@ pub(crate) fn probe_io_summary(text: &str) -> String {
 
 /// Renders the probe's sampled allocation attribution.
 ///
-/// Two different claims live here and conflating them would be the mistake: the
-/// **total** is exact by construction, because each sample charges the counter's
-/// delta since the previous one and those deltas telescope back to the counter
-/// itself. What is sampled is the **attribution** — which stack gets charged —
-/// since a delta is credited to whichever stack the sample caught. Allocations
-/// after the final sample are simply not seen.
+/// Two different claims live here and conflating them would be the mistake:
+/// each reported delta is an exact counter difference between two samples, but
+/// the window's first baseline and its unsampled tail are not counted. The
+/// attribution is sampled too — a delta is credited to whichever stack the
+/// later sample caught.
 ///
 /// So this answers "where does allocation happen", not "how much did this
 /// function allocate". `--instrument` is the mode that answers the second.
@@ -163,8 +163,9 @@ pub(crate) fn probe_alloc_summary(text: &str) -> String {
     rows.sort_by(|a, b| b.1.cmp(&a.1));
     let total: u64 = rows.iter().map(|r| r.1).sum();
     let mut out = format!(
-        "\nallocations — {total} total, exact; the attribution below is sampled, so it says\n\
-         WHERE allocation happens rather than how much each function allocated.\n\n"
+        "\nallocations — {total} observed between samples; attribution is sampled, so it says\n\
+         WHERE allocation happens rather than how much each function allocated. The first\n\
+         baseline and allocations after the final sample are outside this total.\n\n"
     );
     for (stack, allocs) in rows.iter().take(5) {
         let leaf = stack.rsplit(';').find(|f| *f != "<native>").unwrap_or(stack);

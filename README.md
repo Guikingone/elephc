@@ -121,10 +121,13 @@ change with the environment**. Build with `--with-monitoring` and `elephc
 monitor` reads the binary you ran, or the service already serving traffic at
 `https://host:9411`.
 
-A program you *launch* is measured from inside: exact time, allocations, retained
-objects, I/O wait, SQL queries and call counts, so an N+1 is a certainty rather
-than a suspicion. A service you *connect to* answers from its sample ring by
-default — CPU-time shares, sharp enough to name a hotspot — and `elephc monitor
+A program you *launch* is measured from inside: exact wall time, allocations,
+retained objects, database wait, SQL queries and call counts, rooted at
+`{main}`, so an N+1 is a certainty rather than a suspicion. File I/O is not yet
+counted or timed. A service you *connect to* answers from its sample ring by
+default — sampled CPU-time shares, sampled allocation attribution and route
+tags, with no blocked wall time or query/wait summary in a combined monitoring
+build — and `elephc monitor
 <addr> --exact` returns the measured per-function table for one completed request,
 which is the same kind of answer a laptop run gives. A `--web` service also
 answers a signed `X-Elephc-Query` header, which measures that one request exactly

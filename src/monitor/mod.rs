@@ -7,9 +7,9 @@
 //! - `crate::main()` when the first argument is exactly `monitor`.
 //!
 //! Key details:
-//! - The default capture is exact and needs no sampler, so it is identical on
-//!   macOS and Linux. Only `--live` and `--attach` read a process from the
-//!   outside, which shells out to `/usr/bin/sample` and is therefore macOS-only.
+//! - A launched program defaults to exact capture on macOS and Linux. A running
+//!   service defaults to its in-process sampled ring; `--exact` selects one
+//!   completed request. `--live`/`--attach` use macOS's external sampler.
 //! - `sample` splits one function into sibling call-graph nodes per sampled call
 //!   offset; aggregation is by symbol, never by node identity.
 //! - Inlined PHP calls leave no frame, but the inliner preserves callee source
@@ -103,13 +103,15 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
         // nothing itself, so it runs before every capture path.
         return run_stitch(&cmd);
     }
-    // `--duration` sizes a sampling window, and only `--live` and `--attach`
-    // take windows — everything else measures a whole run exactly. Silently
-    // ignoring it would leave someone believing they had bounded a capture.
+    // `--duration` sizes an external sampling window, and only `--live` and
+    // `--attach` take one. Local exact capture measures the launched run; a
+    // service answers its cumulative ring or its next exact request. Silently
+    // ignoring the flag would leave someone believing either was time-bounded.
     if cmd.duration_explicit && !cmd.live && cmd.attach_pid.is_none() {
         eprintln!(
-            "elephc monitor: --duration sizes a sampling window and applies to --live and \
-             --attach only; this capture measures the whole run exactly."
+            "elephc monitor: --duration applies to external --live/--attach windows only; \
+             local exact capture measures the launched run, while a service answers its \
+             current ring or next exact request."
         );
     }
     // A running service is a legitimate target, not a special mode: `monitor
@@ -167,8 +169,9 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     }
     // `--live` and `--attach` are the only paths left that read a process from
     // the outside, and the tool that does it ships on macOS alone. Everything
-    // else — a source, a binary, a running service — is measured exactly and
-    // needs no sampler, which is why this is the only platform branch left.
+    // remaining local default — a source or equipped binary — is measured
+    // exactly and needs no sampler, which is why this is the only platform
+    // branch left.
     if !cfg!(target_os = "macos") {
         if let Some(pid) = cmd.attach_pid {
             eprintln!(
@@ -494,6 +497,9 @@ pub(crate) const CONTROL_FD: i32 = 3;
 /// Marker written into the channel before spawning, so it is already buffered
 /// when the child looks and no handshake can race the program's own start.
 pub(crate) const CONTROL_MAGIC: &[u8] = b"ELEPHC-MONITOR-1";
+/// Acknowledgement returned after the child consumed the control marker and
+/// activated its embedded monitoring runtime.
+pub(crate) const CONTROL_ACK: &[u8] = b"ELEPHC-MONITOR-ACK-1";
 
 /// Holds the parent's end of the control channel open for the child's lifetime.
 pub(crate) struct ControlChannel {

@@ -138,9 +138,11 @@ Codegen:
   --counters              Embed per-function call counters (BSS) and print exact call
                           counts to stderr at exit
   --with-monitoring       Embed the profiling capability, dormant until `elephc monitor`
-                          asks. Exact per-function time, allocations, retained
-                          objects, DB queries, wait and call counts. Inlined
-                          functions fold into their caller (as with --counters).
+                          asks. Local/--exact captures report exact wall time,
+                          allocations, retained objects, DB queries/wait and calls,
+                          rooted at {main}; file I/O is not measured. A service's
+                          default answer is sampled CPU time. Inlined functions
+                          fold into their caller (as with --counters).
   --with-monitoring=NAMES Embed it for the named functions only (comma list, trailing
                           `*` matches by prefix, or @file with one name per line)
   --heap-debug            Enable heap debug instrumentation

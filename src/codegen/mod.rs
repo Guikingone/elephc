@@ -98,10 +98,10 @@ pub enum Instrumentation {
     /// No hooks at all.
     #[default]
     Off,
-    /// Every non-synthetic PHP function.
+    /// The `{main}` root and every non-synthetic PHP function.
     All,
-    /// Only the named functions. A trailing `*` matches by prefix, so
-    /// `PDOStatement::*` covers a class.
+    /// Only the named functions. `{main}` selects the top-level root; a trailing
+    /// `*` matches by prefix, so `PDOStatement::*` covers a class.
     Only(Vec<String>),
 }
 
@@ -449,6 +449,10 @@ mod instrumentation_tests {
         assert!(!only.covers("run_process_order"));
         assert!(!only.covers("PDO::execute"));
         assert!(!only.covers("format_money"));
+
+        let main_only = Instrumentation::Only(vec!["{main}".to_string()]);
+        assert!(main_only.covers("{main}"));
+        assert!(!main_only.covers("main"), "the display-root spelling is explicit");
 
         assert!(Instrumentation::All.covers("anything"));
         assert!(!Instrumentation::Off.covers("anything"));

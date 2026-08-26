@@ -252,6 +252,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     // is never guarded — it is the root of every call chain and runs before the floor exists.
     stack_guard::emit_stack_limit_init_call(ctx.emitter);
     emit_probe_init(ctx);
+    register_main_instr(ctx);
     emit_instr_init(ctx);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
@@ -266,6 +267,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     store_argv_global_if_needed(ctx);
     store_argc_local_if_present(ctx);
     store_argv_local_if_present(ctx);
+    emit_registered_instr_enter(ctx);
 }
 
 /// Emits a callable function prologue using an already-resolved entry label.
@@ -364,6 +366,7 @@ fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("epilogue + exit(0)");
+    emit_instr_exit(ctx);
     // Drain still-active output buffers before any teardown so user output
     // handlers (including eval-registered ones) run while locals, statics, and
     // the eval context are still alive. The exit-path flush in abi::emit_exit
@@ -498,6 +501,11 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
+    // Registration happens while generating the handler, before the entry stub
+    // emits the inherited name table. At runtime the stub initializes the exact
+    // profiler before the bridge invokes this handler.
+    register_main_instr(ctx);
+    emit_registered_instr_enter(ctx);
 }
 
 /// Emits the `--web` top-level handler epilogue and returns to the bridge.
@@ -509,6 +517,7 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
+    emit_instr_exit(ctx);
     emit_main_local_epilogue_cleanup(ctx);
     // Under `--web` the handler returns to the bridge server loop instead of
     // exiting, so the exit-based main epilogue (where `--gc-stats` normally
@@ -1298,7 +1307,7 @@ fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
         0,
     );
     // Claim the I/O event slots the PDO bridge calls through, so a `--probe`
-    // binary reports EXACT query counts and I/O wait per route. Those events are
+    // binary reports exact DB query counts and DB-driver wait per route. Those events are
     // not sampled — a driver call fires exactly one — and they cost an atomic
     // increment paid only when a query happens, so unlike per-call
     // instrumentation this is affordable in production.
@@ -1400,7 +1409,7 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
     abi::emit_symbol_address(ctx.emitter, scratch, &query_fn);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_query_fn"), 0);
     // Third slot: elephc_instr_wait, so the bridge can report how long a driver
-    // call actually blocked — the CPU-vs-wait split of each function's time.
+    // call actually blocked — the DB-wait split of each function's wall time.
     let wait_fn = target.extern_symbol("elephc_instr_wait");
     abi::emit_symbol_address(ctx.emitter, scratch, &wait_fn);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_wait_fn"), 0);
@@ -1453,11 +1462,34 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
 
 }
 
+/// Registers the top-level exact frame before main's name table is emitted.
+///
+/// Full instrumentation always covers `{main}`. Selective instrumentation keeps
+/// its existing pay-for-only-what-was-named contract and includes the root only
+/// when `{main}` itself is selected.
+fn register_main_instr(ctx: &mut FunctionContext<'_>) {
+    const MAIN_NAME: &str = "{main}";
+    if !ctx.shared.instrument.covers(MAIN_NAME) {
+        return;
+    }
+    let id = ctx.shared.register_instr(MAIN_NAME.to_string());
+    ctx.instr_id = Some(id);
+}
+
+/// Emits entry for an instrumentation id already registered on this context.
+fn emit_registered_instr_enter(ctx: &mut FunctionContext<'_>) {
+    let Some(id) = ctx.instr_id else {
+        return;
+    };
+    ctx.emitter.comment("instrument: enter (--instrument)");
+    emit_instr_hook_call(ctx, "elephc_instr_enter", id);
+}
+
 /// Emits the `--instrument` entry hook at the end of a user function's prologue:
 /// registers the function (assigning its id), records the id on the context for
 /// the epilogue, and calls `elephc_instr_enter(id)`. Synthetic bodies are not
-/// user code and stay uninstrumented; `main` uses its own prologue and is not
-/// a timed frame in this mode.
+/// user code and stay uninstrumented; `{main}` is registered by its dedicated
+/// process/web prologue before the name table is initialized.
 fn emit_instr_enter(ctx: &mut FunctionContext<'_>) {
     // Synthetic bodies are not user code. Beyond that, a selective set hooks
     // only the functions it names — the rest run at full speed.
@@ -1466,8 +1498,7 @@ fn emit_instr_enter(ctx: &mut FunctionContext<'_>) {
     }
     let id = ctx.shared.register_instr(ctx.function.name.clone());
     ctx.instr_id = Some(id);
-    ctx.emitter.comment("instrument: enter (--instrument)");
-    emit_instr_hook_call(ctx, "elephc_instr_enter", id);
+    emit_registered_instr_enter(ctx);
 }
 
 /// Emits the `--instrument` exit hook for one return path. Preserves the return

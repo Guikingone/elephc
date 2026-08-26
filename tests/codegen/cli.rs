@@ -10,9 +10,68 @@
 
 use crate::support::*;
 
-/// End-to-end `elephc monitor`: compiles a busy fixture, samples it with
-/// /usr/bin/sample, and writes a two-view Speedscope document whose frames are
-/// PHP names — not EIR block labels, not runtime helpers in the folded view.
+/// A top-level-only program still produces one exact `{main}` frame when run
+/// through the real compile/control-channel/monitor pipeline.
+#[test]
+fn test_cli_monitor_profiles_a_top_level_only_program() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_main_only");
+    fs::write(
+        dir.join("top.php"),
+        "<?php\n$sum = 0; for ($i = 0; $i < 200000; $i = $i + 1) { $sum = ($sum + $i) % 100003; } echo $sum;\n",
+    )
+    .expect("failed to write the top-level monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "top.php",
+            "--out",
+            "top.prof.json",
+            "--save",
+            "top.exact.json",
+        ])
+        .output()
+        .expect("failed to run exact top-level monitor");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "top-level monitor should succeed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(stdout.contains("exact profile"), "{stdout}");
+    assert!(stdout.contains("{main}"), "the exact root is missing: {stdout}");
+
+    let raw = fs::read_to_string(dir.join("top.prof.json"))
+        .expect("top-level monitor should write its Speedscope export");
+    let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+    assert!(
+        doc["shared"]["frames"]
+            .as_array()
+            .expect("frames")
+            .iter()
+            .any(|frame| frame["name"] == "{main}"),
+        "the export must preserve the exact root: {raw}"
+    );
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("top.exact.json")).expect("saved exact graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    assert_eq!(nodes.len(), 1, "a top-level-only run has one frame: {exact}");
+    assert_eq!(nodes[0]["name"], "{main}");
+    assert_eq!(nodes[0]["call_count"], 1, "root must enter and exit once");
+    assert!(
+        exact["edges"].as_array().expect("exact edges").is_empty(),
+        "the root must not call itself: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// End-to-end `elephc monitor`: compiles a busy fixture, activates exact
+/// instrumentation through the control channel, and writes a two-view
+/// Speedscope document whose frames are PHP names — not EIR block labels or
+/// runtime helpers in the folded view.
 ///
 /// The export matters as much as the table. `--out` and `--pprof` were once
 /// wired only to the sampled capture, so when the exact profile became the
@@ -33,7 +92,14 @@ fn test_cli_monitor_writes_php_level_speedscope_profile() {
     .expect("failed to write the monitor fixture");
 
     let output = elephc_cli_command(&dir)
-        .args(["monitor", "busy.php", "--out", "busy.prof.json"])
+        .args([
+            "monitor",
+            "busy.php",
+            "--out",
+            "busy.prof.json",
+            "--save",
+            "busy.exact.json",
+        ])
         .output()
         .expect("failed to run elephc monitor");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -43,8 +109,8 @@ fn test_cli_monitor_writes_php_level_speedscope_profile() {
         "monitor should succeed\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
-        stdout.contains("exact profile") && stdout.contains("burn"),
-        "the table should be the exact profile and name the PHP function: {stdout}"
+        stdout.contains("exact profile") && stdout.contains("{main}") && stdout.contains("burn"),
+        "the exact table should contain its root and the PHP function: {stdout}"
     );
 
     let raw = fs::read_to_string(dir.join("busy.prof.json"))
@@ -79,6 +145,29 @@ fn test_cli_monitor_writes_php_level_speedscope_profile() {
             .iter()
             .any(|f| f["name"].as_str().is_some_and(|n| n.contains("eir_"))),
         "no EIR block label may leak into the profile: {raw}"
+    );
+
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("busy.exact.json")).expect("saved exact graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let burn = nodes.iter().position(|node| node["name"] == "burn").unwrap();
+    assert_eq!(nodes[main]["call_count"], 1, "root must enter exactly once");
+    assert!(
+        exact["edges"].as_array().expect("exact edges").iter().any(|edge| {
+            edge["from"] == main && edge["to"] == burn && edge["count"] == 1
+        }),
+        "the ordinary call must be attributed from {main} to burn: {exact}"
+    );
+    assert!(
+        !exact["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| edge["to"] == main),
+        "no function may be misattributed as calling the root: {exact}"
     );
 
     let _ = fs::remove_dir_all(&dir);
