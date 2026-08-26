@@ -140,6 +140,18 @@ pub(crate) const UNSER_OBJECT_STRING_ERROR_PREFIX: &str = "Object of class ";
 /// Suffix for PHP's catchable object-to-string conversion Error in an allowed-class list.
 pub(crate) const UNSER_OBJECT_STRING_ERROR_SUFFIX: &str =
     " could not be converted to string";
+/// PHP warning emitted when a printf-family `%s` conversion stringifies an array.
+pub(crate) const SPRINTF_ARRAY_TO_STRING_WARNING: &str =
+    "Warning: Array to string conversion\n";
+/// Prefix for printf-family object-to-number coercion warnings.
+pub(crate) const SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX: &str =
+    "Warning: Object of class ";
+/// Suffix for printf-family object-to-integer coercion warnings.
+pub(crate) const SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX: &str =
+    " could not be converted to int\n";
+/// Suffix for printf-family object-to-float coercion warnings.
+pub(crate) const SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX: &str =
+    " could not be converted to float\n";
 /// Suffix shared by PHP's runtime unserialize TypeError diagnostics.
 pub(crate) const UNSER_TYPE_GIVEN_SUFFIX: &str = " given";
 /// Fatal error message when a `printf`-family conversion requests a field width outside

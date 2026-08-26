@@ -86,7 +86,8 @@ pub(super) use common::{
 };
 #[allow(unused_imports)]
 pub(super) use printf::{
-    pack_sprintf_like_arg, sprintf_spec_cats_for_format, SprintfSpecCat,
+    load_optional_sprintf_eval_context, pack_sprintf_like_arg, sprintf_spec_cats_for_format,
+    SprintfSpecCat,
 };
 
 /// Materializes the optional `explode()` `$limit` into the splitter's extra argument register.

@@ -209,6 +209,25 @@ echo "\n";
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
 
+/// Regression: sprintf must release each owned `__toString()` result after copying it.
+#[test]
+fn test_sprintf_tostring_result_released_after_copy() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class SprintfGreeter {
+    public int $id = 7;
+    public function __toString(): string { return "hi:" . $this->id; }
+}
+$greeter = new SprintfGreeter();
+for ($i = 0; $i < 100; $i++) { $text = sprintf("[%8s]", $greeter); }
+echo $text;
+"#,
+    );
+    assert_eq!(out.stdout, "[    hi:7]");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
 /// Regression test: creating assoc arrays via a factory function, pushing them
 /// into a numerically-indexed array, then iterating and accessing keys. Verifies
 /// that `make()` return values survive being stored and retrieved from a outer
