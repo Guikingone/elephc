@@ -1255,7 +1255,6 @@ fn pop_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
     }
 }
 
-/// Emits allocation/free totals to stderr using the shared runtime counters.
 /// Emits the `--probe` initialization call in main's prologue: hands the
 /// embedded symbol table's address and entry count to `elephc_probe_init`,
 /// which installs the SIGPROF handler and arms the profiling timer. Inert
@@ -1498,9 +1497,13 @@ fn emit_instr_exit(ctx: &mut FunctionContext<'_>) {
 /// hook runs last in that prologue and the exit hook first in the epilogue,
 /// before the teardown, so the register already holds this activation's own frame
 /// address at both sites. Live frames have distinct addresses by construction,
-/// which is exactly the property the runtime needs and the only one it uses; an
-/// address reused by a later call is never compared against a frame that has
-/// already returned.
+/// which is exactly the property the runtime needs and the only one it uses.
+///
+/// What the runtime does NOT get for free is that a returned frame's address is
+/// handed back out, and its shadow stack can hold frames that have returned —
+/// an unwind leaves them until the catcher exits. Resolving that is the
+/// runtime's business, not this emission's; see `Frame::fp` and `dropped_fps`
+/// in `elephc-instr`.
 fn emit_instr_hook_call(ctx: &mut FunctionContext<'_>, hook: &str, id: usize) {
     let target = ctx.emitter.target;
     let id_arg = abi::int_arg_reg_name(target, 0);

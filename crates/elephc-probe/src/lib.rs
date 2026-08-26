@@ -89,10 +89,13 @@ const EVENT_TABLE_BYTES: usize = EVENT_BUCKETS * EVENT_WORDS * 8;
 const CONTROL_BYTES: usize = 8;
 /// How many recently accepted profiling signatures the service remembers.
 ///
-/// One entry is spent per ACCEPTED request, and only the key holder can produce
-/// one, so this is sized against how often an operator profiles rather than
-/// against traffic. Sixty-four covers far more asks than a five-minute window
-/// ever carries.
+/// Sized against COLLISIONS, not against how many asks a window carries. Each
+/// signature lands in the one slot its own value chooses, so what this number
+/// buys is the chance that two signatures live at once in the same place — one
+/// in this many, and the loser is refused. Only the key holder can produce a
+/// signature at all, so a handful of live entries is the realistic load and 4096
+/// puts that chance out of reach; the table costs 32 KiB of a mapping that
+/// already holds two megabytes.
 const REPLAY_SLOTS: usize = 4096;
 /// Bytes per remembered signature: ONE word holding the tag in its high half and
 /// the second it was accepted at in its low half.
@@ -107,13 +110,17 @@ const REPLAY_SLOTS: usize = 4096;
 /// compare-exchange, and a slot that changed in any way since it was judged
 /// cannot be taken.
 const REPLAY_SLOT_BYTES: usize = 8;
-/// How many times a spend re-searches after losing a slot to another process.
+/// How many times a spend re-reads its slot after losing the exchange.
 ///
-/// Each loss means somebody else wrote a slot we had picked, and what they wrote
-/// may be this very tag — which only a fresh search can see. Bounded because a
-/// caller is inside an HTTP request: three passes over sixty-four words costs
-/// nothing and needs every one of sixty-three other processes to beat this one
-/// twice in a row to run out.
+/// A loss means another process wrote this word, and what it wrote may be this
+/// very signature — which only a re-read can see, and which the next pass
+/// refuses. Bounded because the caller is inside an HTTP request; running out
+/// returns false, refusing a request rather than admitting one.
+///
+/// Three is generous for what it guards: contention on ONE word, between the
+/// few processes holding the build key. It cannot be exhausted by an ordinary
+/// race — the first lost exchange is followed by a read that finds the slot
+/// occupied and returns immediately.
 const SPEND_ATTEMPTS: usize = 3;
 /// Replay-table bytes, in the shared mapping because the check has to hold
 /// ACROSS `--web` workers: a captured header replayed against a different worker
@@ -704,10 +711,17 @@ fn returns_into_program(address: u64, text: Option<(u64, u64)>) -> bool {
 /// addresses it can stand behind and returning how many that is.
 ///
 /// The shape checks — nonzero, 16-byte aligned, inside `[sp, sp + STACK_WINDOW)`
-/// — prove that an address could be a stack slot, which is what makes it safe to
-/// dereference. They do not prove it IS a frame: a function that uses the frame
+/// — prove a SHAPE, and specifically NOT that the address is mapped. The window
+/// is 64 MiB above the interrupted stack pointer and a thread stack is smaller
+/// than that, so an address can pass every check and still lie past the top of
+/// the stack it was anchored to. What the window buys is that garbage has to
+/// look like a stack address to get through; bounding it to the real extent of
+/// the running thread's stack is the fix, and it needs a way to ask for that
+/// extent which is safe to call from a signal handler on both platforms.
+///
+/// They do not prove it IS a frame either: a function that uses the frame
 /// register as a general one leaves an ordinary value there, and one that is
-/// aligned and inside the window is followed. That is inherent to walking a
+/// aligned and inside the window is followed. That much is inherent to walking a
 /// frame-pointer chain in-process, and every sampler that does it carries it.
 ///
 /// What is NOT inherent is reporting the result. A return address inside the
@@ -1350,15 +1364,24 @@ const QUERY_NONCE_MAX: usize = 64;
 /// this useless under `--web`, where the replay is served by whichever worker
 /// the kernel picks and the one that saw the original may never see it again.
 ///
-/// Open-addressed from the tag itself so two processes racing the SAME tag meet
-/// on the same slot and one loses the compare-exchange; probing forward from
-/// there keeps two DIFFERENT tags that start at one slot from evicting each
-/// other. Slots older than the window are free: nothing outside it is accepted
-/// anyway, so remembering it protects nothing.
+/// ONE slot per signature, addressed by the signature itself, and no probing.
+/// Probing is what let a header be spent twice: two requests presenting it at
+/// once could each finish a search that saw no copy of it — they need only
+/// disagree about whether some slot has expired — and each then claimed a
+/// different slot. Addressed by the tag alone, every racer contends on the same
+/// word and a compare-exchange settles it, with no agreement needed between
+/// them about anything else.
 ///
-/// Refuses when it cannot remember — an unmapped region, or a table whose every
-/// slot is live. Both mean the promise "at most once" cannot be kept, and the
-/// honest answer to a privileged request nobody can account for is no.
+/// The cost is that two DIFFERENT signatures whose tags land on one slot cannot
+/// both be live, and the second is refused: one chance in `REPLAY_SLOTS`,
+/// failing in the direction that refuses rather than admits. A slot outside the
+/// window is free, because nothing outside it is accepted anyway, so remembering
+/// it protects nothing.
+///
+/// Refuses when it cannot remember — an unmapped region, or a slot already held
+/// by a live signature. Both mean the promise "at most once" cannot be kept for
+/// this request, and the honest answer to a privileged request nobody can
+/// account for is no.
 ///
 /// # Safety
 /// Valid only for a mapped region; `base` of 0 is handled as "cannot remember".
@@ -1518,9 +1541,9 @@ pub unsafe extern "C" fn elephc_probe_verify_query(ptr: *const u8, len: usize) -
         return 0;
     }
     // Spent only once the signature has PROVED itself. Checking the table first
-    // would let anyone who can set a header fill all sixty-four slots with junk
-    // and lock the key holder out of their own profiler — the table would then
-    // be a denial of service built out of a replay defence.
+    // would let anyone who can set a header fill the table with junk and lock the
+    // key holder out of their own profiler — the table would then be a denial of
+    // service built out of a replay defence.
     //
     // The verified HMAC folded to the slot's tag width identifies it: forging a
     // collision needs the key, and without the key no part of the tag can be
@@ -2553,21 +2576,6 @@ mod tests {
         REGION.store(0, Ordering::Relaxed);
     }
 
-    /// A full route table returns id 0 (untagged) rather than mis-attributing an
-    /// overflow sample to an arbitrary existing route.
-    /// I/O events are counted exactly, per route, and survive the untagged case.
-    ///
-    /// The point of the whole exercise: a driver call fires exactly one event, so
-    /// these counts do not depend on sampling luck. A CLI run has no route, and
-    /// dropping its events would understate the totals silently — worse than a row
-    /// nobody expected — so id 0 gets its own bucket.
-    /// Only a holder of the build key may turn profiling on.
-    ///
-    /// Without this, anyone who can set a header profiles your production: the
-    /// request pays real time and the response reveals the shape of the code. The
-    /// cases below are the ones an attacker actually has — no signature, a
-    /// signature over a different message, a stale one captured from a log, and a
-    /// truncated tag hoping for a prefix comparison.
     /// Installs `fd` as CONTROL_FD for the duration of a check, then restores.
     ///
     /// Tests share one descriptor table, so this saves and puts back whatever was
@@ -2753,7 +2761,7 @@ mod tests {
 
         // The slot is addressed from the tag, so this also covers the case that
         // matters most — two workers meeting the same replay — by construction:
-        // both walk the same probe sequence and one loses the exchange.
+        // both contend on the same word and one loses the exchange.
         let tag = fold_query_tag(&handshake::hmac_sha256(&key, now.to_string().as_bytes()));
         let word = unsafe {
             replay_slot(REGION.load(Ordering::Relaxed), (tag as usize) % REPLAY_SLOTS)

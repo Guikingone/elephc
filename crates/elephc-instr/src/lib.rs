@@ -113,8 +113,16 @@ struct Frame {
     /// What separates one activation from another. A function id cannot: two
     /// activations of a recursive function share it, and the exit hook then has
     /// no way to say which one is returning. Live frames have distinct addresses
-    /// by construction, and an address reused by a later call is never compared
-    /// against a frame that has already returned.
+    /// by construction, which is the property the matching rests on.
+    ///
+    /// A returned frame's address IS handed back out, and this stack can hold
+    /// frames that have returned — an unwind leaves them above the catcher until
+    /// it exits. So a comparison against a stale frame is reachable, and the
+    /// earlier claim that it never happens was wrong. Two things make it come out
+    /// right, and both are tested rather than asserted: a call made afterwards is
+    /// pushed ABOVE the stale frame, so a search from the top finds the live one
+    /// first; and an activation dropped past the cap is pushed nowhere at all,
+    /// which is why its exit is recognised by `dropped_fps` instead.
     fp: usize,
     t_enter: u64,
     a_enter: u64,
@@ -340,10 +348,14 @@ impl State {
         }
         // Past the cap this activation cannot be timed, and must not pretend to
         // be: raising its depth would leave the function permanently "active",
-        // so its inclusive time is never credited. Its exit will arrive carrying
-        // a frame pointer that is not on the stack and close nothing, which is
-        // what makes this safe to do without tracking how many were dropped. The
-        // call still counts — it did happen — but nothing else does.
+        // so its inclusive time is never credited. The call still counts — it did
+        // happen — but nothing else does.
+        //
+        // Its frame pointer is recorded because its exit has to be recognised
+        // rather than merely unrecognised. This used to say the exit "will arrive
+        // carrying a frame pointer that is not on the stack and close nothing",
+        // which is true of a stack of LIVE frames and false after an unwind —
+        // see `dropped_fps`, and the two tests that hold it.
         if self.stack.len() >= MAX_STACK {
             self.dropped += 1;
             self.dropped_fps.push(fp);
@@ -2404,6 +2416,53 @@ mod tests {
         );
     }
 
+    /// A TRACKED call reusing a stale frame's address closes only itself.
+    ///
+    /// The dropped case needed its own record; this is the other half of the
+    /// same collision, and it holds for a reason worth stating rather than
+    /// assuming. Frames an unwind destroyed sit above the catcher and below
+    /// anything the handler calls afterwards, because a new frame is pushed on
+    /// top of the whole stack. So when two frames carry one address, the live one
+    /// is always the HIGHER index, and a search from the top finds it first.
+    ///
+    /// Nothing pinned that before: the comment claimed such a comparison never
+    /// happened at all, which an unwind disproves. It happens, and the ordering
+    /// is what makes it come out right.
+    #[test]
+    fn a_tracked_call_reusing_a_stale_address_closes_only_itself() {
+        let mut state = State::default();
+        state.enter_sim(0, 10, 0, 0, 0, 0);
+        let catcher = state.stack[0].fp;
+        state.enter_sim(1, 20, 0, 0, 0, 0);
+        let stale = state.stack[1].fp;
+        state.enter_sim(2, 30, 0, 0, 0, 0);
+
+        // Raised at the top, caught at the root: frames 1 and 2 are dead and
+        // still on the shadow stack.
+        state.note_throw(40, 0, 0, 0, 0);
+        assert_eq!(state.stack.len(), 3);
+
+        // The handler calls something, and the native stack hands it the address
+        // frame 1 used to occupy. This one is TRACKED — the stack is not full.
+        state.enter_at(7, stale, 50, 0, 0, 0, 0);
+        assert_eq!(state.stack.len(), 4, "a tracked call is pushed");
+        assert_eq!(
+            state.stack.iter().filter(|f| f.fp == stale).count(),
+            2,
+            "two frames now carry one address, which is the whole point"
+        );
+
+        // Its exit must close itself and nothing else — not the stale twin, and
+        // not the frames between.
+        state.exit_at(7, stale, 60, 0, 0, 0, 0);
+        assert_eq!(
+            state.stack.len(),
+            3,
+            "the exit closed frames belonging to the stale twin"
+        );
+        assert_eq!(state.stack[0].fp, catcher, "and the catcher is untouched");
+    }
+
     /// A throw forgets the dropped activations it destroyed.
     ///
     /// They will never exit, so a record of them left standing is not merely
@@ -2941,6 +3000,41 @@ mod tests {
             String::from_utf8(big).expect("the slice is text"),
             slice,
             "the retry must get the slice itself, not a buffer of zeros"
+        );
+    }
+
+    /// The READER refuses a length the mapping cannot back, whoever wrote it.
+    ///
+    /// The writer's own guard is tested below, but that only proves this crate's
+    /// writer behaves. The header is shared, writable memory: the check exists
+    /// because the reader must not trust ANY writer, and nothing exercised it,
+    /// because nothing in the test suite ever wrote a bad length. A length past
+    /// the region is a copy past the end of the mapping — it would be read as a
+    /// profile, not as a fault.
+    #[test]
+    fn the_reader_refuses_a_length_the_mapping_cannot_back() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        reset_capture();
+        elephc_instr_capture_arm();
+
+        // Written straight into the header, which is what a corrupted or hostile
+        // writer sharing this mapping would do.
+        let filled = capture_word(1).expect("a mapped region");
+        let length = capture_word(2).expect("a mapped region");
+        length.store((CAPTURE_BYTES - CAPTURE_HEADER + 1) as u32, Ordering::Release);
+        filled.store(READY, Ordering::Release);
+
+        let needed = unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) };
+        assert_eq!(needed, 0, "the reader accepted a length past the mapping");
+        assert_eq!(
+            filled.load(Ordering::Acquire),
+            EMPTY,
+            "and left the slot claimed by a length nobody can honour"
+        );
+        assert_eq!(
+            capture_word(0).expect("a mapped region").load(Ordering::Acquire),
+            0,
+            "an unusable slice must also stop the caller waiting for one"
         );
     }
 
