@@ -139,6 +139,24 @@ struct State {
     edges: HashMap<(u32, u32), (u64, u64), BuildIdHasher>,
     /// Pushes dropped at MAX_STACK (reported so silent truncation is visible).
     dropped: u64,
+    /// Frame pointers of activations dropped past `MAX_STACK`, innermost last.
+    ///
+    /// Their exits used to need nothing at all, on the reasoning that a dropped
+    /// activation's exit "carries a frame pointer that is not on the stack and
+    /// closes nothing". That holds while the shadow stack describes LIVE frames,
+    /// and an unwind breaks it: the frames an exception destroyed stay here
+    /// until the catcher exits, while the native stack they occupied is already
+    /// free. A call the handler makes is pushed onto that reclaimed space, so
+    /// its frame pointer does not merely risk colliding with a dead frame's — at
+    /// a fixed frame size it IS that address. The exit then matched the stale
+    /// frame and closed every frame above it, comparing ids only afterwards.
+    ///
+    /// Identities and not a count, which is what the previous design used and
+    /// what a throw could desynchronise: a throw destroys these activations
+    /// without their exits ever arriving, so it clears the list outright rather
+    /// than leaving a number to be counted down against exits belonging to
+    /// somebody else.
+    dropped_fps: Vec<usize>,
     /// Frames whose children outran their own span — impossible when the
     /// accounting is right, so it is reported rather than absorbed.
     overdrawn: u64,
@@ -239,6 +257,13 @@ impl State {
         if depth == 0 {
             return;
         }
+        // Every activation dropped past the cap sat ABOVE this throw, so the
+        // unwind destroys all of them and not one of their exits will arrive.
+        // Their frame pointers are cleared here for that reason and not as
+        // housekeeping: left behind, they would be matched by the NEXT dropped
+        // call to reuse the same address, and its exit would be swallowed as if
+        // it belonged to an activation that no longer exists.
+        self.dropped_fps.clear();
         let unwind = self.unwinding.get_or_insert_with(Unwind::default);
         // A throw raised while another is in flight joins it rather than
         // replacing it: the frames the first one killed died then, and only its
@@ -321,6 +346,7 @@ impl State {
         // call still counts — it did happen — but nothing else does.
         if self.stack.len() >= MAX_STACK {
             self.dropped += 1;
+            self.dropped_fps.push(fp);
             self.fns[id as usize].calls += 1;
             return;
         }
@@ -362,6 +388,15 @@ impl State {
         // exit for a tracked frame — the first was reconciled by counting
         // dropped activations down, which a throw could desynchronise, and the
         // second resolved to whichever frame carried the same id.
+        // A dropped activation is recognised by its OWN frame pointer, before the
+        // stack is searched for one. Recognising it by absence — no frame here
+        // carries this pointer — is what an unwind invalidates, because the dead
+        // frames it leaves behind carry pointers the native stack has already
+        // handed back out.
+        if self.dropped_fps.last() == Some(&fp) {
+            self.dropped_fps.pop();
+            return;
+        }
         let Some(index) = (match self.stack.last() {
             // The overwhelmingly common case, and the reason the search below
             // costs nothing in a program without exceptions.
@@ -546,6 +581,9 @@ impl State {
         self.stack.clear();
         self.edges.clear();
         self.dropped = 0;
+        // The stack these belonged to has just been cleared, so nothing they
+        // could be matched against remains.
+        self.dropped_fps.clear();
         self.overdrawn = 0;
         self.throws_merged = 0;
         // The stack goes with the slice, so the frame this unwind was holding a
@@ -2321,6 +2359,85 @@ mod tests {
         let after = state.stack.len();
         state.exit_at(7, dropped[0], 2_100, 0, 0, 0, 0);
         assert_eq!(state.stack.len(), after, "a dropped exit disturbed the stack");
+    }
+
+    /// A dropped exit is ignored even when its frame pointer ALIASES a stale one.
+    ///
+    /// The reason a dropped activation needs no bookkeeping is that its exit
+    /// "will arrive carrying a frame pointer that is not on the stack". That
+    /// holds while the stack describes live frames, and an unwind breaks it: the
+    /// frames an exception destroyed stay on the shadow stack until the catcher
+    /// exits, while the native stack they occupied is already free. A call the
+    /// handler makes is pushed onto that reclaimed space, so its frame pointer
+    /// is not merely able to collide with a dead frame's — at a fixed frame size
+    /// it is the SAME address.
+    ///
+    /// The existing dropped-exit test picks a frame pointer below every live
+    /// frame, so it cannot collide and says nothing about this. Reported on the
+    /// pull request with this recipe, and it reproduced.
+    #[test]
+    fn a_dropped_exit_whose_frame_pointer_aliases_a_stale_one_closes_nothing() {
+        let mut state = State::default();
+        for depth in 0..MAX_STACK {
+            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
+        }
+        assert_eq!(state.stack.len(), MAX_STACK);
+
+        // Raised at the top and caught at the root: every frame above index 0 is
+        // dead, and every one of them is still on the shadow stack.
+        state.note_throw(1_500, 0, 0, 0, 0);
+
+        // The handler calls something. The stack is full, so the activation is
+        // dropped — and the address it runs at is one the unwind freed.
+        let stale_fp = state.stack[1].fp;
+        let handler = 9u32;
+        state.enter_at(handler, stale_fp, 1_600, 0, 0, 0, 0);
+        assert_eq!(state.stack.len(), MAX_STACK, "a dropped call pushes nothing");
+
+        let before = state.stack.len();
+        state.exit_at(handler, stale_fp, 1_700, 0, 0, 0, 0);
+        assert_eq!(
+            state.stack.len(),
+            before,
+            "a dropped activation's exit closed {} frames it never owned",
+            before - state.stack.len()
+        );
+    }
+
+    /// A throw forgets the dropped activations it destroyed.
+    ///
+    /// They will never exit, so a record of them left standing is not merely
+    /// stale — it is a trap. The next dropped call reuses the address the unwind
+    /// freed, and its own exit would be matched against the dead entry and
+    /// swallowed, leaving ITS identity behind for the one after that. The list is
+    /// cleared at the throw for the same reason the old count was: an entry that
+    /// can never be closed must not be left to close somebody else's.
+    #[test]
+    fn a_throw_forgets_the_dropped_activations_it_destroyed() {
+        let mut state = State::default();
+        for depth in 0..MAX_STACK {
+            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
+        }
+        let reused = state.stack[1].fp;
+
+        // Dropped past the cap, then destroyed by the throw before it can exit.
+        state.enter_at(9, reused, 1_000, 0, 0, 0, 0);
+        state.note_throw(1_500, 0, 0, 0, 0);
+        assert!(
+            state.dropped_fps.is_empty(),
+            "an activation the unwind destroyed is still expected to exit"
+        );
+
+        // The handler now calls something at the very same address. Its exit is
+        // its own, and must be recognised rather than charged to the ghost.
+        state.enter_at(10, reused, 1_600, 0, 0, 0, 0);
+        let before = state.stack.len();
+        state.exit_at(10, reused, 1_700, 0, 0, 0, 0);
+        assert_eq!(state.stack.len(), before, "the live stack was disturbed");
+        assert!(
+            state.dropped_fps.is_empty(),
+            "and its own identity was consumed, not left for the next one"
+        );
     }
 
     /// What a catch handler does belongs to the catcher, not to the thrower.
