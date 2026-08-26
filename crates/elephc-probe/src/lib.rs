@@ -20,7 +20,7 @@
 pub mod endpoint;
 pub mod handshake;
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 /// One entry of the compiler-embedded symbol table: function start address,
 /// name pointer, name length. Layout must match the emitted `.quad` triples.
@@ -94,9 +94,19 @@ const CONTROL_BYTES: usize = 8;
 /// against traffic. Sixty-four covers far more asks than a five-minute window
 /// ever carries.
 const REPLAY_SLOTS: usize = 64;
-/// Bytes per remembered signature: the tag's first eight bytes, then the second
-/// it was accepted at.
-const REPLAY_SLOT_BYTES: usize = 16;
+/// Bytes per remembered signature: ONE word holding the tag in its high half and
+/// the second it was accepted at in its low half.
+///
+/// One word and not two because the two must move together. With a separate tag
+/// and timestamp, a slot judged reusable from a stale timestamp was taken from
+/// the request that had just won it — the winner had published its tag and not
+/// yet its time, and the racer overwrote it. The overwritten signature was then
+/// recorded nowhere, so replaying it succeeded, which is the one thing this
+/// table exists to stop, reached with two legitimate headers and no forgery.
+/// Packed, a slot's identity and its freshness are read and replaced by a single
+/// compare-exchange, and a slot that changed in any way since it was judged
+/// cannot be taken.
+const REPLAY_SLOT_BYTES: usize = 8;
 /// How many times a spend re-searches after losing a slot to another process.
 ///
 /// Each loss means somebody else wrote a slot we had picked, and what they wrote
@@ -129,26 +139,35 @@ unsafe fn region_asked<'a>(base: usize) -> &'a std::sync::atomic::AtomicU64 {
     &*((base + offset) as *const std::sync::atomic::AtomicU64)
 }
 
-/// One remembered signature as its two words: the tag, then when it was taken.
+/// One remembered signature, tag and time in a single word.
 ///
 /// # Safety
 /// Valid only after the region is mapped, for `index < REPLAY_SLOTS`.
-unsafe fn replay_slot<'a>(
-    base: usize,
-    index: usize,
-) -> (
-    &'a std::sync::atomic::AtomicU64,
-    &'a std::sync::atomic::AtomicU64,
-) {
+unsafe fn replay_slot<'a>(base: usize, index: usize) -> &'a AtomicU64 {
     let offset = RING_BYTES
         + ROUTE_TABLE_BYTES
         + EVENT_TABLE_BYTES
         + CONTROL_BYTES
         + index * REPLAY_SLOT_BYTES;
-    (
-        &*((base + offset) as *const std::sync::atomic::AtomicU64),
-        &*((base + offset + 8) as *const std::sync::atomic::AtomicU64),
-    )
+    &*((base + offset) as *const AtomicU64)
+}
+
+/// Packs a spent signature into its slot word.
+///
+/// The second is stored in 32 bits, which is the whole of a Unix timestamp until
+/// 2106 and is compared only against another reading of the same clock.
+fn replay_entry(tag: u32, taken_at: i64) -> u64 {
+    ((tag as u64) << 32) | (taken_at as u64 & 0xffff_ffff)
+}
+
+/// The tag half of a slot word; 0 means the slot has never been used.
+fn replay_entry_tag(word: u64) -> u32 {
+    (word >> 32) as u32
+}
+
+/// The second half of a slot word.
+fn replay_entry_taken_at(word: u64) -> i64 {
+    (word & 0xffff_ffff) as i64
 }
 
 /// I/O events are **not sampled**. A driver call fires exactly one, so these
@@ -558,39 +577,74 @@ const STACK_WINDOW: u64 = 64 * 1024 * 1024;
 
 /// How many consecutive frames the walk may hold without corroborating them.
 ///
-/// A genuine run of frames outside the program's own text is short — a runtime
-/// helper calling another helper calling libc — and ends by returning into
-/// compiled PHP. A chain built out of stack garbage does not come back. Four
-/// covers every real nesting this runtime produces and bounds how far a bad
-/// chain is followed before it is abandoned.
-const UNPROVEN_RUN_MAX: usize = 4;
+/// Deliberately generous, because this is NOT what stops a fabricated stack
+/// being reported — held frames are dropped unless something vouches for them,
+/// whatever this is set to, and the walk is bounded anyway by the caller's
+/// array. All it decides is how deep a native run may go before the chain is
+/// abandoned, and setting it tight cost real stacks: a sample taken inside libc
+/// reaches compiled PHP through however many frames `malloc` or `memcpy` happen
+/// to nest, and at four the whole chain — including the PHP frame that would
+/// have corroborated it — was dropped and the sample lost its attribution.
+///
+/// What a bound still buys is that a garbage chain gets fewer chances to land
+/// inside the text range by accident, so it stays bounded rather than removed.
+const UNPROVEN_RUN_MAX: usize = MAX_FRAMES / 2;
 
-/// The program's own compiled text, as `[first function, text end)`.
+/// Lowest address in the compiler's symbol table, established once at init.
+static TEXT_LOW: AtomicU64 = AtomicU64::new(0);
+/// The table's text-end sentinel, established once at init. Zero means "no
+/// usable table", which is the only state either of these is read in together.
+static TEXT_HIGH: AtomicU64 = AtomicU64::new(0);
+
+/// Records the program's own compiled text range from the symbol table.
 ///
-/// The compiler hands `elephc_probe_init` a symbol table sorted by address whose
-/// final entry is the text-end sentinel, so its two ends bound every function
-/// this binary compiled. Reading them is two loads from a static array, which is
-/// async-signal-safe.
+/// The table is **not** address-sorted as it arrives: the compiler emits plain
+/// functions, then class methods, then closures, then the text-end sentinel, and
+/// the probe sorts a COPY at report time. So entry zero is whichever function
+/// came first in the module, not the lowest address — reading it as the low
+/// bound put every function emitted below it outside the range, and those are
+/// exactly the frames the walk needs in order to corroborate a chain. A program
+/// whose only plain function is `{main}` — one built entirely of class methods —
+/// has the HIGHEST address there, since main is emitted last.
 ///
-/// `None` when no table has been published — a probe built without one cannot
-/// corroborate anything, and the walk says so by trusting the chain, which is
-/// what it did everywhere before.
+/// One pass over the table at init, where a pass is free, rather than in the
+/// signal handler, where it would run at the sampling rate. The sentinel is the
+/// high bound because it marks the END of the text; the last function's own
+/// address would cut that function's body off the range.
 ///
 /// # Safety
-/// Valid only once `elephc_probe_init` has stored a table that outlives the
-/// process, which is how the compiler emits it.
-unsafe fn program_text_range() -> Option<(u64, u64)> {
-    let table = TABLE_PTR.load(Ordering::Relaxed) as *const SymtabEntry;
-    let len = TABLE_LEN.load(Ordering::Relaxed);
+/// `table` must point at `len` valid entries; called once from
+/// `elephc_probe_init` before any sample can be taken.
+unsafe fn record_program_text(table: *const SymtabEntry, len: usize) {
     if table.is_null() || len < 2 {
-        return None;
+        return;
     }
-    let low = (*table).address;
+    let mut low = u64::MAX;
+    for index in 0..len {
+        low = low.min((*table.add(index)).address);
+    }
     let high = (*table.add(len - 1)).address;
     if high <= low {
+        return;
+    }
+    TEXT_LOW.store(low, Ordering::Relaxed);
+    TEXT_HIGH.store(high, Ordering::Relaxed);
+}
+
+/// The program's own compiled text, as `[lowest function, text end)`.
+///
+/// Two relaxed loads of words written once before user code ran, which is what
+/// makes this callable from the signal handler.
+///
+/// `None` when no table was published — a probe built without one cannot
+/// corroborate anything, and the walk says so by trusting the chain, which is
+/// what it did everywhere before.
+fn program_text_range() -> Option<(u64, u64)> {
+    let high = TEXT_HIGH.load(Ordering::Relaxed);
+    if high == 0 {
         return None;
     }
-    Some((low, high))
+    Some((TEXT_LOW.load(Ordering::Relaxed), high))
 }
 
 /// Whether a return address falls inside the program's own compiled text.
@@ -796,6 +850,10 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
     TABLE_PTR.store(table as usize, Ordering::Relaxed);
     TABLE_LEN.store(len, Ordering::Relaxed);
     KEY_PTR.store(key as usize, Ordering::Relaxed);
+    // Before anything can sample: the walk consults this range from the signal
+    // handler, and establishing it there would mean a pass over the whole table
+    // a thousand times a second.
+    record_program_text(table, len);
 
     // Map the sample region MAP_SHARED before any --web fork: the mapping is
     // inherited by every worker, so all workers' SIGPROF handlers fill one ring
@@ -1238,6 +1296,10 @@ fn control_fd_present() -> bool {
 /// stand in for a replay defence.
 const QUERY_WINDOW_SECS: i64 = 300;
 
+/// Longest accepted `n=` nonce. Long enough for a UUID or a request id, short
+/// enough that a header cannot become a channel.
+const QUERY_NONCE_MAX: usize = 64;
+
 /// Spends a verified signature, refusing one that has already been spent.
 ///
 /// Returns true the first time a tag is seen and false for every repeat inside
@@ -1261,43 +1323,40 @@ const QUERY_WINDOW_SECS: i64 = 300;
 ///
 /// # Safety
 /// Valid only for a mapped region; `base` of 0 is handled as "cannot remember".
-unsafe fn spend_query_tag(base: usize, tag: u64, now: i64) -> bool {
+unsafe fn spend_query_tag(base: usize, tag: u32, now: i64) -> bool {
     if base == 0 {
         return false;
     }
-    // 0 marks a free slot, so a tag that folds to it takes the next value. One
-    // signature in 2^64 is thereby indistinguishable from its neighbour, which
-    // costs that request a retry and nothing else.
+    // 0 marks a slot that has never been used, so a tag that folds to it takes
+    // the next value. One signature in 2^32 is thereby indistinguishable from
+    // its neighbour, which costs that request a refusal — the safe direction.
     let tag = if tag == 0 { 1 } else { tag };
-    let start = (tag % REPLAY_SLOTS as u64) as usize;
-    // Two passes, and the split is the whole correctness argument. Taking the
-    // first reusable slot DURING the search let a replay be accepted: a tag whose
-    // home slot was busy at first use sits further along the probe, and when the
-    // slot that displaced it later expires, the replay stops there, finds it
-    // free, and takes it — without ever reaching the entry that says it was
-    // already spent. The search has to finish before anything is taken.
+    let start = (tag as usize) % REPLAY_SLOTS;
     for _attempt in 0..SPEND_ATTEMPTS {
-        let mut reusable: Option<usize> = None;
+        // Two phases, and the split is the whole correctness argument. Taking
+        // the first reusable slot DURING the search let a replay be accepted: a
+        // tag whose home slot was busy at first use sits further along the
+        // probe, and when the slot that displaced it later expired, the replay
+        // stopped there, found it free, and took it — without ever reaching the
+        // entry saying it was already spent. The search has to finish first.
+        let mut reusable: Option<(usize, u64)> = None;
         for step in 0..REPLAY_SLOTS {
             let index = (start + step) % REPLAY_SLOTS;
-            let (tag_word, taken_at) = replay_slot(base, index);
-            let seen = tag_word.load(Ordering::Acquire);
-            if seen == tag {
-                // Spent, whatever the slot's age says. Deliberately NOT gated on
-                // the entry still being live: a matching tag is a matching
-                // TIMESTAMP, and a timestamp old enough for this entry to have
-                // expired was already refused by the window check upstream. So
-                // this can only fire on a genuine replay — and not reading the
-                // time here is what closes the window between a winner's
-                // compare-exchange and the store of its timestamp, in which a
-                // concurrent racer saw its own tag with a stale time, called the
-                // slot reusable, and took it from the request that had just won.
+            let word = replay_slot(base, index).load(Ordering::Acquire);
+            if replay_entry_tag(word) == tag {
+                // Spent, whatever the slot's age says. A matching tag is a
+                // matching request, and one old enough for this entry to have
+                // expired was already refused by the window check upstream — so
+                // this only ever fires on a genuine replay.
                 return false;
             }
             if reusable.is_none()
-                && (seen == 0 || !within_query_window(now, taken_at.load(Ordering::Acquire) as i64))
+                && (replay_entry_tag(word) == 0
+                    || !within_query_window(now, replay_entry_taken_at(word)))
             {
-                reusable = Some(index);
+                // Remember the WORD, not just the slot: it is what the exchange
+                // below is conditional on.
+                reusable = Some((index, word));
             }
         }
         // Every slot holds a signature still inside the window. Sixty-four of
@@ -1305,21 +1364,27 @@ unsafe fn spend_query_tag(base: usize, tag: u64, now: i64) -> bool {
         // holder can produce — so this is a burst, not an attack, and it is
         // refused rather than admitted: a signature nobody can account for cannot
         // be promised to be used once.
-        let Some(index) = reusable else {
+        let Some((index, expected)) = reusable else {
             return false;
         };
-        let (tag_word, taken_at) = replay_slot(base, index);
-        let seen = tag_word.load(Ordering::Acquire);
-        if tag_word
-            .compare_exchange(seen, tag, Ordering::AcqRel, Ordering::Acquire)
+        // Against the exact word the search judged. Anything that happened to
+        // this slot since — a tag written, a time published, both — fails the
+        // exchange, so a slot that has become live in the meantime can never be
+        // taken from the request that made it live.
+        if replay_slot(base, index)
+            .compare_exchange(
+                expected,
+                replay_entry(tag, now),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_ok()
         {
-            taken_at.store(now as u64, Ordering::Release);
             return true;
         }
-        // Somebody took this slot between the search and the exchange. Search
-        // again rather than moving to the next one: what they wrote may be THIS
-        // tag, and only a fresh pass can see that.
+        // Somebody changed this slot between the search and the exchange. Search
+        // again rather than moving on: what they wrote may be THIS tag, and only
+        // a fresh pass can see that.
     }
     false
 }
@@ -1358,12 +1423,24 @@ pub unsafe extern "C" fn elephc_probe_verify_query(ptr: *const u8, len: usize) -
     };
     let mut stamp: Option<i64> = None;
     let mut tag: Option<Vec<u8>> = None;
+    let mut nonce: Option<&str> = None;
     for field in value.split(',') {
         let field = field.trim();
         if let Some(raw) = field.strip_prefix("t=") {
             stamp = raw.parse::<i64>().ok();
         } else if let Some(raw) = field.strip_prefix("v=") {
             tag = decode_hex(raw);
+        } else if let Some(raw) = field.strip_prefix("n=") {
+            // Bounded and restricted to what cannot disturb the signed message
+            // or the header's own framing.
+            if !raw.is_empty()
+                && raw.len() <= QUERY_NONCE_MAX
+                && raw.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                nonce = Some(raw);
+            } else {
+                return 0;
+            }
         }
     }
     let (Some(stamp), Some(tag)) = (stamp, tag) else {
@@ -1375,7 +1452,21 @@ pub unsafe extern "C" fn elephc_probe_verify_query(ptr: *const u8, len: usize) -
     if !within_query_window(now.tv_sec as i64, stamp) {
         return 0;
     }
-    let expected = handshake::hmac_sha256(&key, stamp.to_string().as_bytes());
+    // The nonce is part of the SIGNED message, never a field beside it: a value
+    // an attacker could vary without re-signing would let one captured header
+    // become as many distinct spends as they liked, which is the property the
+    // table exists to deny.
+    //
+    // Without one, the message is the timestamp alone — the original format,
+    // still accepted. That format has one signature per second per key, so two
+    // requests genuinely meant to be profiled in the same second carry the same
+    // header and the second reads as a replay of the first. A nonce separates
+    // them, and it is optional so nothing already minted stops working.
+    let signed = match nonce {
+        Some(nonce) => format!("{stamp}.{nonce}"),
+        None => stamp.to_string(),
+    };
+    let expected = handshake::hmac_sha256(&key, signed.as_bytes());
     if !handshake::tags_equal(&expected, &tag) {
         return 0;
     }
@@ -1384,17 +1475,26 @@ pub unsafe extern "C" fn elephc_probe_verify_query(ptr: *const u8, len: usize) -
     // and lock the key holder out of their own profiler — the table would then
     // be a denial of service built out of a replay defence.
     //
-    // Eight bytes of a verified HMAC identify it: forging a collision needs the
-    // key, and without the key neither half of the tag can be chosen at all.
-    let mut identity = [0u8; 8];
-    identity.copy_from_slice(&expected[..8]);
+    // The verified HMAC folded to the slot's tag width identifies it: forging a
+    // collision needs the key, and without the key no part of the tag can be
+    // chosen at all. Two distinct signatures colliding is one in 2^32 and costs
+    // the second one a refusal, which is the safe direction.
     u32::from(unsafe {
         spend_query_tag(
             REGION.load(Ordering::Relaxed),
-            u64::from_le_bytes(identity),
+            fold_query_tag(&expected),
             now.tv_sec as i64,
         )
     })
+}
+
+/// Folds a verified HMAC into the replay slot's tag width.
+fn fold_query_tag(mac: &[u8; 32]) -> u32 {
+    let mut folded = 0u32;
+    for chunk in mac.chunks_exact(4) {
+        folded ^= u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    }
+    folded
 }
 
 /// Whether a signed timestamp is close enough to now to be accepted.
@@ -2606,21 +2706,37 @@ mod tests {
         // The slot is addressed from the tag, so this also covers the case that
         // matters most — two workers meeting the same replay — by construction:
         // both walk the same probe sequence and one loses the exchange.
-        let (tag_word, _) = unsafe {
-            let identity = handshake::hmac_sha256(&key, now.to_string().as_bytes());
-            let mut first = [0u8; 8];
-            first.copy_from_slice(&identity[..8]);
-            let tag = u64::from_le_bytes(first);
-            replay_slot(
-                REGION.load(Ordering::Relaxed),
-                (tag % REPLAY_SLOTS as u64) as usize,
-            )
-        };
-        assert_ne!(
-            tag_word.load(Ordering::Acquire),
-            0,
+        let tag = fold_query_tag(&handshake::hmac_sha256(&key, now.to_string().as_bytes()));
+        let word = unsafe {
+            replay_slot(REGION.load(Ordering::Relaxed), (tag as usize) % REPLAY_SLOTS)
+        }
+        .load(Ordering::Acquire);
+        assert_eq!(
+            replay_entry_tag(word),
+            tag,
             "the spent tag lands on the slot its own value chooses"
         );
+        assert!(
+            within_query_window(now, replay_entry_taken_at(word)),
+            "and carries the time it was taken, in the same word"
+        );
+
+        // Two asks in the SAME second are two distinct requests, and a nonce is
+        // what says so. Without one they mint the identical header, which the
+        // table cannot tell from a replay — with one they are separate.
+        let signed_nonce = |stamp: i64, nonce: &str| {
+            let mac = handshake::hmac_sha256(&key, format!("{stamp}.{nonce}").as_bytes());
+            let hex: String = mac.iter().map(|b| format!("{b:02x}")).collect();
+            format!("t={stamp},n={nonce},v={hex}")
+        };
+        let second = now - 5;
+        assert!(check(&signed_nonce(second, "req-1")));
+        assert!(check(&signed_nonce(second, "req-2")), "same second, other request");
+        assert!(!check(&signed_nonce(second, "req-1")), "and each is still single use");
+        // A nonce that was not signed is not a nonce: varying it must not turn
+        // one captured header into an unlimited supply of spends.
+        let stolen = signed_nonce(second, "req-2").replace("n=req-2", "n=req-3");
+        assert!(!check(&stolen), "an unsigned nonce cannot re-open a spent header");
 
         // Nowhere to remember means the promise cannot be kept, and the answer to
         // a privileged request nobody can account for is no.
@@ -2653,23 +2769,25 @@ mod tests {
         let now = 1_000_000i64;
 
         // A different signature already holds the home slot of the tag below.
-        let tag = 7u64;
-        let home = (tag % REPLAY_SLOTS as u64) as usize;
-        let (squatter_tag, squatter_at) = unsafe { replay_slot(base, home) };
-        squatter_tag.store(tag + REPLAY_SLOTS as u64, Ordering::Release);
-        squatter_at.store(now as u64, Ordering::Release);
+        let tag = 7u32;
+        let home = (tag as usize) % REPLAY_SLOTS;
+        let squatter = unsafe { replay_slot(base, home) };
+        squatter.store(replay_entry(tag + REPLAY_SLOTS as u32, now), Ordering::Release);
 
         // First use is honoured, and lands somewhere past its home slot.
         assert!(unsafe { spend_query_tag(base, tag, now) });
         assert_ne!(
-            squatter_tag.load(Ordering::Acquire),
+            replay_entry_tag(squatter.load(Ordering::Acquire)),
             tag,
             "the home slot was taken, so the tag went further along"
         );
 
         // The squatter ages out. Its slot is now reusable — and it is the FIRST
         // slot the replay meets.
-        squatter_at.store((now - QUERY_WINDOW_SECS - 60) as u64, Ordering::Release);
+        squatter.store(
+            replay_entry(tag + REPLAY_SLOTS as u32, now - QUERY_WINDOW_SECS - 60),
+            Ordering::Release,
+        );
         assert!(
             !unsafe { spend_query_tag(base, tag, now) },
             "a replay must be found wherever the tag actually sits"
@@ -2680,6 +2798,98 @@ mod tests {
         assert!(unsafe { spend_query_tag(base, tag + 1, now) });
 
         REGION.store(saved_region, Ordering::Relaxed);
+    }
+
+    /// A slot that became live between being judged reusable and being taken is
+    /// not taken.
+    ///
+    /// The defect two independent jurors found. With tag and time in separate
+    /// words, a request that had just won a slot had published its tag and not
+    /// yet its timestamp; a concurrent request judged that slot reusable from the
+    /// stale time, re-read only the tag, and overwrote the winner. The
+    /// overwritten signature was then recorded nowhere, so replaying it
+    /// succeeded — reached with two legitimate headers and no forgery at all.
+    ///
+    /// Driven by hand because it is a SCHEDULE, not an input: no test can make
+    /// two processes interleave at a chosen instruction, so the interleaving is
+    /// staged by storing what each step would have published.
+    #[test]
+    fn a_slot_that_turned_live_under_us_is_not_taken() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+        let now = 2_000_000i64;
+
+        let mine = 11u32;
+        let theirs = mine + REPLAY_SLOTS as u32;
+        let home = (mine as usize) % REPLAY_SLOTS;
+        let slot = unsafe { replay_slot(base, home) };
+
+        // The other request wins the slot outright — tag AND time in one store,
+        // which is what a compare-exchange publishes.
+        slot.store(replay_entry(theirs, now), Ordering::Release);
+
+        // Ours judged that slot reusable from the stale word it read before.
+        // The exchange is conditional on that exact word, so it fails, the search
+        // runs again, and the live entry is left where it is.
+        assert!(unsafe { spend_query_tag(base, mine, now) });
+        assert_eq!(
+            replay_entry_tag(slot.load(Ordering::Acquire)),
+            theirs,
+            "the request that made the slot live keeps it"
+        );
+
+        // And because it kept it, replaying THEIR header is still refused.
+        assert!(!unsafe { spend_query_tag(base, theirs, now) });
+
+        REGION.store(saved_region, Ordering::Relaxed);
+    }
+
+    /// The text range is the LOWEST address in the table, not the first entry.
+    ///
+    /// The compiler emits plain functions, then class methods, then closures,
+    /// then the text-end sentinel, and the probe sorts a COPY at report time — so
+    /// the table as it arrives is in module order. Reading entry zero as the low
+    /// bound put every function emitted below it outside the range, and a
+    /// program built entirely of class methods has the worst case: its only
+    /// plain function is `{main}`, which is emitted LAST and therefore sits at
+    /// the highest address while occupying the table's first slot.
+    #[test]
+    fn the_text_range_does_not_assume_a_sorted_table() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let name = b"f";
+        // Module order for a methods-only program: `{main}` first in the table
+        // and highest in memory, methods below it, sentinel last.
+        let table = [
+            SymtabEntry { address: 0x9000, name_ptr: name.as_ptr() as u64, name_len: 1 },
+            SymtabEntry { address: 0x2000, name_ptr: name.as_ptr() as u64, name_len: 1 },
+            SymtabEntry { address: 0x3000, name_ptr: name.as_ptr() as u64, name_len: 1 },
+            SymtabEntry { address: 0xa000, name_ptr: name.as_ptr() as u64, name_len: 1 },
+        ];
+        let saved = (TEXT_LOW.load(Ordering::Relaxed), TEXT_HIGH.load(Ordering::Relaxed));
+        unsafe { record_program_text(table.as_ptr(), table.len()) };
+        assert_eq!(
+            program_text_range(),
+            Some((0x2000, 0xa000)),
+            "the low bound is the lowest address, not the first entry"
+        );
+        // The method frames that entry zero would have excluded now corroborate.
+        assert!(returns_into_program(0x2100, program_text_range()));
+        assert!(returns_into_program(0x9100, program_text_range()));
+        // And the sentinel still bounds the top.
+        assert!(!returns_into_program(0xa000, program_text_range()));
+
+        // A table too short to have a sentinel leaves no range at all, and the
+        // walk falls back to trusting the chain rather than corroborating
+        // against a bound it made up.
+        TEXT_LOW.store(0, Ordering::Relaxed);
+        TEXT_HIGH.store(0, Ordering::Relaxed);
+        unsafe { record_program_text(table.as_ptr(), 1) };
+        assert_eq!(program_text_range(), None);
+
+        TEXT_LOW.store(saved.0, Ordering::Relaxed);
+        TEXT_HIGH.store(saved.1, Ordering::Relaxed);
     }
 
     #[test]

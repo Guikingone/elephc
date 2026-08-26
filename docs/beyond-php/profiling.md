@@ -560,6 +560,7 @@ profiles that single request and leaves every other one untouched:
 
 ```text
 X-Elephc-Query: t=<unix seconds>,v=<hex hmac of the timestamp>
+X-Elephc-Query: t=<unix seconds>,n=<request id>,v=<hex hmac of "<t>.<n>">
 ```
 
 The value is signed with the build key, so it cannot be forged by someone who can
@@ -569,6 +570,15 @@ because the service remembers spent signatures in the same shared mapping its
 workers already share. A header lifted from a proxy log, an access log or a
 shared trace is therefore worth nothing, and one lifted before the legitimate
 request lands is worth exactly one request rather than a window of them.
+
+**Use the second form when you profile more than once a second.** With the
+timestamp alone, two requests minted in the same second produce the identical
+header, and nothing at the far end can tell them from a replay of each other — so
+the second is refused. An `n=` value (up to 64 characters of `A-Za-z0-9-_`, a
+request id or a UUID) makes them distinct. It is part of the **signed** message,
+not a field beside it: a nonce that could be varied without re-signing would turn
+one captured header into as many spends as an attacker wanted, which is exactly
+what single use exists to deny. Omitting it keeps the original format working.
 
 The timestamp bounds how long a value can be presented at all: five minutes
 either side of the server's wall clock. That is the clock it has to be — the

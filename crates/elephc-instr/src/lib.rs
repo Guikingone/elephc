@@ -1853,6 +1853,24 @@ fn claim_is_same_process(recorded: &AtomicU32, claimer: i32) -> Option<bool> {
     Some(process_start_id(claimer)? == recorded)
 }
 
+/// Forgets who held a slot, so the next claimer's window cannot be judged on the
+/// last one's identity.
+///
+/// This word is only ever evidence ABOUT the pid in `filled`, and it outlived
+/// that pid: a worker's identity stayed behind after its slice was consumed, so
+/// a later claimer stopped between winning the claim and recording its own was
+/// judged against its predecessor's — read as "a different process", and with
+/// the age past the backstop, revoked while it was alive and holding the
+/// payload. That is the corruption the identity was added to prevent, reached
+/// through the identity itself, and it lands in exactly the case the whole fix
+/// exists for: a writer frozen mid-claim.
+///
+/// Cleared whenever the slot is freed, so a free slot carries no opinion and the
+/// gap reads as "no identity recorded" — which keeps the slot, the safe answer.
+fn clear_claim_identity(claim_id: &AtomicU32) {
+    claim_id.store(0, Ordering::Release);
+}
+
 /// Clears a slice nobody is going to take, and leaves alone one being written.
 ///
 /// Storing EMPTY outright is what let a second worker's claim succeed while the
@@ -1862,6 +1880,7 @@ fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32, claim_id: &At
         .compare_exchange(READY, EMPTY, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
+        clear_claim_identity(claim_id);
         HELD_BY.store(0, Ordering::Relaxed);
         return;
     }
@@ -1889,7 +1908,12 @@ fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32, claim_id: &At
             // Against `state`, not a constant: only the claim we judged may be
             // released, so a claimer that finished and a successor that took the
             // slot in the meantime are both left alone.
-            let _ = filled.compare_exchange(state, EMPTY, Ordering::AcqRel, Ordering::Relaxed);
+            if filled
+                .compare_exchange(state, EMPTY, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                clear_claim_identity(claim_id);
+            }
         } else if identity.is_none() && age > ABANDONED_CLAIM_SECS {
             // Left standing, and said so. A claim this old that cannot be
             // identified means every later `--exact` answers "no request
@@ -2012,9 +2036,12 @@ pub extern "C" fn elephc_instr_capture_arm() {
 /// `out` must point to at least `cap` writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> usize {
-    let (Some(armed), Some(filled), Some(length)) =
-        (capture_word(0), capture_word(1), capture_word(2))
-    else {
+    let (Some(armed), Some(filled), Some(length), Some(claim_id)) = (
+        capture_word(0),
+        capture_word(1),
+        capture_word(2),
+        capture_word(CLAIM_ID_WORD),
+    ) else {
         return 0;
     };
     // A claimed-but-unfinished slot reads as nothing: the writer is mid-copy,
@@ -2027,6 +2054,7 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
     // past the end of the mapping, so this is checked here rather than trusted
     // from any one writer.
     if len > CAPTURE_BYTES - CAPTURE_HEADER {
+        clear_claim_identity(claim_id);
         filled.store(EMPTY, Ordering::Relaxed);
         armed.store(0, Ordering::Relaxed);
         return 0;
@@ -2045,6 +2073,11 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
     // worker could observe EMPTY, claim the slot, and start overwriting the bytes
     // this call is still reading — a profile stitched from two slices, with
     // nothing to detect it.
+    // Before the slot is freed: once EMPTY is visible a new claimer can win it,
+    // and clearing afterwards would wipe the identity that claimer had just
+    // recorded — which reads as "no identity", and is safe, but leaves the word
+    // saying nothing about a slot that is in fact held.
+    clear_claim_identity(claim_id);
     filled.store(EMPTY, Ordering::Release);
     armed.store(0, Ordering::Relaxed);
     len
@@ -2559,6 +2592,56 @@ mod tests {
         // There is no "unknown claimer" row any more: the claim IS the pid, so a
         // slot that is claimed at all names the process holding it. The identity
         // above answers a different question — WHICH incarnation of that pid.
+    }
+
+    /// A freed slot carries no opinion about who held it.
+    ///
+    /// The identity word is evidence ABOUT the pid in `filled`, and it used to
+    /// outlive that pid: a worker's identity stayed behind after its slice was
+    /// consumed, so the NEXT claimer — stopped in the few instructions between
+    /// winning the claim and recording its own identity — was judged against its
+    /// predecessor's. That reads as "a different process", and with the age past
+    /// the backstop the reclaimer revoked a writer that was alive and holding the
+    /// payload. It is the corruption the identity exists to prevent, reached
+    /// through the identity itself, and it lands in exactly the case the fix is
+    /// for: a writer frozen mid-claim.
+    #[test]
+    fn a_freed_slot_forgets_who_held_it() {
+        let mine = std::process::id();
+        let filled = AtomicU32::new(READY);
+        let claimed_at = AtomicU32::new(0);
+        // A previous holder's identity, of some other process.
+        let claim_id = AtomicU32::new(0xDEAD_BEEF);
+
+        // Releasing a finished slice must take the identity with it.
+        super::release_stale_slice(&filled, &claimed_at, &claim_id);
+        assert_eq!(filled.load(Ordering::Acquire), EMPTY);
+        assert_eq!(
+            claim_id.load(Ordering::Acquire),
+            0,
+            "a free slot must say nothing about who held it"
+        );
+
+        // Now the scene the stale word produced. A new claimer wins the slot and
+        // is stopped before recording its identity — so the word is whatever the
+        // release left. With a predecessor's value there, this process reads as
+        // "not the claimer" and an old claim is revoked while it is alive.
+        filled.store(mine, Ordering::Release);
+        claimed_at.store(0, Ordering::Relaxed);
+        super::release_stale_slice(&filled, &claimed_at, &claim_id);
+        assert_eq!(
+            filled.load(Ordering::Acquire),
+            mine,
+            "a live claimer with no identity recorded keeps its slot"
+        );
+
+        // And with a predecessor's identity left behind, it would not have.
+        claim_id.store(0xDEAD_BEEF, Ordering::Release);
+        assert!(
+            super::claim_may_be_taken(true, super::claim_is_same_process(&claim_id, mine as i32), u32::MAX),
+            "which is what the stale word did: a live writer judged a stranger"
+        );
+        super::HELD_BY.store(0, Ordering::Relaxed);
     }
 
     /// A claim left standing because it could not be verified is REPORTED.
