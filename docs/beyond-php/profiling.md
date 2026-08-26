@@ -750,6 +750,15 @@ where a figure would otherwise be trusted further than it should be:
   rather than finished still reports the time it ran, because a suspension is
   accounted for when it happens rather than waiting for a return that never
   comes.
+- **`yield from` flattens one level of the call graph.** The delegating body is
+  off the stack for the whole delegation rather than around each forwarded yield,
+  because the runtime helper that drives the inner generator calls the suspension
+  primitive itself. The inner generator therefore starts while the outer one is
+  already suspended and is recorded as a callee of the *consumer*: `drain →
+  inner` where PHP says `outer → inner`. Inclusive time is right for both — the
+  outer body took **52.6%** of a program for 52 µs of work before this, and reads
+  0.3% now — and the consumer's loop is what drives those resumes, so the edge
+  names something real.
 - **A suspension from inside a nested call parks only the innermost frame.**
   `Fiber::suspend()` called from a function the fiber body called suspends the
   whole coroutine, but what the hook is told is one frame pointer, and the frames
