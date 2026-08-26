@@ -505,15 +505,26 @@ impl State {
             self.parks_refused += 1;
             return;
         }
-        // Innermost first, with the rest still standing, so each span is charged
-        // to its own caller exactly as its return would have charged it.
-        let mut frames = Vec::new();
-        while self.stack.len() > index {
-            let frame = self.stack.pop().expect("the index is inside the stack");
-            frames.push((frame.id, frame.fp));
-            self.close_frame(frame, t, a, f, io, w);
-        }
-        frames.reverse();
+        // Anything ABOVE the suspending frame is not part of this coroutine: a
+        // suspension is reached by a call, so whatever the body called has
+        // already returned. What can be up there is what an unwind leaves —
+        // frames an exception destroyed, which stay until the catcher exits. A
+        // catch handler that yields therefore finds them in its way.
+        //
+        // They are closed the way an exit closes them, at the instant of the
+        // throw that killed each one. Parking them instead closed dead frames at
+        // the suspension's timestamp and the resume then reopened them as LIVE
+        // callees, charging everything after through activations that no longer
+        // existed.
+        self.close_frames_above(index, t, a, f, io, w);
+        let frame = self.stack.pop().expect("the index is inside the stack");
+        let frames = vec![(frame.id, frame.fp)];
+        // Traced like an exit, because it ends a span exactly as an exit does.
+        // Recording it only in `exit_at` left every pre-yield segment out of the
+        // Chrome/Perfetto timeline, and an abandoned generator with no span at
+        // all while the aggregate table accounted for it.
+        self.trace_span(frame.id, frame.t_enter, t);
+        self.close_frame(frame, t, a, f, io, w);
         self.parked.push(Parked { fp, frames });
     }
 
@@ -532,6 +543,19 @@ impl State {
         // by a different function fails it and resumes nothing rather than
         // handing one coroutine's activations to another.
         if self.parked[at].frames.first().is_none_or(|(first, _)| *first != id) {
+            return;
+        }
+        // A park refused at `MAX_PARKED` left this activation ON the stack, and
+        // an older abandoned coroutine of the same function can own a parked
+        // group at a coroutine-stack address that has since been handed back
+        // out. Restoring then pushes a second, duplicate activation on top of
+        // the live one. The pair being live already is the whole signal: a
+        // suspension took its frame off, so a resume can never find it there.
+        if self
+            .stack
+            .iter()
+            .any(|frame| frame.fp == fp && frame.id == id)
+        {
             return;
         }
         let group = self.parked.remove(at);
@@ -649,41 +673,7 @@ impl State {
         // their cost on them; simply discarding them left it inside the
         // catching function's own time, which then reads as the hot function
         // (measured: a catcher showing 99.7% self time for work it never did).
-        while self.stack.len() > index + 1 {
-            let stale = self.stack.pop().expect("the index is inside the stack");
-            // Frames above the catcher are closed at the instant of the throw
-            // that killed THEM — everything between that and the catcher's
-            // return belongs to the unwinding and the handler, not to the code
-            // that was unwound. Which throw that is depends on how deep the
-            // frame sat, so it is looked up per frame rather than shared.
-            let killer = self
-                .unwinding
-                .as_ref()
-                .and_then(|u| u.killer_of(self.stack.len()));
-            match killer {
-                // A frame cannot be closed before it was entered, which is what
-                // an older throw's instant would do to one the handler opened
-                // after it. Its own entry reports it as instantaneous, which
-                // understates it, where the subtraction would have wrapped.
-                Some((kt, ka, kf, kio, kw)) => {
-                    // All five clamped, not just the clock. `close_frame`
-                    // subtracts each of them from what the frame entered with,
-                    // and every one of those subtractions wraps the same way —
-                    // so guarding time alone left four counters able to produce
-                    // ~1.8e19 from the very case the guard exists for. Either
-                    // that case is unreachable and the guard describes a
-                    // phantom, or it is reachable and the counters wrap; the
-                    // asymmetry is what could not be right either way.
-                    let at = kt.max(stale.t_enter);
-                    let allocs = ka.max(stale.a_enter);
-                    let frees = kf.max(stale.f_enter);
-                    let io_ops = kio.max(stale.io_enter);
-                    let wait = kw.max(stale.w_enter);
-                    self.close_frame(stale, at, allocs, frees, io_ops, wait)
-                }
-                None => self.close_frame(stale, t, a, f, io, w),
-            }
-        }
+        self.close_frames_above(index, t, a, f, io, w);
         let Some(mut frame) = self.stack.pop() else {
             return;
         };
@@ -733,14 +723,75 @@ impl State {
                 self.dropped_fps = Vec::new();
             }
         }
-        if TRACE_ON.load(Ordering::Relaxed) {
-            if self.trace.len() < TRACE_CAP.load(Ordering::Relaxed) {
-                self.trace.push((id, frame.t_enter, t));
-            } else {
-                self.trace_dropped += 1;
+        self.trace_span(id, frame.t_enter, t);
+        self.close_frame(frame, t, a, f, io, w);
+    }
+
+    /// Records one span on the opt-in timeline, if tracing is on and there is
+    /// room.
+    ///
+    /// Every event that ENDS a span goes through here. There are two — an exit
+    /// and a suspension — and only the exit used to record, so the timeline was
+    /// missing exactly the segments the aggregate table did account for: every
+    /// stretch a generator ran before a `yield`, and an abandoned generator
+    /// entirely.
+    fn trace_span(&mut self, id: u32, from: u64, to: u64) {
+        if !TRACE_ON.load(Ordering::Relaxed) {
+            return;
+        }
+        if self.trace.len() < TRACE_CAP.load(Ordering::Relaxed) {
+            self.trace.push((id, from, to));
+        } else {
+            self.trace_dropped += 1;
+        }
+    }
+
+    /// Closes every frame above `index`, at the instant of the throw that killed
+    /// each one.
+    ///
+    /// Frames an exception unwound never ran their own exit hook, and they stay
+    /// on this stack until the catcher exits — deliberately, because closing
+    /// them at the throw is what keeps their cost on them rather than inside the
+    /// catching function's own time (measured: a catcher showing 99.7% self time
+    /// for work it never did). Which throw killed a given frame depends on how
+    /// deep it sat, so it is looked up per frame rather than shared.
+    ///
+    /// Shared by the two events that find such frames in their way: an exit, and
+    /// a suspension by a catch handler that yields. Written once because the two
+    /// must agree — a suspension that instead PARKED this debris would reopen
+    /// dead activations as live callees on the resume, and charge everything
+    /// after them through frames that no longer exist.
+    fn close_frames_above(&mut self, index: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+        while self.stack.len() > index + 1 {
+            let stale = self.stack.pop().expect("the index is inside the stack");
+            let killer = self
+                .unwinding
+                .as_ref()
+                .and_then(|u| u.killer_of(self.stack.len()));
+            match killer {
+                // A frame cannot be closed before it was entered, which is what
+                // an older throw's instant would do to one the handler opened
+                // after it. Its own entry reports it as instantaneous, which
+                // understates it, where the subtraction would have wrapped.
+                //
+                // All five clamped, not just the clock. `close_frame` subtracts
+                // each of them from what the frame entered with, and every one of
+                // those subtractions wraps the same way — so guarding time alone
+                // left four counters able to produce ~1.8e19 from the very case
+                // the guard exists for. Either that case is unreachable and the
+                // guard describes a phantom, or it is reachable and the counters
+                // wrap; the asymmetry is what could not be right either way.
+                Some((kt, ka, kf, kio, kw)) => {
+                    let at = kt.max(stale.t_enter);
+                    let allocs = ka.max(stale.a_enter);
+                    let frees = kf.max(stale.f_enter);
+                    let io_ops = kio.max(stale.io_enter);
+                    let wait = kw.max(stale.w_enter);
+                    self.close_frame(stale, at, allocs, frees, io_ops, wait)
+                }
+                None => self.close_frame(stale, t, a, f, io, w),
             }
         }
-        self.close_frame(frame, t, a, f, io, w);
     }
 
     /// Accounts one frame that is ending now: its own cost, its inclusive span
@@ -2979,35 +3030,116 @@ mod tests {
         assert_eq!(state.fns[0].calls, 2, "and neither resume counted as a call");
     }
 
-    /// A group of parked activations comes back in the order it went away.
+    /// A catch handler that suspends does not park the frames the throw killed.
     ///
-    /// More than one frame is parked when frames sit ABOVE the suspending one —
-    /// which an unwind leaves behind, since the frames an exception destroyed
-    /// stay on the shadow stack until the catcher exits. Restoring them
-    /// innermost-first would put the callee under its own caller, and every
-    /// depth-ordered thing after that — the caller an `enter_at` reads, the
-    /// frames a resync closes — would be reading the stack upside down.
+    /// Between a throw and its catcher exiting, the frames the exception
+    /// destroyed stay on this stack — deliberately, so their cost lands on them
+    /// rather than on the handler. If that catcher is a generator body and it
+    /// yields, those dead frames sit ABOVE the suspending one, and parking
+    /// everything above the index swept them into the group: closed at the
+    /// suspension's timestamp rather than at their killer's, then reopened by
+    /// the resume as LIVE callees, with everything after charged through
+    /// activations that no longer existed.
+    ///
+    /// A suspension is reached by a call, so a coroutine never has a live frame
+    /// above it. Anything up there is unwind debris and is closed the way an
+    /// exit closes it.
     #[test]
-    fn a_parked_group_comes_back_in_the_order_it_went_away() {
+    fn a_catch_handler_that_suspends_does_not_park_the_dead() {
         let mut state = State::default();
-        let base = CORO_BASE;
-        let above = CORO_BASE - 64;
-        state.enter_at(3, base, 0, 0, 0, 0, 0);
-        state.enter_at(4, above, 5, 0, 0, 0, 0);
+        // The catcher is a generator body on its own stack, with two frames
+        // above it that a throw is about to destroy.
+        state.enter_at(0, CORO_BASE, 0, 0, 0, 0, 0);
+        state.enter_at(1, CORO_BASE - 64, 10, 0, 0, 0, 0);
+        state.enter_at(2, CORO_BASE - 128, 20, 0, 0, 0, 0);
+        state.note_throw(30, 0, 0, 0, 0);
+        assert_eq!(state.stack.len(), 3, "the throw leaves them standing");
 
-        state.suspend_at(3, base, 10, 0, 0, 0, 0);
+        // The catcher yields, 1000 ns later.
+        state.suspend_at(0, CORO_BASE, 1_030, 0, 0, 0, 0);
+
+        let group = state.parked.first().expect("the catcher parked");
         assert_eq!(
-            state.parked.first().map(|group| group.frames.len()),
-            Some(2),
-            "both frames belong to the coroutine that suspended"
+            group.frames,
+            vec![(0, CORO_BASE)],
+            "only the suspending frame belongs to the coroutine"
         );
-        assert!(state.stack.is_empty());
-
-        state.resume_at(3, base, 20, 0, 0, 0, 0);
+        assert!(state.stack.is_empty(), "and the debris is gone, not parked");
         assert_eq!(
-            state.stack.iter().map(|frame| frame.id).collect::<Vec<_>>(),
-            vec![3, 4],
-            "the callee came back underneath its own caller"
+            state.fns[2].excl_ns, 10,
+            "the innermost dead frame is closed at the throw that killed it, \
+             not at the suspension 1000 ns later"
+        );
+        assert_eq!(state.fns[1].excl_ns, 10, "and so is the one below it");
+    }
+
+    /// A resume does not open a second copy of an activation that is already live.
+    ///
+    /// A park refused at `MAX_PARKED` leaves its frame on the stack, and a
+    /// coroutine stack that has been freed is handed back out — so an older,
+    /// abandoned group can be sitting at the same address under the same
+    /// function. The resume that follows the refused park found THAT group and
+    /// pushed a duplicate activation on top of the live one.
+    ///
+    /// The pairing is what the id check alone cannot settle, because here the
+    /// ids match too; being live is the signal, since a suspension takes its
+    /// frame off the stack and a resume can never find its own there.
+    #[test]
+    fn a_refused_park_does_not_resume_an_abandoned_twin() {
+        let mut state = State::default();
+        // An older activation of function 7 suspended at this address and was
+        // never resumed.
+        state.enter_at(7, CORO_BASE, 0, 0, 0, 0, 0);
+        state.suspend_at(7, CORO_BASE, 10, 0, 0, 0, 0);
+        assert_eq!(state.parked.len(), 1);
+
+        // The cap fills, then a new activation of 7 reuses that freed address
+        // and has its own park refused.
+        for index in 1..MAX_PARKED {
+            let other = CORO_BASE + index * 64;
+            state.enter_at(8, other, index as u64, 0, 0, 0, 0);
+            state.suspend_at(8, other, index as u64, 0, 0, 0, 0);
+        }
+        state.enter_at(7, CORO_BASE, 2_000, 0, 0, 0, 0);
+        state.suspend_at(7, CORO_BASE, 2_010, 0, 0, 0, 0);
+        assert_eq!(state.parks_refused, 1, "the cap refused it");
+        assert_eq!(state.stack.len(), 1, "so its frame is still standing");
+
+        state.resume_at(7, CORO_BASE, 2_020, 0, 0, 0, 0);
+        assert_eq!(
+            state.stack.len(),
+            1,
+            "the abandoned twin was opened on top of the live activation"
+        );
+        assert_eq!(
+            state.parked.len(),
+            MAX_PARKED,
+            "and its group is untouched, not consumed by somebody else's resume"
+        );
+    }
+
+    /// A suspension records a timeline span, the same as an exit.
+    ///
+    /// Both end a span. Only the exit recorded one, so the Chrome/Perfetto
+    /// output was missing exactly what the aggregate table did account for —
+    /// every stretch a generator ran before a `yield`, and an abandoned
+    /// generator's whole life.
+    #[test]
+    fn a_suspension_records_a_timeline_span() {
+        let _serial = ticks_are_nanoseconds();
+        let restore = TRACE_ON.swap(true, Ordering::Relaxed);
+        let mut state = State::default();
+
+        state.enter_at(0, CORO_BASE, 100, 0, 0, 0, 0);
+        state.suspend_at(0, CORO_BASE, 130, 0, 0, 0, 0);
+        state.resume_at(0, CORO_BASE, 500, 0, 0, 0, 0);
+        state.exit_at(0, CORO_BASE, 520, 0, 0, 0, 0);
+
+        TRACE_ON.store(restore, Ordering::Relaxed);
+        assert_eq!(
+            state.trace,
+            vec![(0, 100, 130), (0, 500, 520)],
+            "the pre-yield stretch is missing from the timeline"
         );
     }
 
