@@ -1720,12 +1720,21 @@ fn process_is_alive(pid: i32) -> bool {
 /// together. `ABANDONED_CLAIM_SECS` is not a property of the writer, so it
 /// cannot be allowed to speak for one that is demonstrably alive.
 ///
-/// A claimer that is alive but is NOT that process — its pid was recycled — or
-/// one whose identity cannot be established falls back to the age rule, which
-/// is the only thing left. That covers both the platform where start identity
-/// is unavailable and the few instructions between winning the claim and
-/// recording it, during which the word still holds the previous claimer's
-/// value: a mismatch that persists for a full minute is not that window.
+/// A claimer that is alive and is provably a DIFFERENT process — its pid was
+/// recycled — is taken once the age backstop passes. The backstop rather than at
+/// once, because the few instructions between winning the claim and recording
+/// the identity also read as a mismatch, and a mismatch that persists for a full
+/// minute is not that window.
+///
+/// A claimer that is alive and cannot be identified at all keeps its slot. That
+/// is the last case that could still take the payload from a writer holding it,
+/// and it is the one with no evidence either way: the process is there, and
+/// nothing available says whether it is the one that claimed. Between serving a
+/// profile spliced from two writers and serving none, this crate has said all
+/// along that none is the honest answer, and a wedge announces itself where a
+/// stitched profile does not. What it costs is recovery from a crashed worker
+/// whose pid was recycled, on a platform with no way to ask — the rarest branch
+/// of the rarest case, traded for never corrupting.
 ///
 /// Split out as a pure function because the interesting rows need a writer that
 /// is frozen, or dead, or a pid that has been reused — none of which a test can
@@ -1734,10 +1743,10 @@ fn claim_may_be_taken(claimer_alive: bool, same_process: Option<bool>, age_secs:
     if !claimer_alive {
         return true;
     }
-    if same_process == Some(true) {
-        return false;
+    match same_process {
+        Some(false) => age_secs > ABANDONED_CLAIM_SECS,
+        Some(true) | None => false,
     }
-    age_secs > ABANDONED_CLAIM_SECS
 }
 
 /// Seconds on a clock that is the same for every process sharing the mapping
@@ -1833,9 +1842,9 @@ fn fold_start_id(value: u64) -> u32 {
 ///
 /// `None` when there is nothing to compare: no identity was recorded (a claim
 /// still inside the few instructions between winning and recording, or one made
-/// by a build without this word), or the kernel will not tell us. Both fall back
-/// to the age rule rather than guessing, because guessing "different" revokes a
-/// live writer.
+/// by a build without this word), or the kernel will not tell us. Neither is
+/// evidence, and guessing "different" is what revokes a live writer, so both
+/// leave the claim standing.
 fn claim_is_same_process(recorded: &AtomicU32, claimer: i32) -> Option<bool> {
     let recorded = recorded.load(Ordering::Acquire);
     if recorded == 0 {
@@ -1853,8 +1862,14 @@ fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32, claim_id: &At
         .compare_exchange(READY, EMPTY, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
+        HELD_BY.store(0, Ordering::Relaxed);
         return;
     }
+    // Recomputed on every pass and stored once at the end, so a blockage that
+    // clears stops being reported. Raising it and never lowering it would leave
+    // the endpoint naming a process that finished minutes ago — a diagnostic
+    // that goes stale is worse than none, because it is believed.
+    let mut blocked = 0;
     let state = filled.load(Ordering::Acquire);
     if state != EMPTY && state != READY {
         // Anything else is the claimer's pid, written by the compare-exchange
@@ -1869,17 +1884,41 @@ fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32, claim_id: &At
         // claimer is still there, and whether it is still the SAME process,
         // since a pid that has been recycled is alive and yet gone. Age decides
         // only what the kernel cannot.
-        if claim_may_be_taken(
-            process_is_alive(claimer),
-            claim_is_same_process(claim_id, claimer),
-            age,
-        ) {
+        let identity = claim_is_same_process(claim_id, claimer);
+        if claim_may_be_taken(process_is_alive(claimer), identity, age) {
             // Against `state`, not a constant: only the claim we judged may be
             // released, so a claimer that finished and a successor that took the
             // slot in the meantime are both left alone.
             let _ = filled.compare_exchange(state, EMPTY, Ordering::AcqRel, Ordering::Relaxed);
+        } else if identity.is_none() && age > ABANDONED_CLAIM_SECS {
+            // Left standing, and said so. A claim this old that cannot be
+            // identified means every later `--exact` answers "no request
+            // completed", which is true of nothing: requests are completing and
+            // being refused the slot. Publishing who holds it turns a silent
+            // timeout into a fact an operator can act on — restart that worker —
+            // and it is the only cost of never revoking what we cannot verify.
+            blocked = claimer;
         }
     }
+    HELD_BY.store(blocked, Ordering::Relaxed);
+}
+
+/// The pid of a claim this process declined to revoke because it could not tell
+/// whether the holder was still writing, or 0.
+///
+/// Process-local on purpose: it is a diagnostic about a decision THIS process
+/// made, read by the endpoint that lives in the same process, and putting it in
+/// the shared mapping would have every worker overwrite every other's.
+static HELD_BY: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// Reports a capture slot held by a process this one could not vouch for, or 0.
+///
+/// The endpoint asks after a capture times out, so an answer nobody can explain
+/// — traffic flowing, requests completing, and no slice — names the process that
+/// is holding the rendezvous instead of leaving the operator to guess.
+#[no_mangle]
+pub extern "C" fn elephc_instr_capture_blocked_by() -> i32 {
+    HELD_BY.load(Ordering::Relaxed)
 }
 /// Base address of that mapping, or 0 when it could not be established — in
 /// which case the capture is simply unavailable and the dump keeps logging.
@@ -2500,8 +2539,9 @@ mod tests {
             "a dead writer's slot is free immediately, with no timeout to serve"
         );
         assert!(
-            super::claim_may_be_taken(true, None, super::ABANDONED_CLAIM_SECS + 1),
-            "an unidentifiable claimer past the backstop: the pid was reused"
+            !super::claim_may_be_taken(true, None, super::ABANDONED_CLAIM_SECS + 1),
+            "a live claimer nobody can identify keeps its slot: the age says \
+             nothing about it, and the alternative is two writers in one payload"
         );
         assert!(
             !super::claim_may_be_taken(true, Some(true), u32::MAX),
@@ -2519,6 +2559,60 @@ mod tests {
         // There is no "unknown claimer" row any more: the claim IS the pid, so a
         // slot that is claimed at all names the process holding it. The identity
         // above answers a different question — WHICH incarnation of that pid.
+    }
+
+    /// A claim left standing because it could not be verified is REPORTED.
+    ///
+    /// Refusing to revoke what cannot be identified is the safe half; the other
+    /// half is that such a claim can outlast every later capture, and "no request
+    /// completed within 30s" is then false — requests are completing and being
+    /// refused the slot. The endpoint reads this to say which process is holding
+    /// it, so the operator restarts that worker instead of concluding the
+    /// profiler is broken.
+    #[test]
+    fn a_claim_that_cannot_be_verified_is_kept_and_announced() {
+        let mine = std::process::id();
+        let filled = AtomicU32::new(mine);
+        let claimed_at = AtomicU32::new(0);
+        // 0 is "no identity recorded", which is what an unsupported platform
+        // leaves and what the instant between winning a claim and recording it
+        // looks like. This process is unquestionably alive, so the pair is
+        // exactly the row that used to hand the payload to a second writer.
+        let claim_id = AtomicU32::new(0);
+        super::HELD_BY.store(0, Ordering::Relaxed);
+
+        super::release_stale_slice(&filled, &claimed_at, &claim_id);
+
+        assert_eq!(
+            filled.load(Ordering::Acquire),
+            mine,
+            "an unverifiable live claim is not taken"
+        );
+        assert_eq!(
+            super::elephc_instr_capture_blocked_by(),
+            mine as i32,
+            "and the endpoint can name who is holding it"
+        );
+
+        // Recording the identity makes it verifiable, the claim resolves as the
+        // same process, and there is nothing to announce.
+        claim_id.store(
+            super::process_start_id(mine as i32).expect("this platform identifies a process"),
+            Ordering::Release,
+        );
+        super::release_stale_slice(&filled, &claimed_at, &claim_id);
+        assert_eq!(filled.load(Ordering::Acquire), mine);
+        assert_eq!(
+            super::elephc_instr_capture_blocked_by(),
+            0,
+            "a claim the kernel accounts for is not a blockage"
+        );
+
+        // And a slice waiting to be read is released as it always was, without
+        // any of this: READY is not a claim.
+        filled.store(READY, Ordering::Release);
+        super::release_stale_slice(&filled, &claimed_at, &claim_id);
+        assert_eq!(filled.load(Ordering::Acquire), EMPTY);
     }
 
     /// The kernel identifies this process, stably, and the claim path records it.

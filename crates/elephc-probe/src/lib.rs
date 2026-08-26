@@ -87,14 +87,30 @@ const EVENT_TABLE_BYTES: usize = EVENT_BUCKETS * EVENT_WORDS * 8;
 /// workers forked flips only its own copy, and the master runs no PHP. The
 /// workers must be able to observe the ask that happened after they existed.
 const CONTROL_BYTES: usize = 8;
-/// Shared-region byte size: the ring, then the route table, then the per-route
-/// event counters, then the control word — all inherited across a `--web` fork,
-/// so route ids stay consistent and every worker's counters land in one place.
+/// How many recently accepted profiling signatures the service remembers.
 ///
-/// The control word is appended LAST so adding it moves no existing offset:
-/// every other area is addressed from the constants above it.
+/// One entry is spent per ACCEPTED request, and only the key holder can produce
+/// one, so this is sized against how often an operator profiles rather than
+/// against traffic. Sixty-four covers far more asks than a five-minute window
+/// ever carries.
+const REPLAY_SLOTS: usize = 64;
+/// Bytes per remembered signature: the tag's first eight bytes, then the second
+/// it was accepted at.
+const REPLAY_SLOT_BYTES: usize = 16;
+/// Replay-table bytes, in the shared mapping because the check has to hold
+/// ACROSS `--web` workers: a captured header replayed against a different worker
+/// than the one that served the original would otherwise meet a process that had
+/// never seen it.
+const REPLAY_TABLE_BYTES: usize = REPLAY_SLOTS * REPLAY_SLOT_BYTES;
+/// Shared-region byte size: the ring, then the route table, then the per-route
+/// event counters, then the control word, then the replay table — all inherited
+/// across a `--web` fork, so route ids stay consistent, every worker's counters
+/// land in one place, and a signature spent on one worker is spent on all.
+///
+/// Each new area is appended LAST so adding it moves no existing offset: every
+/// other area is addressed from the constants above it.
 const REGION_BYTES: usize =
-    RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES + CONTROL_BYTES;
+    RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES + CONTROL_BYTES + REPLAY_TABLE_BYTES;
 
 /// The shared "someone asked" word, or `None` before the region is mapped.
 ///
@@ -103,6 +119,28 @@ const REGION_BYTES: usize =
 unsafe fn region_asked<'a>(base: usize) -> &'a std::sync::atomic::AtomicU64 {
     let offset = RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES;
     &*((base + offset) as *const std::sync::atomic::AtomicU64)
+}
+
+/// One remembered signature as its two words: the tag, then when it was taken.
+///
+/// # Safety
+/// Valid only after the region is mapped, for `index < REPLAY_SLOTS`.
+unsafe fn replay_slot<'a>(
+    base: usize,
+    index: usize,
+) -> (
+    &'a std::sync::atomic::AtomicU64,
+    &'a std::sync::atomic::AtomicU64,
+) {
+    let offset = RING_BYTES
+        + ROUTE_TABLE_BYTES
+        + EVENT_TABLE_BYTES
+        + CONTROL_BYTES
+        + index * REPLAY_SLOT_BYTES;
+    (
+        &*((base + offset) as *const std::sync::atomic::AtomicU64),
+        &*((base + offset + 8) as *const std::sync::atomic::AtomicU64),
+    )
 }
 
 /// I/O events are **not sampled**. A driver call fires exactly one, so these
@@ -510,6 +548,129 @@ unsafe fn interrupted_pc_fp(context: *mut libc::c_void) -> (u64, u64, u64) {
 /// worker/CLI stack while rejecting a wild `fp` far from `sp`.
 const STACK_WINDOW: u64 = 64 * 1024 * 1024;
 
+/// How many consecutive frames the walk may hold without corroborating them.
+///
+/// A genuine run of frames outside the program's own text is short — a runtime
+/// helper calling another helper calling libc — and ends by returning into
+/// compiled PHP. A chain built out of stack garbage does not come back. Four
+/// covers every real nesting this runtime produces and bounds how far a bad
+/// chain is followed before it is abandoned.
+const UNPROVEN_RUN_MAX: usize = 4;
+
+/// The program's own compiled text, as `[first function, text end)`.
+///
+/// The compiler hands `elephc_probe_init` a symbol table sorted by address whose
+/// final entry is the text-end sentinel, so its two ends bound every function
+/// this binary compiled. Reading them is two loads from a static array, which is
+/// async-signal-safe.
+///
+/// `None` when no table has been published — a probe built without one cannot
+/// corroborate anything, and the walk says so by trusting the chain, which is
+/// what it did everywhere before.
+///
+/// # Safety
+/// Valid only once `elephc_probe_init` has stored a table that outlives the
+/// process, which is how the compiler emits it.
+unsafe fn program_text_range() -> Option<(u64, u64)> {
+    let table = TABLE_PTR.load(Ordering::Relaxed) as *const SymtabEntry;
+    let len = TABLE_LEN.load(Ordering::Relaxed);
+    if table.is_null() || len < 2 {
+        return None;
+    }
+    let low = (*table).address;
+    let high = (*table.add(len - 1)).address;
+    if high <= low {
+        return None;
+    }
+    Some((low, high))
+}
+
+/// Whether a return address falls inside the program's own compiled text.
+///
+/// The question is only ever asked to CORROBORATE a frame, never to reject one:
+/// a genuine frame in a runtime helper or in libc answers false, and so does a
+/// stack word an fp-less function happened to leave behind.
+fn returns_into_program(address: u64, text: Option<(u64, u64)>) -> bool {
+    match text {
+        Some((low, high)) => address >= low && address < high,
+        // No table to check against. Every frame counts as corroborated, which
+        // is the unverified walk this crate had before the table was consulted.
+        None => true,
+    }
+}
+
+/// Walks the frame-pointer chain from `fp`, filling `out` with the return
+/// addresses it can stand behind and returning how many that is.
+///
+/// The shape checks — nonzero, 16-byte aligned, inside `[sp, sp + STACK_WINDOW)`
+/// — prove that an address could be a stack slot, which is what makes it safe to
+/// dereference. They do not prove it IS a frame: a function that uses the frame
+/// register as a general one leaves an ordinary value there, and one that is
+/// aligned and inside the window is followed. That is inherent to walking a
+/// frame-pointer chain in-process, and every sampler that does it carries it.
+///
+/// What is NOT inherent is reporting the result. A return address inside the
+/// program's own text is proof that the frame it came from is real; one outside
+/// is either a genuine native frame or the garbage above. So frames are HELD
+/// until the chain returns into compiled code, which corroborates every frame
+/// held behind it at once, and are dropped if it never does. A stack that stops
+/// early is a stack that really ran as far as it says; a stack padded with
+/// frames nobody can vouch for reads exactly like a real one, which is worse
+/// than the missing tail.
+///
+/// The interrupted PC is not walked and not held: the kernel handed it over, so
+/// it is the one frame that needs no corroborating. The caller stores it.
+///
+/// # Safety
+/// Dereferences `fp` and `fp + 8` after checking they lie inside the window
+/// above `sp`. `out` is written only within its own length.
+unsafe fn walk_frame_chain(mut fp: u64, sp: u64, text: Option<(u64, u64)>, out: &mut [u64]) -> usize {
+    // Corroborated frames occupy `out[..proven]`; frames waiting for
+    // corroboration sit just above them and are overwritten or forgotten.
+    let mut proven = 0usize;
+    let mut held = 0usize;
+    while proven + held < out.len() {
+        // The bound is `- 16` because the two loads below read `[fp, fp+8)` and
+        // `[fp+8, fp+16)`. At `- 8` an fp eight bytes below the end of the
+        // address space passed, the first load succeeded, and the second crossed
+        // the boundary — the guard covered one of the two reads it exists for.
+        if fp == 0
+            || fp & 0xf != 0
+            || fp < sp
+            || fp.wrapping_sub(sp) >= STACK_WINDOW
+            || fp > u64::MAX - 16
+        {
+            break;
+        }
+        let next_fp = *(fp as *const u64);
+        let return_address = *((fp + 8) as *const u64);
+        if return_address < 0x1000 {
+            break;
+        }
+        out[proven + held] = return_address;
+        if returns_into_program(return_address, text) {
+            // This frame returned into code this binary compiled, which vouches
+            // for it and for every frame held behind it.
+            proven += held + 1;
+            held = 0;
+        } else {
+            held += 1;
+            if held > UNPROVEN_RUN_MAX {
+                break;
+            }
+        }
+        // Frames must strictly grow toward higher addresses or the chain is
+        // corrupt (or we crossed into a differently-shaped frame).
+        if next_fp <= fp {
+            break;
+        }
+        fp = next_fp;
+    }
+    // `held` frames are deliberately left out of the count: nothing corroborated
+    // them, and reporting them would be inventing a stack.
+    proven
+}
+
 /// The SIGPROF handler: records the interrupted PC plus the return addresses
 /// of the frame-pointer chain into the next ring slot.
 ///
@@ -540,7 +701,7 @@ extern "C" fn on_sigprof(
             return;
         }
         let head = &*(base as *const std::sync::atomic::AtomicU64);
-        let (pc, mut fp, sp) = interrupted_pc_fp(context);
+        let (pc, fp, sp) = interrupted_pc_fp(context);
         let ticket = head.fetch_add(1, Ordering::Relaxed);
         let slot_index = (ticket as usize) % RING_SLOTS;
         // Slot words are atomics: the reader (endpoint/dump) runs concurrently
@@ -588,48 +749,19 @@ extern "C" fn on_sigprof(
             None => 0,
         };
         region_word(base, slot_index, 2).store(allocs_delta, Ordering::Relaxed);
-        let mut depth = 0usize;
+        // The interrupted PC first: the kernel handed it over, so it is the one
+        // frame that needs nothing to vouch for it.
         region_word(base, slot_index, PC_WORD0).store(pc, Ordering::Relaxed);
-        depth += 1;
-        while depth < MAX_FRAMES {
-            // A valid frame pointer is nonzero, 16-byte aligned, and inside the
-            // interrupted stack window `[sp, sp + STACK_WINDOW)`. Anchoring to sp
-            // rejects a stale fp before dereferencing it can fault.
-            //
-            // These checks prove a SHAPE, not that the address is mapped, and
-            // that limit is inherent to walking a frame-pointer chain in-process:
-            // a function compiled without frame pointers leaves an ordinary value
-            // in the register, and one that happens to be aligned and inside the
-            // window is followed. Every in-process FP sampler carries this. What
-            // the window buys is that the garbage has to look like a stack
-            // address to get through.
-            //
-            // The bound is `- 16` because the two loads below read
-            // `[fp, fp+8)` and `[fp+8, fp+16)`. At `- 8` an fp eight bytes below
-            // the end of the address space passed, the first load succeeded, and
-            // the second crossed the boundary — the guard covered one of the two
-            // reads it exists for.
-            if fp == 0
-                || fp & 0xf != 0
-                || fp < sp
-                || fp.wrapping_sub(sp) >= STACK_WINDOW
-                || fp > u64::MAX - 16
-            {
-                break;
-            }
-            let next_fp = *(fp as *const u64);
-            let return_address = *((fp + 8) as *const u64);
-            if return_address < 0x1000 {
-                break;
-            }
-            region_word(base, slot_index, depth + PC_WORD0).store(return_address, Ordering::Relaxed);
+        // Walked into a stack array rather than straight into the ring, because
+        // a frame is only reportable once a LATER frame corroborates it, and a
+        // word already published cannot be taken back. 248 bytes on a 64 KiB
+        // signal stack, and no allocation.
+        let mut frames = [0u64; MAX_FRAMES - 1];
+        let walked = walk_frame_chain(fp, sp, program_text_range(), &mut frames);
+        let mut depth = 1usize;
+        for address in &frames[..walked] {
+            region_word(base, slot_index, depth + PC_WORD0).store(*address, Ordering::Relaxed);
             depth += 1;
-            // Frames must strictly grow toward higher addresses or the chain
-            // is corrupt (or we crossed into a differently-shaped frame).
-            if next_fp <= fp {
-                break;
-            }
-            fp = next_fp;
         }
         // Publish depth last with Release so a reader that loads it Acquire never
         // sees a higher depth than the PCs already stored.
@@ -1091,7 +1223,69 @@ fn control_fd_present() -> bool {
 /// How far a signed profiling request may be from the server's clock, in
 /// seconds. Wide enough for real clock skew between two hosts, narrow enough that
 /// a captured header stops working long before anyone finds it in a log.
+///
+/// The window alone was never the whole answer: inside it a captured header
+/// worked any number of times, from anywhere. `spend_query_tag` is what makes it
+/// work at most ONCE, so the window now only has to cover clock skew rather than
+/// stand in for a replay defence.
 const QUERY_WINDOW_SECS: i64 = 300;
+
+/// Spends a verified signature, refusing one that has already been spent.
+///
+/// Returns true the first time a tag is seen and false for every repeat inside
+/// the window — so a header lifted from a log or a proxy trace is worth nothing,
+/// and one lifted before the legitimate request lands is worth exactly one
+/// request rather than five minutes of them.
+///
+/// The table lives in the SHARED mapping. A per-process memory would have made
+/// this useless under `--web`, where the replay is served by whichever worker
+/// the kernel picks and the one that saw the original may never see it again.
+///
+/// Open-addressed from the tag itself so two processes racing the SAME tag meet
+/// on the same slot and one loses the compare-exchange; probing forward from
+/// there keeps two DIFFERENT tags that start at one slot from evicting each
+/// other. Slots older than the window are free: nothing outside it is accepted
+/// anyway, so remembering it protects nothing.
+///
+/// Refuses when it cannot remember — an unmapped region, or a table whose every
+/// slot is live. Both mean the promise "at most once" cannot be kept, and the
+/// honest answer to a privileged request nobody can account for is no.
+///
+/// # Safety
+/// Valid only for a mapped region; `base` of 0 is handled as "cannot remember".
+unsafe fn spend_query_tag(base: usize, tag: u64, now: i64) -> bool {
+    if base == 0 {
+        return false;
+    }
+    // 0 marks a free slot, so a tag that folds to it takes the next value. One
+    // signature in 2^64 is thereby indistinguishable from its neighbour, which
+    // costs that request a retry and nothing else.
+    let tag = if tag == 0 { 1 } else { tag };
+    let start = (tag % REPLAY_SLOTS as u64) as usize;
+    for step in 0..REPLAY_SLOTS {
+        let index = (start + step) % REPLAY_SLOTS;
+        let (tag_word, taken_at) = replay_slot(base, index);
+        let seen = tag_word.load(Ordering::Acquire);
+        let live = seen != 0 && within_query_window(now, taken_at.load(Ordering::Acquire) as i64);
+        if live {
+            if seen == tag {
+                return false;
+            }
+            continue;
+        }
+        match tag_word.compare_exchange(seen, tag, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {
+                taken_at.store(now as u64, Ordering::Release);
+                return true;
+            }
+            // Someone took this slot between the load and the exchange. If they
+            // took it with OUR tag they are the request this one is a replay of.
+            Err(actual) if actual == tag => return false,
+            Err(_) => continue,
+        }
+    }
+    false
+}
 
 /// Verifies an `X-Elephc-Query` value against the embedded build key.
 ///
@@ -1145,7 +1339,25 @@ pub unsafe extern "C" fn elephc_probe_verify_query(ptr: *const u8, len: usize) -
         return 0;
     }
     let expected = handshake::hmac_sha256(&key, stamp.to_string().as_bytes());
-    u32::from(handshake::tags_equal(&expected, &tag))
+    if !handshake::tags_equal(&expected, &tag) {
+        return 0;
+    }
+    // Spent only once the signature has PROVED itself. Checking the table first
+    // would let anyone who can set a header fill all sixty-four slots with junk
+    // and lock the key holder out of their own profiler — the table would then
+    // be a denial of service built out of a replay defence.
+    //
+    // Eight bytes of a verified HMAC identify it: forging a collision needs the
+    // key, and without the key neither half of the tag can be chosen at all.
+    let mut identity = [0u8; 8];
+    identity.copy_from_slice(&expected[..8]);
+    u32::from(unsafe {
+        spend_query_tag(
+            REGION.load(Ordering::Relaxed),
+            u64::from_le_bytes(identity),
+            now.tv_sec as i64,
+        )
+    })
 }
 
 /// Whether a signed timestamp is close enough to now to be accepted.
@@ -1653,6 +1865,114 @@ mod tests {
         assert_eq!(symbolize(&symbols, 0x3001), "<native>");
     }
 
+    /// Lays a frame-pointer chain into `stack` and returns `(sp, first fp)`.
+    ///
+    /// Each frame is the sixteen bytes both supported ABIs use —
+    /// `[fp] = caller fp`, `[fp + 8] = return address` — so the walk under test
+    /// reads a real chain rather than a mock of one. The frames are placed at
+    /// rising 16-byte-aligned addresses inside the caller's buffer, which is
+    /// what makes them pass the walk's shape checks.
+    ///
+    /// # Safety
+    /// `stack` must hold `2 * returns.len() + 4` words, which gives every frame
+    /// room after alignment.
+    unsafe fn lay_frame_chain(stack: &mut [u64], returns: &[u64]) -> (u64, u64) {
+        let base = stack.as_mut_ptr() as u64;
+        let first = (base + 15) & !15;
+        for (index, address) in returns.iter().enumerate() {
+            let fp = first + (index as u64) * 16;
+            let next = if index + 1 < returns.len() { fp + 16 } else { 0 };
+            *(fp as *mut u64) = next;
+            *((fp + 8) as *mut u64) = *address;
+        }
+        (base, first)
+    }
+
+    /// A frame is reported only once a later frame vouches for it.
+    ///
+    /// The walk's shape checks prove an address COULD be a stack slot, never
+    /// that it is a frame — a function using the frame register as a general one
+    /// leaves a value that is aligned, inside the window, and followed. What
+    /// separates a real frame from that is returning into code this binary
+    /// compiled, so frames outside the program's text are held until the chain
+    /// comes back, and dropped when it does not. The tail that goes missing was
+    /// never a stack; the tail that used to be reported read exactly like one.
+    #[test]
+    fn frames_nothing_vouches_for_are_not_reported() {
+        let text = Some((0x10_000u64, 0x20_000u64));
+        let php = |n: u64| 0x10_000 + n * 0x100;
+        let native = |n: u64| 0x7f_0000_0000u64 + n * 0x100;
+
+        // A native run BETWEEN two compiled frames is real: the chain comes back,
+        // so the helpers it went through are vouched for and kept.
+        let chain = [php(1), native(1), native(2), php(2)];
+        let mut stack = vec![0u64; chain.len() * 2 + 4];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let mut out = [0u64; MAX_FRAMES - 1];
+        let walked = unsafe { super::walk_frame_chain(fp, sp, text, &mut out) };
+        assert_eq!(&out[..walked], &chain, "a chain that returns is kept whole");
+
+        // The same run with nothing after it is the garbage case, and the whole
+        // uncorroborated tail goes rather than being reported as a stack.
+        let chain = [php(1), native(1), native(2)];
+        let mut stack = vec![0u64; chain.len() * 2 + 4];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let walked = unsafe { super::walk_frame_chain(fp, sp, text, &mut out) };
+        assert_eq!(&out[..walked], &[php(1)], "an unvouched tail is not a stack");
+
+        // A chain that never reaches compiled code reports nothing at all: every
+        // frame in it is exactly as likely to be a leftover stack word.
+        let chain = [native(1), native(2)];
+        let mut stack = vec![0u64; chain.len() * 2 + 4];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let walked = unsafe { super::walk_frame_chain(fp, sp, text, &mut out) };
+        assert_eq!(walked, 0);
+
+        // And it is abandoned rather than followed to the depth cap: past the
+        // run bound the walk stops, so a compiled frame further down does not
+        // rescue thirty frames of garbage.
+        let mut chain = vec![native(0); super::UNPROVEN_RUN_MAX + 1];
+        chain.push(php(9));
+        let mut stack = vec![0u64; chain.len() * 2 + 4];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let walked = unsafe { super::walk_frame_chain(fp, sp, text, &mut out) };
+        assert_eq!(walked, 0, "the run bound is what stops a bad chain");
+    }
+
+    /// With no symbol table there is nothing to corroborate against, and the
+    /// walk says so by trusting the chain — the behaviour it had everywhere
+    /// before the table was consulted. Stated as a test because the alternative,
+    /// silently reporting no frames at all, looks identical to an idle process.
+    #[test]
+    fn without_a_symbol_table_the_walk_trusts_the_chain() {
+        let chain = [0x7f_0000_0100u64, 0x7f_0000_0200, 0x7f_0000_0300];
+        let mut stack = vec![0u64; chain.len() * 2 + 4];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let mut out = [0u64; MAX_FRAMES - 1];
+        let walked = unsafe { super::walk_frame_chain(fp, sp, None, &mut out) };
+        assert_eq!(&out[..walked], &chain);
+    }
+
+    /// The shape checks still reject what cannot be a frame at all, and they run
+    /// BEFORE the dereference, which is what keeps a stale register from
+    /// faulting the handler.
+    #[test]
+    fn the_walk_refuses_a_frame_pointer_that_cannot_be_one() {
+        let chain = [0x10_100u64];
+        let mut stack = vec![0u64; 8];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let text = Some((0x10_000u64, 0x20_000u64));
+        let mut out = [0u64; MAX_FRAMES - 1];
+        for bad in [0, fp + 8, sp.saturating_sub(16), sp + super::STACK_WINDOW, u64::MAX - 8] {
+            let walked = unsafe { super::walk_frame_chain(bad, sp, text, &mut out) };
+            assert_eq!(walked, 0, "fp {bad:#x} must not be walked");
+        }
+        // The good one still walks, so the row above is rejection and not a
+        // walk that never worked.
+        let walked = unsafe { super::walk_frame_chain(fp, sp, text, &mut out) };
+        assert_eq!(&out[..walked], &chain);
+    }
+
     /// The first sample establishes the baseline; it does not spend it.
     ///
     /// Sampled allocation attribution charges each sample the counter's growth
@@ -2138,9 +2458,14 @@ mod tests {
     /// An unsigned, stale, or wrongly-signed header turns nothing on: asking
     /// to profile production is a privileged act.
     fn only_a_signed_query_enables_profiling() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let key = [7u8; handshake::KEY_LEN];
         let published: Vec<u8> = key.to_vec();
         KEY_PTR.store(published.as_ptr() as usize, Ordering::Relaxed);
+        // A verified signature is SPENT against the shared replay table, so the
+        // region has to exist for one to be accepted at all — see the test below.
+        let mut region = vec![0u8; REGION_BYTES];
+        let saved_region = REGION.swap(region.as_mut_ptr() as usize, Ordering::Relaxed);
 
         let now = {
             let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
@@ -2169,7 +2494,7 @@ mod tests {
         assert!(!check(&format!("t={now},v={hex}")));
 
         // Truncated: must not pass a prefix comparison.
-        let good = sign(now);
+        let good = sign(now - 1);
         assert!(!check(&good[..good.len() - 4]));
         // Malformed and empty values are refused rather than parsed loosely.
         assert!(!check("t=abc,v=zz"));
@@ -2177,7 +2502,76 @@ mod tests {
 
         KEY_PTR.store(0, Ordering::Relaxed);
         // With no key published there is nothing to verify against, so nothing passes.
-        assert!(!check(&sign(now)));
+        assert!(!check(&sign(now - 2)));
+        REGION.store(saved_region, Ordering::Relaxed);
+    }
+
+    /// A signature is worth one request, not five minutes of them.
+    ///
+    /// The timestamp bounds how LONG a captured header keeps working; on its own
+    /// it says nothing about how OFTEN. Inside the window a value lifted from a
+    /// proxy log, an access log or a shared trace could be replayed without
+    /// limit, and each replay costs the service a profiled request. Spending the
+    /// tag makes the second use fail, whoever sends it and whichever worker
+    /// receives it — which is why the table is in the shared mapping rather than
+    /// beside the verifier.
+    #[test]
+    fn a_verified_signature_is_spent_and_cannot_be_replayed() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = [3u8; handshake::KEY_LEN];
+        let published: Vec<u8> = key.to_vec();
+        let saved_key = KEY_PTR.swap(published.as_ptr() as usize, Ordering::Relaxed);
+        let mut region = vec![0u8; REGION_BYTES];
+        let saved_region = REGION.swap(region.as_mut_ptr() as usize, Ordering::Relaxed);
+
+        let now = {
+            let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+            unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut ts) };
+            ts.tv_sec as i64
+        };
+        let sign = |stamp: i64| {
+            let tag = handshake::hmac_sha256(&key, stamp.to_string().as_bytes());
+            let hex: String = tag.iter().map(|b| format!("{b:02x}")).collect();
+            format!("t={stamp},v={hex}")
+        };
+        let check =
+            |value: &str| unsafe { elephc_probe_verify_query(value.as_ptr(), value.len()) } == 1;
+
+        let header = sign(now);
+        assert!(check(&header), "the request that asked is served");
+        assert!(!check(&header), "the same header again is a replay");
+        assert!(!check(&header), "and stays one");
+
+        // A different request, still inside the same window, is unaffected: the
+        // table remembers signatures, it does not close the window.
+        assert!(check(&sign(now - 30)), "a distinct ask is still honoured");
+
+        // The slot is addressed from the tag, so this also covers the case that
+        // matters most — two workers meeting the same replay — by construction:
+        // both walk the same probe sequence and one loses the exchange.
+        let (tag_word, _) = unsafe {
+            let identity = handshake::hmac_sha256(&key, now.to_string().as_bytes());
+            let mut first = [0u8; 8];
+            first.copy_from_slice(&identity[..8]);
+            let tag = u64::from_le_bytes(first);
+            replay_slot(
+                REGION.load(Ordering::Relaxed),
+                (tag % REPLAY_SLOTS as u64) as usize,
+            )
+        };
+        assert_ne!(
+            tag_word.load(Ordering::Acquire),
+            0,
+            "the spent tag lands on the slot its own value chooses"
+        );
+
+        // Nowhere to remember means the promise cannot be kept, and the answer to
+        // a privileged request nobody can account for is no.
+        REGION.store(0, Ordering::Relaxed);
+        assert!(!check(&sign(now - 60)));
+
+        REGION.store(saved_region, Ordering::Relaxed);
+        KEY_PTR.store(saved_key, Ordering::Relaxed);
     }
 
     #[test]
