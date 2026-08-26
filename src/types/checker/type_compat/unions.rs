@@ -167,6 +167,25 @@ impl Checker {
         matches!(ty, PhpType::Union(_)) && self.type_supports_mixed_int_dispatch(ty)
     }
 
+    /// Returns true if every member of `ty` can take part in a numeric comparison once boxed.
+    ///
+    /// Runtime ordering inspects each boxed tag, preserving float payloads and PHP's boolean
+    /// truthiness rules. Integer-only dispatch remains intentionally narrower.
+    fn type_supports_mixed_numeric_dispatch(&self, ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Float => true,
+            PhpType::Union(members) => members
+                .iter()
+                .all(|member| self.type_supports_mixed_numeric_dispatch(member)),
+            other => self.type_supports_mixed_int_dispatch(other),
+        }
+    }
+
+    /// Returns true if `ty` is a union whose every member can take part in a numeric comparison.
+    pub(crate) fn is_union_with_mixed_numeric_dispatch(&self, ty: &PhpType) -> bool {
+        matches!(ty, PhpType::Union(_)) && self.type_supports_mixed_numeric_dispatch(ty)
+    }
+
     /// Computes the merged type when assigning `new_ty` to a variable that already has
     /// `existing` type. Returns `Some(merged)` when types are compatible for compound assignment
     /// (e.g., `+=`), or `None` when the types cannot be merged (e.g., two incompatible scalars).

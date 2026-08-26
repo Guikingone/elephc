@@ -5221,7 +5221,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Float,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Returns available space on filesystem or disk partition.",
         examples: &[
@@ -5249,7 +5249,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Float,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Returns the total size of a filesystem or disk partition.",
         examples: &[

@@ -149,6 +149,28 @@ fn execute_program_spaceship_returns_int_cells() {
 
     assert_eq!(values.output, "-1:0:1");
 }
+/// Verifies Magician keeps relational NaN unordered and spaceship positive in either order.
+#[test]
+fn execute_program_nan_relational_and_spaceship_diverge() {
+    let program = parse_fragment(
+        br#"echo NAN < 0 ? "bad" : "lt"; echo ":";
+echo NAN <= 0 ? "bad" : "lte"; echo ":";
+echo NAN > 0 ? "bad" : "gt"; echo ":";
+echo NAN >= 0 ? "bad" : "gte"; echo ":";
+echo NAN <=> 0; echo ":";
+echo "1" <=> NAN; echo ":";
+echo NAN <=> "1"; echo ":";
+echo "a" <=> NAN; echo ":";
+echo NAN <=> "a";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "lt:lte:gt:gte:1:1:1:1:1");
+}
 /// Verifies strict equality keeps PHP type identity distinct from loose equality.
 #[test]
 fn execute_program_strict_equality_uses_type_identity() {

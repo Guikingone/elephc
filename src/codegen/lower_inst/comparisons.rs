@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers scalar equality EIR opcodes for the Phase 04 backend.
+//! Lowers scalar equality and ordering EIR opcodes for the Phase 04 backend.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_instruction()`.
@@ -10,6 +10,9 @@
 //!   to the shared runtime helper.
 //! - Loose equality mirrors the legacy scalar paths for int/bool/null/string
 //!   combinations and delegates string numeric parsing to shared runtime helpers.
+//! - Mixed ordering delegates to the shared PHP comparison table so floats retain
+//!   their fractional payload, boolean operands keep PHP truthiness semantics, and
+//!   relational operators can reject unordered NaN results independently of spaceship.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -807,6 +810,10 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
+    if needs_runtime_ordering_compare(&lhs_ty) || needs_runtime_ordering_compare(&rhs_ty) {
+        emit_runtime_ordering_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
+        return store_if_result(ctx, inst);
+    }
     let uses_float_compare = lhs_ty == PhpType::Float || rhs_ty == PhpType::Float;
     if uses_float_compare {
         emit_numeric_float_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
@@ -821,6 +828,143 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     }
     emit_spaceship_result(ctx, uses_float_compare);
     store_if_result(ctx, inst)
+}
+
+/// Lowers a PHP relational comparison whose operands require runtime tag dispatch.
+pub(super) fn lower_php_rel_cmp(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let lhs_ty = ctx.value_php_type(lhs)?;
+    let rhs_ty = ctx.value_php_type(rhs)?;
+    if !needs_runtime_ordering_compare(&lhs_ty) && !needs_runtime_ordering_compare(&rhs_ty) {
+        return Err(CodegenIrError::invalid_module(format!(
+            "php_rel_cmp requires a runtime-tagged operand, got {:?} and {:?}",
+            lhs_ty, rhs_ty
+        )));
+    }
+    emit_runtime_ordering_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
+    emit_runtime_relational_result(ctx, super::expect_cmp_predicate(inst)?)?;
+    store_if_result(ctx, inst)
+}
+
+/// Returns true when PHP ordering must inspect an operand's runtime tag.
+fn needs_runtime_ordering_compare(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
+}
+
+/// Compares runtime-tagged operands through PHP's shared ordering table.
+///
+/// Leaves the normalized ordering result in the integer result register and an IEEE
+/// unordered flag in the secondary scratch register. Spaceship ignores the flag; relational
+/// consumers use it to map every NaN predicate to `false` as PHP requires.
+fn emit_runtime_ordering_compare(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    lhs_ty: &PhpType,
+    rhs: ValueId,
+    rhs_ty: &PhpType,
+) -> Result<()> {
+    let left_box_temp = !is_mixed_like(lhs_ty);
+    let right_box_temp = !is_mixed_like(rhs_ty);
+    materialize_value_as_mixed(ctx, lhs, lhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    materialize_value_as_mixed(ctx, rhs, rhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 32);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov x3, x0");                              // pass the right runtime tag to PHP ordering
+            ctx.emitter.instruction("mov x4, x1");                              // pass the right low payload word to PHP ordering
+            ctx.emitter.instruction("mov x5, x2");                              // pass the right high payload word to PHP ordering
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_php_compare");
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_push_reg_pair(ctx.emitter, "rdi", "rdx");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 32);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the right runtime tag to PHP ordering
+            ctx.emitter.instruction("mov r8, rdi");                             // pass the right low payload word to PHP ordering
+            ctx.emitter.instruction("mov r9, rdx");                             // pass the right high payload word to PHP ordering
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_php_compare");
+        }
+    }
+
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_push_reg(ctx.emitter, "x1"),
+        Arch::X86_64 => abi::emit_push_reg(ctx.emitter, "rdx"),
+    }
+    if left_box_temp {
+        decref_mixed_temp_at(ctx, 80);
+    }
+    if right_box_temp {
+        decref_mixed_temp_at(ctx, 64);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::secondary_scratch_reg(ctx.emitter));
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_release_temporary_stack(ctx.emitter, 64);
+    Ok(())
+}
+
+/// Applies a signed relational predicate to a PHP ordering result, rejecting unordered NaN.
+fn emit_runtime_relational_result(
+    ctx: &mut FunctionContext<'_>,
+    predicate: crate::ir::CmpPredicate,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let unordered_reg = abi::secondary_scratch_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, #0", result_reg));              // compare the normalized PHP ordering result against zero
+            ctx.emitter.instruction(&format!(
+                "cset {}, {}",
+                result_reg,
+                super::aarch64_condition(predicate)?
+            ));                                                                 // materialize the requested signed relational predicate
+            ctx.emitter
+                .instruction(&format!("cmp {}, #0", unordered_reg));           // test whether numeric comparison encountered NaN
+            ctx.emitter.instruction(&format!(
+                "csel {}, xzr, {}, ne",
+                result_reg, result_reg
+            ));                                                                 // force every unordered PHP relational comparison to false
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, 0", result_reg));               // compare the normalized PHP ordering result against zero
+            ctx.emitter.instruction(&format!(
+                "set{} al",
+                super::x86_64_condition(predicate)?
+            ));                                                                 // materialize the requested signed relational predicate
+            ctx.emitter
+                .instruction(&format!("movzx {}, al", result_reg));            // widen the relational predicate byte to the result register
+            ctx.emitter.instruction("xor r11d, r11d");                          // prepare the false value for unordered selection
+            ctx.emitter.instruction(&format!(
+                "test {}, {}",
+                unordered_reg, unordered_reg
+            ));                                                                 // test whether numeric comparison encountered NaN
+            ctx.emitter.instruction(&format!("cmovne {}, r11", result_reg));    // force every unordered PHP relational comparison to false
+        }
+    }
+    Ok(())
 }
 
 /// Returns true for scalar values that can participate in the current loose integer path.

@@ -23,9 +23,9 @@ sidebar:
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function disk_free_space(string $directory): float
+function disk_free_space(string $directory): mixed
 ```
 
 ## What the type checker enforces

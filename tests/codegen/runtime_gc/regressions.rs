@@ -9,6 +9,56 @@
 
 use crate::support::*;
 
+/// Verifies fresh disk-space results do not retain owned temporary directory arguments.
+/// Each result is a newly boxed float-or-false cell and therefore cannot alias the `getcwd()`
+/// string passed to the builtin; the old may-alias classification leaked one path per call.
+#[test]
+fn test_disk_space_fresh_results_release_temporary_paths() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$hits = 0;
+for ($i = 0; $i < 5; $i++) {
+    $hits += is_float(disk_free_space(getcwd())) ? 1 : 0;
+    $hits += is_float(disk_total_space(getcwd())) ? 1 : 0;
+}
+echo $hits;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "10");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected temporary disk paths to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies runtime-tagged ordering releases the temporary boxes created for concrete operands.
+#[test]
+fn test_float_or_false_runtime_ordering_releases_comparison_boxes() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe_fraction(bool $ok): float|false {
+    return $ok ? 0.5 : false;
+}
+
+for ($i = 0; $i < 50; $i++) {
+    $value = maybe_fraction($i % 2 === 0);
+    $ordered = $value > -1;
+    $spaceship = $value <=> -1;
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected runtime ordering boxes to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test: associative array values accessed inside a function after the
 /// array is passed as an argument. Verifies that reading multiple keys (`done`,
 /// `title`, `priority`) from a passed assoc array produces correct output.

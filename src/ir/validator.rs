@@ -333,7 +333,7 @@ fn validate_instruction_immediate(
         EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
-        ICmp | FCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
+        ICmp | FCmp | PhpRelCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
             matches!(imm, Imm::CmpPredicate(_))
         }),
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
@@ -444,6 +444,7 @@ fn validate_opcode_rules(
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),
         ICmp => check_binary(function, inst_id, inst, IrType::I64, "I64"),
         FCmp => check_binary(function, inst_id, inst, IrType::F64, "F64"),
+        PhpRelCmp => check_count(inst_id, inst, 2, "2"),
         IToF => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         IToStr => check_unary_any(
             function,

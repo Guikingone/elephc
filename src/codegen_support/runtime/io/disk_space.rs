@@ -7,13 +7,15 @@
 //!
 //! Key details:
 //! - Calls `statfs` on the null-terminated path and multiplies the fundamental
-//!   block size by the available or total block count; returns 0.0 on failure.
+//!   block size by the available or total block count.
+//! - Returns the byte-count payload and an independent success flag so a successful `0.0`
+//!   remains distinct from PHP `false`.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// disk_space: report available or total bytes of a filesystem.
 /// Input:  x0 = mode (0 = available bytes, 1 = total bytes), x1/x2 = path
-/// Output: d0 = byte count as a double (0.0 when `statfs` fails)
+/// Output: d0/xmm0 = byte count as a double, x0/rax = 1 on success / 0 when `statfs` fails
 pub fn emit_disk_space(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_disk_space_linux_x86_64(emitter);
@@ -43,7 +45,8 @@ pub fn emit_disk_space(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_disk_space_ok")); // continue only when statfs succeeded
-    emitter.instruction("fmov d0, xzr");                                        // statfs failed: report 0.0 bytes
+    emitter.instruction("fmov d0, xzr");                                        // statfs failed: payload defaults to 0.0
+    emitter.instruction("mov x0, #0");                                          // failure flag tells codegen to box PHP false
     emitter.instruction("b __rt_disk_space_done");                              // skip the computation after a failure
 
     emitter.label("__rt_disk_space_ok");
@@ -57,11 +60,12 @@ pub fn emit_disk_space(emitter: &mut Emitter) {
     emitter.label("__rt_disk_space_count");
     emitter.instruction("mul x9, x9, x11");                                     // bytes = block size * block count
     emitter.instruction("ucvtf d0, x9");                                        // convert the byte count to a double
+    emitter.instruction("mov x0, #1");                                          // success flag for codegen-side float|false boxing
 
     emitter.label("__rt_disk_space_done");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // release the stack frame
-    emitter.instruction("ret");                                                 // return the byte count in d0
+    emitter.instruction("ret");                                                 // return the byte count and success flag in d0 and x0
 }
 
 /// Emits the Linux x86_64 stream runtime helper for disk space.
@@ -109,13 +113,15 @@ fn emit_disk_space_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rcx");                                        // block size into the multiply accumulator
     emitter.instruction("imul rax, r8");                                        // bytes = block size * block count
     emitter.instruction("cvtsi2sd xmm0, rax");                                  // convert the byte count to a double
+    emitter.instruction("mov rax, 1");                                          // success flag for codegen-side float|false boxing
     emitter.instruction("jmp __rt_disk_space_done_x86");                        // skip the failure path
 
     emitter.label("__rt_disk_space_fail_x86");
-    emitter.instruction("xorps xmm0, xmm0");                                    // statfs failed: report 0.0 bytes
+    emitter.instruction("xorps xmm0, xmm0");                                    // statfs failed: payload defaults to 0.0
+    emitter.instruction("mov rax, 0");                                          // failure flag tells codegen to box PHP false
 
     emitter.label("__rt_disk_space_done_x86");
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the stack frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the byte count in xmm0
+    emitter.instruction("ret");                                                 // return the byte count and success flag in xmm0 and rax
 }

@@ -8210,13 +8210,50 @@ fn test_eval_dispatches_disk_space_builtin_calls() {
 eval('echo disk_free_space(".") > 0 ? "free" : "bad"; echo ":";
 echo disk_total_space(directory: ".") > 0 ? "total" : "bad"; echo ":";
 echo disk_total_space(".") >= disk_free_space(".") ? "ordered" : "bad"; echo ":";
-echo disk_free_space("no/such/path/elephc-magician") === 0.0 ? "missing" : "bad"; echo ":";
+echo disk_free_space("no/such/path/elephc-magician") === false ? "missing" : "bad"; echo ":";
 echo call_user_func("disk_free_space", ".") > 0 ? "call" : "bad"; echo ":";
 echo call_user_func_array("disk_total_space", ["directory" => "."]) > 0 ? "spread" : "bad";
 echo ":"; echo function_exists("disk_free_space"); echo function_exists("disk_total_space");');
 "#,
     );
     assert_eq!(out, "free:total:ordered:missing:call:spread:11");
+}
+
+/// Verifies dynamic eval uses PHP runtime ordering for false and preserves unordered NaN
+/// semantics for numeric and string operands separately from spaceship ordering.
+#[test]
+fn test_dynamic_eval_relational_and_spaceship_use_php_ordering() {
+    let out = compile_and_run(
+        r#"<?php
+$code = $argc > 1 ? $argv[1] : '$missing = disk_free_space("no/such/path/elephc-magician-ordering");
+var_dump($missing > -1);
+var_dump($missing < -1);
+var_dump($missing <=> -1);
+var_dump(-1 <=> $missing);
+$nan = NAN;
+var_dump($nan < 0);
+var_dump($nan <= 0);
+var_dump($nan > 0);
+var_dump($nan >= 0);
+var_dump($nan <=> 0);
+foreach (["1", "a"] as $string) {
+    var_dump($string <=> $nan);
+    var_dump($nan <=> $string);
+    var_dump($string < $nan);
+    var_dump($string > $nan);
+    var_dump($nan < $string);
+    var_dump($nan > $string);
+}';
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(true)\nint(-1)\nint(1)\nbool(false)\nbool(false)\n\
+         bool(false)\nbool(false)\nint(1)\nint(1)\nint(1)\nbool(false)\n\
+         bool(false)\nbool(false)\nbool(false)\nint(1)\nint(1)\nbool(false)\n\
+         bool(false)\nbool(false)\nbool(false)\n"
+    );
 }
 
 /// Verifies eval stat metadata builtins return scalar metadata and dispatch dynamically.
