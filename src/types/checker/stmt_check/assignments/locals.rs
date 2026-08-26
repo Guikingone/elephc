@@ -859,6 +859,12 @@ pub(super) fn check_const_decl(
 /// Infers the right-hand side and accepts homogeneous indexed arrays or associative arrays.
 /// Indexed arrays propagate their element type, while associative values bind adaptively as
 /// `Mixed`. Returns an error for non-array types, including unresolved nullable unions.
+///
+/// A `mixed` right-hand side is accepted, because refusing it rejects programs php runs.
+/// `TypeSpec` has no array form, so every builtin that answers an ARRAY declares `mixed` —
+/// `[$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);`, out of php's own
+/// manual, was refused outright. What the value turns out to be is php's question to answer at
+/// run time, exactly as it is for `[$a] = $untypedParameter`.
 pub(super) fn check_list_unpack(
     checker: &mut Checker,
     vars: &[String],
@@ -880,6 +886,8 @@ pub(super) fn check_list_unpack(
         // Associative arrays can contain integer keys used by positional destructuring. Their
         // element type stays adaptive because hash values may be heterogeneous or absent.
         PhpType::AssocArray { .. } => PhpType::Mixed,
+        // A value whose type is not known until run time — see above.
+        PhpType::Mixed => PhpType::Mixed,
         _ => {
             for var in vars {
                 poison_unbound_local(env, var);
