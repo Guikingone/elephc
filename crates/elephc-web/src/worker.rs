@@ -211,7 +211,9 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     let log_method_path = if access_log { Some((method.clone(), path.clone())) } else { None };
                     // The route label the sampling probe stamps onto samples taken
                     // during this request (no-op unless the binary was built --probe).
-                    let probe_route = format!("{method} {path}");
+                    // Shaped, not raw: the probe's route table is fixed at 256 with
+                    // no eviction, and raw paths spend it on identifiers.
+                    let probe_route = probe_route::route_label(&method, &path);
                     let accepts_gzip = gzip
                         && req.headers().get(hyper::header::ACCEPT_ENCODING).is_some_and(|v| {
                             v.to_str().map(|s| s.to_ascii_lowercase().contains("gzip")).unwrap_or(false)

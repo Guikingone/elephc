@@ -46,7 +46,7 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
     // process that has to tag its samples, adopt an ask, and open an exact
     // slice. None of it happened in the isolated modes, which is why
     // `--web-isolation=pool|request` reported nothing at all.
-    let probe_route_label = format!("{} {}", request.method, request.path);
+    let probe_route_label = probe_route::route_label(&request.method, &request.path);
     let req_traceparent = request
         .headers
         .iter()

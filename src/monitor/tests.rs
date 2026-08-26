@@ -583,10 +583,15 @@ Total number in stack (recursive counted multiple, when >=5):
             "a budget file is a budget"
         );
 
-        // Exports the service path does not write, and modes it cannot honour.
-        assert_eq!(flags(&["--dot", "g.dot"]).as_deref(), Some("--dot"));
-        assert_eq!(flags(&["--html", "g.html"]).as_deref(), Some("--html"));
+        // Modes a service cannot honour: it answers once, through its endpoint.
+        // `--serve` only parses alongside `--live` and `--html`, so this also
+        // shows the html export riding through un-refused next to two modes that
+        // are not.
         assert_eq!(flags(&["--live"]).as_deref(), Some("--live"));
+        assert_eq!(
+            flags(&["--live", "--html", "g.html", "--serve", "127.0.0.1:8080"]).as_deref(),
+            Some("--live, --serve"),
+        );
 
         // The decider is only half of it: an audit pointed out that deleting the
         // refusal from `run` leaves everything above green, because nothing here
@@ -619,6 +624,32 @@ Total number in stack (recursive counted multiple, when >=5):
             flags(&["--exact"]),
             None,
             "--exact is read by run_probe_host and must not be refused here"
+        );
+        // Which exports a service honours is a fact about `run_probe_host`, and
+        // reading it is the only way to state it. Held by hand, this list said
+        // the sampled path rendered no graphs while it was calling
+        // `write_graph_exports`, and `--html` against an address became exit 2
+        // and no file. Asserting the call site here means re-adding that refusal
+        // fails a test rather than shipping.
+        let host = include_str!("remote.rs")
+            .split_once("pub(crate) fn run_probe_host(")
+            .expect("the service reader must exist")
+            .1;
+        let host_body = host.split_once("\n}\n").expect("a function body").0;
+        for (writer, flag) in [
+            ("write_speedscope(", "--out"),
+            ("encode_folded_profile(", "--pprof"),
+            ("write_graph_exports(", "--dot / --html"),
+        ] {
+            assert!(
+                host_body.contains(writer),
+                "{flag} is accepted below because the service path calls {writer}"
+            );
+        }
+        assert_eq!(
+            flags(&["--dot", "g.dot", "--html", "g.html"]),
+            None,
+            "the graph exporters are rendered from the sampled answer"
         );
         assert_eq!(
             flags(&["--out", "out.json", "--pprof", "p.pb"]),

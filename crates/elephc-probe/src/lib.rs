@@ -54,6 +54,15 @@ const SEQ_WORD: usize = MAX_FRAMES + 3;
 const PC_WORD0: usize = 3;
 /// Cap on distinct request routes recorded; overflow buckets into `<other>`.
 const MAX_ROUTES: usize = 256;
+/// The slot the overflow bucket occupies, leaving `MAX_ROUTES - 1` for real
+/// routes. Reserved rather than taken from the front so a full table still
+/// resolves every id it handed out before it filled.
+const OTHER_ROUTE_INDEX: usize = MAX_ROUTES - 1;
+/// The name that bucket carries. Samples past the cap used to come back with id
+/// 0, which is also what a CLI run and an idle worker carry, so a late endpoint
+/// did not appear as over-capacity — it did not appear at all, folded silently
+/// into the untagged pool. A named bucket says the table filled.
+const OTHER_ROUTE_NAME: &str = "<other>";
 /// Bytes per shared route slot: a 1-byte length then up to 63 name bytes.
 const ROUTE_SLOT_BYTES: usize = 64;
 /// Max route name length that fits a slot.
@@ -295,16 +304,19 @@ unsafe fn current_allocs() -> Option<u64> {
 /// master's endpoint. Full table buckets into `<other>`. Runs in the worker's
 /// normal context (append + scan), never the signal handler.
 ///
-/// Deliberately NOT gated on having been asked, unlike the sampling itself.
-/// Route ids have to be stable from boot for a sample taken at any moment to
-/// resolve to the right name, and gating the table on the ask would make an id
-/// mean different things either side of it. The price is accepted and worth
-/// stating: a monitored service writes its route labels into the shared mapping
-/// before anyone has authenticated, so a path carrying a token is in that
-/// mapping from the moment it is served, and the per-route counters cover the
-/// process's whole life rather than the window an operator chose. Both are
-/// bounded — the table is capped and the counters are fixed-width — and neither
-/// is readable without the build key.
+/// Gated on having been asked, like the sampling itself — the caller checks
+/// before it gets here. The first version was not, on the reasoning that a
+/// route id must be stable from boot for a sample taken at any moment to
+/// resolve to the right name. That reasoning does not survive its own premise:
+/// `on_sigprof` returns immediately unless the process has been asked, so no
+/// sample exists before the ask to need a stable id, and interning early bought
+/// nothing. It cost the table. Serving a few hundred `/users/123`-shaped URLs
+/// before anyone connected filled all 256 slots, and every endpoint that
+/// mattered afterwards — the one being profiled — arrived to a full table. It
+/// also put every raw path, tokens included, into the shared mapping from the
+/// moment it was served, and made the per-route counters cover the process's
+/// whole life rather than the window an operator chose. All three go away
+/// together.
 ///
 /// # Safety
 /// Valid only after the region is mapped.
@@ -338,24 +350,40 @@ unsafe fn intern_route(route: &str) -> usize {
     let count_ptr = (base + RING_BYTES) as *const std::sync::atomic::AtomicU64;
     let count = &*count_ptr;
     let existing = count.load(Ordering::Acquire) as usize;
-    for index in 0..existing.min(MAX_ROUTES) {
+    for index in 0..existing.min(OTHER_ROUTE_INDEX) {
         if read_route_slot(base, index) == name {
             return index + 1;
         }
     }
-    if existing >= MAX_ROUTES {
-        // Table full: leave the sample untagged (id 0) rather than mis-attribute
-        // it to an arbitrary existing route.
-        return 0;
+    if existing >= OTHER_ROUTE_INDEX {
+        return other_route_id(base);
     }
     // Claim the next slot. A benign race can duplicate a name across workers;
     // both ids resolve to the same text, so grouping is unaffected.
     let index = count.fetch_add(1, Ordering::AcqRel) as usize;
-    if index >= MAX_ROUTES {
-        return 0;
+    if index >= OTHER_ROUTE_INDEX {
+        // Lost the last free slot to another worker between the load and the
+        // add. The counter is left where it is: it is only ever compared against
+        // the cap, never used as a length.
+        return other_route_id(base);
     }
     write_route_slot(base, index, name.as_bytes());
     index + 1
+}
+
+/// Publishes the overflow bucket if it is not there yet and returns its id.
+///
+/// Written lazily so a service whose routes fit the table never carries a row
+/// it did not earn. Two workers overflowing at once write the same bytes into
+/// the same slot, which is why this needs no claim of its own.
+///
+/// # Safety
+/// Valid only after the region is mapped.
+unsafe fn other_route_id(base: usize) -> usize {
+    if read_route_slot(base, OTHER_ROUTE_INDEX).is_empty() {
+        write_route_slot(base, OTHER_ROUTE_INDEX, OTHER_ROUTE_NAME.as_bytes());
+    }
+    OTHER_ROUTE_INDEX + 1
 }
 
 /// Writes a route name into shared slot `index` (`[len][bytes]`). The bytes are
@@ -394,6 +422,16 @@ pub unsafe extern "C" fn elephc_probe_set_route(route: *const u8, len: usize) {
     observe_shared_ask();
     // Defensive: a bridge bug passing a wild length must not read out of bounds.
     if route.is_null() || len == 0 || len > 4096 {
+        CURRENT_ROUTE.store(0, Ordering::Relaxed);
+        return;
+    }
+    // Nothing is sampled until someone asks, so nothing needs a name until then
+    // either — and the route table is a fixed 256 slots with no eviction, so
+    // filling it with traffic nobody is watching is how the traffic somebody IS
+    // watching ends up unnamed. `observe_shared_ask` above is what makes this
+    // flag true for a `--web` worker that forked before the ask arrived, so the
+    // very first request after an operator connects is already tagged.
+    if !ASKED.load(Ordering::Relaxed) {
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
         return;
     }
@@ -1954,12 +1992,19 @@ mod tests {
             assert_eq!(route_name(b).as_deref(), Some("POST /checkout"));
             assert_eq!(route_name(0), None, "id 0 is no route");
 
-            // set_route publishes the id; empty clears it.
+            // set_route publishes the id; empty clears it. It interns only for a
+            // service that was asked — see the gate's own test — so say so here,
+            // and claim the timer for this pid so adopting the ask does not arm
+            // a real SIGPROF in a binary with no handler for it.
+            let was_asked = ASKED.swap(true, Ordering::Relaxed);
+            let was_armed = ARMED_PID.swap(libc::getpid(), Ordering::Relaxed);
             let route = "GET /api/orders";
             elephc_probe_set_route(route.as_ptr(), route.len());
             assert_eq!(CURRENT_ROUTE.load(Ordering::Relaxed), a);
             elephc_probe_set_route(std::ptr::null(), 0);
             assert_eq!(CURRENT_ROUTE.load(Ordering::Relaxed), 0);
+            ARMED_PID.store(was_armed, Ordering::Relaxed);
+            ASKED.store(was_asked, Ordering::Relaxed);
         }
         REGION.store(0, Ordering::Relaxed);
     }
@@ -2181,22 +2226,79 @@ mod tests {
     }
 
     #[test]
-    /// Past the route table's capacity samples are recorded untagged rather
-    /// than attributed to whatever route happened to hash there.
-    fn route_table_overflow_returns_untagged() {
+    /// Past the route table's capacity samples go to a NAMED bucket, never to
+    /// whatever route happened to sit there — and never to id 0.
+    ///
+    /// Id 0 is what a CLI run and an idle worker carry, so returning it for
+    /// overflow made an endpoint arriving after the table filled vanish into the
+    /// untagged pool instead of showing up as over-capacity. The constant said
+    /// "overflow buckets into `<other>`" from the start; only the code did not.
+    fn route_table_overflow_buckets_into_other() {
         let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut region = vec![0u8; REGION_BYTES];
         let base = region.as_mut_ptr() as usize;
         REGION.store(base, Ordering::Relaxed);
         unsafe {
-            for i in 0..MAX_ROUTES {
+            for i in 0..OTHER_ROUTE_INDEX {
                 assert_eq!(intern_route(&format!("route-{i}")), i + 1);
             }
-            // The table is now full; a new route cannot be interned.
-            assert_eq!(intern_route("one-too-many"), 0);
+            // The reserved slot is still blank while the table has room.
+            assert_eq!(route_name(OTHER_ROUTE_INDEX + 1), None);
+            // Full: every later route shares one bucket, and it has a name an
+            // operator can read in the report.
+            let over = intern_route("one-too-many");
+            assert_eq!(over, OTHER_ROUTE_INDEX + 1);
+            assert_eq!(intern_route("another-one"), over);
+            assert_eq!(route_name(over).as_deref(), Some(OTHER_ROUTE_NAME));
+            // Routes interned before it filled still resolve to themselves.
+            assert_eq!(route_name(1).as_deref(), Some("route-0"));
             // route_name never resolves an out-of-range id to a real slot.
             assert_eq!(route_name(MAX_ROUTES + 1), None);
         }
+        REGION.store(0, Ordering::Relaxed);
+    }
+
+    /// A route is not interned until this process has been asked to sample.
+    ///
+    /// The table is 256 fixed slots with no eviction, so anything that writes to
+    /// it before an operator connects is spending the budget of the profile they
+    /// have not asked for yet. A service answering a few hundred distinct
+    /// `/users/N` URLs filled it outright, and the endpoint under investigation
+    /// then interned to nothing.
+    ///
+    /// Goes through the FFI entry point rather than `intern_route`, because the
+    /// gate is in the caller: testing the interner would pass with the gate
+    /// deleted.
+    #[test]
+    fn a_route_is_not_interned_before_anyone_asks() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+        REGION.store(base, Ordering::Relaxed);
+        let was_asked = ASKED.swap(false, Ordering::Relaxed);
+        // The entry point adopts an ask by ARMING, and a real SIGPROF in a test
+        // binary whose handler is not installed kills it. Claiming the timer for
+        // this pid is what a process that already armed looks like, so adoption
+        // declines and only the interning under test runs.
+        let was_armed = ARMED_PID.swap(unsafe { libc::getpid() }, Ordering::Relaxed);
+        let route = "GET /users/{id}";
+        unsafe {
+            elephc_probe_set_route(route.as_ptr(), route.len());
+            assert_eq!(
+                CURRENT_ROUTE.load(Ordering::Relaxed),
+                0,
+                "an unasked service must not name its traffic"
+            );
+            assert_eq!(route_name(1), None, "and must not have written a slot");
+            // Asked: the very next request is tagged, table untouched until now.
+            ASKED.store(true, Ordering::Relaxed);
+            elephc_probe_set_route(route.as_ptr(), route.len());
+            assert_eq!(CURRENT_ROUTE.load(Ordering::Relaxed), 1);
+            assert_eq!(route_name(1).as_deref(), Some(route));
+        }
+        ARMED_PID.store(was_armed, Ordering::Relaxed);
+        ASKED.store(was_asked, Ordering::Relaxed);
+        CURRENT_ROUTE.store(0, Ordering::Relaxed);
         REGION.store(0, Ordering::Relaxed);
     }
 }

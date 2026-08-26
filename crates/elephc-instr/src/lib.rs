@@ -1639,10 +1639,19 @@ pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64) {
 /// state cannot span that, which is why the first version of this worked
 /// everywhere except the one place it was for.
 ///
-/// Layout: `armed`, `filled`, `len`, `claimed_at`, then the text. Four `u32`
-/// headers and the bytes, so a reader in another process needs no allocator
-/// agreement.
-const CAPTURE_HEADER: usize = 16;
+/// Layout: `armed`, `filled`, `len`, `claimed_at`, `claim_start_id`, then the
+/// text. Five `u32` headers and the bytes, so a reader in another process needs
+/// no allocator agreement.
+///
+/// `claim_start_id` is NOT a second copy of the claim — the claim is `filled`,
+/// and it names its holder by itself. This word answers a different question:
+/// whether the process now answering to that pid is the one that made the
+/// claim. It is written only by the winner, only after it has won, and read
+/// only to REFUSE a reclamation, so a value from a previous claimer can delay
+/// recovery and can never cost a live writer its slot.
+const CAPTURE_HEADER: usize = 20;
+/// Header word holding the claimer's start identity (0 = not recorded).
+const CLAIM_ID_WORD: usize = 4;
 /// One mebibyte holds a large per-function table with room to spare; a slice
 /// bigger than this is refused rather than cut, since a truncated profile is
 /// indistinguishable from a complete one.
@@ -1697,37 +1706,149 @@ fn process_is_alive(pid: i32) -> bool {
 
 /// Whether a claim may be taken from the process that made it.
 ///
-/// Three rules, in order. A claimer we cannot identify falls back to the old
-/// timeout, which is what a slot claimed before this word existed carries. A
-/// claimer the kernel says is gone is taken at once — that is the recovery this
-/// exists for, and it no longer has to wait out a timeout. A claimer that is
-/// still there keeps its slot until `ABANDONED_CLAIM_SECS`, which is only
-/// reachable when its pid has been reused by something else.
+/// Three rules, in order.
+///
+/// A claimer the kernel says is gone is taken at once — that is the recovery
+/// this exists for, and it does not have to wait out a timeout.
+///
+/// A claimer that is still there AND is provably the same process that made the
+/// claim keeps its slot, however old the claim is. Age used to overrule this,
+/// and age cannot: a handler stopped by `SIGSTOP`, a frozen cgroup or a paused
+/// VM is alive, owns the payload, and is going to finish writing it the moment
+/// it resumes — but reads as ancient. Its slot was handed to a second writer,
+/// both copied into the same mapping, and the endpoint served the two spliced
+/// together. `ABANDONED_CLAIM_SECS` is not a property of the writer, so it
+/// cannot be allowed to speak for one that is demonstrably alive.
+///
+/// A claimer that is alive but is NOT that process — its pid was recycled — or
+/// one whose identity cannot be established falls back to the age rule, which
+/// is the only thing left. That covers both the platform where start identity
+/// is unavailable and the few instructions between winning the claim and
+/// recording it, during which the word still holds the previous claimer's
+/// value: a mismatch that persists for a full minute is not that window.
 ///
 /// Split out as a pure function because the interesting rows need a writer that
 /// is frozen, or dead, or a pid that has been reused — none of which a test can
 /// arrange against a live process.
-fn claim_may_be_taken(claimer_alive: bool, age_secs: u32) -> bool {
+fn claim_may_be_taken(claimer_alive: bool, same_process: Option<bool>, age_secs: u32) -> bool {
     if !claimer_alive {
         return true;
+    }
+    if same_process == Some(true) {
+        return false;
     }
     age_secs > ABANDONED_CLAIM_SECS
 }
 
-/// Wall-clock seconds, for deciding whether a claim was abandoned. Coarse on
-/// purpose: it is compared against five seconds, never used as a measurement.
-fn wall_seconds() -> u32 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as u32)
-        .unwrap_or(0)
+/// Seconds on a clock that is the same for every process sharing the mapping
+/// and that no administrator can move.
+///
+/// `CLOCK_MONOTONIC` counts from boot, so two processes reading it agree, which
+/// is the only property this needs — the value is compared against another
+/// process's reading, never interpreted as a date. It replaced the wall clock
+/// because that one CAN move: a forward correction, from NTP or by hand, ages
+/// every outstanding claim by however much it jumped and can retire a live
+/// writer's claim the instant it lands.
+fn monotonic_seconds() -> u32 {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // Safety: writes one `timespec` this call owns.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } != 0 {
+        // Reads as "claimed just now", which delays reclamation rather than
+        // hastening it. The other direction hands out a live writer's slot.
+        return 0;
+    }
+    now.tv_sec as u32
+}
+
+/// A value that distinguishes the process now running under `pid` from any
+/// earlier one that held the same pid, or `None` where it cannot be had.
+///
+/// The kernel is the only source: a pid alone does not identify a process,
+/// because pids are recycled, and the recycled case is precisely the one where
+/// revoking a claim is right. Start time is what both supported platforms
+/// expose and what both `ps` and every process-supervision tool uses for the
+/// same purpose. Folded to 32 bits because the header words are `u32` and this
+/// is a discriminator, not a timestamp: a collision leaves a stale claim
+/// standing until the age backstop, which is the safe outcome.
+#[cfg(target_os = "linux")]
+fn process_start_id(pid: i32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // Field 2 is the executable name in parentheses and may itself contain both
+    // spaces and parentheses, so the fields after it are located from the LAST
+    // `)` rather than by splitting the line. What follows it is field 3 onward,
+    // and start time is field 22.
+    let after_name = stat.get(stat.rfind(')')? + 1..)?;
+    let start_ticks: u64 = after_name.split_whitespace().nth(19)?.parse().ok()?;
+    Some(fold_start_id(start_ticks))
+}
+
+/// macOS has no `/proc`; `libproc` answers the same question.
+#[cfg(target_os = "macos")]
+fn process_start_id(pid: i32) -> Option<u32> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // Safety: `info` is exactly `size` writable bytes, which is what the flavor
+    // is documented to fill.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut libc::proc_bsdinfo as *mut libc::c_void,
+            size,
+        )
+    };
+    // A short answer is not an answer: the call reports how much it wrote, and
+    // anything less than the whole struct leaves the start time uninitialized.
+    if written != size {
+        return None;
+    }
+    Some(fold_start_id(
+        (info.pbi_start_tvsec << 20) ^ info.pbi_start_tvusec,
+    ))
+}
+
+/// Anywhere else the identity is simply unavailable, and every claim falls back
+/// to the age rule — the behaviour this replaced, stated rather than assumed.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_start_id(_pid: i32) -> Option<u32> {
+    None
+}
+
+/// Folds a start time into the header's word width, never to 0 — that value is
+/// the header's "nothing recorded".
+fn fold_start_id(value: u64) -> u32 {
+    let folded = (value ^ (value >> 32)) as u32;
+    if folded == 0 {
+        1
+    } else {
+        folded
+    }
+}
+
+/// Whether the process holding `claimer` is the one that made the claim.
+///
+/// `None` when there is nothing to compare: no identity was recorded (a claim
+/// still inside the few instructions between winning and recording, or one made
+/// by a build without this word), or the kernel will not tell us. Both fall back
+/// to the age rule rather than guessing, because guessing "different" revokes a
+/// live writer.
+fn claim_is_same_process(recorded: &AtomicU32, claimer: i32) -> Option<bool> {
+    let recorded = recorded.load(Ordering::Acquire);
+    if recorded == 0 {
+        return None;
+    }
+    Some(process_start_id(claimer)? == recorded)
 }
 
 /// Clears a slice nobody is going to take, and leaves alone one being written.
 ///
 /// Storing EMPTY outright is what let a second worker's claim succeed while the
 /// first was still copying into the region.
-fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32) {
+fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32, claim_id: &AtomicU32) {
     if filled
         .compare_exchange(READY, EMPTY, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
@@ -1740,14 +1861,19 @@ fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32) {
         // that made the claim, so it cannot name anyone but the process that
         // actually holds the slot.
         let claimer = state as i32;
-        let age = wall_seconds().saturating_sub(claimed_at.load(Ordering::Relaxed));
+        let age = monotonic_seconds().saturating_sub(claimed_at.load(Ordering::Relaxed));
         // The timeout alone used to decide this, and it cannot: a writer frozen
-        // by a cgroup, a `SIGSTOP` or a paused VM is indistinguishable from a
-        // dead one, so its slot was handed to a second writer and both copied
-        // into the same payload. Ask the kernel whether the claimer is still
-        // there instead; the age only decides the case the pid cannot, which is
-        // a dead worker's pid reused by something else.
-        if claim_may_be_taken(process_is_alive(claimer), age) {
+        // by a cgroup, a `SIGSTOP` or a paused VM is indistinguishable BY AGE
+        // from a dead one, so its slot was handed to a second writer and both
+        // copied into the same payload. Ask the kernel instead — whether the
+        // claimer is still there, and whether it is still the SAME process,
+        // since a pid that has been recycled is alive and yet gone. Age decides
+        // only what the kernel cannot.
+        if claim_may_be_taken(
+            process_is_alive(claimer),
+            claim_is_same_process(claim_id, claimer),
+            age,
+        ) {
             // Against `state`, not a constant: only the claim we judged may be
             // released, so a claimer that finished and a successor that took the
             // slot in the meantime are both left alone.
@@ -1826,10 +1952,13 @@ pub extern "C" fn elephc_instr_capture_arm() {
     // makes the entry point self-sufficient without changing where the mapping
     // that matters — the one inherited across the fork — is established.
     map_capture_region();
-    if let (Some(filled), Some(armed), Some(claimed_at)) =
-        (capture_word(1), capture_word(0), capture_word(3))
-    {
-        release_stale_slice(filled, claimed_at);
+    if let (Some(filled), Some(armed), Some(claimed_at), Some(claim_id)) = (
+        capture_word(1),
+        capture_word(0),
+        capture_word(3),
+        capture_word(CLAIM_ID_WORD),
+    ) {
+        release_stale_slice(filled, claimed_at, claim_id);
         armed.store(1, Ordering::Release);
     }
 }
@@ -1886,11 +2015,14 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
 /// diverted to nobody.
 #[no_mangle]
 pub extern "C" fn elephc_instr_capture_cancel() {
-    if let (Some(armed), Some(filled), Some(claimed_at)) =
-        (capture_word(0), capture_word(1), capture_word(3))
-    {
+    if let (Some(armed), Some(filled), Some(claimed_at), Some(claim_id)) = (
+        capture_word(0),
+        capture_word(1),
+        capture_word(3),
+        capture_word(CLAIM_ID_WORD),
+    ) {
         armed.store(0, Ordering::Relaxed);
-        release_stale_slice(filled, claimed_at);
+        release_stale_slice(filled, claimed_at, claim_id);
     }
 }
 
@@ -1930,7 +2062,7 @@ fn offer_capture(text: &str) -> bool {
     // identity is not, which is why the pid rides inside the claim below rather
     // than in a word of its own.
     if let Some(claimed_at) = capture_word(3) {
-        claimed_at.store(wall_seconds(), Ordering::Relaxed);
+        claimed_at.store(monotonic_seconds(), Ordering::Relaxed);
     }
     // The claim and the claimer's name are ONE store. Winning this is what makes
     // the slot ours, and it carries our pid in the same instant — so there is no
@@ -1942,6 +2074,21 @@ fn offer_capture(text: &str) -> bool {
         .is_err()
     {
         return false;
+    }
+    // Now that the slot is ours, say WHICH process we are — not which pid, which
+    // the claim already carries, but which incarnation of it. A reclaimer that
+    // finds this pid alive can then tell "the writer is still working, possibly
+    // frozen" from "this pid belongs to something else now", and only the second
+    // is a reason to take the slot back. Written after the claim and only by the
+    // winner: a loser writes nothing, and the worst a value left by a previous
+    // claimer can do is look like a mismatch, which merely defers to the age
+    // rule. The reverse order would revoke live writers, which is the failure
+    // this whole word exists to remove.
+    if let Some(claim_id) = capture_word(CLAIM_ID_WORD) {
+        claim_id.store(
+            process_start_id(mine as i32).unwrap_or(0),
+            Ordering::Release,
+        );
     }
     // The question has its answer, so stop asking it of everything else still
     // running. Leaving it armed kept every later request paying for a slice that
@@ -2334,24 +2481,98 @@ mod tests {
     /// timeout-bound. Row 3 is the only case the pid cannot settle — a dead
     /// worker's pid reused by an unrelated process — which the long backstop
     /// covers so the rendezvous cannot wedge forever.
+    ///
+    /// Rows 1 and 4 are the correction: liveness alone was still not enough,
+    /// because the backstop overruled it. A process that is alive AND is the one
+    /// that made the claim now keeps its slot at any age, so a `SIGSTOP` held
+    /// past the minute — or a wall clock jumped forward past it — no longer
+    /// costs a writer the payload it is holding.
     #[test]
     fn a_claim_is_taken_from_the_dead_and_left_to_the_living() {
         // Frozen mid-copy for a minute: still its slot. This is the row the old
         // timeout got wrong.
         assert!(
-            !super::claim_may_be_taken(true, 30),
+            !super::claim_may_be_taken(true, Some(true), 30),
             "a live writer keeps its claim, however slow it is"
         );
         assert!(
-            super::claim_may_be_taken(false, 0),
+            super::claim_may_be_taken(false, None, 0),
             "a dead writer's slot is free immediately, with no timeout to serve"
         );
         assert!(
-            super::claim_may_be_taken(true, super::ABANDONED_CLAIM_SECS + 1),
-            "past the backstop the slot is taken anyway: the pid was reused"
+            super::claim_may_be_taken(true, None, super::ABANDONED_CLAIM_SECS + 1),
+            "an unidentifiable claimer past the backstop: the pid was reused"
+        );
+        assert!(
+            !super::claim_may_be_taken(true, Some(true), u32::MAX),
+            "the same process is never revoked, whatever the clock says"
+        );
+        assert!(
+            super::claim_may_be_taken(true, Some(false), super::ABANDONED_CLAIM_SECS + 1),
+            "a recycled pid is a different process, and the backstop frees it"
+        );
+        assert!(
+            !super::claim_may_be_taken(true, Some(false), 1),
+            "but not before it: a fresh mismatch is the winner's own claim, \
+             recorded a few instructions later"
         );
         // There is no "unknown claimer" row any more: the claim IS the pid, so a
-        // slot that is claimed at all names the process holding it.
+        // slot that is claimed at all names the process holding it. The identity
+        // above answers a different question — WHICH incarnation of that pid.
+    }
+
+    /// The kernel identifies this process, stably, and the claim path records it.
+    ///
+    /// Without an identity every row above collapses back to the age rule, and
+    /// the defect returns silently — so this asserts the platform really answers
+    /// rather than trusting that it does. It also pins the ORDER in the offer:
+    /// recording identity before winning the claim would be a loser stamping the
+    /// winner's slot, which is the mistake the pid-in-the-claim change removed.
+    #[test]
+    fn a_claim_records_which_incarnation_of_the_pid_made_it() {
+        let mine = std::process::id() as i32;
+        let first = super::process_start_id(mine).expect("this platform must identify a process");
+        assert_ne!(first, 0, "0 is the header's 'nothing recorded'");
+        assert_eq!(first, super::process_start_id(mine).unwrap(), "and be stable");
+        assert_eq!(
+            super::process_start_id(-1),
+            None,
+            "a pid that cannot exist has no identity"
+        );
+
+        // Same process, recorded identity: the reclaimer must say "same".
+        let recorded = AtomicU32::new(first);
+        assert_eq!(super::claim_is_same_process(&recorded, mine), Some(true));
+        recorded.store(first.wrapping_add(1), Ordering::Relaxed);
+        assert_eq!(
+            super::claim_is_same_process(&recorded, mine),
+            Some(false),
+            "a different incarnation reads as different"
+        );
+        recorded.store(0, Ordering::Relaxed);
+        assert_eq!(
+            super::claim_is_same_process(&recorded, mine),
+            None,
+            "nothing recorded is not evidence of anything"
+        );
+
+        let source = include_str!("lib.rs");
+        let offer = source
+            .split_once("fn offer_capture(")
+            .expect("the offer path must exist")
+            .1;
+        let body = offer.split_once("\n}\n").expect("a function body").0;
+        let claim = body
+            .find(".compare_exchange(EMPTY, mine")
+            .expect("the claim must be a compare-exchange to this pid");
+        let record = body
+            .find("capture_word(CLAIM_ID_WORD)")
+            .expect("the claim must record its identity");
+        assert!(
+            claim < record,
+            "identity is recorded by the WINNER, after winning — a loser that \
+             stamped first would put its own name on someone else's slot"
+        );
     }
 
     /// `process_is_alive` answers about this process and about no process.

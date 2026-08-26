@@ -72,11 +72,15 @@ Mermaid cause chart.
 
 **Which target, not which mode.** A `.php` source is compiled with
 `--with-monitoring` and read; a binary that carries the capability is read; an
-address is read through the running service's endpoint. Nothing about the
-environment changes the command, the numbers, or the exports. A binary built
-without `--with-monitoring` is **refused**, with both remedies printed — there is
-no reduced fallback, because a degraded profile that looks like the real one is
-worse than none.
+address is read through the running service's endpoint. The command is the same
+one in every case, and you never choose a mechanism. What the target can answer
+does differ, and in exactly one place: a **program** is measured exactly, while a
+**service** answers from its sample ring — it is serving other traffic, and
+stopping it to instrument one request is not on offer. `--exact` against a
+service asks for the measured per-function table of the next request that
+completes, at that request's expense. A binary built without `--with-monitoring`
+is **refused**, with both remedies printed — there is no reduced fallback,
+because a degraded profile that looks like the real one is worse than none.
 
 Reading a running service (`monitor <address>`) needs the build key: from
 `--key <file>`, the `ELEPHC_PROBE_KEY` hex environment variable, or a `.key`
@@ -115,12 +119,13 @@ bare-binary capture cannot, and the asymmetry reads as phantom deltas.
 Sampling noise on identical runs measures around ±0.3 points at ~1,500
 samples; thresholds of a few points are well clear of it.
 
-`--live` and `--attach` are the one exception to all of the above, and the only
-place the sampled/exact distinction still surfaces. They read a process from the
-**outside** with `/usr/bin/sample` — the only way to look at a program already
-running under someone else's control — so their numbers are sampled shares, they
-cannot see time spent blocked on I/O, and they need macOS. On Linux, or whenever
-you want exact numbers from a live process, use `monitor <address>` instead.
+`--live` and `--attach` read a process from the **outside** with `/usr/bin/sample`
+— the only way to look at a program already running under someone else's control,
+with nothing built into it. Their numbers are sampled shares, they cannot see
+time spent blocked on I/O, and they need macOS. On Linux, or for a process that
+does carry the capability, use `monitor <address>`: it answers from the process's
+own sample ring, which does account for I/O wait, and with `--exact` returns the
+measured per-function table for one completed request.
 
 `--live` turns the table into a top-style display refreshed once per window
 (`--duration`, default 3s in live mode): the current window's shares with

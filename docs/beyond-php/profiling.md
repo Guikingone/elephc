@@ -587,9 +587,23 @@ GET /api/orders   ████████████████████�
   {main}  serialize  <native>...
 ```
 
+**The label is a shape, not a path.** The server derives it from the request:
+each path segment that cannot be a route name is replaced by what it is — a
+segment of only digits becomes `{id}`, a UUID becomes `{uuid}`, twelve or more
+hex characters become `{hash}` (per dot-separated part, so
+`/assets/app.9f8c2b1a4d5e.js` reads as `/assets/app.{hash}.js`). Everything else
+is kept verbatim, because merging two real endpoints into one row would report a
+number true of neither. So `/users/1` and `/users/2` share the row
+`GET /users/{id}` without the application doing anything, and no framework
+routing table is consulted — by the time a request reaches the sampler, the path
+is the only thing known about it.
+
 Route names are sanitized (a `;` or a newline from a crafted path cannot forge
-frames), and the distinct-route table is capped at 256; pass **route patterns**
-(`/users/{id}`), not raw paths, so a crawler cannot exhaust it.
+frames). The distinct-route table holds 255 entries plus one `<other>` bucket,
+and nothing is interned until someone asks for a profile — an unasked service
+spends none of it, and the window you get is the window you asked for. Past 255
+distinct shapes the surplus is reported as `<other>` rather than dropped, so a
+table that fills says so instead of quietly leaving endpoints out.
 
 ## What the numbers are
 
@@ -1160,9 +1174,13 @@ sampled function makes inlining visible by difference.
 - **Unix socket paths are limited to ~104 bytes** (`SUN_LEN`). Keep the socket
   in `/tmp` or `/run`.
 - **Route names come from requests.** They are sanitized (a `;` or a newline from
-  a crafted path cannot forge frames) and the distinct-route table is capped at
-  256 — pass **route patterns** (`/users/{id}`), not raw paths, so a crawler
-  cannot exhaust it.
+  a crafted path cannot forge frames) and shaped, so identifiers in the path do
+  not become route names — the rules are under *`--web` servers: all workers,
+  per route*, above.
+  The table holds 255 shapes plus an `<other>` bucket and is not written to at
+  all until someone asks for a profile, so a crawler hitting an unasked service
+  exhausts nothing, and one hitting an asked service lands in `<other>` rather
+  than displacing the endpoints you are watching.
 - **Self re-exec.** A program that calls `execve` *without* forking (a graceful
   self-restart) keeps the armed sampling timer, which would kill the new image.
   Call the exported `elephc_probe_disarm` before such an exec. Ordinary
