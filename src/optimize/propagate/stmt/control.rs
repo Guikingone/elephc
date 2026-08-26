@@ -229,12 +229,34 @@ pub(super) fn propagate_try_stmt(
     env: ConstantEnv,
 ) -> (Stmt, ConstantEnv) {
     let (try_body, _) = propagate_block(try_body, env.clone());
+    // A catch is entered from an arbitrary point INSIDE the try body, not from
+    // its start and not from its end. So a variable the body may write holds an
+    // unknown value here, and specifically NOT the one it held before the `try`
+    // — which is what the catch used to be given.
+    //
+    // What that cost was a silently wrong answer in an everyday idiom:
+    //
+    //     $t = 0;
+    //     try { $t = 5; throw new RuntimeException('x'); }
+    //     catch (RuntimeException $e) { }
+    //     return $t;              // PHP says 5; this folded it to 0
+    //
+    // Both halves of that are this env: `$t` read as 0 inside the catch, and the
+    // merged exit env carried the same 0 out to the `return`. `finally` already
+    // started from nothing for exactly this reason, which is the shape of the
+    // answer; the whole body's invalidation set is the precise version of it, so
+    // a variable the try body cannot touch still folds.
+    let catch_env = {
+        let mut catch_env = env.clone();
+        crate::optimize::propagate::invalidation::block_invalidation(&try_body).apply(&mut catch_env);
+        catch_env
+    };
     let catches: Vec<_> = catches
         .into_iter()
         .map(|catch| crate::parser::ast::CatchClause {
             exception_types: catch.exception_types,
             variable: catch.variable,
-            body: propagate_block(catch.body, env.clone()).0,
+            body: propagate_block(catch.body, catch_env.clone()).0,
         })
         .collect();
     let finally_body = finally_body.map(|body| propagate_block(body, HashMap::new()).0);

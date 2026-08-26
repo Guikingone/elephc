@@ -38,6 +38,16 @@ pub(super) fn has_exception_handlers(func: &Function) -> bool {
 }
 
 /// Returns the successor blocks branched to by a terminator, in branch order.
+///
+/// Explicit branches only: there are NO exception edges here. A `may_throw`
+/// instruction is not a terminator, so a block that throws out of the middle of
+/// a `try` looks like it reaches only the block its `br` names, and `Throw` is
+/// listed with `Return` as having no successors at all when inside a `try` it
+/// goes to the handler. Any analysis that treats this as the whole control flow
+/// is reasoning about the path where nothing threw — which is how dead-store
+/// elimination came to neutralize stores a catch could still read. A pass that
+/// needs the exceptional path has to account for it itself; `dead_store` is the
+/// worked example.
 pub(super) fn successors(term: &Terminator) -> Vec<BlockId> {
     match term {
         Terminator::Br { target, .. } => vec![*target],

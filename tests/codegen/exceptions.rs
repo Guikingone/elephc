@@ -891,3 +891,115 @@ echo '|', intdiv(7, 2), '|', fdiv(1, 0), '|', (1 * $n) << (3 * $n), '|', (-8 * $
     );
     assert_eq!(out, "1|1|4|3|3|INF|8|-4");
 }
+
+/// A value written inside a `try` survives into the `catch`.
+///
+/// It did not. Every write the try body made was discarded the moment the
+/// exception was caught, and the catch — and everything after the statement —
+/// read what the variable held BEFORE the `try`. Silently: no diagnostic, no
+/// crash, just an answer PHP disagrees with, in one of the most ordinary shapes
+/// there is (accumulate in a try, adjust in the catch).
+///
+/// Two independent causes, both about a catch being entered from the MIDDLE of
+/// the try body: the AST constant propagation walked the catch in the
+/// environment from before the `try`, and the exit environment merged that same
+/// stale path out past the whole statement.
+#[test]
+fn test_a_write_inside_a_try_survives_the_catch() {
+    let out = compile_and_run(
+        r#"<?php
+function accumulate(): int {
+    $t = 0;
+    try {
+        $t += 5;
+        throw new RuntimeException('x');
+    } catch (RuntimeException $e) {
+        $t += 7;
+    }
+    return $t;
+}
+function read_in_catch(): int {
+    $t = 0;
+    try { $t = 5; throw new RuntimeException('x'); }
+    catch (RuntimeException $e) { return $t; }
+    return -1;
+}
+function read_after(): string {
+    $s = 'a';
+    try { $s = 'bb'; throw new RuntimeException('x'); }
+    catch (RuntimeException $e) { }
+    return $s;
+}
+echo accumulate(), '|', read_in_catch(), '|', read_after();
+"#,
+    );
+    assert_eq!(out, "12|5|bb");
+}
+
+/// A store made before a throwing CALL is not dead because a later store
+/// overwrites it.
+///
+/// Dead-store elimination walks a CFG built from terminators, and a `may_throw`
+/// instruction is not one — so the block that throws out of the middle of a
+/// `try` looked like it reached only the block its `br` named, and `$t = 9`
+/// looked like it overwrote `$t = 5` on the only path there was. Both earlier
+/// stores were neutralized to `nop`, and the catch fell through to a load of a
+/// slot nothing had written: the function returned a different value on every
+/// run, being whatever the frame's stack happened to hold.
+///
+/// The string case is here because it was RIGHT while the int case was wrong —
+/// refcounted locals are zero-initialized and scalars are not, so the same
+/// defect surfaced as a stale value in one and as an address in the other.
+#[test]
+fn test_a_store_before_a_throwing_call_is_not_dead() {
+    let out = compile_and_run(
+        r#"<?php
+function boom(): void { throw new RuntimeException('x'); }
+function overwritten_after_the_call(): int {
+    $t = 0;
+    try { $t = 5; boom(); $t = 9; }
+    catch (RuntimeException $e) { }
+    return $t;
+}
+function overwritten_after_a_literal_throw(): int {
+    $t = 0;
+    try { $t = 5; $z = 1; throw new RuntimeException('x'); $t = 9; }
+    catch (RuntimeException $e) { }
+    return $t;
+}
+function strings_too(): string {
+    $t = 'before';
+    try { $t = 'inside'; boom(); $t = 'after'; }
+    catch (RuntimeException $e) { }
+    return $t;
+}
+echo overwritten_after_the_call(), '|', overwritten_after_a_literal_throw(), '|', strings_too();
+"#,
+    );
+    assert_eq!(out, "5|5|inside");
+}
+
+/// The try body's stores stay dead when nothing in it can throw.
+///
+/// The guard that keeps the two above correct must not become "never eliminate a
+/// store in a function with a `try`". A block that cannot reach a handler still
+/// gets the ordinary treatment, which is what says the fix is a rule about
+/// exception edges rather than a switch that turns the pass off.
+#[test]
+fn test_a_try_that_cannot_throw_still_allows_dead_stores() {
+    let out = compile_and_run(
+        r#"<?php
+function boom(): void { throw new RuntimeException('x'); }
+function overwritten(): int {
+    $t = 0;
+    $t = 5;
+    $t = 9;
+    try { boom(); }
+    catch (RuntimeException $e) { }
+    return $t;
+}
+echo overwritten();
+"#,
+    );
+    assert_eq!(out, "9");
+}
