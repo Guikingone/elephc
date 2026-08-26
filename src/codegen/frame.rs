@@ -1464,6 +1464,16 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
     let scratch = abi::int_arg_reg_name(target, 0);
     abi::emit_symbol_address(ctx.emitter, scratch, &io_fn);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_io_fn"), 0);
+    // The stream counter's slot, filled the same way and for the same reason: the
+    // emitted stream builtins read it and stay inert while it is zero.
+    let stream = target.extern_symbol("elephc_instr_stream");
+    abi::emit_symbol_address(ctx.emitter, scratch, &stream);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_stream_fn"),
+        0,
+    );
     // Companion slot: elephc_instr_query, so the PDO bridge can report each
     // query's SQL text (the N+1 view) the same pay-for-use way as the counter.
     let query_fn = target.extern_symbol("elephc_instr_query");

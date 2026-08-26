@@ -41,6 +41,15 @@ pub(crate) struct GraphNode {
     pub io_inclusive: u64,
     #[serde(default)]
     pub io_exclusive: u64,
+    /// Exact inclusive/exclusive STREAM operation counts — `fopen`, `fread`,
+    /// `fwrite`, `fgets`, `fclose`, `file_get_contents`, `file_put_contents`
+    /// (`--instrument`). Separate from the query counts on purpose: a function
+    /// that reads a file a thousand times and one that runs a thousand
+    /// statements are different problems with the same shape.
+    #[serde(default)]
+    pub stream_inclusive: u64,
+    #[serde(default)]
+    pub stream_exclusive: u64,
     /// Exact retained objects — allocated minus freed (`--instrument`). Signed:
     /// a function that releases more than it takes reports negative.
     #[serde(default)]
@@ -126,6 +135,13 @@ pub(crate) struct CallGraph {
     /// runs only), hottest first — the SQL panel / N+1 view. Empty otherwise.
     #[serde(default)]
     pub queries: Vec<(String, u64)>,
+    /// Distinct STREAM operations and how many times each ran, most-run first.
+    ///
+    /// The count alone says a function performed 1,200 stream operations; this
+    /// says whether that is one `fopen` and 1,199 `fgets` — a read loop — or
+    /// 1,200 `fopen` calls, which is a different bug with the same total.
+    #[serde(default)]
+    pub stream_ops: Vec<(String, u64)>,
     /// Per-line self cost over the PHP source, when a dSYM made it recoverable.
     #[serde(default)]
     pub lines: Option<SourceLines>,
@@ -447,6 +463,8 @@ pub(crate) fn render_html_frames(
                         "allocExclN": node.alloc_exclusive,
                         "ioInclN": node.io_inclusive,
                         "ioExclN": node.io_exclusive,
+                        "streamInclN": node.stream_inclusive,
+                        "streamExclN": node.stream_exclusive,
                         "retInclN": node.retained_inclusive,
                         "retExclN": node.retained_exclusive,
                         "waitInclN": node.wait_inclusive,
@@ -2368,6 +2386,8 @@ mod tests {
                     alloc_exclusive: 1,
                     io_inclusive: 0,
                     io_exclusive: 0,
+                    stream_inclusive: 0,
+                    stream_exclusive: 0,
                     retained_inclusive: 0,
                     retained_exclusive: 0,
                     wait_inclusive: 0,
@@ -2383,6 +2403,8 @@ mod tests {
                     alloc_exclusive: 40,
                     io_inclusive: 0,
                     io_exclusive: 0,
+                    stream_inclusive: 0,
+                    stream_exclusive: 0,
                     retained_inclusive: 0,
                     retained_exclusive: 0,
                     wait_inclusive: 0,
@@ -2393,6 +2415,7 @@ mod tests {
             edges: vec![GraphEdge { from: 0, to: 1, weight: 80, count: None }],
             total: 100,
             queries: Vec::new(),
+            stream_ops: Vec::new(),
             lines: None,
             trace: None,
         }
@@ -2587,6 +2610,8 @@ mod tests {
                 alloc_exclusive: 0,
                 io_inclusive: 0,
                 io_exclusive: 0,
+                stream_inclusive: 0,
+                stream_exclusive: 0,
                 retained_inclusive: 0,
                 retained_exclusive: 0,
                 wait_inclusive: 0,
@@ -2596,6 +2621,7 @@ mod tests {
             edges: vec![],
             total: 1,
             queries: Vec::new(),
+            stream_ops: Vec::new(),
             lines: None,
             trace: None,
         };

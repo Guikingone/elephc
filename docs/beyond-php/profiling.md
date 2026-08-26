@@ -29,7 +29,8 @@ program or connects to one already running.
 
 A target this command **launches** — a source or a binary — is measured for its
 whole run and reports the full table: per-function calls, inclusive and self
-time, allocations, retained objects, queries and I/O wait. Every export follows:
+time, allocations, retained objects, queries, stream operations and I/O wait.
+Every export follows:
 [Speedscope](https://www.speedscope.app), [pprof](https://github.com/google/pprof),
 Graphviz, the HTML call graph.
 
@@ -742,8 +743,37 @@ callee many times and that callee issues one query each, the recommendation says
 so outright — "*N+1: `list_all` calls `get_user` 200 times and `get_user`
 issues 200 DB queries — batch them into one query*". `monitor`
 shows a `queries` column and per-function query counts in the graph tooltips.
-(HTTP has no client bridge in elephc yet; filesystem I/O can be added on the same
-runtime hook.)
+(HTTP has no client bridge in elephc yet.)
+
+**And streams.** `incl_stream` / `excl_stream` count **stream operations** per
+function — `fopen`, `fread`, `fwrite`, `fgets`, `fclose`, `file_get_contents`,
+`file_put_contents` — attributed the same exact way, and reported in a `streams`
+column and as an `--assert streams:…` metric.
+
+They are counted *apart* from queries rather than folded into one "I/O" number,
+because the two are different problems with the same shape and different fixes: a
+thousand statements are batched into one, while a thousand reads are a handle you
+should have kept open. The N+1 recommendation says which it is — "*N+1: `report`
+calls `load_line` 200 times and `load_line` performs 600 stream operations — open
+once and reuse the handle, or read the file once*".
+
+Under the table, the run's operations are broken down by call:
+
+```text
+stream operations
+  fclose               20
+  fgets                20
+  fopen                20
+  file_get_contents    1
+```
+
+That breakdown is the part a count alone cannot give. Sixty operations is a read
+loop if it is one `fopen` and fifty-nine `fgets`, and a *reopen* loop if it is
+twenty of each — the same total, a different bug.
+
+Pure queries about a handle — `feof`, `ftell` — are deliberately not counted.
+They touch no descriptor, and counting them would report
+`while (!feof($h)) { fgets($h); }` as doing twice the work it does.
 
 **And what stays behind.** `incl_ret` / `excl_ret` are **retained** objects —
 allocated minus freed — attributed per function the same exact way, by reading

@@ -1300,6 +1300,36 @@ impl RuntimeFnId {
         )
     }
 
+    /// Whether this builtin performs a STREAM operation the monitor counts.
+    ///
+    /// The file-I/O counterpart of the query counter, and separate from it on
+    /// purpose: a function that reads a file a thousand times and one that runs a
+    /// thousand statements are different problems with the same shape, and one
+    /// combined "I/O" dimension cannot tell them apart.
+    ///
+    /// Whole-file calls belong here as much as handle calls do. `file_get_contents()`
+    /// is one stream operation the program never names a handle for, and leaving it
+    /// out would report a loop over it as doing no stream work at all — the exact
+    /// shape the counter exists to expose.
+    ///
+    /// Deliberately NOT here: `feof`, `ftell` and the other pure QUERIES about a
+    /// handle. They touch no descriptor, php-src answers them from the stream's own
+    /// state, and counting them would drown the read/write ratio the count is for
+    /// in loop bookkeeping — `while (!feof($h)) { fgets($h); }` would report twice
+    /// the operations it performs.
+    pub const fn is_stream_operation(self) -> bool {
+        matches!(
+            self,
+            RuntimeFnId::Fopen
+                | RuntimeFnId::Fclose
+                | RuntimeFnId::Fread
+                | RuntimeFnId::Fwrite
+                | RuntimeFnId::Fgets
+                | RuntimeFnId::FileGetContents
+                | RuntimeFnId::FilePutContents
+        )
+    }
+
     /// Returns the callback operand inspected for runtime string dispatch, if any.
     pub const fn string_callback_operand_index(self) -> Option<usize> {
         match self {

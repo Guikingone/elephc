@@ -139,8 +139,9 @@ Codegen:
                           counts to stderr at exit
   --with-monitoring       Embed the profiling capability, dormant until `elephc monitor`
                           asks. Exact per-function time, allocations, retained
-                          objects, DB queries, wait and call counts. Inlined
-                          functions fold into their caller (as with --counters).
+                          objects, DB queries, STREAM operations, wait and call
+                          counts. Inlined functions fold into their caller (as
+                          with --counters).
   --with-monitoring=NAMES Embed it for the named functions only (comma list, trailing
                           `*` matches by prefix, or @file with one name per line)
   --heap-debug            Enable heap debug instrumentation

@@ -460,6 +460,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // SQL text (normalized) so the exact profiler can list distinct statements
     // and their execution counts — the N+1 view. Pay-for-use, like the io slot.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_query_fn"), 8, target));
+    // elephc_instr_stream_fn: filled with elephc_instr_stream under --instrument,
+    // else zero. The emitted STREAM builtins read it and call through it when
+    // non-null, naming the operation, so the exact profiler can report stream
+    // work per function and break it down by call — the file-I/O counterpart of
+    // the query counter, and separate from it on purpose: a thousand reads and a
+    // thousand statements are different problems with the same shape.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_stream_fn"), 8, target));
     // elephc_instr_wait_fn: third companion slot, filled with elephc_instr_wait
     // under --instrument. The PDO bridge times the actual driver call and
     // reports the nanoseconds through it, which is what splits each function's
