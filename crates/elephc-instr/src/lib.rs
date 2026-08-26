@@ -358,7 +358,19 @@ impl State {
         // see `dropped_fps`, and the two tests that hold it.
         if self.stack.len() >= MAX_STACK {
             self.dropped += 1;
-            self.dropped_fps.push(fp);
+            // Bounded, because the shadow stack is. Capping pushes at MAX_STACK
+            // is what keeps a runaway recursion from costing unbounded profiler
+            // memory, and recording an identity per dropped activation without a
+            // bound of its own put that cost straight back — one word per
+            // activation instead of a frame, but still without end.
+            //
+            // Past this the identity is not recorded, so such an exit falls back
+            // to finding no frame of its own, which is right unless an unwind has
+            // left a stale frame at the same address. Reaching that needs twice
+            // MAX_STACK live frames, on a stack large enough to survive them.
+            if self.dropped_fps.len() < MAX_STACK {
+                self.dropped_fps.push(fp);
+            }
             self.fns[id as usize].calls += 1;
             return;
         }
@@ -1630,9 +1642,12 @@ pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64, frame: usi
 /// state cannot span that, which is why the first version of this worked
 /// everywhere except the one place it was for.
 ///
-/// Layout: `armed`, `filled`, `len`, `claimed_at`, `claim_start_id`, then the
-/// text. Five `u32` headers and the bytes, so a reader in another process needs
-/// no allocator agreement.
+/// Layout: `armed`, `filled`, `len`, `claimed_at`, `claim_start_id`,
+/// `capture_epoch`, `slice_epoch`, then the text. Seven `u32` headers and the
+/// bytes, so a reader in another process needs no allocator agreement.
+///
+/// `capture_epoch` and `slice_epoch` are what tie a slice to the capture that
+/// asked for it; see `CAPTURE_EPOCH_WORD`.
 ///
 /// `claim_start_id` is NOT a second copy of the claim — the claim is `filled`,
 /// and it names its holder by itself. This word answers a different question:
@@ -1640,7 +1655,19 @@ pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64, frame: usi
 /// claim. It is written only by the winner, only after it has won, and read
 /// only to REFUSE a reclamation, so a value from a previous claimer can delay
 /// recovery and can never cost a live writer its slot.
-const CAPTURE_HEADER: usize = 20;
+const CAPTURE_HEADER: usize = 28;
+/// Header word holding the identity of the capture currently armed.
+///
+/// `armed` is a bare yes/no, so a capture that timed out and a NEW one that
+/// armed afterwards look identical to a worker that read it. A worker
+/// descheduled between reading `armed` and claiming the slot therefore published
+/// a slice rendered for the FIRST capture into the second one's answer — a
+/// complete, plausible profile of a request that finished before the operator
+/// asked, with nothing in it to say so. Every arm takes a new identity, and a
+/// slice carries the one it was offered for.
+const CAPTURE_EPOCH_WORD: usize = 5;
+/// Header word holding the capture identity the published slice answers.
+const SLICE_EPOCH_WORD: usize = 6;
 /// Header word holding the claimer's start identity (0 = not recorded).
 const CLAIM_ID_WORD: usize = 4;
 /// One mebibyte holds a large per-function table with room to spare; a slice
@@ -1898,7 +1925,14 @@ fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32, claim_id: &At
         // that made the claim, so it cannot name anyone but the process that
         // actually holds the slot.
         let claimer = state as i32;
-        let age = monotonic_seconds().saturating_sub(claimed_at.load(Ordering::Relaxed));
+        // Wrapping, not saturating. The seconds are 32 bits and the backstop is
+        // sixty, so a difference taken across the wrap is exact while a saturating
+        // one reads zero and keeps the claim for as long as the low bits take to
+        // catch up. Unreachable in practice — it needs the machine's uptime to
+        // reach 2^32 seconds — and worth writing correctly anyway, with the
+        // direction stated: unlike the replay table's rollover, which turned
+        // protection OFF, this one errs by keeping a claim, which is safe.
+        let age = monotonic_seconds().wrapping_sub(claimed_at.load(Ordering::Relaxed));
         // The timeout alone used to decide this, and it cannot: a writer frozen
         // by a cgroup, a `SIGSTOP` or a paused VM is indistinguishable BY AGE
         // from a dead one, so its slot was handed to a second writer and both
@@ -2033,6 +2067,12 @@ pub extern "C" fn elephc_instr_capture_arm() {
         capture_word(CLAIM_ID_WORD),
     ) {
         release_stale_slice(filled, claimed_at, claim_id);
+        // A new identity for this capture, taken BEFORE it is announced as
+        // armed, so no worker can read "armed" and pair it with the previous
+        // capture's identity.
+        if let Some(epoch) = capture_word(CAPTURE_EPOCH_WORD) {
+            epoch.fetch_add(1, Ordering::AcqRel);
+        }
         armed.store(1, Ordering::Release);
     }
 }
@@ -2058,6 +2098,23 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
     // A claimed-but-unfinished slot reads as nothing: the writer is mid-copy,
     // and the caller polls until it is done or its own wait runs out.
     if filled.load(Ordering::Acquire) != READY {
+        return 0;
+    }
+    // A slice offered to a capture that is no longer the one running answers the
+    // wrong question. `armed` alone could not tell them apart — it is a yes/no,
+    // so a capture that timed out and the one that armed next read the same — and
+    // a worker descheduled between reading it and claiming the slot published a
+    // profile of a request that had finished before this caller ever asked.
+    // Discarded rather than served: the poll continues, and gets the request it
+    // asked for.
+    //
+    // Compared against the CURRENT identity, which is this caller's own: the
+    // endpoint runs one capture at a time.
+    let current = capture_word(CAPTURE_EPOCH_WORD).map(|e| e.load(Ordering::Acquire));
+    let offered = capture_word(SLICE_EPOCH_WORD).map(|e| e.load(Ordering::Acquire));
+    if current != offered {
+        clear_claim_identity(claim_id);
+        filled.store(EMPTY, Ordering::Release);
         return 0;
     }
     let len = length.load(Ordering::Relaxed) as usize;
@@ -2121,6 +2178,12 @@ fn offer_capture(text: &str) -> bool {
     else {
         return false;
     };
+    // Read BEFORE the armed check, so it names the capture that was running when
+    // this request finished rather than whichever one is running by the time the
+    // slot is claimed.
+    let offered_for = capture_word(CAPTURE_EPOCH_WORD)
+        .map(|epoch| epoch.load(Ordering::Acquire))
+        .unwrap_or(0);
     if armed.load(Ordering::Acquire) == 0 {
         return false;
     }
@@ -2212,6 +2275,11 @@ fn offer_capture(text: &str) -> bool {
         );
     }
     length.store(bytes.len() as u32, Ordering::Relaxed);
+    // Which capture this slice answers, published before READY so a reader that
+    // sees the slice always sees the identity that goes with it.
+    if let Some(slice_epoch) = capture_word(SLICE_EPOCH_WORD) {
+        slice_epoch.store(offered_for, Ordering::Relaxed);
+    }
     filled.store(READY, Ordering::Release);
     true
 }
@@ -3003,6 +3071,73 @@ mod tests {
         );
     }
 
+    /// A slice offered to a capture that has since ended is not served to the next.
+    ///
+    /// `armed` is a yes/no, so a capture that timed out and the one that armed
+    /// after it read the same to a worker. A worker descheduled between reading
+    /// it and claiming the slot therefore published a slice rendered for the
+    /// FIRST capture, and the second received it — a complete, plausible profile
+    /// of a request that finished before the operator asked, with nothing in it
+    /// to say so. Found by an audit run before this branch was pushed.
+    ///
+    /// Staged rather than raced: the interleaving is a schedule, and what the
+    /// worker leaves behind is exactly a slice stamped with the earlier capture's
+    /// identity.
+    #[test]
+    fn a_slice_offered_to_a_finished_capture_is_not_served_to_the_next() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        reset_capture();
+
+        // Capture A arms; a worker reads its identity and is descheduled.
+        elephc_instr_capture_arm();
+        let offered_for = capture_word(CAPTURE_EPOCH_WORD)
+            .expect("a mapped region")
+            .load(Ordering::Acquire);
+
+        // A gives up, and capture B arms in its place.
+        elephc_instr_capture_cancel();
+        elephc_instr_capture_arm();
+
+        // The worker resumes and publishes what it rendered for A.
+        let slice = "elephc-instr: stale calls=1 incl_ns=5\n";
+        let base = CAPTURE_REGION.load(Ordering::Acquire);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                slice.as_ptr(),
+                (base + CAPTURE_HEADER) as *mut u8,
+                slice.len(),
+            );
+        }
+        capture_word(2).expect("a mapped region").store(slice.len() as u32, Ordering::Relaxed);
+        capture_word(SLICE_EPOCH_WORD)
+            .expect("a mapped region")
+            .store(offered_for, Ordering::Relaxed);
+        capture_word(1).expect("a mapped region").store(READY, Ordering::Release);
+
+        // B must not be handed A's answer.
+        let needed = unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) };
+        assert_eq!(needed, 0, "the next capture was served the previous one's slice");
+        assert_eq!(
+            capture_word(1).expect("a mapped region").load(Ordering::Acquire),
+            EMPTY,
+            "and the stale slice must be cleared out of the way"
+        );
+        assert_ne!(
+            capture_word(0).expect("a mapped region").load(Ordering::Acquire),
+            0,
+            "B is still waiting for its own request, so it stays armed"
+        );
+
+        // A slice offered to B itself is served.
+        let current = capture_word(CAPTURE_EPOCH_WORD)
+            .expect("a mapped region")
+            .load(Ordering::Acquire);
+        assert_ne!(current, offered_for, "each arm takes a new identity");
+        assert!(super::offer_capture(slice), "an armed capture refused a slice");
+        let needed = unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) };
+        assert_eq!(needed, slice.len(), "B's own slice was withheld");
+    }
+
     /// The READER refuses a length the mapping cannot back, whoever wrote it.
     ///
     /// The writer's own guard is tested below, but that only proves this crate's
@@ -3021,6 +3156,14 @@ mod tests {
         // writer sharing this mapping would do.
         let filled = capture_word(1).expect("a mapped region");
         let length = capture_word(2).expect("a mapped region");
+        // Offered for the capture that is actually running, so this reaches the
+        // length check rather than being discarded as a stale slice first.
+        let current = capture_word(CAPTURE_EPOCH_WORD)
+            .expect("a mapped region")
+            .load(Ordering::Acquire);
+        capture_word(SLICE_EPOCH_WORD)
+            .expect("a mapped region")
+            .store(current, Ordering::Release);
         length.store((CAPTURE_BYTES - CAPTURE_HEADER + 1) as u32, Ordering::Release);
         filled.store(READY, Ordering::Release);
 
@@ -3102,9 +3245,18 @@ mod tests {
     /// is mid-copy into alone, because clearing one is how two profiles ended up
     /// written over each other. Setup needs the unconditional version, and saying
     /// so in the header rather than through the API keeps the difference visible.
+    /// Clears the WHOLE rendezvous header between tests.
+    ///
+    /// It used to clear the first four words, which was the whole header when it
+    /// was written and has not been since. Every word added after that — the
+    /// claimer's identity, the capture identities — leaked from one test into the
+    /// next, and the tests share this mapping. That surfaced as a test failing
+    /// for a state some earlier test had left behind, which is the least useful
+    /// kind of red there is. Derived from the header's size so it cannot fall
+    /// behind again.
     fn reset_capture() {
         map_capture_region();
-        for index in 0..4 {
+        for index in 0..CAPTURE_HEADER / 4 {
             if let Some(word) = capture_word(index) {
                 word.store(0, Ordering::Relaxed);
             }
