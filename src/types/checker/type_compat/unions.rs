@@ -231,14 +231,10 @@ impl Checker {
                 _ => PhpType::Resource(None),
             });
         }
-        // EXPERIMENT: widen a scalar reassignment to Mixed instead of refusing it.
-        if matches!(
-            existing,
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
-        ) && matches!(
-            new_ty,
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
-        ) {
+        // A reassignment WIDENS the slot rather than being refused. php has no rule against
+        // `$v = new A(); $v = 42;` — a variable holds whatever was last written to it — and every
+        // refusal here rejects a program php runs.
+        if reassignment_widens_to_mixed(existing) && reassignment_widens_to_mixed(new_ty) {
             return Some(PhpType::Mixed);
         }
         None
@@ -330,4 +326,24 @@ impl Checker {
             _ => declared_ty.clone(),
         }
     }
+}
+
+/// Reports whether a type can live in a widened `mixed` slot after a reassignment.
+///
+/// Every VALUE shape can: a Mixed cell carries its own tag, so the slot holds whichever was
+/// written last. The exclusions are the shapes that are not php values at all — a raw pointer, a
+/// buffer, a packed struct, a callable descriptor — for which "box it and dispatch on the tag" has
+/// no meaning, and `Never`/`Void`, which the arms above already answer.
+fn reassignment_widens_to_mixed(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+    )
 }
