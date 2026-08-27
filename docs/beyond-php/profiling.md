@@ -29,13 +29,15 @@ program or connects to one already running.
 
 A target this command **launches** — a source or a binary — is measured for its
 whole run and reports the full table: per-function calls, inclusive and self
-time, allocations, retained objects, queries and I/O wait. Every export follows:
+wall time, allocations, retained objects, DB queries and DB-driver wait. File
+I/O is not yet counted or timed. Every export follows:
 [Speedscope](https://www.speedscope.app), [pprof](https://github.com/google/pprof),
 Graphviz, the HTML call graph.
 
 A service **already running** answers through its endpoint, and there the default
 is the sampler: folded stacks with their sample counts, plus allocations per
-stack. That is a statistical view of where CPU time goes, not a per-function
+stack whose counter deltas and attribution cover only intervals between samples.
+That is a statistical view of where CPU time goes, not a per-function
 table. `--exact` asks instead for the measured table of the next request that
 completes — the same numbers a launched run gives, scoped to one request. That
 exact remote answer is the table itself today; the exporters read the sampled
@@ -48,6 +50,21 @@ combined `--with-monitoring` — no per-route query or I/O wait summary either,
 because the exact runtime claims those slots (there is a note on this near the
 end of this page). Ask for those with `--exact`, or with a signed
 `X-Elephc-Query` header.
+
+The capability matrix is explicit about each dimension:
+
+| Capture | CPU | Wall time | Calls | Allocations / retained | DB queries | File I/O | Wait | Routes |
+|---|---|---|---|---|---|---|---|---|
+| local `monitor` | not measured as an OS CPU clock; the UI can show wall minus recorded DB wait | exact enter/exit time, rooted at `{main}` | exact | exact / exact | exact | not available | exact DB-driver wait only | untagged local run |
+| service default | sampled CPU-time ring | unavailable; blocked time is invisible | unavailable | exact deltas only between samples, with sampled attribution; no retained count | unavailable in combined `--with-monitoring` | unavailable | unavailable in combined `--with-monitoring` | sampled stacks carry the exact route tag |
+| service `--exact` or signed request | not measured separately; wall minus recorded DB wait is only a derived remainder | exact for one completed request, rooted at `{main}` | exact | exact / exact | exact | not available | exact DB-driver wait only | exact request route/trace context |
+| `--live` | sampled externally | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
+| `--attach` | sampled externally | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
+
+A probe-only binary can emit exact per-route DB-operation and DB-wait counters
+beside its sampled stacks. `--with-monitoring` links both runtimes, and the exact
+runtime owns those callbacks, so the combined service-default row above is the
+one users of the public flag receive.
 
 What *is* the same across all four is the mechanism. Profiling in production is
 normally a *different tool* answering a *smaller question*, an approximation you
@@ -492,8 +509,9 @@ that samples itself from boot whether or not anyone ever looks.
 
 The **exact** answer is the same measurement a local run gives:
 per-function calls, self and inclusive time, allocations, retained objects,
-queries and I/O wait, for one request. It exists only once a request completes,
-so `--exact` waits up to thirty seconds for the next one.
+DB queries and DB-driver wait, for one request, rooted at `{main}`. It does not
+count or time file I/O. It exists only once a request completes, so `--exact`
+waits up to thirty seconds for the next one.
 
 One exact capture runs at a time. The rendezvous the worker leaves its slice in
 is a single slot, so a second `--exact` while one is in flight is told so rather
@@ -652,12 +670,15 @@ is not double counted), and `excl_ns` the function's own time (inclusive minus
 its callees'). Across a run the exclusive times sum to the root's inclusive — a
 real partition of the program's time.
 
-A **sampled** view exists alongside it, and two things use it: `--live` and
-`--attach`, which read a process from the outside ~1000 times per second of CPU
-time. Sampled shares are estimates that sharpen as samples accumulate, they carry
-noise (around ±0.3 points at ~1,500 samples), and time spent *blocked* on I/O is
-invisible to them because the CPU-time timer does not tick while a program waits.
-Where a page or a table shows sampled numbers it says so.
+A **sampled** view exists alongside it in three paths. A running service's
+default endpoint answer comes from the in-process CPU-time ring;
+`--live` and `--attach` read a process from the outside with `/usr/bin/sample`.
+All three report estimates that sharpen as samples accumulate, carry noise
+(around ±0.3 points at ~1,500 samples), and cannot see time spent blocked on I/O
+because their CPU-time clocks do not tick while a program waits. Only the
+in-process ring carries sampled allocation deltas and route tags; external
+`--live`/`--attach` do not. Where a page or table shows sampled numbers it says
+so.
 
 ### Narrowing it to a few functions
 
@@ -666,8 +687,9 @@ elephc --with-monitoring=process_order,'PDOStatement::*' app.php
 elephc --with-monitoring=@hot-functions.txt app.php
 ```
 
-Hooks land only on the functions you name; a trailing `*` matches by prefix, and
-`@file` reads one name per line. Everything else runs at full speed — on the demo
+Hooks land only on the functions you name; `{main}` names the top-level frame, a
+trailing `*` matches by prefix, and `@file` reads one name per line. Everything
+else runs at full speed — on the demo
 service, profiling all 35 functions costs +3% while three named ones cost +2%.
 What that saves is proportional to the calls it removes, so the narrowing pays on
 a program whose hot functions are called often ([full table and the cost model
@@ -707,8 +729,8 @@ where a figure would otherwise be trusted further than it should be:
   function's return, which charged everything the handler did to whatever threw:
   measured on a function whose entire body is `throw`, it carried 100% of the
   self time — the eight-million-iteration loop the catch block ran. It now
-  reports ~0%, and the work sits with the catcher. All six dimensions are
-  sampled at the throw, so what a handler allocates belongs to the handler the
+  reports ~0%, and the work sits with the catcher. All six dimensions are read
+  at the throw, so what a handler allocates belongs to the handler the
   same way its time does.
 
   This holds through the awkward shapes too — a handler that calls something, a
@@ -723,33 +745,17 @@ where a figure would otherwise be trusted further than it should be:
   ARM machines publish the rate and never take this path.
 - **Inlined functions fold into their caller** and do not appear at all, exactly
   as with `--counters`.
-- **Shares are relative to the largest inclusive time in the capture.** When
-  `{main}` is not instrumented and a program has several independent top-level
-  calls, their self shares can therefore sum past 100%.
+- **Full exact captures have a `{main}` root.** Its enter/exit hooks bracket the
+  top-level PHP body, so a top-level-only program still produces a profile and
+  ordinary functions sit below one root without double entry or exit. Selective
+  instrumentation preserves its named-only overhead contract: if `{main}` is
+  not selected, shares are relative to the largest included function and
+  independent self shares can sum past 100%.
 - **A suspended generator or fiber is off the stack while it is suspended.** A
   `yield` and a `Fiber::suspend` switch stacks rather than returning, so the body
   is not running between two resumes and is not counted as running: the frame is
   closed at the suspension and opened again at the resume, and the span between
   them belongs to whoever drove it.
-
-  ```php
-  foreach (produce($n) as $v) { burn($work); }   // burn is called by the LOOP
-  ```
-  ```text
-  elephc-instr-edge: drain -> burn count=200     # and recorded under the loop
-  ```
-
-  Before this, the body kept its frame and was read as the caller of everything
-  the consumer did next. Measured on the four lines above: a generator body that
-  ran for 23 µs reported **99.8% inclusive time** and an edge to a function it
-  never called. Self time was the one column that stayed right, because the
-  consumer's work was counted as a child.
-
-  Two things follow, both deliberate. A coroutine's `calls` counts entries, not
-  resumes — a resume is the same activation. And a coroutine that is abandoned
-  rather than finished still reports the time it ran, because a suspension is
-  accounted for when it happens rather than waiting for a return that never
-  comes.
 - **`yield from` flattens one level of the call graph.** The delegating body is
   off the stack for the whole delegation rather than around each forwarded yield,
   because the runtime helper that drives the inner generator calls the suspension
@@ -797,7 +803,7 @@ so outright — "*N+1: `list_all` calls `get_user` 200 times and `get_user`
 issues 200 DB queries — batch them into one query*". `monitor`
 shows a `queries` column and per-function query counts in the graph tooltips.
 (HTTP has no client bridge in elephc yet; filesystem I/O can be added on the same
-runtime hook.)
+runtime hook, but is not counted today.)
 
 **And what stays behind.** `incl_ret` / `excl_ret` are **retained** objects —
 allocated minus freed — attributed per function the same exact way, by reading
@@ -817,22 +823,24 @@ A function that keeps most of what it allocates gets called out directly —
 "*`hoard` retains the most — 20001 of its 20014 allocations (100%) are still
 live when it returns; check for a cache or collection that only grows*".
 
-**And CPU vs waiting.** `incl_wait` / `excl_wait` are the nanoseconds a function
+**And wall time vs recorded DB waiting.** `incl_wait` / `excl_wait` are the nanoseconds a function
 spent **blocked inside a driver call** rather than running PHP. The PDO bridge
 times the database work — statement execution and `PDO::exec`, across every
 driver — and reports the elapsed time through the same pay-for-use slot
-mechanism, so the profiler can split every function's self time into CPU and
-wait. Note the scope: *database* work. File and network I/O outside PDO are not
-yet timed, so they read as CPU.
+mechanism, so the profiler can split every function's self time into recorded DB
+wait and a non-DB remainder. Note the scope: *database* work. File and network
+I/O outside PDO are not timed, so `wall - DB wait` is not an OS measurement of
+actual on-CPU time.
 
 ```
-PDO::exec              self 1.8 ms   wait 1.4 ms   cpu 363.7 µs
-PDOStatement::execute  self 2.9 ms   wait 167.0 µs cpu 2.8 ms
-PDO::prepare           self 2.1 ms   wait 0 ns     cpu 2.1 ms
+PDO::exec              self 1.8 ms   wait 1.4 ms   non-DB 363.7 µs
+PDOStatement::execute  self 2.9 ms   wait 167.0 µs non-DB 2.8 ms
+PDO::prepare           self 2.1 ms   wait 0 ns     non-DB 2.1 ms
 ```
 
 That distinction decides where tuning pays: `PDO::exec` above is *not* slow PHP,
-it is the database; `PDO::prepare` is genuinely PHP-side work. When a quarter or
+it is the database; `PDO::prepare` is predominantly in the non-DB remainder.
+When a quarter or
 more of the run is spent blocked, the recommendations say so outright — "*the
 run is I/O-bound: 41% of it (1.4 ms) is spent waiting on the database — PDO::exec
 blocks longest; batching or caching queries will beat any PHP-side tuning*". The
@@ -1263,11 +1271,11 @@ sampled function makes inlining visible by difference.
   is that per-route SQL and I/O wait, which a probe-only binary would report, are
   not in the sampled capture of a combined one. Ask for them with `--exact`, or
   with a signed `X-Elephc-Query` header.
-- **Sampled captures are CPU-time only.** `--live` and `--attach` sample on the
-  CPU-time timer, so time spent blocked on I/O is not attributed in those two
-  modes. The exact profile measures wait time directly (see *CPU vs waiting*
-  above). On Apple `arm64e` builds, PAC-signed return addresses degrade sampled
-  stacks to `<native>`; the default `arm64` target is unaffected.
+- **Sampled captures are CPU-time only.** The service-default ring and external
+  `--live`/`--attach` paths do not attribute time spent blocked on I/O. Exact
+  capture measures DB-driver wait directly (see *wall time vs recorded DB
+  waiting* above). On Apple `arm64e` builds, PAC-signed return addresses degrade
+  sampled stacks to `<native>`; the default `arm64` target is unaffected.
 - **A sampled stack can be short; it is not invented.** The in-process sampler
   walks the frame-pointer chain, and a function that uses the frame register as
   an ordinary one leaves a value there that looks exactly like a frame — every

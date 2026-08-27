@@ -47,8 +47,8 @@ pub(crate) struct GraphNode {
     pub retained_inclusive: i64,
     #[serde(default)]
     pub retained_exclusive: i64,
-    /// Exact nanoseconds blocked in I/O calls (`--instrument`). Self time minus
-    /// self wait is the function's CPU time.
+    /// Exact nanoseconds blocked in DB driver calls (`--instrument`). Self time
+    /// minus this wait is an unclassified non-DB remainder, not OS CPU time.
     #[serde(default)]
     pub wait_inclusive: u64,
     #[serde(default)]
@@ -1182,7 +1182,7 @@ const DATA = __DATA_JSON__;
     return total ? 100 * (ns || 0) / total : 0;
   }
   // A function's own CPU time: self time minus the part it spent blocked.
-  function cpuNs(n) {
+  function nonDbNs(n) {
     const total = (FRAMES[cur] && FRAMES[cur].total) || 0;
     return Math.max(0, Math.round(n.excl / 100 * total) - (n.waitExclN || 0));
   }
@@ -1211,7 +1211,7 @@ const DATA = __DATA_JSON__;
     if (metric === 'io') return 'incl ' + (n.ioInclN || 0) + ' q';
     if (metric === 'calls') return 'self ' + n.excl.toFixed(1) + '% time';
     if (metric === 'ret') return 'incl ' + fmtSigned(n.retInclN || 0) + ' retained';
-    if (metric === 'wait') return 'cpu ' + fmtNs(cpuNs(n)) + ' · incl wait ' + fmtNs(n.waitInclN || 0);
+    if (metric === 'wait') return 'non-DB ' + fmtNs(nonDbNs(n)) + ' · incl wait ' + fmtNs(n.waitInclN || 0);
     return 'incl ' + n.incl.toFixed(0) + '%';
   }
   function nodeSub(n) {
@@ -1219,7 +1219,7 @@ const DATA = __DATA_JSON__;
     if (metric === 'io') return (n.ioExclN || 0) + ' queries';
     if (metric === 'calls') return (n.calls || 0) + ' calls';
     if (metric === 'ret') return fmtSigned(n.retExclN || 0) + ' retained · incl ' + fmtSigned(n.retInclN || 0);
-    if (metric === 'wait') return 'wait ' + fmtNs(n.waitExclN || 0) + ' · cpu ' + fmtNs(cpuNs(n));
+    if (metric === 'wait') return 'wait ' + fmtNs(n.waitExclN || 0) + ' · non-DB ' + fmtNs(nonDbNs(n));
     return 'incl ' + n.incl.toFixed(1) + '% · self ' + n.excl.toFixed(1) + '%';
   }
 

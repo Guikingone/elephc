@@ -10,9 +10,68 @@
 
 use crate::support::*;
 
-/// End-to-end `elephc monitor`: compiles a busy fixture, samples it with
-/// /usr/bin/sample, and writes a two-view Speedscope document whose frames are
-/// PHP names — not EIR block labels, not runtime helpers in the folded view.
+/// A top-level-only program still produces one exact `{main}` frame when run
+/// through the real compile/control-channel/monitor pipeline.
+#[test]
+fn test_cli_monitor_profiles_a_top_level_only_program() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_main_only");
+    fs::write(
+        dir.join("top.php"),
+        "<?php\n$sum = 0; for ($i = 0; $i < 200000; $i = $i + 1) { $sum = ($sum + $i) % 100003; } echo $sum;\n",
+    )
+    .expect("failed to write the top-level monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "top.php",
+            "--out",
+            "top.prof.json",
+            "--save",
+            "top.exact.json",
+        ])
+        .output()
+        .expect("failed to run exact top-level monitor");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "top-level monitor should succeed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(stdout.contains("exact profile"), "{stdout}");
+    assert!(stdout.contains("{main}"), "the exact root is missing: {stdout}");
+
+    let raw = fs::read_to_string(dir.join("top.prof.json"))
+        .expect("top-level monitor should write its Speedscope export");
+    let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+    assert!(
+        doc["shared"]["frames"]
+            .as_array()
+            .expect("frames")
+            .iter()
+            .any(|frame| frame["name"] == "{main}"),
+        "the export must preserve the exact root: {raw}"
+    );
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("top.exact.json")).expect("saved exact graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    assert_eq!(nodes.len(), 1, "a top-level-only run has one frame: {exact}");
+    assert_eq!(nodes[0]["name"], "{main}");
+    assert_eq!(nodes[0]["call_count"], 1, "root must enter and exit once");
+    assert!(
+        exact["edges"].as_array().expect("exact edges").is_empty(),
+        "the root must not call itself: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// End-to-end `elephc monitor`: compiles a busy fixture, activates exact
+/// instrumentation through the control channel, and writes a two-view
+/// Speedscope document whose frames are PHP names — not EIR block labels or
+/// runtime helpers in the folded view.
 ///
 /// The export matters as much as the table. `--out` and `--pprof` were once
 /// wired only to the sampled capture, so when the exact profile became the
@@ -33,7 +92,14 @@ fn test_cli_monitor_writes_php_level_speedscope_profile() {
     .expect("failed to write the monitor fixture");
 
     let output = elephc_cli_command(&dir)
-        .args(["monitor", "busy.php", "--out", "busy.prof.json"])
+        .args([
+            "monitor",
+            "busy.php",
+            "--out",
+            "busy.prof.json",
+            "--save",
+            "busy.exact.json",
+        ])
         .output()
         .expect("failed to run elephc monitor");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -43,8 +109,8 @@ fn test_cli_monitor_writes_php_level_speedscope_profile() {
         "monitor should succeed\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
-        stdout.contains("exact profile") && stdout.contains("burn"),
-        "the table should be the exact profile and name the PHP function: {stdout}"
+        stdout.contains("exact profile") && stdout.contains("{main}") && stdout.contains("burn"),
+        "the exact table should contain its root and the PHP function: {stdout}"
     );
 
     let raw = fs::read_to_string(dir.join("busy.prof.json"))
@@ -81,6 +147,252 @@ fn test_cli_monitor_writes_php_level_speedscope_profile() {
         "no EIR block label may leak into the profile: {raw}"
     );
 
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("busy.exact.json")).expect("saved exact graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let burn = nodes.iter().position(|node| node["name"] == "burn").unwrap();
+    assert_eq!(nodes[main]["call_count"], 1, "root must enter exactly once");
+    assert!(
+        exact["edges"].as_array().expect("exact edges").iter().any(|edge| {
+            edge["from"] == main && edge["to"] == burn && edge["count"] == 1
+        }),
+        "the ordinary call must be attributed from {{main}} to burn: {exact}"
+    );
+    assert!(
+        !exact["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| edge["to"] == main),
+        "no function may be misattributed as calling the root: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Shutdown output handlers and object destructors remain children of the
+/// exact `{main}` frame instead of becoming disconnected graph roots.
+#[test]
+fn test_cli_monitor_keeps_shutdown_callbacks_under_main() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_shutdown_callbacks");
+    fs::write(
+        dir.join("shutdown.php"),
+        r#"<?php
+function shutdown_handler(string $contents, int $phase): string {
+    $n = 0;
+    for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    if ($phase < 0) { echo $n; }
+    return $contents;
+}
+class CleanupProbe {
+    public function __destruct() {
+        $n = 0;
+        for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    }
+}
+$probe = new CleanupProbe();
+ob_start(shutdown_handler(...));
+echo "profiled\n";
+"#,
+    )
+    .expect("failed to write the shutdown monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "shutdown.php",
+            "--out",
+            "shutdown.prof.json",
+            "--save",
+            "shutdown.exact.json",
+        ])
+        .output()
+        .expect("failed to monitor shutdown callbacks");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "shutdown monitor should succeed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("shutdown.exact.json")).expect("saved shutdown graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let edges = exact["edges"].as_array().expect("exact edges");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let handler = nodes
+        .iter()
+        .position(|node| node["name"] == "shutdown_handler")
+        .unwrap();
+    let destructor = nodes
+        .iter()
+        .position(|node| node["name"] == "CleanupProbe::__destruct")
+        .unwrap();
+    for child in [handler, destructor] {
+        assert!(
+            edges.iter().any(|edge| {
+                edge["from"] == main && edge["to"] == child && edge["count"] == 1
+            }),
+            "shutdown PHP work must remain below {{main}}: {exact}"
+        );
+    }
+    assert!(
+        nodes[main]["inclusive"].as_u64().unwrap()
+            > nodes[main]["exclusive"].as_u64().unwrap(),
+        "the root must subtract shutdown callees from self time: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Runs one clean language-level termination fixture and verifies that monitor
+/// receives the complete exact graph despite bypassed generated epilogues.
+fn assert_clean_language_exit_profile(tag: &str, source: &str) {
+    let dir = make_cli_test_dir(tag);
+    fs::write(
+        dir.join("exit.php"),
+        source,
+    )
+    .expect("failed to write the clean-exit monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "exit.php",
+            "--out",
+            "exit.prof.json",
+            "--save",
+            "exit.exact.json",
+        ])
+        .output()
+        .expect("failed to monitor a clean language exit");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "a clean language exit should publish a profile\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("exit.exact.json")).expect("saved exit graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let child = nodes
+        .iter()
+        .position(|node| node["name"] == "before_exit")
+        .unwrap();
+    assert_eq!(nodes[main]["call_count"], 1);
+    assert!(
+        exact["edges"].as_array().expect("exact edges").iter().any(|edge| {
+            edge["from"] == main && edge["to"] == child && edge["count"] == 1
+        }),
+        "the clean exit must publish the complete rooted graph: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `exit(0)` closes and publishes the active exact stack even though normal
+/// generated function and main epilogues are bypassed.
+#[test]
+fn test_cli_monitor_profiles_a_clean_language_exit() {
+    assert_clean_language_exit_profile(
+        "elephc_cli_monitor_exit_zero",
+        r#"<?php
+function before_exit(): int {
+    $n = 0;
+    for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    return $n;
+}
+$value = before_exit();
+if ($value < 0) { echo $value; }
+exit(0);
+"#,
+    );
+}
+
+/// The zero-argument `die()` lowering publishes the same rooted exact graph as
+/// the status-bearing `exit(0)` path.
+#[test]
+fn test_cli_monitor_profiles_clean_die_without_status() {
+    assert_clean_language_exit_profile(
+        "elephc_cli_monitor_die_no_status",
+        r#"<?php
+function before_exit(): int {
+    $n = 0;
+    for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    return $n;
+}
+$value = before_exit();
+if ($value < 0) { echo $value; }
+die();
+"#,
+    );
+}
+
+/// An uncaught generated PHP error bypasses every ordinary epilogue just like
+/// `exit()`, so it must still close and publish the exact root and live callee.
+#[test]
+fn test_cli_monitor_profiles_an_uncaught_codegen_error() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_uncaught_codegen_error");
+    // The negative-value recursive branch keeps the failing function out of the
+    // inliner while `$argc` still takes the direct uncaught path at runtime.
+    fs::write(
+        dir.join("uncaught.php"),
+        r#"<?php
+function fail_uncaught(int $value): int {
+    if ($value < 0) { return fail_uncaught(-$value); }
+    return intdiv($value, $value - $value);
+}
+fail_uncaught($argc);
+"#,
+    )
+    .expect("failed to write the uncaught-error monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "uncaught.php",
+            "--out",
+            "uncaught.prof.json",
+            "--save",
+            "uncaught.exact.json",
+        ])
+        .output()
+        .expect("failed to monitor an uncaught generated error");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "an uncaught generated error should still publish a profile\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("uncaught.exact.json"))
+            .expect("saved uncaught-error graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let failing = nodes
+        .iter()
+        .position(|node| node["name"] == "fail_uncaught")
+        .unwrap();
+    assert_eq!(nodes[main]["call_count"], 1);
+    assert!(
+        exact["edges"].as_array().expect("exact edges").iter().any(|edge| {
+            edge["from"] == main && edge["to"] == failing && edge["count"] == 1
+        }),
+        "the uncaught error must publish the complete rooted graph: {exact}"
+    );
+
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -108,6 +420,7 @@ fn test_cli_version_flags_report_package_version() {
     let stdout = String::from_utf8_lossy(&help.stdout);
     assert!(stdout.contains(&format!("Version: {}", env!("CARGO_PKG_VERSION"))));
     assert!(stdout.contains("-V, --version"));
+    assert!(stdout.contains("name `{main}` for the top-level root"));
 
     let _ = fs::remove_dir_all(&dir);
 }

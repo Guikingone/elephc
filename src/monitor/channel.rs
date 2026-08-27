@@ -9,6 +9,7 @@
 //!
 //! Key details:
 //! - The child end is inherited across the spawn; both ends close on drop.
+//! - The child acknowledges successful runtime activation on the same channel.
 //! - The key comes from the `<binary>.key` sidecar, or an explicit override.
 
 use super::*;
@@ -95,6 +96,21 @@ pub(crate) fn open_control_channel() -> Option<ControlChannel> {
         }
         Some(channel)
     }
+}
+
+/// Whether the child acknowledged consuming the control marker and activating
+/// its embedded monitoring runtime.
+pub(crate) fn control_channel_activated(channel: &ControlChannel) -> bool {
+    let mut ack = [0u8; CONTROL_ACK.len()];
+    let read = unsafe {
+        libc::recv(
+            channel.parent,
+            ack.as_mut_ptr() as *mut libc::c_void,
+            ack.len(),
+            libc::MSG_DONTWAIT | libc::MSG_WAITALL,
+        )
+    };
+    read == ack.len() as isize && ack == CONTROL_ACK
 }
 
 /// Arranges for `channel`'s child end to arrive as `CONTROL_FD` in the spawned

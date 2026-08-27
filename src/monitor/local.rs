@@ -1,7 +1,8 @@
 //! Purpose:
 //! Profiles a program `monitor` launches — a `.php` source (built first) or a
-//! binary. This is the measured path: the run is instrumented from inside, so
-//! every dimension is exact and every export is available.
+//! binary. This path records exact instrumented calls, wall time, allocations,
+//! retained objects, database queries, and database-driver wait; it does not
+//! claim operating-system CPU time or file-I/O events.
 //!
 //! Called from:
 //! - `monitor::main`, when the target is a file rather than an address.
@@ -265,27 +266,38 @@ pub(crate) fn compile_php_target(source: &str) -> Result<PathBuf, String> {
 /// confident diagnosis of the wrong thing, and it sent the investigation at the
 /// build flags for an hour. The exit status was there the whole time and nobody
 /// looked at it.
-pub(crate) fn no_profile_reason(status: &process::ExitStatus, binary: &Path) -> String {
+pub(crate) fn no_profile_reason(
+    status: &process::ExitStatus,
+    binary: &Path,
+    capture_activated: bool,
+) -> String {
     use std::os::unix::process::ExitStatusExt as _;
     if let Some(signal) = status.signal() {
         return format!(
-            "{} was killed by signal {signal} before it could write a profile. \
-             The capture is lost because the run is: the profile is written at exit.",
+            "{} was killed by signal {signal} before the active capture window could close \
+             and publish its profile",
             binary.display()
         );
     }
     match status.code() {
+        Some(code) if code != 0 => format!(
+            "{} exited with status {code} before the active capture window could close and \
+             publish its profile",
+            binary.display()
+        ),
+        _ if !capture_activated => format!(
+            "the exact control channel for {} was unavailable or was not acknowledged, so no \
+             capture window was activated",
+            binary.display()
+        ),
         Some(0) | None => format!(
-            "{} ran and exited cleanly but wrote no profile, so the capability \
-             never switched on. It carries the monitoring marker, so the build is \
-             not the problem — the control channel is.",
+            "{} acknowledged monitoring and exited cleanly, but published no instrumented \
+             frames; this is expected only when selective instrumentation selected no function \
+             that ran. A full capture should always publish {{main}}, so otherwise its active \
+             window did not close or publish correctly",
             binary.display()
         ),
-        Some(code) => format!(
-            "{} exited with status {code} and wrote no profile. Whatever went \
-             wrong there went wrong before the profile was written.",
-            binary.display()
-        ),
+        Some(_) => unreachable!("non-zero statuses were handled above"),
     }
 }
 
@@ -341,6 +353,7 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
         }
     };
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let capture_activated = channel.as_ref().is_some_and(control_channel_activated);
     // Pass through the program's own diagnostics — and only those. A
     // `--with-monitoring` binary carries both mechanisms, so its stderr also
     // holds the sampler's folded stacks; forwarding those would print raw
@@ -360,7 +373,10 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
     }
     let mut graph = parse_instrument_dump(&stderr);
     if graph.nodes.is_empty() {
-        eprintln!("elephc monitor: {}", no_profile_reason(&output.status, &binary));
+        eprintln!(
+            "elephc monitor: {}",
+            no_profile_reason(&output.status, &binary, capture_activated)
+        );
         return 1;
     }
     print!("{}", instrument_table(&graph));

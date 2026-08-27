@@ -80,13 +80,20 @@ const EVENT_WORDS: usize = 2;
 const EVENT_BUCKETS: usize = MAX_ROUTES + 1;
 /// Event-table bytes: fixed counters per route id.
 const EVENT_TABLE_BYTES: usize = EVENT_BUCKETS * EVENT_WORDS * 8;
-/// Control-area bytes: one word, `1` once anyone has asked this service to
-/// sample. It lives in the SHARED mapping and not beside `ASKED` in process
+/// Control-area bytes: one word carrying `DORMANT`, `INITIALIZING`, or `ACTIVE`
+/// for the sampled window. It lives in the SHARED mapping and not beside
+/// `ASKED` in process
 /// memory because that is the whole point: `ASKED` is a per-process
 /// `AtomicBool`, so a `--web` master that authenticates a client after its
 /// workers forked flips only its own copy, and the master runs no PHP. The
 /// workers must be able to observe the ask that happened after they existed.
 const CONTROL_BYTES: usize = 8;
+/// No operator has asked this shared service to collect samples or events.
+const ASK_DORMANT: u64 = 0;
+/// The first asker owns the fixed-counter reset; events remain gated out.
+const ASK_INITIALIZING: u64 = 1;
+/// The reset is published and sampled/event collection is active.
+const ASK_ACTIVE: u64 = 2;
 /// How many recently accepted profiling signatures the service remembers.
 ///
 /// Sized against COLLISIONS, not against how many asks a window carries. Each
@@ -226,7 +233,44 @@ fn replay_entry_is_live(word: u64, now: i64) -> bool {
     ahead.min(behind) <= QUERY_WINDOW_SECS as u32
 }
 
+/// Resets every fixed event bucket before the first sampled window opens.
+fn reset_event_counters(base: usize) {
+    for route_id in 0..EVENT_BUCKETS {
+        for word in 0..EVENT_WORDS {
+            unsafe { event_word(base, route_id, word) }.store(0, Ordering::Relaxed);
+        }
+    }
+}
 
+/// Opens the shared event/sampling window exactly once, publishing `ACTIVE`
+/// only after the first asker's counter reset is complete.
+fn activate_shared_window(base: usize) {
+    let asked = unsafe { region_asked(base) };
+    match asked.compare_exchange(
+        ASK_DORMANT,
+        ASK_INITIALIZING,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => {
+            reset_event_counters(base);
+            asked.store(ASK_ACTIVE, Ordering::Release);
+        }
+        Err(ASK_ACTIVE) => {}
+        Err(ASK_INITIALIZING) => {
+            while asked.load(Ordering::Acquire) == ASK_INITIALIZING {
+                std::hint::spin_loop();
+            }
+        }
+        Err(_) => {}
+    }
+}
+
+/// Whether exact event callbacks belong to an active monitoring window.
+fn event_window_active(base: usize) -> bool {
+    ASKED.load(Ordering::Relaxed)
+        || unsafe { region_asked(base) }.load(Ordering::Acquire) == ASK_ACTIVE
+}
 /// I/O events are **not sampled**. A driver call fires exactly one, so these
 /// counts are exact — the sampler's statistical nature applies to *time*, which
 /// it observes 1000x/second, not to events it is told about. Keeping the two
@@ -246,7 +290,7 @@ unsafe fn event_word<'a>(
 /// Adds `amount` to one of the current request's event counters.
 fn note_event(word: usize, amount: u64) {
     let base = REGION.load(Ordering::Relaxed);
-    if base == 0 {
+    if base == 0 || !event_window_active(base) {
         return;
     }
     let route_id = CURRENT_ROUTE.load(Ordering::Relaxed) as usize;
@@ -255,7 +299,7 @@ fn note_event(word: usize, amount: u64) {
     }
 }
 
-/// Records one I/O operation against the request currently being served.
+/// Records one database operation against the request currently being served.
 ///
 /// Reached through the same `_elephc_instr_io_fn` slot the exact profiler uses,
 /// so the PDO bridge needs no knowledge of which profiler is linked. Costs one
@@ -273,7 +317,7 @@ pub extern "C" fn elephc_probe_note_wait(ns: u64) {
     note_event(1, ns);
 }
 
-/// Renders the per-route event counters, one line per route that saw any I/O.
+/// Renders the per-route event counters, one line per route that saw DB activity.
 ///
 /// Deliberately its own line prefix rather than extra columns on the folded
 /// samples: a consumer must not be able to mistake an exact count for a sampled
@@ -283,17 +327,10 @@ pub fn event_report(base: usize) -> String {
     if base == 0 {
         return out;
     }
-    let count = unsafe {
-        (*((base + RING_BYTES) as *const std::sync::atomic::AtomicU64)).load(Ordering::Acquire)
-    } as usize;
-    // `count + 2`, not `+ 1`. The counter stops at `OTHER_ROUTE_INDEX` because
-    // overflow returns the shared bucket WITHOUT claiming a slot, so it never
-    // reaches the id that bucket carries — `OTHER_ROUTE_INDEX + 1`. Bounding the
-    // walk at `count + 1` therefore stopped one short of it, and every exact I/O
-    // event charged to `<other>` was recorded and never reported. That is the
-    // silent understatement this table exists to avoid; a row nobody expected is
-    // the lesser problem, and `EVENT_BUCKETS` still bounds the walk.
-    for route_id in 0..EVENT_BUCKETS.min(count + 2) {
+    // The table is fixed and sparse. Iterating the complete bounded range also
+    // includes route id MAX_ROUTES, the reserved `<other>` bucket whose lazy
+    // publication does not increase the ordinary route count.
+    for route_id in 0..EVENT_BUCKETS {
         let io = unsafe { event_word(base, route_id, 0) }.load(Ordering::Relaxed);
         let wait = unsafe { event_word(base, route_id, 1) }.load(Ordering::Relaxed);
         if io == 0 && wait == 0 {
@@ -1077,13 +1114,12 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
 /// Idempotent — every later poll finds collection already running, which is why
 /// the first answer on a freshly-started service is thin and the next is not.
 pub(crate) fn begin_sampled() {
-    // Published BEFORE the local early-return: the endpoint thread runs in the
-    // `--web` master, whose own `ASKED` may already be true from an earlier poll
-    // while workers forked since have never seen it. Writing the shared word
-    // first means a second poll still repairs a worker that missed the first.
+    // The shared transition opens the event window only after the first asker's
+    // reset. Workers forked before this ask observe ACTIVE on their next route,
+    // while callbacks before it remain excluded from the report.
     let region = REGION.load(Ordering::Relaxed);
     if region != 0 {
-        unsafe { region_asked(region) }.store(1, Ordering::Release);
+        activate_shared_window(region);
     }
     // A fresh ask lifts an exec latch: whoever disarmed did so for an exec that
     // either happened — in which case this image is gone and nothing here runs —
@@ -1310,7 +1346,8 @@ unsafe fn observe_shared_ask() {
     if DISARMED_FOR_EXEC.load(Ordering::Relaxed) {
         return;
     }
-    let asked = ASKED.load(Ordering::Relaxed) || region_asked(region).load(Ordering::Acquire) != 0;
+    let asked = ASKED.load(Ordering::Relaxed)
+        || region_asked(region).load(Ordering::Acquire) == ASK_ACTIVE;
     if !should_adopt_ask(ARMED_PID.load(Ordering::Relaxed), libc::getpid(), asked, region) {
         return;
     }
@@ -1337,6 +1374,8 @@ const CONTROL_FD: i32 = 3;
 /// buffered when the child looks. A stray inherited socket on the same descriptor
 /// says nothing and is ignored.
 const CONTROL_MAGIC: &[u8] = b"ELEPHC-MONITOR-1";
+/// Returned to the spawning monitor only after the marker was consumed.
+const CONTROL_ACK: &[u8] = b"ELEPHC-MONITOR-ACK-1";
 
 /// Whether this process was started by `elephc monitor`.
 ///
@@ -1389,7 +1428,16 @@ fn control_fd_present() -> bool {
             CONTROL_MAGIC.len(),
             libc::MSG_DONTWAIT,
         );
-        true
+        // Give the parent evidence that this process, rather than merely the
+        // socketpair creator, reached and accepted the activation point. The
+        // exact monitor uses this to distinguish a valid empty selective window
+        // from a clean run whose control channel was never recognised.
+        libc::send(
+            CONTROL_FD,
+            CONTROL_ACK.as_ptr() as *const libc::c_void,
+            CONTROL_ACK.len(),
+            libc::MSG_NOSIGNAL,
+        ) == CONTROL_ACK.len() as isize
     }
 }
 
@@ -2072,6 +2120,17 @@ mod tests {
 
             let verdict = super::control_fd_present();
 
+            let mut ack = [0u8; super::CONTROL_ACK.len()];
+            // If the socketpair itself occupied fd 3, `dup2` replaced `ours`;
+            // its saved duplicate is then the peer that receives the ACK.
+            let ack_fd = if ours == super::CONTROL_FD { saved } else { ours };
+            let ack_len = libc::recv(
+                ack_fd,
+                ack.as_mut_ptr() as *mut libc::c_void,
+                ack.len(),
+                libc::MSG_DONTWAIT | libc::MSG_WAITALL,
+            );
+
             // The marker is gone; whatever followed it is not.
             let mut buf = [0u8; 64];
             let left = libc::recv(
@@ -2092,6 +2151,8 @@ mod tests {
             libc::close(theirs);
 
             assert!(verdict, "the real magic must be recognised");
+            assert_eq!(ack_len, super::CONTROL_ACK.len() as isize);
+            assert_eq!(ack, super::CONTROL_ACK, "activation must be acknowledged");
             assert_eq!(&buf[..left], trailing, "the marker must be consumed, and only it");
         }
     }
@@ -2560,9 +2621,17 @@ mod tests {
             }
 
             let asked = region_asked(base);
-            assert_eq!(asked.load(Ordering::Acquire), 0, "starts unasked");
-            asked.store(1, Ordering::Release);
-            assert_eq!(asked.load(Ordering::Acquire), 1, "reads back what it wrote");
+            assert_eq!(
+                asked.load(Ordering::Acquire),
+                ASK_DORMANT,
+                "starts dormant"
+            );
+            asked.store(ASK_ACTIVE, Ordering::Release);
+            assert_eq!(
+                asked.load(Ordering::Acquire),
+                ASK_ACTIVE,
+                "reads back the active state"
+            );
         }
 
         assert!(
@@ -2882,6 +2951,9 @@ mod tests {
             CURRENT_ROUTE.store(other, Ordering::Relaxed);
         }
 
+        // Event callbacks are intentionally inert before the first sampled
+        // ask, so open the window this reporting regression exercises.
+        activate_shared_window(base);
         elephc_probe_note_io();
         elephc_probe_note_wait(4_000);
 
@@ -3235,6 +3307,7 @@ mod tests {
         let mut region = vec![0u8; REGION_BYTES];
         let base = region.as_mut_ptr() as usize;
         REGION.store(base, Ordering::Relaxed);
+        let was_asked = ASKED.swap(true, Ordering::Relaxed);
 
         // No route set yet: everything lands in the untagged bucket.
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
@@ -3264,10 +3337,57 @@ mod tests {
 
         REGION.store(0, Ordering::Relaxed);
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
+        ASKED.store(was_asked, Ordering::Relaxed);
         // With no region mapped the entry points are inert rather than unsafe.
         elephc_probe_note_io();
         elephc_probe_note_wait(1);
         assert!(event_report(0).is_empty());
+    }
+
+    /// Events before the first sampled ask are excluded, while untagged events
+    /// after activation remain visible in the exact event report.
+    #[test]
+    fn the_first_ask_opens_a_fresh_event_window() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+        REGION.store(base, Ordering::Relaxed);
+        CURRENT_ROUTE.store(0, Ordering::Relaxed);
+        let was_asked = ASKED.swap(false, Ordering::Relaxed);
+
+        for _ in 0..7 {
+            elephc_probe_note_io();
+        }
+        elephc_probe_note_wait(700);
+        assert!(event_report(base).is_empty(), "pre-ask callbacks must be inert");
+
+        unsafe { region_asked(base) }.store(ASK_INITIALIZING, Ordering::Release);
+        elephc_probe_note_io();
+        elephc_probe_note_wait(100);
+        assert!(
+            event_report(base).is_empty(),
+            "callbacks must remain gated while the first asker resets"
+        );
+        unsafe { region_asked(base) }.store(ASK_DORMANT, Ordering::Release);
+
+        // Also seed the storage directly: activation owns a reset before it
+        // publishes ACTIVE, so legacy/stale bytes cannot leak into this window.
+        unsafe { event_word(base, 0, 0) }.store(11, Ordering::Relaxed);
+        unsafe { event_word(base, 0, 1) }.store(1_100, Ordering::Relaxed);
+        activate_shared_window(base);
+        elephc_probe_note_io();
+        elephc_probe_note_io();
+        elephc_probe_note_wait(23);
+        let report = event_report(base);
+        assert_eq!(
+            report,
+            "elephc-probe-io: <untagged> ops=2 wait_ns=23\n",
+            "the first report must contain only the active window"
+        );
+
+        ASKED.store(was_asked, Ordering::Relaxed);
+        CURRENT_ROUTE.store(0, Ordering::Relaxed);
+        REGION.store(0, Ordering::Relaxed);
     }
 
     #[test]
@@ -3283,6 +3403,7 @@ mod tests {
         let mut region = vec![0u8; REGION_BYTES];
         let base = region.as_mut_ptr() as usize;
         REGION.store(base, Ordering::Relaxed);
+        let was_asked = ASKED.swap(false, Ordering::Relaxed);
         unsafe {
             for i in 0..OTHER_ROUTE_INDEX {
                 assert_eq!(intern_route(&format!("route-{i}")), i + 1);
@@ -3293,13 +3414,28 @@ mod tests {
             // operator can read in the report.
             let over = intern_route("one-too-many");
             assert_eq!(over, OTHER_ROUTE_INDEX + 1);
+            assert_eq!(over, MAX_ROUTES, "the overflow id is the final route id");
+            assert_eq!(EVENT_BUCKETS, MAX_ROUTES + 1, "id 0 needs one extra bucket");
             assert_eq!(intern_route("another-one"), over);
             assert_eq!(route_name(over).as_deref(), Some(OTHER_ROUTE_NAME));
             // Routes interned before it filled still resolve to themselves.
             assert_eq!(route_name(1).as_deref(), Some("route-0"));
             // route_name never resolves an out-of-range id to a real slot.
             assert_eq!(route_name(MAX_ROUTES + 1), None);
+
+            activate_shared_window(base);
+            CURRENT_ROUTE.store(over, Ordering::Relaxed);
+            elephc_probe_note_io();
+            elephc_probe_note_io();
+            elephc_probe_note_wait(4_321);
+            assert_eq!(
+                event_report(base),
+                "elephc-probe-io: <other> ops=2 wait_ns=4321\n",
+                "the reserved final id must be exported, not skipped by count+1"
+            );
         }
+        ASKED.store(was_asked, Ordering::Relaxed);
+        CURRENT_ROUTE.store(0, Ordering::Relaxed);
         REGION.store(0, Ordering::Relaxed);
     }
 
