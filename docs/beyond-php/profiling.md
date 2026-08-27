@@ -779,7 +779,11 @@ where a figure would otherwise be trusted further than it should be:
   case that is exact.
 - **At most 4,096 coroutines can be suspended at once.** Past that a suspension
   is refused and the frame is left where it was, which is the old attribution
-  rather than a new one; the report says how many.
+  rather than a new one; the report says how many. A suspension also releases
+  whatever was still parked under its own coroutine: a fiber address is handed to
+  the next fiber once the first is freed, so a group still standing under it
+  belongs to a coroutine that is gone and will never be resumed. Abandoned
+  generators therefore cost a slot only until their address is reused.
 
 **Memory too.** `incl_allocs` / `excl_allocs` are the exact number of heap
 allocations attributed to each function — the same shadow-stack math applied to
@@ -1074,6 +1078,12 @@ so any Perfetto/`chrome://tracing`-compatible viewer opens it. Standalone, set
 `ELEPHC_INSTR_TRACE=<path>` (and optionally `ELEPHC_INSTR_TRACE_MAX=<n>`) when
 running a monitored binary. The trace is bounded (500k calls by default)
 so a hot program's trace stays openable; the overflow count is reported.
+
+A coroutine is the one thing that produces more than one slice per call. A
+suspension ends a span exactly as a return does, so a generator resumed three
+times appears as three slices on its own row, with the consumer's work between
+them where it belongs — and an abandoned generator still gets the slice it ran
+for, even though its exit never arrives.
 
 ### Recommendations and assertions
 
