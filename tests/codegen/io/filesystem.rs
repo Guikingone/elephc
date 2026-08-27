@@ -1136,6 +1136,20 @@ $d->close();
 
 unlink("$base/a.txt");
 rmdir($base);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nstring(9) \"Directory\"\npath=elephc_dir_surface\nbool(true)\n\
+         bool(true)\nint(3)\n\
+         NULL\nbool(true)\nNULL\n\
+         bool(false)\n\
+         Error: Cannot directly construct Directory, use dir() instead\n\
+         bool(true)\nbool(true)\n",
+        "the whole Directory surface, readdir-ordered and with php's void returns"
+    );
+}
+
 /// Verifies invalid disk-space paths return strict PHP `false`, not a successful `0.0` byte count.
 #[test]
 fn test_disk_space_invalid_path_is_strict_false() {
@@ -1168,13 +1182,7 @@ var_dump($total <=> -1);
     );
     assert_eq!(
         out,
-        "bool(true)\nstring(9) \"Directory\"\npath=elephc_dir_surface\nbool(true)\n\
-         bool(true)\nint(3)\n\
-         NULL\nbool(true)\nNULL\n\
-         bool(false)\n\
-         Error: Cannot directly construct Directory, use dir() instead\n\
-         bool(true)\nbool(true)\n",
-        "the whole Directory surface, readdir-ordered and with php's void returns"
+        "bool(false)\nbool(true)\nint(-1)\nint(1)\nbool(false)\nint(-1)\n"
     );
 }
 
@@ -1365,8 +1373,6 @@ rmdir($base);
         "Deprecated: readdir(): Passing null is deprecated, instead the last opened \
          directory stream should be provided\n",
         "an explicit null is deprecated with php's own wording, and `@` silences the rest"
-    );
-        "bool(false)\nbool(true)\nint(-1)\nint(1)\nbool(false)\nint(-1)\n"
     );
 }
 

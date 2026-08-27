@@ -317,11 +317,51 @@ impl Checker {
                 for out in &write_only {
                     // `stmt_form: false` — this is a builtin binding its own out-parameter, not a
                     // statement-form assignment the program wrote, so it is not a site the
-                    // permissive retype may re-bind. An incompatible type here stays the error it
-                    // was.
-                    crate::types::checker::stmt_check::assignments::locals::merge_local_assignment_type(
+                    // permissive retype may re-bind.
+                    let Err(mismatch) = crate::types::checker::stmt_check::assignments::locals::merge_local_assignment_type(
                         self, &out.variable, &out.written, out.span, env, false,
-                    )?;
+                    ) else {
+                        continue;
+                    };
+                    // php does not care what the variable held: `$wb = "s";
+                    // flock($h, LOCK_EX, $wb);` leaves an int in `$wb` and says nothing. The
+                    // merge cannot re-bind here — every by-reference argument is recorded as
+                    // reference-aliased, and the builtin writes through the slot's ADDRESS —
+                    // so the slot has to widen instead, which is the same answer a
+                    // heterogeneous scalar reassignment gets.
+                    //
+                    // Only from a SCALAR, because that is the whole of what the widening can
+                    // deliver: `LoweringContext::boxed_incdec_storage_type` boxes a slot whose
+                    // representation is `Int|Float|Bool|False|Str` and leaves every other one
+                    // alone. Widening an `array` local here bound the environment to `mixed`
+                    // while the slot stayed an array — measured as `var_dump` printing NULL
+                    // where php printed `int(0)`, with no diagnostic anywhere. The mismatch is
+                    // reported instead, at the argument, which is a better answer than the
+                    // backend's own `unsupported ... written into a array<int> slot`.
+                    let widens = env
+                        .get(&out.variable)
+                        .map(|current| {
+                            matches!(
+                                current.codegen_repr(),
+                                PhpType::Int
+                                    | PhpType::Float
+                                    | PhpType::Bool
+                                    | PhpType::False
+                                    | PhpType::Str
+                            )
+                        })
+                        .unwrap_or(false);
+                    if !widens {
+                        return Err(mismatch);
+                    }
+                    // Recorded in `widened_scalar_locals` as well as the environment, because
+                    // the slot type is a whole-frame property: lowering reads it when it
+                    // DECLARES the local, long before this write happens. The environment
+                    // alone would leave a raw slot to receive a boxed value.
+                    let scope = self.current_loop_storage_scope.clone();
+                    self.widened_scalar_locals
+                        .insert((scope, out.variable.clone()));
+                    env.insert(out.variable.clone(), PhpType::Mixed);
                 }
                 if builtin_name.eq_ignore_ascii_case("openssl_encrypt") {
                     if let Some(arg) = openssl_encrypt_tag_arg(&expanded_args) {

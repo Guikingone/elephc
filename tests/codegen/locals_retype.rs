@@ -52,6 +52,22 @@ echo "|", $a ?? "dflt";"#,
     assert_eq!(out, "unset|empty|dflt");
 }
 
+/// A read after the kill warns and yields null, exactly as php does.
+///
+/// MEASURED on `php -n` 8.5.6 — `<?php $a = 1; unset($a); echo $a;` prints
+/// `Warning: Undefined variable $a` and nothing else, exit 0. elephc used to REFUSE the
+/// program, and two `error_tests` asserted that refusal; the behaviour is now php's, so the
+/// assertion belongs where the runtime answer can be read rather than where a compile error
+/// was expected. Without this the compile-time half would say only "it type-checks", which a
+/// program that silently printed nothing would satisfy just as well.
+#[test]
+fn test_read_after_unset_warns_and_yields_null() {
+    let out = compile_and_run_capture("<?php $a = $argc; unset($a); echo $a;\n");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.diagnostics, "Warning: Undefined variable $a\n");
+}
+
 /// Two kills of the same name in one body each abandon their own slot.
 #[test]
 fn test_repeated_kill_and_rebind_leaves_a_clean_heap() {
@@ -1342,6 +1358,31 @@ fn test_unset_of_a_program_wide_global_name_keeps_the_binding() {
     assert_eq!(out, "5");
 }
 
+/// A `global` inside a CLOSURE loses its write, with no `unset` and no retype anywhere.
+///
+/// The named-function twin directly above prints php's `5`. This is the same program with
+/// `function w()` written as a closure, and it prints `1` — the initial value — because
+/// `global_decls::collect_global_var_names` walks STATEMENT bodies only, so the closure's
+/// `global $a` never names the program-wide cell the top level reads.
+///
+/// Recorded here because every fixture that touched this blind spot reached it THROUGH an
+/// `unset`, which made the loss look like a consequence of the kill. It is not: this program has
+/// no kill, compiles clean, and is silently wrong. It is the shape to fix, and the one to
+/// re-measure first when the `Mixed`-array backend gaps that block the wider walk are closed
+/// (see the `global_decls` module preamble).
+#[test]
+#[ignore = "global-in-closure write loss: php prints 5|7, elephc prints 1|7"]
+fn test_a_global_declared_in_a_closure_reaches_the_top_levels_storage() {
+    let out = compile_and_run(concat!(
+        "<?php $a = 1; $f = function() { global $a; $a = 5; }; $f(); echo $a, \"|\";",
+        " $b = 1; function g(): void { global $b; $b = 7; } g(); echo $b;",
+    ));
+    assert_eq!(
+        out, "5|7",
+        "php -n 8.5.6 prints 5|7; the closure half is the loss"
+    );
+}
+
 /// Control: the RETYPE of the same program-global name keeps working, printing PHP's `5`. Lowering
 /// refuses to abandon the slot, so the site falls back to the widening path it used before retypes
 /// were lowered — which is why the veto covers the kill alone.
@@ -2181,8 +2222,25 @@ fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
     );
 }
 
-/// `unset` then READ, where the only `global` naming the local sits in a CLOSURE body: an honest
-/// compile error, deliberately, until the global-in-closure write loss is fixed.
+/// `unset` then READ, where the only `global` naming the local sits in a CLOSURE body.
+///
+/// IGNORED, and the reason is a measurement this fixture's own premise did not have.
+///
+/// The mitigation below rests on an undefined READ being a compile error. It is not one any
+/// more: `php -n` 8.5.6 WARNS and continues for every undefined read (`<?php echo $x;` prints
+/// the warning, exit 0), elephc now does the same, and
+/// `codegen::undefined_variables::test_undefined_variable_read_warns_and_yields_null` pins it.
+/// So this shape no longer refuses — it warns and prints nothing where php prints `5`.
+///
+/// What the premise missed is that the `unset` is not what breaks it. MEASURED with no kill
+/// anywhere: `$a = 1; $f = function() { global $a; $a = 5; }; $f(); echo $a;` prints `1` under
+/// elephc and `5` under php — the closure's write is lost on its own, in a program that
+/// compiles clean today and that no fixture covered. The refusal was therefore never a fence
+/// around the bug, only around one entrance to it, and re-erecting it here would still leave
+/// the other one open while rejecting a program php accepts.
+///
+/// Kept rather than deleted because the SHAPE is still the one to assert once the write loss
+/// is closed: at that point both fixtures should expect php's `5` and lose the `#[ignore]`.
 ///
 /// `test_unset_of_a_program_wide_global_name_keeps_the_binding` pins the NAMED-function twin,
 /// which the shared `collect_global_var_names` walk does see: there the veto keeps the binding,
@@ -2199,6 +2257,7 @@ fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
 /// until the global-in-closure write loss (tracked upstream) is closed — at which point the
 /// program should print `5` and this fixture should say so.
 #[test]
+#[ignore = "global-in-closure write loss: php prints 5, elephc prints nothing (see the doc comment)"]
 fn test_unset_then_read_of_a_closure_declared_global_is_a_compile_error() {
     let error = compile_expect_type_error(
         "<?php $a = 1; unset($a); $f = function() { global $a; $a = 5; }; $f(); echo $a;",
@@ -2209,8 +2268,10 @@ fn test_unset_then_read_of_a_closure_declared_global_is_a_compile_error() {
     );
 }
 
-/// The same for an ENUM method body, the other declaration the shared walk does not descend into.
+/// The same for an ENUM method body, the other declaration the shared walk does not descend
+/// into, and ignored for the same reason as its closure twin above.
 #[test]
+#[ignore = "global-in-closure write loss: php prints 5, elephc prints nothing (see the doc comment)"]
 fn test_unset_then_read_of_an_enum_declared_global_is_a_compile_error() {
     let error = compile_expect_type_error(
         r#"<?php
