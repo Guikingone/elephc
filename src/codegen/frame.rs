@@ -1255,7 +1255,6 @@ fn pop_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
     }
 }
 
-/// Emits allocation/free totals to stderr using the shared runtime counters.
 /// Emits the `--probe` initialization call in main's prologue: hands the
 /// embedded symbol table's address and entry count to `elephc_probe_init`,
 /// which installs the SIGPROF handler and arms the profiling timer. Inert
@@ -1422,6 +1421,19 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
         &target.extern_symbol("elephc_instr_throw_fn"),
         0,
     );
+    // Sixth slot: elephc_instr_unpark, called from the runtime's suspend helper
+    // on the paths that raise instead of returning. Those are the only ways a
+    // parked activation can reach a PHP handler without its resume hook, and the
+    // helper is shared by every coroutine — so it has no function id, and it
+    // passes the running coroutine instead, which is what the park recorded.
+    let unpark_fn = target.extern_symbol("elephc_instr_unpark");
+    abi::emit_symbol_address(ctx.emitter, scratch, &unpark_fn);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_unpark_fn"),
+        0,
+    );
     let request = target.extern_symbol("elephc_instr_request");
     abi::emit_symbol_address(ctx.emitter, scratch, &request);
     abi::emit_store_reg_to_symbol(
@@ -1479,13 +1491,108 @@ fn emit_instr_exit(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Emits the `--instrument` hook that parks this activation across a coroutine's
+/// stack switch, preserving `live` registers across the call.
+///
+/// A `yield` and a `Fiber::suspend` do not return: they switch stacks, so the
+/// enter hook's frame stays open across everything the consumer does next. The
+/// runtime then reads it as the caller of the consumer's next call and charges
+/// the consumer's whole cost to it — measured on four lines of PHP, a generator
+/// body that ran 23 us reported 99.8% inclusive time and an edge to a function
+/// it never called.
+///
+/// Emitted at the switch and not before it, with the outgoing arguments already
+/// staged, so what the suspension itself costs to set up — boxing the yielded
+/// value allocates — is still charged to the body that is doing it.
+pub(super) fn emit_instr_suspend(ctx: &mut FunctionContext<'_>, live: &[&'static str]) {
+    emit_instr_coroutine_hook(ctx, "elephc_instr_suspend", "suspend", live);
+}
+
+/// Emits the `--instrument` hook that unparks this activation where a resumed
+/// coroutine picks up, preserving `live` registers across the call.
+///
+/// Placed immediately after the switch returns, which is that point: the value
+/// the resume delivered is in the result register and is what `live` protects.
+pub(super) fn emit_instr_resume(ctx: &mut FunctionContext<'_>, live: &[&'static str]) {
+    emit_instr_coroutine_hook(ctx, "elephc_instr_resume", "resume", live);
+}
+
+/// Shared body of the two coroutine hooks.
+///
+/// Nothing at all is emitted for a function the instrumentation does not cover,
+/// including the saves — `instr_id` is set by the enter hook, so a body without
+/// one has no frame to park and the pushes would bracket a call that never
+/// happens.
+fn emit_instr_coroutine_hook(
+    ctx: &mut FunctionContext<'_>,
+    hook: &str,
+    label: &str,
+    live: &[&'static str],
+) {
+    if !ctx.shared.instrument.is_on() {
+        return;
+    }
+    let Some(id) = ctx.instr_id else {
+        return;
+    };
+    ctx.emitter
+        .comment(&format!("instrument: {label} (--instrument)"));
+    for reg in live {
+        abi::emit_push_reg(ctx.emitter, reg);
+    }
+    emit_instr_hook_args(ctx, id);
+    // A fifth argument these two take and the enter/exit pair does not: WHICH
+    // coroutine this is, read from the runtime's own `_fiber_current`.
+    //
+    // The frame pointer says which ACTIVATION and this says which SUSPENSION,
+    // and only the second can be had from inside the suspend helper — which is
+    // where it is needed, because that helper does not always return. Loaded
+    // last for the same reason the frame pointer is: the symbol loads above
+    // borrow a scratch register, and this one must survive to the call.
+    let coro_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_load_symbol_to_reg(ctx.emitter, coro_arg, "_fiber_current", 0);
+    let entry = ctx.emitter.target.extern_symbol(hook);
+    abi::emit_call_label(ctx.emitter, &entry);
+    for reg in live.iter().rev() {
+        abi::emit_pop_reg(ctx.emitter, reg);
+    }
+}
+
 /// Loads `id` into the first integer argument register, the program's live
-/// allocation counter (`_gc_allocs`) into the second, and the free counter
-/// (`_gc_frees`) into the third, then calls a `elephc_instr_*` hook. Reading
-/// both counters at the call site lets the runtime attribute allocations — and
-/// net retained objects (allocs minus frees) — per function exactly the way it
-/// attributes time.
+/// allocation counter (`_gc_allocs`) into the second, the free counter
+/// (`_gc_frees`) into the third, and this activation's frame pointer into the
+/// fourth, then calls a `elephc_instr_*` hook. Reading both counters at the call
+/// site lets the runtime attribute allocations — and net retained objects
+/// (allocs minus frees) — per function exactly the way it attributes time.
+///
+/// The frame pointer is what tells the runtime WHICH activation this is. An id
+/// alone cannot: two activations of a recursive function are the same thing to
+/// it, so an exception caught across them was charged to whichever frame the
+/// search found first, and an exit for an activation past the shadow-stack cap
+/// was indistinguishable from an exit for one that was tracked. Both were known
+/// defects with the same cause, and both close here.
+///
+/// It costs one `mov`. Every emitted function establishes a frame pointer in its
+/// prologue — unconditionally; there is no leaf or frameless variant — the enter
+/// hook runs last in that prologue and the exit hook first in the epilogue,
+/// before the teardown, so the register already holds this activation's own frame
+/// address at both sites. Live frames have distinct addresses by construction,
+/// which is exactly the property the runtime needs and the only one it uses.
+///
+/// What the runtime does NOT get for free is that a returned frame's address is
+/// handed back out, and its shadow stack can hold frames that have returned —
+/// an unwind leaves them until the catcher exits. Resolving that is the
+/// runtime's business, not this emission's; see `Frame::fp` and `dropped_fps`
+/// in `elephc-instr`.
 fn emit_instr_hook_call(ctx: &mut FunctionContext<'_>, hook: &str, id: usize) {
+    emit_instr_hook_args(ctx, id);
+    let entry = ctx.emitter.target.extern_symbol(hook);
+    abi::emit_call_label(ctx.emitter, &entry);
+}
+
+/// Places the four arguments every `elephc_instr_*` hook takes, without calling
+/// one. Split out because the coroutine hooks take a fifth.
+fn emit_instr_hook_args(ctx: &mut FunctionContext<'_>, id: usize) {
     let target = ctx.emitter.target;
     let id_arg = abi::int_arg_reg_name(target, 0);
     abi::emit_load_int_immediate(ctx.emitter, id_arg, id as i64);
@@ -1493,8 +1600,12 @@ fn emit_instr_hook_call(ctx: &mut FunctionContext<'_>, hook: &str, id: usize) {
     abi::emit_load_symbol_to_reg(ctx.emitter, allocs_arg, "_gc_allocs", 0);
     let frees_arg = abi::int_arg_reg_name(target, 2);
     abi::emit_load_symbol_to_reg(ctx.emitter, frees_arg, "_gc_frees", 0);
-    let entry = target.extern_symbol(hook);
-    abi::emit_call_label(ctx.emitter, &entry);
+    // Last, because the symbol loads above borrow a scratch register and this
+    // one must survive to the call.
+    let frame_arg = abi::int_arg_reg_name(target, 3);
+    let frame_ptr = abi::frame_pointer_reg(ctx.emitter);
+    ctx.emitter
+        .instruction(&format!("mov {frame_arg}, {frame_ptr}"));
 }
 
 /// Emits the `--instrument` exit dump call at main's epilogue (and per `--web`

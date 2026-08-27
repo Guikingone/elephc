@@ -20,7 +20,7 @@
 pub mod endpoint;
 pub mod handshake;
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 /// One entry of the compiler-embedded symbol table: function start address,
 /// name pointer, name length. Layout must match the emitted `.quad` triples.
@@ -87,14 +87,55 @@ const EVENT_TABLE_BYTES: usize = EVENT_BUCKETS * EVENT_WORDS * 8;
 /// workers forked flips only its own copy, and the master runs no PHP. The
 /// workers must be able to observe the ask that happened after they existed.
 const CONTROL_BYTES: usize = 8;
-/// Shared-region byte size: the ring, then the route table, then the per-route
-/// event counters, then the control word — all inherited across a `--web` fork,
-/// so route ids stay consistent and every worker's counters land in one place.
+/// How many recently accepted profiling signatures the service remembers.
 ///
-/// The control word is appended LAST so adding it moves no existing offset:
-/// every other area is addressed from the constants above it.
+/// Sized against COLLISIONS, not against how many asks a window carries. Each
+/// signature lands in the one slot its own value chooses, so what this number
+/// buys is the chance that two signatures live at once in the same place — one
+/// in this many, and the loser is refused. Only the key holder can produce a
+/// signature at all, so a handful of live entries is the realistic load and 4096
+/// puts that chance out of reach; the table costs 32 KiB of a mapping that
+/// already holds two megabytes.
+const REPLAY_SLOTS: usize = 4096;
+/// Bytes per remembered signature: ONE word holding the tag in its high half and
+/// the second it was accepted at in its low half.
+///
+/// One word and not two because the two must move together. With a separate tag
+/// and timestamp, a slot judged reusable from a stale timestamp was taken from
+/// the request that had just won it — the winner had published its tag and not
+/// yet its time, and the racer overwrote it. The overwritten signature was then
+/// recorded nowhere, so replaying it succeeded, which is the one thing this
+/// table exists to stop, reached with two legitimate headers and no forgery.
+/// Packed, a slot's identity and its freshness are read and replaced by a single
+/// compare-exchange, and a slot that changed in any way since it was judged
+/// cannot be taken.
+const REPLAY_SLOT_BYTES: usize = 8;
+/// How many times a spend re-reads its slot after losing the exchange.
+///
+/// A loss means another process wrote this word, and what it wrote may be this
+/// very signature — which only a re-read can see, and which the next pass
+/// refuses. Bounded because the caller is inside an HTTP request; running out
+/// returns false, refusing a request rather than admitting one.
+///
+/// Three is generous for what it guards: contention on ONE word, between the
+/// few processes holding the build key. It cannot be exhausted by an ordinary
+/// race — the first lost exchange is followed by a read that finds the slot
+/// occupied and returns immediately.
+const SPEND_ATTEMPTS: usize = 3;
+/// Replay-table bytes, in the shared mapping because the check has to hold
+/// ACROSS `--web` workers: a captured header replayed against a different worker
+/// than the one that served the original would otherwise meet a process that had
+/// never seen it.
+const REPLAY_TABLE_BYTES: usize = REPLAY_SLOTS * REPLAY_SLOT_BYTES;
+/// Shared-region byte size: the ring, then the route table, then the per-route
+/// event counters, then the control word, then the replay table — all inherited
+/// across a `--web` fork, so route ids stay consistent, every worker's counters
+/// land in one place, and a signature spent on one worker is spent on all.
+///
+/// Each new area is appended LAST so adding it moves no existing offset: every
+/// other area is addressed from the constants above it.
 const REGION_BYTES: usize =
-    RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES + CONTROL_BYTES;
+    RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES + CONTROL_BYTES + REPLAY_TABLE_BYTES;
 
 /// The shared "someone asked" word, or `None` before the region is mapped.
 ///
@@ -104,6 +145,87 @@ unsafe fn region_asked<'a>(base: usize) -> &'a std::sync::atomic::AtomicU64 {
     let offset = RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES;
     &*((base + offset) as *const std::sync::atomic::AtomicU64)
 }
+
+/// One remembered signature, tag and time in a single word.
+///
+/// # Safety
+/// Valid only after the region is mapped, for `index < REPLAY_SLOTS`.
+unsafe fn replay_slot<'a>(base: usize, index: usize) -> &'a AtomicU64 {
+    let offset = RING_BYTES
+        + ROUTE_TABLE_BYTES
+        + EVENT_TABLE_BYTES
+        + CONTROL_BYTES
+        + index * REPLAY_SLOT_BYTES;
+    &*((base + offset) as *const AtomicU64)
+}
+
+/// Packs a spent signature into its slot word.
+///
+/// The second is stored in 32 bits, which is the whole of a Unix timestamp until
+/// 2106 and is compared only against another reading of the same clock.
+fn replay_entry(tag: u32, taken_at: i64) -> u64 {
+    ((tag as u64) << 32) | (taken_at as u64 & 0xffff_ffff)
+}
+
+/// The tag half of a slot word.
+///
+/// Only the tests read it. Spending no longer needs to know WHICH signature holds
+/// a slot: used-and-live refuses either way — this signature again, which is a
+/// replay, or another that got there first, which is the collision policy — and
+/// an expired entry is taken over whatever its tag says. The tag still does the
+/// work it was added for; it is what makes a slot identify a signature at all,
+/// so a second presentation lands on the same word.
+#[cfg(test)]
+fn replay_entry_tag(word: u64) -> u32 {
+    (word >> 32) as u32
+}
+
+/// Whether a slot has ever been written.
+///
+/// The WHOLE word, not the tag half. Reserving a tag value as the empty marker
+/// meant a signature folding to it had to be remapped onto its neighbour, which
+/// made those two indistinguishable — a collision manufactured by the sentinel
+/// rather than by the fold. A real entry always carries a timestamp, and a
+/// timestamp whose low 32 bits are zero is 1970 — refused by the window long
+/// before this table is consulted — so a zero word cannot be an entry, and every
+/// one of the 2^32 tags keeps its own value.
+///
+/// Total until 2106, and stated rather than assumed: the stored seconds are the
+/// LOW 32 bits, so the one second where they wrap to zero would encode a tag-0
+/// entry as the empty word. That needs a signature folding to tag 0 (one in
+/// 2^32, and unforgeable without the key) minted in that single second.
+fn replay_entry_is_used(word: u64) -> bool {
+    word != 0
+}
+
+/// The second half of a slot word.
+fn replay_entry_taken_at(word: u64) -> u32 {
+    (word & 0xffff_ffff) as u32
+}
+
+/// Whether a slot's signature is still inside the window.
+///
+/// The subtraction WRAPS, and that is the point. Comparing a 32-bit stored
+/// second against a widened `now` works only while the clock fits in 32 bits: at
+/// the 2106 rollover an entry stored moments earlier reads as billions of seconds
+/// old, every slot reads as free, and the table stops refusing anything — replay
+/// protection does not degrade there, it inverts. A wrapping difference is exact
+/// across the boundary because the window is five minutes and the wrap is 136
+/// years, so the two can never be confused.
+///
+/// Symmetric, for the same reason the header's own window is: a stamp slightly
+/// in the FUTURE is a live entry seen by a process whose clock runs behind, and
+/// treating it as expired hands that process a slot another one had just taken —
+/// which is a second spend of one signature. The concurrent test caught exactly
+/// that when this was written one-sided, with racers two seconds apart.
+fn replay_entry_is_live(word: u64, now: i64) -> bool {
+    let now = now as u32;
+    let stored = replay_entry_taken_at(word);
+    let ahead = now.wrapping_sub(stored);
+    let behind = stored.wrapping_sub(now);
+    ahead.min(behind) <= QUERY_WINDOW_SECS as u32
+}
+
 
 /// I/O events are **not sampled**. A driver call fires exactly one, so these
 /// counts are exact — the sampler's statistical nature applies to *time*, which
@@ -164,7 +286,14 @@ pub fn event_report(base: usize) -> String {
     let count = unsafe {
         (*((base + RING_BYTES) as *const std::sync::atomic::AtomicU64)).load(Ordering::Acquire)
     } as usize;
-    for route_id in 0..EVENT_BUCKETS.min(count + 1) {
+    // `count + 2`, not `+ 1`. The counter stops at `OTHER_ROUTE_INDEX` because
+    // overflow returns the shared bucket WITHOUT claiming a slot, so it never
+    // reaches the id that bucket carries — `OTHER_ROUTE_INDEX + 1`. Bounding the
+    // walk at `count + 1` therefore stopped one short of it, and every exact I/O
+    // event charged to `<other>` was recorded and never reported. That is the
+    // silent understatement this table exists to avoid; a row nobody expected is
+    // the lesser problem, and `EVENT_BUCKETS` still bounds the walk.
+    for route_id in 0..EVENT_BUCKETS.min(count + 2) {
         let io = unsafe { event_word(base, route_id, 0) }.load(Ordering::Relaxed);
         let wait = unsafe { event_word(base, route_id, 1) }.load(Ordering::Relaxed);
         if io == 0 && wait == 0 {
@@ -510,6 +639,199 @@ unsafe fn interrupted_pc_fp(context: *mut libc::c_void) -> (u64, u64, u64) {
 /// worker/CLI stack while rejecting a wild `fp` far from `sp`.
 const STACK_WINDOW: u64 = 64 * 1024 * 1024;
 
+/// How many consecutive frames the walk may hold without corroborating them.
+///
+/// Deliberately generous, because this is NOT what stops a fabricated stack
+/// being reported — held frames are dropped unless something vouches for them,
+/// whatever this is set to, and the walk is bounded anyway by the caller's
+/// array. All it decides is how deep a native run may go before the chain is
+/// abandoned, and setting it tight cost real stacks: a sample taken inside libc
+/// reaches compiled PHP through however many frames `malloc` or `memcpy` happen
+/// to nest, and at four the whole chain — including the PHP frame that would
+/// have corroborated it — was dropped and the sample lost its attribution.
+///
+/// What a bound still buys is that a garbage chain gets fewer chances to land
+/// inside the text range by accident, so it stays bounded rather than removed.
+const UNPROVEN_RUN_MAX: usize = MAX_FRAMES / 2;
+
+/// The name the compiler gives the entry that marks the end of its own text.
+const TEXT_END_SENTINEL: &str = "<end>";
+
+/// Lowest address in the compiler's symbol table, established once at init.
+static TEXT_LOW: AtomicU64 = AtomicU64::new(0);
+/// The table's text-end sentinel, established once at init. Zero means "no
+/// usable table", which is the only state either of these is read in together.
+static TEXT_HIGH: AtomicU64 = AtomicU64::new(0);
+
+/// Records the program's own compiled text range from the symbol table.
+///
+/// The table is **not** address-sorted as it arrives: the compiler emits plain
+/// functions, then class methods, then closures, then the text-end sentinel, and
+/// the probe sorts a COPY at report time. So entry zero is whichever function
+/// came first in the module, not the lowest address — reading it as the low
+/// bound put every function emitted below it outside the range, and those are
+/// exactly the frames the walk needs in order to corroborate a chain. A program
+/// whose only plain function is `{main}` — one built entirely of class methods —
+/// has the HIGHEST address there, since main is emitted last.
+///
+/// One pass over the table at init, where a pass is free, rather than in the
+/// signal handler, where it would run at the sampling rate. The sentinel is the
+/// high bound because it marks the END of the text; the last function's own
+/// address would cut that function's body off the range.
+///
+/// # Safety
+/// `table` must point at `len` valid entries; called once from
+/// `elephc_probe_init` before any sample can be taken.
+unsafe fn record_program_text(table: *const SymtabEntry, len: usize) {
+    if table.is_null() || len < 2 {
+        return;
+    }
+    let mut low = u64::MAX;
+    let mut high_seen = 0u64;
+    for index in 0..len {
+        let address = (*table.add(index)).address;
+        low = low.min(address);
+        high_seen = high_seen.max(address);
+    }
+    // The high bound is the text-end sentinel, and that it is the LAST entry is
+    // an agreement with the emitter rather than something this crate can see. So
+    // check the agreement instead of assuming it: the sentinel is the one entry
+    // the compiler names `<end>`. If it is ever anywhere else, no range is
+    // published and the walk falls back to trusting the chain — which loses
+    // corroboration, and is much better than corroborating against a bound that
+    // is really some function's start.
+    let last = &*table.add(len - 1);
+    let name = std::slice::from_raw_parts(last.name_ptr as *const u8, last.name_len as usize);
+    if name != TEXT_END_SENTINEL.as_bytes() {
+        return;
+    }
+    let high = last.address;
+    // The sentinel must also be ABOVE every function, not merely last in the
+    // table. It is emitted after all of them, so it is — but that is an agreement
+    // with the emitter and with whatever the linker does to section order, and an
+    // agreement is worth checking. A sentinel that ended up below some function
+    // would put that function outside the range, and its frames would stop
+    // corroborating the chains they are in.
+    //
+    // Nothing is published when it fails, so the walk falls back to trusting the
+    // chain: losing corroboration beats corroborating against a bound that
+    // excludes real code.
+    if high <= low || high < high_seen {
+        return;
+    }
+    TEXT_LOW.store(low, Ordering::Relaxed);
+    TEXT_HIGH.store(high, Ordering::Relaxed);
+}
+
+/// The program's own compiled text, as `[lowest function, text end)`.
+///
+/// Two relaxed loads of words written once before user code ran, which is what
+/// makes this callable from the signal handler.
+///
+/// `None` when no table was published — a probe built without one cannot
+/// corroborate anything, and the walk says so by trusting the chain, which is
+/// what it did everywhere before.
+fn program_text_range() -> Option<(u64, u64)> {
+    let high = TEXT_HIGH.load(Ordering::Relaxed);
+    if high == 0 {
+        return None;
+    }
+    Some((TEXT_LOW.load(Ordering::Relaxed), high))
+}
+
+/// Whether a return address falls inside the program's own compiled text.
+///
+/// The question is only ever asked to CORROBORATE a frame, never to reject one:
+/// a genuine frame in a runtime helper or in libc answers false, and so does a
+/// stack word an fp-less function happened to leave behind.
+fn returns_into_program(address: u64, text: Option<(u64, u64)>) -> bool {
+    match text {
+        Some((low, high)) => address >= low && address < high,
+        // No table to check against. Every frame counts as corroborated, which
+        // is the unverified walk this crate had before the table was consulted.
+        None => true,
+    }
+}
+
+/// Walks the frame-pointer chain from `fp`, filling `out` with the return
+/// addresses it can stand behind and returning how many that is.
+///
+/// The shape checks — nonzero, 16-byte aligned, inside `[sp, sp + STACK_WINDOW)`
+/// — prove a SHAPE, and specifically NOT that the address is mapped. The window
+/// is 64 MiB above the interrupted stack pointer and a thread stack is smaller
+/// than that, so an address can pass every check and still lie past the top of
+/// the stack it was anchored to. What the window buys is that garbage has to
+/// look like a stack address to get through; bounding it to the real extent of
+/// the running thread's stack is the fix, and it needs a way to ask for that
+/// extent which is safe to call from a signal handler on both platforms.
+///
+/// They do not prove it IS a frame either: a function that uses the frame
+/// register as a general one leaves an ordinary value there, and one that is
+/// aligned and inside the window is followed. That much is inherent to walking a
+/// frame-pointer chain in-process, and every sampler that does it carries it.
+///
+/// What is NOT inherent is reporting the result. A return address inside the
+/// program's own text is proof that the frame it came from is real; one outside
+/// is either a genuine native frame or the garbage above. So frames are HELD
+/// until the chain returns into compiled code, which corroborates every frame
+/// held behind it at once, and are dropped if it never does. A stack that stops
+/// early is a stack that really ran as far as it says; a stack padded with
+/// frames nobody can vouch for reads exactly like a real one, which is worse
+/// than the missing tail.
+///
+/// The interrupted PC is not walked and not held: the kernel handed it over, so
+/// it is the one frame that needs no corroborating. The caller stores it.
+///
+/// # Safety
+/// Dereferences `fp` and `fp + 8` after checking they lie inside the window
+/// above `sp`. `out` is written only within its own length.
+unsafe fn walk_frame_chain(mut fp: u64, sp: u64, text: Option<(u64, u64)>, out: &mut [u64]) -> usize {
+    // Corroborated frames occupy `out[..proven]`; frames waiting for
+    // corroboration sit just above them and are overwritten or forgotten.
+    let mut proven = 0usize;
+    let mut held = 0usize;
+    while proven + held < out.len() {
+        // The bound is `- 16` because the two loads below read `[fp, fp+8)` and
+        // `[fp+8, fp+16)`. At `- 8` an fp eight bytes below the end of the
+        // address space passed, the first load succeeded, and the second crossed
+        // the boundary — the guard covered one of the two reads it exists for.
+        if fp == 0
+            || fp & 0xf != 0
+            || fp < sp
+            || fp.wrapping_sub(sp) >= STACK_WINDOW
+            || fp > u64::MAX - 16
+        {
+            break;
+        }
+        let next_fp = *(fp as *const u64);
+        let return_address = *((fp + 8) as *const u64);
+        if return_address < 0x1000 {
+            break;
+        }
+        out[proven + held] = return_address;
+        if returns_into_program(return_address, text) {
+            // This frame returned into code this binary compiled, which vouches
+            // for it and for every frame held behind it.
+            proven += held + 1;
+            held = 0;
+        } else {
+            held += 1;
+            if held > UNPROVEN_RUN_MAX {
+                break;
+            }
+        }
+        // Frames must strictly grow toward higher addresses or the chain is
+        // corrupt (or we crossed into a differently-shaped frame).
+        if next_fp <= fp {
+            break;
+        }
+        fp = next_fp;
+    }
+    // `held` frames are deliberately left out of the count: nothing corroborated
+    // them, and reporting them would be inventing a stack.
+    proven
+}
+
 /// The SIGPROF handler: records the interrupted PC plus the return addresses
 /// of the frame-pointer chain into the next ring slot.
 ///
@@ -540,7 +862,7 @@ extern "C" fn on_sigprof(
             return;
         }
         let head = &*(base as *const std::sync::atomic::AtomicU64);
-        let (pc, mut fp, sp) = interrupted_pc_fp(context);
+        let (pc, fp, sp) = interrupted_pc_fp(context);
         let ticket = head.fetch_add(1, Ordering::Relaxed);
         let slot_index = (ticket as usize) % RING_SLOTS;
         // Slot words are atomics: the reader (endpoint/dump) runs concurrently
@@ -588,48 +910,19 @@ extern "C" fn on_sigprof(
             None => 0,
         };
         region_word(base, slot_index, 2).store(allocs_delta, Ordering::Relaxed);
-        let mut depth = 0usize;
+        // The interrupted PC first: the kernel handed it over, so it is the one
+        // frame that needs nothing to vouch for it.
         region_word(base, slot_index, PC_WORD0).store(pc, Ordering::Relaxed);
-        depth += 1;
-        while depth < MAX_FRAMES {
-            // A valid frame pointer is nonzero, 16-byte aligned, and inside the
-            // interrupted stack window `[sp, sp + STACK_WINDOW)`. Anchoring to sp
-            // rejects a stale fp before dereferencing it can fault.
-            //
-            // These checks prove a SHAPE, not that the address is mapped, and
-            // that limit is inherent to walking a frame-pointer chain in-process:
-            // a function compiled without frame pointers leaves an ordinary value
-            // in the register, and one that happens to be aligned and inside the
-            // window is followed. Every in-process FP sampler carries this. What
-            // the window buys is that the garbage has to look like a stack
-            // address to get through.
-            //
-            // The bound is `- 16` because the two loads below read
-            // `[fp, fp+8)` and `[fp+8, fp+16)`. At `- 8` an fp eight bytes below
-            // the end of the address space passed, the first load succeeded, and
-            // the second crossed the boundary — the guard covered one of the two
-            // reads it exists for.
-            if fp == 0
-                || fp & 0xf != 0
-                || fp < sp
-                || fp.wrapping_sub(sp) >= STACK_WINDOW
-                || fp > u64::MAX - 16
-            {
-                break;
-            }
-            let next_fp = *(fp as *const u64);
-            let return_address = *((fp + 8) as *const u64);
-            if return_address < 0x1000 {
-                break;
-            }
-            region_word(base, slot_index, depth + PC_WORD0).store(return_address, Ordering::Relaxed);
+        // Walked into a stack array rather than straight into the ring, because
+        // a frame is only reportable once a LATER frame corroborates it, and a
+        // word already published cannot be taken back. 248 bytes on a 64 KiB
+        // signal stack, and no allocation.
+        let mut frames = [0u64; MAX_FRAMES - 1];
+        let walked = walk_frame_chain(fp, sp, program_text_range(), &mut frames);
+        let mut depth = 1usize;
+        for address in &frames[..walked] {
+            region_word(base, slot_index, depth + PC_WORD0).store(*address, Ordering::Relaxed);
             depth += 1;
-            // Frames must strictly grow toward higher addresses or the chain
-            // is corrupt (or we crossed into a differently-shaped frame).
-            if next_fp <= fp {
-                break;
-            }
-            fp = next_fp;
         }
         // Publish depth last with Release so a reader that loads it Acquire never
         // sees a higher depth than the PCs already stored.
@@ -656,6 +949,10 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
     TABLE_PTR.store(table as usize, Ordering::Relaxed);
     TABLE_LEN.store(len, Ordering::Relaxed);
     KEY_PTR.store(key as usize, Ordering::Relaxed);
+    // Before anything can sample: the walk consults this range from the signal
+    // handler, and establishing it there would mean a pass over the whole table
+    // a thousand times a second.
+    record_program_text(table, len);
 
     // Map the sample region MAP_SHARED before any --web fork: the mapping is
     // inherited by every worker, so all workers' SIGPROF handlers fill one ring
@@ -701,9 +998,17 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
     // thread's own stack, exactly as it did everywhere before this existed. So
     // this is a protection for the thread that matters, not a property of the
     // process — and sharing one static stack is safe only for as long as that
-    // stays true. The endpoint threads block SIGPROF, which is what keeps the
-    // other threads that exist today (the endpoint's, and the PDO bridge's tokio
-    // runtime) from reaching it; a future thread that samples would need its own.
+    // stays true. The endpoint's own threads block SIGPROF and so never reach the
+    // handler at all.
+    //
+    // The PDO bridge's tokio workers do NOT: they are built from the
+    // PHP-executing thread and inherit an unblocked mask, so a process-directed
+    // SIGPROF can land on one while it is inside a driver call. The handler then
+    // runs there, on that thread's own alternate stack, and samples the driver's
+    // stack under whatever route the PHP thread had set. That is profile
+    // pollution rather than corruption — the ring's per-slot sequence still keeps
+    // each sample whole — and it is written down here rather than denied, because
+    // an earlier version of this comment claimed the mask covered them.
     if SIGSTACK_BYTES >= libc::MINSIGSTKSZ as usize {
         let mut alt: libc::stack_t = std::mem::zeroed();
         alt.ss_sp = std::ptr::addr_of_mut!(SIGSTACK) as *mut libc::c_void;
@@ -1091,7 +1396,119 @@ fn control_fd_present() -> bool {
 /// How far a signed profiling request may be from the server's clock, in
 /// seconds. Wide enough for real clock skew between two hosts, narrow enough that
 /// a captured header stops working long before anyone finds it in a log.
+///
+/// The window alone was never the whole answer: inside it a captured header
+/// worked any number of times, from anywhere. `spend_query_tag` is what makes it
+/// work at most ONCE, so the window now only has to cover clock skew rather than
+/// stand in for a replay defence.
 const QUERY_WINDOW_SECS: i64 = 300;
+
+/// Longest accepted `n=` nonce. Long enough for a UUID or a request id, short
+/// enough that a header cannot become a channel.
+const QUERY_NONCE_MAX: usize = 64;
+
+/// Spends a verified signature, refusing one that has already been spent.
+///
+/// Returns true the first time a tag is seen and false for every repeat inside
+/// the window — so a header lifted from a log or a proxy trace is worth nothing,
+/// and one lifted before the legitimate request lands is worth exactly one
+/// request rather than five minutes of them.
+///
+/// The table lives in the SHARED mapping. A per-process memory would have made
+/// this useless under `--web`, where the replay is served by whichever worker
+/// the kernel picks and the one that saw the original may never see it again.
+///
+/// ONE slot per signature, addressed by the signature itself, and no probing.
+/// Probing is what let a header be spent twice: two requests presenting it at
+/// once could each finish a search that saw no copy of it — they need only
+/// disagree about whether some slot has expired — and each then claimed a
+/// different slot. Addressed by the tag alone, every racer contends on the same
+/// word and a compare-exchange settles it, with no agreement needed between
+/// them about anything else.
+///
+/// The cost is that two DIFFERENT signatures whose tags land on one slot cannot
+/// both be live, and the second is refused: one chance in `REPLAY_SLOTS`,
+/// failing in the direction that refuses rather than admits. A slot outside the
+/// window is free, because nothing outside it is accepted anyway, so remembering
+/// it protects nothing.
+///
+/// Refuses when it cannot remember — an unmapped region, or a slot already held
+/// by a live signature. Both mean the promise "at most once" cannot be kept for
+/// this request, and the honest answer to a privileged request nobody can
+/// account for is no.
+///
+/// # Safety
+/// Valid only for a mapped region; `base` of 0 is handled as "cannot remember".
+unsafe fn spend_query_tag(base: usize, tag: u32, stamp: i64, now: i64) -> bool {
+    if base == 0 {
+        return false;
+    }
+    // ONE slot per signature, chosen by the signature itself. Not a probe
+    // sequence: probing is what let the same signature be spent twice.
+    //
+    // With probing, two requests presenting the same captured header at once
+    // could each finish a search that saw no copy of it and then claim DIFFERENT
+    // slots — they need only disagree about whether some slot has expired, which
+    // two workers reading a clock two seconds apart do at every window edge. Both
+    // were honoured, which is the replay this table exists to refuse. Checking
+    // for a duplicate after inserting narrows that to the width of the check and
+    // does not close it, because the check is not atomic with the insert either;
+    // measured, eight racers still double-spent within a few hundred rounds.
+    //
+    // Addressed by the tag alone, every racer contends on the SAME word, and a
+    // compare-exchange settles it with no agreement needed about anything else:
+    // the loser re-reads, finds the signature there, and is refused. The price is
+    // that two DIFFERENT signatures whose tags land on one slot cannot both be
+    // live — the second is refused. That is one chance in `REPLAY_SLOTS`, it
+    // fails in the safe direction, and it is why the table is sized far above
+    // what a five-minute window ever holds rather than at the dozens that would
+    // otherwise do.
+    //
+    // What an entry RECORDS is the header's own timestamp; what judges it is the
+    // server's clock. Those are two different clocks, and recording the wrong one
+    // left a gap the size of the skew between them.
+    //
+    // A header is presentable while `|now - stamp|` is inside the window. The
+    // entry used to live while `|now - spent_at|` was, and with a server running
+    // behind by the skew the window exists to absorb, the second interval ends
+    // FIRST: the legitimate request is served, its entry expires, and the
+    // captured header — still inside its own window — is honoured again. At the
+    // limit that is five minutes of unrestricted replay after the single use
+    // this table promises.
+    //
+    // Recording the stamp makes the two intervals one interval by construction.
+    // It also removes a disagreement between workers: every process handling one
+    // header now derives liveness from a value the header carries rather than
+    // from its own clock.
+    let slot = replay_slot(base, (tag as usize) % REPLAY_SLOTS);
+    for _attempt in 0..SPEND_ATTEMPTS {
+        let word = slot.load(Ordering::Acquire);
+        let occupied = replay_entry_is_used(word) && replay_entry_is_live(word, now);
+        if occupied {
+            // Either this very signature — a replay — or another one that got
+            // here first. Same answer: this request is not honoured. Reading the
+            // age WITH the tag is safe because they share one word, so a match
+            // can never be paired with a timestamp its winner had yet to publish.
+            return false;
+        }
+        // Against the exact word just read, so a slot that turned live in between
+        // cannot be taken from the request that made it live.
+        if slot
+            .compare_exchange(
+                word,
+                replay_entry(tag, stamp),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            return true;
+        }
+        // Somebody else wrote this slot. Re-read and judge again: what they wrote
+        // may be this very signature, which the next pass will refuse.
+    }
+    false
+}
 
 /// Verifies an `X-Elephc-Query` value against the embedded build key.
 ///
@@ -1127,12 +1544,24 @@ pub unsafe extern "C" fn elephc_probe_verify_query(ptr: *const u8, len: usize) -
     };
     let mut stamp: Option<i64> = None;
     let mut tag: Option<Vec<u8>> = None;
+    let mut nonce: Option<&str> = None;
     for field in value.split(',') {
         let field = field.trim();
         if let Some(raw) = field.strip_prefix("t=") {
             stamp = raw.parse::<i64>().ok();
         } else if let Some(raw) = field.strip_prefix("v=") {
             tag = decode_hex(raw);
+        } else if let Some(raw) = field.strip_prefix("n=") {
+            // Bounded and restricted to what cannot disturb the signed message
+            // or the header's own framing.
+            if !raw.is_empty()
+                && raw.len() <= QUERY_NONCE_MAX
+                && raw.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                nonce = Some(raw);
+            } else {
+                return 0;
+            }
         }
     }
     let (Some(stamp), Some(tag)) = (stamp, tag) else {
@@ -1144,8 +1573,52 @@ pub unsafe extern "C" fn elephc_probe_verify_query(ptr: *const u8, len: usize) -
     if !within_query_window(now.tv_sec as i64, stamp) {
         return 0;
     }
-    let expected = handshake::hmac_sha256(&key, stamp.to_string().as_bytes());
-    u32::from(handshake::tags_equal(&expected, &tag))
+    // The nonce is part of the SIGNED message, never a field beside it: a value
+    // an attacker could vary without re-signing would let one captured header
+    // become as many distinct spends as they liked, which is the property the
+    // table exists to deny.
+    //
+    // Without one, the message is the timestamp alone — the original format,
+    // still accepted. That format has one signature per second per key, so two
+    // requests genuinely meant to be profiled in the same second carry the same
+    // header and the second reads as a replay of the first. A nonce separates
+    // them, and it is optional so nothing already minted stops working.
+    let signed = match nonce {
+        Some(nonce) => format!("{stamp}.{nonce}"),
+        None => stamp.to_string(),
+    };
+    let expected = handshake::hmac_sha256(&key, signed.as_bytes());
+    if !handshake::tags_equal(&expected, &tag) {
+        return 0;
+    }
+    // Spent only once the signature has PROVED itself. Checking the table first
+    // would let anyone who can set a header fill the table with junk and lock the
+    // key holder out of their own profiler — the table would then be a denial of
+    // service built out of a replay defence.
+    //
+    // The verified HMAC folded to the slot's tag width identifies it: forging a
+    // collision needs the key, and without the key no part of the tag can be
+    // chosen at all. Two distinct signatures landing on one SLOT is one chance in
+    // `REPLAY_SLOTS` and costs the second a refusal, which is the safe direction
+    // — the slot, not the tag, is what they have to share, and quoting 2^32 here
+    // understated it by six orders of magnitude.
+    u32::from(unsafe {
+        spend_query_tag(
+            REGION.load(Ordering::Relaxed),
+            fold_query_tag(&expected),
+            stamp,
+            now.tv_sec as i64,
+        )
+    })
+}
+
+/// Folds a verified HMAC into the replay slot's tag width.
+fn fold_query_tag(mac: &[u8; 32]) -> u32 {
+    let mut folded = 0u32;
+    for chunk in mac.chunks_exact(4) {
+        folded ^= u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    }
+    folded
 }
 
 /// Whether a signed timestamp is close enough to now to be accepted.
@@ -1446,15 +1919,29 @@ mod tests {
     /// Asking is what starts collection, and asking twice changes nothing.
     #[test]
     fn sampled_collection_starts_when_a_client_asks_for_it() {
+        // Serialized, and with the region forced empty for the duration.
+        //
+        // This calls the REAL `begin_sampled`, whose comment used to say "no ring
+        // is mapped in a test binary, so this stops short of the syscall". That
+        // holds for this test alone and not for the suite: `REGION` is a static
+        // that the route and replay tests swap to a heap buffer while they run,
+        // and with one of those in flight this reached `arm_timer` for real — in
+        // a binary where no SIGPROF handler is installed, so the default action
+        // terminated the process. It killed roughly one run in seven, printing no
+        // failing test at all because the process simply died. Taking the lock
+        // also stops `ASKED` from leaking into the tests that assert a build
+        // starts unasked.
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved_region = REGION.swap(0, super::Ordering::Relaxed);
         let restore = super::ASKED.load(super::Ordering::Relaxed);
         super::ASKED.store(false, super::Ordering::Relaxed);
         assert!(
             !super::should_arm(super::ASKED.load(super::Ordering::Relaxed), 0x1000),
             "a reachable service fills nothing until someone asks",
         );
-        // No ring is mapped in a test binary, so this decides and stops short of
-        // the syscall — which is the behaviour under test: the DECISION is what
-        // an authenticated client changes.
+        // The DECISION is what an authenticated client changes; `should_arm` is
+        // asked about a mapped ring with a literal, so the decision is observable
+        // without this process owning one.
         super::begin_sampled();
         assert!(
             super::should_arm(super::ASKED.load(super::Ordering::Relaxed), 0x1000),
@@ -1466,6 +1953,7 @@ mod tests {
             "a second poll finds collection already running",
         );
         super::ASKED.store(restore, super::Ordering::Relaxed);
+        REGION.store(saved_region, super::Ordering::Relaxed);
     }
 
     /// A worker only starts sampling because someone asked, never because the
@@ -1484,6 +1972,11 @@ mod tests {
     /// process stopped, so a dump that returns early leaves that flag alone.
     #[test]
     fn a_dump_on_a_binary_nobody_asked_does_nothing() {
+        // Reads `ASKED`, which other tests set and restore, so it has to hold the
+        // same lock they do — otherwise this fails whenever it lands between an
+        // ask and its restore, and the failure describes a defect that is not
+        // there.
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         assert!(
             !super::ASKED.load(super::Ordering::Relaxed),
             "a test build must start unasked, or this proves nothing"
@@ -1651,6 +2144,114 @@ mod tests {
         // At or past the sentinel start: runtime/libc territory.
         assert_eq!(symbolize(&symbols, 0x3000), "<native>");
         assert_eq!(symbolize(&symbols, 0x3001), "<native>");
+    }
+
+    /// Lays a frame-pointer chain into `stack` and returns `(sp, first fp)`.
+    ///
+    /// Each frame is the sixteen bytes both supported ABIs use —
+    /// `[fp] = caller fp`, `[fp + 8] = return address` — so the walk under test
+    /// reads a real chain rather than a mock of one. The frames are placed at
+    /// rising 16-byte-aligned addresses inside the caller's buffer, which is
+    /// what makes them pass the walk's shape checks.
+    ///
+    /// # Safety
+    /// `stack` must hold `2 * returns.len() + 4` words, which gives every frame
+    /// room after alignment.
+    unsafe fn lay_frame_chain(stack: &mut [u64], returns: &[u64]) -> (u64, u64) {
+        let base = stack.as_mut_ptr() as u64;
+        let first = (base + 15) & !15;
+        for (index, address) in returns.iter().enumerate() {
+            let fp = first + (index as u64) * 16;
+            let next = if index + 1 < returns.len() { fp + 16 } else { 0 };
+            *(fp as *mut u64) = next;
+            *((fp + 8) as *mut u64) = *address;
+        }
+        (base, first)
+    }
+
+    /// A frame is reported only once a later frame vouches for it.
+    ///
+    /// The walk's shape checks prove an address COULD be a stack slot, never
+    /// that it is a frame — a function using the frame register as a general one
+    /// leaves a value that is aligned, inside the window, and followed. What
+    /// separates a real frame from that is returning into code this binary
+    /// compiled, so frames outside the program's text are held until the chain
+    /// comes back, and dropped when it does not. The tail that goes missing was
+    /// never a stack; the tail that used to be reported read exactly like one.
+    #[test]
+    fn frames_nothing_vouches_for_are_not_reported() {
+        let text = Some((0x10_000u64, 0x20_000u64));
+        let php = |n: u64| 0x10_000 + n * 0x100;
+        let native = |n: u64| 0x7f_0000_0000u64 + n * 0x100;
+
+        // A native run BETWEEN two compiled frames is real: the chain comes back,
+        // so the helpers it went through are vouched for and kept.
+        let chain = [php(1), native(1), native(2), php(2)];
+        let mut stack = vec![0u64; chain.len() * 2 + 4];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let mut out = [0u64; MAX_FRAMES - 1];
+        let walked = unsafe { super::walk_frame_chain(fp, sp, text, &mut out) };
+        assert_eq!(&out[..walked], &chain, "a chain that returns is kept whole");
+
+        // The same run with nothing after it is the garbage case, and the whole
+        // uncorroborated tail goes rather than being reported as a stack.
+        let chain = [php(1), native(1), native(2)];
+        let mut stack = vec![0u64; chain.len() * 2 + 4];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let walked = unsafe { super::walk_frame_chain(fp, sp, text, &mut out) };
+        assert_eq!(&out[..walked], &[php(1)], "an unvouched tail is not a stack");
+
+        // A chain that never reaches compiled code reports nothing at all: every
+        // frame in it is exactly as likely to be a leftover stack word.
+        let chain = [native(1), native(2)];
+        let mut stack = vec![0u64; chain.len() * 2 + 4];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let walked = unsafe { super::walk_frame_chain(fp, sp, text, &mut out) };
+        assert_eq!(walked, 0);
+
+        // And it is abandoned rather than followed to the depth cap: past the
+        // run bound the walk stops, so a compiled frame further down does not
+        // rescue thirty frames of garbage.
+        let mut chain = vec![native(0); super::UNPROVEN_RUN_MAX + 1];
+        chain.push(php(9));
+        let mut stack = vec![0u64; chain.len() * 2 + 4];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let walked = unsafe { super::walk_frame_chain(fp, sp, text, &mut out) };
+        assert_eq!(walked, 0, "the run bound is what stops a bad chain");
+    }
+
+    /// With no symbol table there is nothing to corroborate against, and the
+    /// walk says so by trusting the chain — the behaviour it had everywhere
+    /// before the table was consulted. Stated as a test because the alternative,
+    /// silently reporting no frames at all, looks identical to an idle process.
+    #[test]
+    fn without_a_symbol_table_the_walk_trusts_the_chain() {
+        let chain = [0x7f_0000_0100u64, 0x7f_0000_0200, 0x7f_0000_0300];
+        let mut stack = vec![0u64; chain.len() * 2 + 4];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let mut out = [0u64; MAX_FRAMES - 1];
+        let walked = unsafe { super::walk_frame_chain(fp, sp, None, &mut out) };
+        assert_eq!(&out[..walked], &chain);
+    }
+
+    /// The shape checks still reject what cannot be a frame at all, and they run
+    /// BEFORE the dereference, which is what keeps a stale register from
+    /// faulting the handler.
+    #[test]
+    fn the_walk_refuses_a_frame_pointer_that_cannot_be_one() {
+        let chain = [0x10_100u64];
+        let mut stack = vec![0u64; 8];
+        let (sp, fp) = unsafe { lay_frame_chain(&mut stack, &chain) };
+        let text = Some((0x10_000u64, 0x20_000u64));
+        let mut out = [0u64; MAX_FRAMES - 1];
+        for bad in [0, fp + 8, sp.saturating_sub(16), sp + super::STACK_WINDOW, u64::MAX - 8] {
+            let walked = unsafe { super::walk_frame_chain(bad, sp, text, &mut out) };
+            assert_eq!(walked, 0, "fp {bad:#x} must not be walked");
+        }
+        // The good one still walks, so the row above is rejection and not a
+        // walk that never worked.
+        let walked = unsafe { super::walk_frame_chain(fp, sp, text, &mut out) };
+        assert_eq!(&out[..walked], &chain);
     }
 
     /// The first sample establishes the baseline; it does not spend it.
@@ -2028,21 +2629,6 @@ mod tests {
         REGION.store(0, Ordering::Relaxed);
     }
 
-    /// A full route table returns id 0 (untagged) rather than mis-attributing an
-    /// overflow sample to an arbitrary existing route.
-    /// I/O events are counted exactly, per route, and survive the untagged case.
-    ///
-    /// The point of the whole exercise: a driver call fires exactly one event, so
-    /// these counts do not depend on sampling luck. A CLI run has no route, and
-    /// dropping its events would understate the totals silently — worse than a row
-    /// nobody expected — so id 0 gets its own bucket.
-    /// Only a holder of the build key may turn profiling on.
-    ///
-    /// Without this, anyone who can set a header profiles your production: the
-    /// request pays real time and the response reveals the shape of the code. The
-    /// cases below are the ones an attacker actually has — no signature, a
-    /// signature over a different message, a stale one captured from a log, and a
-    /// truncated tag hoping for a prefix comparison.
     /// Installs `fd` as CONTROL_FD for the duration of a check, then restores.
     ///
     /// Tests share one descriptor table, so this saves and puts back whatever was
@@ -2138,9 +2724,14 @@ mod tests {
     /// An unsigned, stale, or wrongly-signed header turns nothing on: asking
     /// to profile production is a privileged act.
     fn only_a_signed_query_enables_profiling() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let key = [7u8; handshake::KEY_LEN];
         let published: Vec<u8> = key.to_vec();
         KEY_PTR.store(published.as_ptr() as usize, Ordering::Relaxed);
+        // A verified signature is SPENT against the shared replay table, so the
+        // region has to exist for one to be accepted at all — see the test below.
+        let mut region = vec![0u8; REGION_BYTES];
+        let saved_region = REGION.swap(region.as_mut_ptr() as usize, Ordering::Relaxed);
 
         let now = {
             let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
@@ -2169,7 +2760,7 @@ mod tests {
         assert!(!check(&format!("t={now},v={hex}")));
 
         // Truncated: must not pass a prefix comparison.
-        let good = sign(now);
+        let good = sign(now - 1);
         assert!(!check(&good[..good.len() - 4]));
         // Malformed and empty values are refused rather than parsed loosely.
         assert!(!check("t=abc,v=zz"));
@@ -2177,7 +2768,461 @@ mod tests {
 
         KEY_PTR.store(0, Ordering::Relaxed);
         // With no key published there is nothing to verify against, so nothing passes.
-        assert!(!check(&sign(now)));
+        assert!(!check(&sign(now - 2)));
+        REGION.store(saved_region, Ordering::Relaxed);
+    }
+
+    /// A signature is worth one request, not five minutes of them.
+    ///
+    /// The timestamp bounds how LONG a captured header keeps working; on its own
+    /// it says nothing about how OFTEN. Inside the window a value lifted from a
+    /// proxy log, an access log or a shared trace could be replayed without
+    /// limit, and each replay costs the service a profiled request. Spending the
+    /// tag makes the second use fail, whoever sends it and whichever worker
+    /// receives it — which is why the table is in the shared mapping rather than
+    /// beside the verifier.
+    #[test]
+    fn a_verified_signature_is_spent_and_cannot_be_replayed() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = [3u8; handshake::KEY_LEN];
+        let published: Vec<u8> = key.to_vec();
+        let saved_key = KEY_PTR.swap(published.as_ptr() as usize, Ordering::Relaxed);
+        let mut region = vec![0u8; REGION_BYTES];
+        let saved_region = REGION.swap(region.as_mut_ptr() as usize, Ordering::Relaxed);
+
+        let now = {
+            let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+            unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut ts) };
+            ts.tv_sec as i64
+        };
+        let sign = |stamp: i64| {
+            let tag = handshake::hmac_sha256(&key, stamp.to_string().as_bytes());
+            let hex: String = tag.iter().map(|b| format!("{b:02x}")).collect();
+            format!("t={stamp},v={hex}")
+        };
+        let check =
+            |value: &str| unsafe { elephc_probe_verify_query(value.as_ptr(), value.len()) } == 1;
+
+        let header = sign(now);
+        assert!(check(&header), "the request that asked is served");
+        assert!(!check(&header), "the same header again is a replay");
+        assert!(!check(&header), "and stays one");
+
+        // A different request, still inside the same window, is unaffected: the
+        // table remembers signatures, it does not close the window.
+        assert!(check(&sign(now - 30)), "a distinct ask is still honoured");
+
+        // The slot is addressed from the tag, so this also covers the case that
+        // matters most — two workers meeting the same replay — by construction:
+        // both contend on the same word and one loses the exchange.
+        let tag = fold_query_tag(&handshake::hmac_sha256(&key, now.to_string().as_bytes()));
+        let word = unsafe {
+            replay_slot(REGION.load(Ordering::Relaxed), (tag as usize) % REPLAY_SLOTS)
+        }
+        .load(Ordering::Acquire);
+        assert_eq!(
+            replay_entry_tag(word),
+            tag,
+            "the spent tag lands on the slot its own value chooses"
+        );
+        assert!(
+            replay_entry_is_live(word, now),
+            "and carries the time it was taken, in the same word"
+        );
+
+        // Two asks in the SAME second are two distinct requests, and a nonce is
+        // what says so. Without one they mint the identical header, which the
+        // table cannot tell from a replay — with one they are separate.
+        let signed_nonce = |stamp: i64, nonce: &str| {
+            let mac = handshake::hmac_sha256(&key, format!("{stamp}.{nonce}").as_bytes());
+            let hex: String = mac.iter().map(|b| format!("{b:02x}")).collect();
+            format!("t={stamp},n={nonce},v={hex}")
+        };
+        let second = now - 5;
+        assert!(check(&signed_nonce(second, "req-1")));
+        assert!(check(&signed_nonce(second, "req-2")), "same second, other request");
+        assert!(!check(&signed_nonce(second, "req-1")), "and each is still single use");
+        // A nonce that was not signed is not a nonce: varying it must not turn
+        // one captured header into an unlimited supply of spends.
+        let stolen = signed_nonce(second, "req-2").replace("n=req-2", "n=req-3");
+        assert!(!check(&stolen), "an unsigned nonce cannot re-open a spent header");
+
+        // Nowhere to remember means the promise cannot be kept, and the answer to
+        // a privileged request nobody can account for is no.
+        REGION.store(0, Ordering::Relaxed);
+        assert!(!check(&sign(now - 60)));
+
+        REGION.store(saved_region, Ordering::Relaxed);
+        KEY_PTR.store(saved_key, Ordering::Relaxed);
+    }
+
+    /// The `<other>` bucket's exact counters are reported, not merely recorded.
+    ///
+    /// Overflow returns the shared bucket without claiming a slot, so the route
+    /// counter stops one short of the id that bucket carries. Walking the event
+    /// table to `count + 1` therefore stopped short of it too, and every exact
+    /// I/O event charged to `<other>` was recorded and never printed — the silent
+    /// understatement this table exists to avoid, and the one thing its own
+    /// comments call worse than a row nobody expected.
+    #[test]
+    fn the_overflow_bucket_reports_the_events_charged_to_it() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+        REGION.store(base, Ordering::Relaxed);
+        let saved_route = CURRENT_ROUTE.swap(0, Ordering::Relaxed);
+
+        unsafe {
+            // Fill the table, then take the shared bucket.
+            for index in 0..OTHER_ROUTE_INDEX {
+                assert_eq!(intern_route(&format!("route-{index}")), index + 1);
+            }
+            let other = intern_route("one-too-many");
+            assert_eq!(other, OTHER_ROUTE_INDEX + 1);
+            CURRENT_ROUTE.store(other, Ordering::Relaxed);
+        }
+
+        elephc_probe_note_io();
+        elephc_probe_note_wait(4_000);
+
+        let report = event_report(base);
+        assert!(
+            report.contains(&format!("{OTHER_ROUTE_NAME} ops=1 wait_ns=4000")),
+            "events charged to the overflow bucket were recorded and never \
+             reported: {report}"
+        );
+
+        CURRENT_ROUTE.store(saved_route, Ordering::Relaxed);
+        REGION.store(0, Ordering::Relaxed);
+    }
+
+    /// A signature that folds to zero keeps its own slot value.
+    ///
+    /// Reserving a TAG value as the empty marker forced any signature folding to
+    /// it onto its neighbour, so those two became indistinguishable — a collision
+    /// manufactured by the sentinel rather than by the fold, and the second of
+    /// the pair was refused as a replay of the first. The whole word marks an
+    /// unused slot instead, which a real entry can never be: it always carries a
+    /// timestamp, and a zero timestamp is 1970, refused by the window long before
+    /// this table is reached.
+    #[test]
+    fn a_signature_that_folds_to_zero_is_not_confused_with_its_neighbour() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+        let now = 7_000_000i64;
+
+        // Both are honoured: they are different signatures and, since neither is
+        // remapped onto the other, they do not share a slot value.
+        assert!(unsafe { spend_query_tag(base, 0, now, now) }, "tag 0 is a tag");
+        assert!(unsafe { spend_query_tag(base, 1, now, now) }, "and so is tag 1");
+
+        // Each is spent once, on its own account.
+        assert!(!unsafe { spend_query_tag(base, 0, now, now) });
+        assert!(!unsafe { spend_query_tag(base, 1, now, now) });
+
+        // A never-written slot is the zero WORD, which a real entry cannot be.
+        let untouched = unsafe { replay_slot(base, 9) }.load(Ordering::Acquire);
+        assert!(!replay_entry_is_used(untouched));
+        assert!(replay_entry_is_used(replay_entry(0, now)), "tag 0 with a real time is an entry");
+
+        REGION.store(saved_region, Ordering::Relaxed);
+    }
+
+    /// A slot's age survives the 2106 rollover, and a clock two seconds behind.
+    ///
+    /// Both directions matter and for opposite reasons. Across the rollover a
+    /// widened comparison reads an entry stored moments earlier as billions of
+    /// seconds old, so every slot reads free and the table stops refusing
+    /// anything — replay protection does not degrade there, it inverts. And a
+    /// stamp slightly in the FUTURE is what a process whose clock runs behind
+    /// sees of an entry another process has just taken; reading that as expired
+    /// hands it the same slot, which is one signature spent twice.
+    #[test]
+    fn a_slots_age_survives_the_rollover_and_a_clock_that_lags() {
+        // Seconds either side of the 32-bit wrap.
+        let before = u32::MAX as i64 - 1;
+        let after = u32::MAX as i64 + 2;
+        let tag = 5u32;
+
+        // Stored just before the wrap, read just after: four seconds apart.
+        let word = replay_entry(tag, before);
+        assert!(
+            replay_entry_is_live(word, after),
+            "four seconds is four seconds, whichever side of the wrap they fall"
+        );
+        // And genuinely old across it is still old.
+        assert!(!replay_entry_is_live(replay_entry(tag, before - 3600), after));
+
+        // A stamp in the future, which is how a lagging clock sees a fresh entry.
+        let now = 4_000_000i64;
+        assert!(replay_entry_is_live(replay_entry(tag, now + 2), now));
+        assert!(!replay_entry_is_live(
+            replay_entry(tag, now + QUERY_WINDOW_SECS + 60),
+            now
+        ));
+    }
+
+    /// A spent signature stays spent for as long as its header stays valid.
+    ///
+    /// Two clocks decide two things: the header is presentable while
+    /// `|server now - stamp|` is inside the window, and the entry recording it
+    /// used to live while `|server now - the moment it was spent|` was. With a
+    /// server running behind by the skew the window exists to absorb, the second
+    /// interval ends FIRST — the legitimate request is served, its entry expires,
+    /// and the captured header, still inside its own window, is honoured again.
+    /// At the limit that is five minutes of unrestricted replay after the single
+    /// use this table promises.
+    ///
+    /// Recording the header's own stamp makes the two intervals one.
+    #[test]
+    fn a_spent_signature_outlives_the_skew_that_minted_it() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+
+        // The server runs a full window behind the client that minted the header,
+        // which is the most the window is meant to absorb.
+        let served_at = 6_000_000i64;
+        let stamp = served_at + QUERY_WINDOW_SECS;
+        let tag = 13u32;
+
+        assert!(
+            within_query_window(served_at, stamp),
+            "the header is presentable at the edge of the skew, or this proves nothing"
+        );
+        assert!(unsafe { spend_query_tag(base, tag, stamp, served_at) });
+
+        // A second later than the entry's OLD lifetime would have allowed, and
+        // still well inside the header's own.
+        let replayed_at = served_at + QUERY_WINDOW_SECS + 1;
+        assert!(
+            within_query_window(replayed_at, stamp),
+            "the captured header is still presentable here — that is the whole gap"
+        );
+        assert!(
+            !unsafe { spend_query_tag(base, tag, stamp, replayed_at) },
+            "so the table must still be refusing it"
+        );
+
+        // Once the header itself can no longer be presented, the slot is free
+        // again: there is nothing left to protect.
+        let expired_at = stamp + QUERY_WINDOW_SECS + 1;
+        assert!(!within_query_window(expired_at, stamp));
+        assert!(unsafe { spend_query_tag(base, tag + 1, expired_at, expired_at) });
+
+        REGION.store(saved_region, Ordering::Relaxed);
+    }
+
+    /// A slot is reusable once its signature ages out, and not before.
+    ///
+    /// One slot per signature means a second signature landing on the same slot
+    /// is refused while the first is live — one chance in `REPLAY_SLOTS`, failing
+    /// in the safe direction. What must NOT happen is the slot staying spent
+    /// forever: once the window has passed there is nothing left to protect,
+    /// because the timestamp check upstream already refuses anything that old.
+    #[test]
+    fn a_slot_is_reusable_once_its_signature_ages_out() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+        let now = 1_000_000i64;
+
+        let tag = 7u32;
+        let slot = unsafe { replay_slot(base, (tag as usize) % REPLAY_SLOTS) };
+
+        // Another signature holds the slot, still inside the window.
+        slot.store(replay_entry(tag + 1, now), Ordering::Release);
+        assert!(
+            !unsafe { spend_query_tag(base, tag, now, now) },
+            "a live slot belongs to whoever took it"
+        );
+
+        // Once it ages out the slot is free again.
+        slot.store(replay_entry(tag + 1, now - QUERY_WINDOW_SECS - 60), Ordering::Release);
+        assert!(unsafe { spend_query_tag(base, tag, now, now) });
+        assert_eq!(replay_entry_tag(slot.load(Ordering::Acquire)), tag);
+
+        // And having taken it, this signature is spent.
+        assert!(!unsafe { spend_query_tag(base, tag, now, now) });
+
+        REGION.store(saved_region, Ordering::Relaxed);
+    }
+
+    /// A slot that became live between being judged reusable and being taken is
+    /// not taken.
+    ///
+    /// The defect two independent jurors found. With tag and time in separate
+    /// words, a request that had just won a slot had published its tag and not
+    /// yet its timestamp; a concurrent request judged that slot reusable from the
+    /// stale time, re-read only the tag, and overwrote the winner. The
+    /// overwritten signature was then recorded nowhere, so replaying it
+    /// succeeded — reached with two legitimate headers and no forgery at all.
+    ///
+    /// Staged by storing what each step would have published: no test can make
+    /// two processes interleave at a chosen instruction.
+    #[test]
+    fn a_slot_that_turned_live_under_us_is_not_taken() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+        let now = 2_000_000i64;
+
+        // Two signatures whose tags land on one slot — the only way either is in
+        // a position to overwrite the other at all.
+        let mine = 11u32;
+        let theirs = mine + REPLAY_SLOTS as u32;
+        let slot = unsafe { replay_slot(base, (mine as usize) % REPLAY_SLOTS) };
+        assert_eq!(
+            (theirs as usize) % REPLAY_SLOTS,
+            (mine as usize) % REPLAY_SLOTS,
+            "they must share a slot or there is nothing to race for"
+        );
+
+        // Theirs wins it outright — tag AND time in one store, which is what a
+        // compare-exchange publishes.
+        slot.store(replay_entry(theirs, now), Ordering::Release);
+
+        assert!(
+            !unsafe { spend_query_tag(base, mine, now, now) },
+            "ours is refused rather than served by evicting theirs"
+        );
+        assert_eq!(
+            replay_entry_tag(slot.load(Ordering::Acquire)),
+            theirs,
+            "the request that made the slot live keeps it"
+        );
+
+        // And because it kept it, replaying THEIR header is still refused.
+        assert!(!unsafe { spend_query_tag(base, theirs, now, now) });
+
+        REGION.store(saved_region, Ordering::Relaxed);
+    }
+
+    /// One signature is spent once, however many racers present it at once.
+    ///
+    /// The property a replay defence lives or dies by, and the one that probing
+    /// could not hold: with a probe sequence, two requests presenting the same
+    /// captured header at once could each finish a search that saw no copy of it
+    /// — they need only disagree about whether some slot has expired, which two
+    /// workers reading a clock two seconds apart do at every window edge — and
+    /// each then claimed a different slot. Both were honoured. Checking for a
+    /// duplicate after inserting narrowed that and did not close it, because the
+    /// check is not atomic with the insert either; measured, eight racers still
+    /// double-spent within a few hundred rounds.
+    ///
+    /// Addressed by the tag alone, every racer contends on the same word and a
+    /// compare-exchange settles it. Run concurrently on purpose: the defect IS
+    /// the interleaving, and a single-threaded version cannot reach it.
+    #[test]
+    fn one_signature_is_spent_once_however_many_present_it() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        const RACERS: usize = 8;
+        const ROUNDS: usize = 300;
+        let base_time = 4_000_000i64;
+
+        for round in 0..ROUNDS {
+            let mut region = vec![0u8; REGION_BYTES];
+            let base = region.as_mut_ptr() as usize;
+            let tag = 1_000 + round as u32;
+
+            // The slot is held by an unrelated signature stamped right at the
+            // window's edge, so racers reading a clock a couple of seconds apart
+            // disagree about whether it is free. That disagreement is what made
+            // the old design hand out two slots.
+            let edge = base_time - QUERY_WINDOW_SECS;
+            unsafe { replay_slot(base, (tag as usize) % REPLAY_SLOTS) }
+                .store(replay_entry(tag + 7, edge), Ordering::Release);
+
+            let ready = std::sync::Barrier::new(RACERS);
+            let wins = std::sync::atomic::AtomicUsize::new(0);
+            std::thread::scope(|scope| {
+                for racer in 0..RACERS {
+                    let ready = &ready;
+                    let wins = &wins;
+                    scope.spawn(move || {
+                        let now = if racer % 2 == 0 { base_time + 2 } else { base_time - 2 };
+                        ready.wait();
+                        if unsafe { spend_query_tag(base, tag, now, now) } {
+                            wins.fetch_add(1, Ordering::Relaxed);
+                        }
+                    });
+                }
+            });
+
+            assert!(
+                wins.load(Ordering::Relaxed) <= 1,
+                "round {round}: a signature is spent once, not once per racer"
+            );
+        }
+    }
+
+    /// The text range is the LOWEST address in the table, not the first entry.
+    ///
+    /// The compiler emits plain functions, then class methods, then closures,
+    /// then the text-end sentinel, and the probe sorts a COPY at report time — so
+    /// the table as it arrives is in module order. Reading entry zero as the low
+    /// bound put every function emitted below it outside the range, and a
+    /// program built entirely of class methods has the worst case: its only
+    /// plain function is `{main}`, which is emitted LAST and therefore sits at
+    /// the highest address while occupying the table's first slot.
+    #[test]
+    fn the_text_range_does_not_assume_a_sorted_table() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let name = b"f";
+        let end = TEXT_END_SENTINEL.as_bytes();
+        let entry = |address: u64, label: &[u8]| SymtabEntry {
+            address,
+            name_ptr: label.as_ptr() as u64,
+            name_len: label.len() as u64,
+        };
+        // Module order for a methods-only program: `{main}` first in the table
+        // and highest in memory, methods below it, sentinel last.
+        let table = [
+            entry(0x9000, name),
+            entry(0x2000, name),
+            entry(0x3000, name),
+            entry(0xa000, end),
+        ];
+        let saved = (TEXT_LOW.load(Ordering::Relaxed), TEXT_HIGH.load(Ordering::Relaxed));
+        unsafe { record_program_text(table.as_ptr(), table.len()) };
+        assert_eq!(
+            program_text_range(),
+            Some((0x2000, 0xa000)),
+            "the low bound is the lowest address, not the first entry"
+        );
+        // The method frames that entry zero would have excluded now corroborate.
+        assert!(returns_into_program(0x2100, program_text_range()));
+        assert!(returns_into_program(0x9100, program_text_range()));
+        // And the sentinel still bounds the top.
+        assert!(!returns_into_program(0xa000, program_text_range()));
+
+        // A table too short to have a sentinel leaves no range at all, and the
+        // walk falls back to trusting the chain rather than corroborating
+        // against a bound it made up.
+        TEXT_LOW.store(0, Ordering::Relaxed);
+        TEXT_HIGH.store(0, Ordering::Relaxed);
+        unsafe { record_program_text(table.as_ptr(), 1) };
+        assert_eq!(program_text_range(), None);
+
+        // A table whose last entry is NOT the sentinel publishes nothing either.
+        // That the sentinel comes last is an agreement with the emitter, and an
+        // agreement is worth checking: a high bound taken from some function's
+        // start would silently cut the text short.
+        let unsentinelled = [entry(0x2000, name), entry(0x9000, name)];
+        unsafe { record_program_text(unsentinelled.as_ptr(), unsentinelled.len()) };
+        assert_eq!(
+            program_text_range(),
+            None,
+            "no sentinel, no range — corroborating against a made-up bound is worse"
+        );
+
+        TEXT_LOW.store(saved.0, Ordering::Relaxed);
+        TEXT_HIGH.store(saved.1, Ordering::Relaxed);
     }
 
     #[test]
