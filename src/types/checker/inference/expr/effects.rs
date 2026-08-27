@@ -429,6 +429,12 @@ impl Checker {
                                         .insert(var.clone());
                                 }
                             } else {
+                                // The binding survives the `unset` in the ENVIRONMENT while the
+                                // runtime slot is released and nulled, so a later assignment reads
+                                // as a retype of a value that is no longer there. Recorded so the
+                                // widening fallback declines: widening such a slot leaks one boxed
+                                // cell, measured, where refusing merely rejects a program php runs.
+                                self.unset_without_kill.insert(var.clone());
                                 // This visit RE-DECIDES the site. The checker walks a body more
                                 // than once (top level twice, method bodies to stability, a
                                 // function body once per call-site re-specialization), and only

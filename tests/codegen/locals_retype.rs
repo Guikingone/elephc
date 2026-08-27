@@ -2727,6 +2727,75 @@ fn test_by_value_foreach_value_var_retypes_after_the_loop() {
     );
 }
 
+/// A retype WIDENS the slot where the kill cannot reach, and the value survives.
+///
+/// The kill needs the name to be KILLABLE, which asks among other things for a binding depth of
+/// 0 — proof that the store creating the binding definitely ran. A `catch` variable has no such
+/// proof: `catch (Throwable $e) { … } $e = new A();` was refused at compile time, and `php -n`
+/// 8.5.6 runs it. So is every crossing between kinds, which php has no rule against at all.
+///
+/// Widening is the other mechanism and asks for no such proof: the slot stays where it is and
+/// becomes a boxed cell carrying its own tag. What that leaves to check is the thing a refusal
+/// never had to prove — that the value written after the crossing is the one that reads back.
+///
+/// Heap-debug is load-bearing, not decorative. Until this, the only widening was between
+/// `Int|Bool|False|Float`, whose values are TAGGED and allocate nothing, so the widened slot had
+/// never held heap storage and nothing had ever had to release it. Every shape below puts a
+/// string, an array or an object there.
+#[test]
+fn test_a_retype_widens_where_the_kill_cannot_reach() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public function name(): string { return "A"; } }
+try { throw new RuntimeException("boom"); }
+catch (Throwable $e) { echo get_class($e), ";"; }
+$e = new A();
+echo $e->name(), "|";
+
+$o = new A();
+$o = "s" . $argc;
+echo $o, "|";
+
+$q = new A();
+$q = 7;
+echo $q, "|";
+
+$r = [$argc];
+$r = "arr" . $argc;
+echo $r, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "RuntimeException;A|s1|7|arr1\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// And it stops at an `unset` whose kill was WITHHELD, where it would leak.
+///
+/// When `unset` reaches a name it cannot kill, the environment keeps the old type while the
+/// RUNTIME releases the slot and stores null. A later assignment therefore looks like an ordinary
+/// retype and is not one: widening the slot for it leaks one boxed cell per site — measured, on
+/// all five shapes `error_tests` covers (a branch-created binding, a `list()` target in a branch,
+/// a `foreach` value variable, a by-value capture, an `unset` inside `try`).
+///
+/// So the refusal stands there, and this pins that it does. `php -n` 8.5.6 runs these programs, so
+/// the refusal is a divergence — a LOUD one, kept in preference to a silent leak until the missing
+/// release is understood. `Checker::unset_without_kill` is the flag, and this is its contract.
+#[test]
+fn test_a_withheld_kill_keeps_the_refusal_rather_than_leaking() {
+    let error = compile_expect_type_error(
+        "<?php if ($argc > 1) { $a = 1; } unset($a); $a = \"s\" . $argc; echo $a;",
+    );
+    assert!(
+        error.contains("cannot reassign $a from int to string"),
+        "expected the refusal to stand, got: {error}"
+    );
+}
+
 /// The kill half of the same control: with no alias in sight, `unset` really ends the by-value
 /// value variable's binding and the incompatible rebind gets a fresh slot.
 ///

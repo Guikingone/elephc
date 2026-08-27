@@ -77,6 +77,14 @@ pub(crate) struct Checker {
     /// its own body put them there, and no later call site may specialize it back to a narrow
     /// element type: the caller's storage is what was widened. A parameter merely DECLARED
     /// `array` is not in the set, which is how a `sort($a)` body keeps slots the backend sorts.
+    /// Names an `unset` reached whose binding it could NOT end.
+    ///
+    /// The kill needs the name to be killable; when it is not, the env keeps the old type while
+    /// the RUNTIME still released the slot and stored null. A later reassignment therefore looks
+    /// like an ordinary retype and is not one — and widening the slot for it LEAKS: measured, one
+    /// boxed cell per site, because the store into the widened slot has no owner to hand back to.
+    /// The widening declines for these names and the refusal stands.
+    pub unset_without_kill: HashSet<String>,
     pub by_ref_widened_params: HashSet<(String, usize)>,
     /// Functions whose signature is being re-resolved because their body widened a
     /// by-reference array parameter. The set bounds that re-entry to one pass: `array<mixed>`
@@ -476,6 +484,36 @@ impl Checker {
             // or more and `None` are indistinguishable HERE, and this is the only killable-relevant
             // reader of the map.
             && self.local_binding_depth.get(name).copied() == Some(0)
+            && !self.active_ref_params.contains(name)
+            && !self.ref_aliased_locals.contains(name)
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
+            && !self.typed_local_names.contains(name)
+    }
+
+    /// Whether the name's storage is THIS frame's alone, whatever introduced the binding.
+    ///
+    /// `local_binding_is_killable` above answers a stronger question — may this binding be ENDED
+    /// and replaced by a fresh slot — and its `Some(0)` clause is what separates them. That clause
+    /// covers two different things at once: a name whose storage is not this frame's at all
+    /// (a superglobal, an extern global), and a name a CONDITIONAL group introduced without an
+    /// assignment (a `catch` variable, a `foreach` or `list()` target, a builtin out-parameter).
+    /// The first must never be re-bound. The second is ordinary frame storage; it is only the kill
+    /// that it cannot have, because nothing proves the binding ran.
+    ///
+    /// WIDENING has no such requirement: it keeps the one slot and boxes it, so a binding that may
+    /// not have run is no obstacle. What it does need is that no one ELSE reads the slot by name —
+    /// a by-reference parameter's caller, a `global`, a `static`, an `eval` body — which is every
+    /// other clause below, kept verbatim.
+    pub(crate) fn local_binding_storage_is_private(&self, name: &str) -> bool {
+        !self.body_contains_eval
+            // Depth 0, kept from the killable rule though a widening does not need it for its
+            // OWN sake: the marking machinery in `mixed_storage_scan` reads the same shape, and
+            // relaxing it here turned seven of its `error_tests` red — a name widened inside a
+            // branch is one that pass then declines to mark. The cost is one measured divergence,
+            // `$a = 1; try { unset($a); } finally {} if ($c) { $a = "s"; }`, which php runs.
+            && self.local_conditional_depth == 0
+            && !self.name_is_seeded_program_storage(name)
             && !self.active_ref_params.contains(name)
             && !self.ref_aliased_locals.contains(name)
             && !self.active_globals.contains(name)

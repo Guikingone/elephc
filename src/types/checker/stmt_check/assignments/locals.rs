@@ -905,6 +905,42 @@ pub(crate) fn merge_local_assignment_type(
                 env.insert(name.to_string(), ty.clone());
                 return Ok(());
             }
+            // The re-bind above could not take it, and php still runs the program: a variable
+            // holds whatever was last written to it, whatever KIND that is. `catch (Throwable $e)`
+            // followed by `$e = new A()` in the same scope is the shape that matters — ordinary
+            // code, and one the re-bind can never serve, because a catch variable is introduced by
+            // a conditional group and so carries no binding depth for
+            // `local_binding_is_killable` to approve.
+            //
+            // Widening is the OTHER mechanism, and it is second on purpose. The re-bind gives the
+            // name a fresh slot at its new type and says so out loud; this boxes the slot for the
+            // whole frame and says nothing, which is the right answer only where the first is
+            // unavailable. Putting it in `merged_assignment_type` instead — where a first attempt
+            // at this put it — preempted the re-bind for every killable name and took 86
+            // `error_tests` with it, all of them asserting the warning that then never came.
+            //
+            // And it is gated on the storage being this frame's ALONE, which is every clause of
+            // the killable rule except the one about binding DEPTH. That clause is what a catch
+            // variable trips, and it is about whether the binding definitely ran — a question a
+            // kill has to answer and a widening does not, since the slot survives either way. The
+            // rest are about who else reads the slot by name: a by-reference parameter's caller, a
+            // `global`, a `static`, an `eval` body. Skipping those refused nothing and widened 56
+            // programs whose storage was not ours to box.
+            // `--strict-locals` exists to make an incompatible retype an ERROR, and it means the
+            // widening as much as the re-bind: both let the program through.
+            if !checker.strict_locals
+                && !checker.unset_without_kill.contains(name)
+                && checker.local_binding_storage_is_private(name)
+                && reassignment_widens_to_mixed(existing)
+                && reassignment_widens_to_mixed(ty)
+            {
+                let scope = checker.current_loop_storage_scope.clone();
+                checker
+                    .widened_scalar_locals
+                    .insert((scope, name.to_string()));
+                env.insert(name.to_string(), PhpType::Mixed);
+                return Ok(());
+            }
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -1180,4 +1216,24 @@ pub(super) fn check_static_var(
     checker.active_statics.insert(name.to_string());
     env.insert(name.to_string(), ty);
     Ok(())
+}
+
+/// Reports whether a type can live in a widened `mixed` slot after a reassignment.
+///
+/// Every VALUE shape can: a Mixed cell carries its own tag, so the slot holds whichever was
+/// written last. The exclusions are the shapes that are not php values at all — a raw pointer, a
+/// buffer, a packed struct, a callable descriptor — for which "box it and dispatch on the tag" has
+/// no meaning, and `Never`/`Void`, which the merge answers before ever reaching the refusal.
+fn reassignment_widens_to_mixed(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+    )
 }
