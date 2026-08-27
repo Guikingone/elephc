@@ -291,8 +291,10 @@ pub(crate) fn no_profile_reason(
             binary.display()
         ),
         Some(0) | None => format!(
-            "{} completed a valid capture window with no instrumented frames; under selective \
-             instrumentation this means none of the selected functions ran",
+            "{} acknowledged monitoring and exited cleanly, but published no instrumented \
+             frames; this is expected only when selective instrumentation selected no function \
+             that ran. A full capture should always publish {{main}}, so otherwise its active \
+             window did not close or publish correctly",
             binary.display()
         ),
         Some(_) => unreachable!("non-zero statuses were handled above"),

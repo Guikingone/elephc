@@ -159,7 +159,7 @@ fn test_cli_monitor_writes_php_level_speedscope_profile() {
         exact["edges"].as_array().expect("exact edges").iter().any(|edge| {
             edge["from"] == main && edge["to"] == burn && edge["count"] == 1
         }),
-        "the ordinary call must be attributed from {main} to burn: {exact}"
+        "the ordinary call must be attributed from {{main}} to burn: {exact}"
     );
     assert!(
         !exact["edges"]
@@ -171,6 +171,170 @@ fn test_cli_monitor_writes_php_level_speedscope_profile() {
     );
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Shutdown output handlers and object destructors remain children of the
+/// exact `{main}` frame instead of becoming disconnected graph roots.
+#[test]
+fn test_cli_monitor_keeps_shutdown_callbacks_under_main() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_shutdown_callbacks");
+    fs::write(
+        dir.join("shutdown.php"),
+        r#"<?php
+function shutdown_handler(string $contents, int $phase): string {
+    $n = 0;
+    for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    if ($phase < 0) { echo $n; }
+    return $contents;
+}
+class CleanupProbe {
+    public function __destruct() {
+        $n = 0;
+        for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    }
+}
+$probe = new CleanupProbe();
+ob_start(shutdown_handler(...));
+echo "profiled\n";
+"#,
+    )
+    .expect("failed to write the shutdown monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "shutdown.php",
+            "--out",
+            "shutdown.prof.json",
+            "--save",
+            "shutdown.exact.json",
+        ])
+        .output()
+        .expect("failed to monitor shutdown callbacks");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "shutdown monitor should succeed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("shutdown.exact.json")).expect("saved shutdown graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let edges = exact["edges"].as_array().expect("exact edges");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let handler = nodes
+        .iter()
+        .position(|node| node["name"] == "shutdown_handler")
+        .unwrap();
+    let destructor = nodes
+        .iter()
+        .position(|node| node["name"] == "CleanupProbe::__destruct")
+        .unwrap();
+    for child in [handler, destructor] {
+        assert!(
+            edges.iter().any(|edge| {
+                edge["from"] == main && edge["to"] == child && edge["count"] == 1
+            }),
+            "shutdown PHP work must remain below {{main}}: {exact}"
+        );
+    }
+    assert!(
+        nodes[main]["inclusive"].as_u64().unwrap()
+            > nodes[main]["exclusive"].as_u64().unwrap(),
+        "the root must subtract shutdown callees from self time: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Runs one clean language-level termination fixture and verifies that monitor
+/// receives the complete exact graph despite bypassed generated epilogues.
+fn assert_clean_language_exit_profile(tag: &str, source: &str) {
+    let dir = make_cli_test_dir(tag);
+    fs::write(
+        dir.join("exit.php"),
+        source,
+    )
+    .expect("failed to write the clean-exit monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "exit.php",
+            "--out",
+            "exit.prof.json",
+            "--save",
+            "exit.exact.json",
+        ])
+        .output()
+        .expect("failed to monitor a clean language exit");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "a clean language exit should publish a profile\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("exit.exact.json")).expect("saved exit graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let child = nodes
+        .iter()
+        .position(|node| node["name"] == "before_exit")
+        .unwrap();
+    assert_eq!(nodes[main]["call_count"], 1);
+    assert!(
+        exact["edges"].as_array().expect("exact edges").iter().any(|edge| {
+            edge["from"] == main && edge["to"] == child && edge["count"] == 1
+        }),
+        "the clean exit must publish the complete rooted graph: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `exit(0)` closes and publishes the active exact stack even though normal
+/// generated function and main epilogues are bypassed.
+#[test]
+fn test_cli_monitor_profiles_a_clean_language_exit() {
+    assert_clean_language_exit_profile(
+        "elephc_cli_monitor_exit_zero",
+        r#"<?php
+function before_exit(): int {
+    $n = 0;
+    for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    return $n;
+}
+$value = before_exit();
+if ($value < 0) { echo $value; }
+exit(0);
+"#,
+    );
+}
+
+/// The zero-argument `die()` lowering publishes the same rooted exact graph as
+/// the status-bearing `exit(0)` path.
+#[test]
+fn test_cli_monitor_profiles_clean_die_without_status() {
+    assert_clean_language_exit_profile(
+        "elephc_cli_monitor_die_no_status",
+        r#"<?php
+function before_exit(): int {
+    $n = 0;
+    for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    return $n;
+}
+$value = before_exit();
+if ($value < 0) { echo $value; }
+die();
+"#,
+    );
 }
 
 /// Verifies both compiler version flags print the Cargo package version and exit successfully.
@@ -197,6 +361,7 @@ fn test_cli_version_flags_report_package_version() {
     let stdout = String::from_utf8_lossy(&help.stdout);
     assert!(stdout.contains(&format!("Version: {}", env!("CARGO_PKG_VERSION"))));
     assert!(stdout.contains("-V, --version"));
+    assert!(stdout.contains("name `{main}` for the top-level root"));
 
     let _ = fs::remove_dir_all(&dir);
 }

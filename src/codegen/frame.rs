@@ -366,7 +366,6 @@ fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("epilogue + exit(0)");
-    emit_instr_exit(ctx);
     // Drain still-active output buffers before any teardown so user output
     // handlers (including eval-registered ones) run while locals, statics, and
     // the eval context are still alive. The exit-path flush in abi::emit_exit
@@ -375,6 +374,11 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    // The exact root brackets every PHP callback that shutdown can invoke:
+    // output handlers above and object destructors from the cleanup paths. If
+    // it exits earlier, those functions become disconnected graph roots and
+    // their work no longer partitions `{main}`.
+    emit_instr_exit(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     // Everything below is a call on a torn-down frame, and on x86_64 that frame
@@ -517,8 +521,10 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
-    emit_instr_exit(ctx);
     emit_main_local_epilogue_cleanup(ctx);
+    // Per-request local teardown may run PHP destructors, so it belongs inside
+    // the request's `{main}` frame just like process-exit teardown does.
+    emit_instr_exit(ctx);
     // Under `--web` the handler returns to the bridge server loop instead of
     // exiting, so the exit-based main epilogue (where `--gc-stats` normally
     // prints) is never reached. Emitting the counters here, once per request,
@@ -1623,7 +1629,7 @@ fn emit_instr_hook_call(ctx: &mut FunctionContext<'_>, hook: &str, id: usize) {
 
 /// Places the four arguments every `elephc_instr_*` hook takes, without calling
 /// one. Split out because the coroutine hooks take a fifth.
-fn emit_instr_hook_args(ctx: &mut FunctionContext<'_>, id: usize) {
+pub(super) fn emit_instr_hook_args(ctx: &mut FunctionContext<'_>, id: usize) {
     let target = ctx.emitter.target;
     let id_arg = abi::int_arg_reg_name(target, 0);
     abi::emit_load_int_immediate(ctx.emitter, id_arg, id as i64);

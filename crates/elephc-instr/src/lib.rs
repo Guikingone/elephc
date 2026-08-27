@@ -863,6 +863,38 @@ impl State {
         }
     }
 
+    /// Closes the current function and every tracked ancestor at process exit.
+    ///
+    /// `exit()`/`die()` do not return through generated epilogues, so without
+    /// this path their live frames never receive an exit hook and no complete
+    /// exact graph can be published. The current id is closed first so the
+    /// ordinary exception-resynchronization path can identify a catch frame
+    /// before the remaining ancestors are drained at the same final instant.
+    /// Its frame pointer is paired with the function id so recursive or
+    /// concurrently live activations cannot be confused.
+    fn terminate_at(
+        &mut self,
+        current: Option<(u32, usize)>,
+        t: u64,
+        a: u64,
+        f: u64,
+        io: u64,
+        w: u64,
+    ) {
+        // Let an activation dropped past the cap consume only its own recorded
+        // frame pointer. Clearing these identities first would let a reused
+        // address match an unwind-dead tracked frame instead.
+        if let Some((id, fp)) = current {
+            self.exit_at(id, fp, t, a, f, io, w);
+        }
+        // No dropped activation will return after process termination, and its
+        // identity must not consume a tracked ancestor's synthetic exit.
+        self.dropped_fps = Vec::new();
+        while let Some((id, fp)) = self.stack.last().map(|frame| (frame.id, frame.fp)) {
+            self.exit_at(id, fp, t, a, f, io, w);
+        }
+    }
+
     /// Accounts one frame that is ending now: its own cost, its inclusive span
     /// when the outermost activation closes, and its total charged to the
     /// caller it is returning to.
@@ -2054,6 +2086,36 @@ pub extern "C" fn elephc_instr_resume(id: u32, allocs: u64, frees: u64, frame: u
     let io = IO_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
     STATE.with(|s| s.borrow_mut().resume_at(id, frame, t, allocs, frees, io, w));
+}
+
+/// Finalizes and publishes an exact slice before `exit()`/`die()` terminates.
+///
+/// `current_id` is the compiler-assigned id of the function executing the
+/// language construct, or `u32::MAX` when selective instrumentation did not
+/// assign that function a frame. `frame` is the same activation identity passed
+/// to enter/exit hooks. All live tracked frames close at one final counter
+/// snapshot, then the normal dump path writes or hands over the slice.
+#[no_mangle]
+pub extern "C" fn elephc_instr_terminate(
+    current_id: u32,
+    allocs: u64,
+    frees: u64,
+    frame: usize,
+) {
+    if !ENABLED.swap(false, Ordering::Relaxed) {
+        return;
+    }
+    let t = now_ticks();
+    let io = IO_OPS.load(Ordering::Relaxed);
+    let w = WAIT_NS.load(Ordering::Relaxed);
+    let current = (current_id != u32::MAX).then_some((current_id, frame));
+    STATE.with(|s| {
+        s.borrow_mut()
+            .terminate_at(current, t, allocs, frees, io, w)
+    });
+    SLICE_OPEN.store(false, Ordering::Relaxed);
+    publish_active(false);
+    elephc_instr_dump();
 }
 
 /// The rendezvous where an endpoint asks for a slice and a worker leaves it.
@@ -4732,6 +4794,51 @@ mod tests {
         assert_eq!(sum_ns, s.fns[0].incl_ns);
         assert_eq!(sum_allocs, s.fns[0].incl_allocs);
         assert_eq!(sum_io, s.fns[0].incl_io);
+    }
+
+    /// A language-level process exit closes the current function and `{main}`
+    /// even though neither generated epilogue can run.
+    #[test]
+    fn termination_closes_the_live_stack_at_one_counter_snapshot() {
+        let mut s = State::default();
+        s.enter_at(0, 0x1000, 10, 2, 0, 0, 0); // {main}
+        s.enter_at(1, 0x2000, 20, 3, 0, 0, 0); // function that calls exit(0)
+
+        s.terminate_at(Some((1, 0x2000)), 50, 7, 1, 2, 5);
+
+        assert!(s.stack.is_empty(), "termination must close every tracked frame");
+        assert_eq!(s.fns[1].incl_ns, 30);
+        assert_eq!(s.fns[1].excl_ns, 30);
+        assert_eq!(s.fns[0].incl_ns, 40);
+        assert_eq!(s.fns[0].excl_ns, 10);
+        assert_eq!(s.fns[0].incl_allocs, 5);
+        assert_eq!(s.fns[0].incl_frees, 1);
+        assert_eq!(s.fns[0].incl_io, 2);
+        assert_eq!(s.fns[0].incl_wait, 5);
+        assert_eq!(s.edges.get(&(0, 1)), Some(&(1, 30)));
+    }
+
+    /// Termination identifies a recursive catcher by frame pointer instead of
+    /// closing the unwind-dead activation with the same function id.
+    #[test]
+    fn termination_resynchronizes_to_the_exact_recursive_activation() {
+        let _serial = ticks_are_nanoseconds();
+        let restore_trace = TRACE_ON.swap(true, Ordering::Relaxed);
+        let mut s = State::default();
+        s.enter_at(0, 0x1000, 0, 0, 0, 0, 0); // {main}
+        s.enter_at(1, 0x2000, 5, 0, 0, 0, 0); // recursive catcher
+        s.enter_at(1, 0x3000, 10, 0, 0, 0, 0); // recursive thrower
+        s.note_throw(20, 0, 0, 0, 0);
+
+        s.terminate_at(Some((1, 0x2000)), 50, 0, 0, 0, 0);
+
+        TRACE_ON.store(restore_trace, Ordering::Relaxed);
+        assert!(s.stack.is_empty(), "termination must drain the resynchronized stack");
+        assert_eq!(
+            s.trace,
+            vec![(1, 5, 50), (0, 0, 50)],
+            "the unwind-dead recursive activation was closed as the current one"
+        );
     }
 
     #[test]

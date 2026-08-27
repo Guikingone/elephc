@@ -54,7 +54,7 @@
     }
 
     /// Empty exact captures distinguish an unavailable control channel, an
-    /// interrupted window, and a valid window with no selected frames.
+    /// interrupted window, and an acknowledged run that published no frames.
     #[test]
     fn empty_exact_capture_reasons_name_the_observed_outcome() {
         let binary = std::path::Path::new("shop");
@@ -72,8 +72,9 @@
         assert!(unavailable.contains("unavailable"), "{unavailable}");
 
         let empty = super::no_profile_reason(&clean, binary, true);
-        assert!(empty.contains("valid capture window"), "{empty}");
-        assert!(empty.contains("no instrumented frames"), "{empty}");
+        assert!(empty.contains("acknowledged monitoring"), "{empty}");
+        assert!(empty.contains("selective instrumentation"), "{empty}");
+        assert!(empty.contains("did not close or publish"), "{empty}");
 
         let ended = super::no_profile_reason(&failed, binary, true);
         assert!(ended.contains("status 17"), "{ended}");

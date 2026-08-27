@@ -143,8 +143,9 @@ Codegen:
                           rooted at {main}; file I/O is not measured. A service's
                           default answer is sampled CPU time. Inlined functions
                           fold into their caller (as with --counters).
-  --with-monitoring=NAMES Embed it for the named functions only (comma list, trailing
-                          `*` matches by prefix, or @file with one name per line)
+  --with-monitoring=NAMES Embed it for the named functions only (comma list; trailing
+                          `*` matches by prefix; name `{main}` for the top-level root;
+                          or use @file with one name per line)
   --heap-debug            Enable heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
   --ini KEY=VALUE         Bake an INI directive override (repeatable; opcache.* honored)
