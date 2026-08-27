@@ -174,7 +174,21 @@ pub(crate) fn run_live(
                     }
                     continue;
                 }
-                Snapshot::Gone => break,
+                Snapshot::Gone => {
+                    // Ending here reaps a target that is still up — that is what
+                    // `--live` does with a program it launched, since the program
+                    // exists to be watched. What it must not do is that
+                    // SILENTLY: an operator whose program disappeared is owed
+                    // the difference between "it finished" and "I lost the
+                    // channel to it".
+                    if child.as_deref_mut().is_some_and(|c| c.try_wait().ok().flatten().is_none()) {
+                        eprintln!(
+                            "elephc monitor: lost the channel to the target while it was still \
+                             running; stopping it and reporting what was collected"
+                        );
+                    }
+                    break;
+                }
             };
             // Snapshots are cumulative, so the window is what this one has that
             // the last did not. A stack that stopped being sampled contributes

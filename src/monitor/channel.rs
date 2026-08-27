@@ -94,17 +94,7 @@ pub(crate) fn open_polled_control_channel() -> Option<ControlChannel> {
     //
     // Generous against the answer itself, which waits out a 400 ms warm-up
     // before reporting an empty ring, and finite against everything else.
-    let timeout = libc::timeval { tv_sec: 5, tv_usec: 0 };
-    // Safety: setting a documented option on a socket this process owns.
-    unsafe {
-        libc::setsockopt(
-            channel.parent,
-            libc::SOL_SOCKET,
-            libc::SO_RCVTIMEO,
-            &timeout as *const libc::timeval as *const libc::c_void,
-            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
-        );
-    }
+    set_receive_deadline(channel.parent, 5);
     Some(channel)
 }
 
@@ -218,6 +208,36 @@ pub(crate) fn is_profiler_line(line: &str) -> bool {
     PROFILER_LINE_PREFIXES.contains(&first)
 }
 
+/// Gives a socket a receive deadline, in whole seconds.
+///
+/// Split out so a test can ask for a short one. The behaviour worth testing is
+/// what happens WHEN a deadline passes, and a test that has to wait five real
+/// seconds to reach it is a test that gets shortened until it no longer reaches
+/// it at all.
+pub(crate) fn set_receive_deadline(fd: i32, seconds: i64) {
+    let timeout = libc::timeval { tv_sec: seconds, tv_usec: 0 };
+    // Safety: setting a documented option on a socket this process owns.
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &timeout as *const libc::timeval as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
+    }
+}
+
+/// How many consecutive deadlines a half-delivered reply may miss before the
+/// channel is called finished.
+///
+/// A reply arriving in pieces resets the deadline on every piece, so reaching
+/// even one of these means a whole deadline passed with NOTHING arriving
+/// mid-message — a writer that has stopped rather than one that is slow. Three,
+/// because ending the view reaps the target, and the difference between slow and
+/// stopped is worth a few seconds of patience.
+const MID_MESSAGE_STALLS: u32 = 3;
+
 /// What asking the child for a snapshot produced.
 ///
 /// Three outcomes and not two, because "no answer" and "no child" call for
@@ -293,11 +313,27 @@ pub(crate) fn request_snapshot(channel: &ControlChannel) -> Snapshot {
         return Snapshot::Gone;
     }
     let mut body = vec![0u8; len];
-    match recv_exact(fd, &mut body) {
-        Read::Filled => {}
-        // Mid-message, so the channel is desynchronised whatever the child's
-        // state: it cannot be asked again, even though it may be alive.
-        Read::TimedOutClean | Read::Ended => return Snapshot::Gone,
+    // Being mid-message is a property of the MESSAGE, not of this read. The
+    // header is already consumed, so the stream owes exactly `len` bytes — which
+    // is what makes waiting longer safe here and nowhere else, whether or not
+    // any of the body has arrived yet.
+    //
+    // That distinction is the whole of it, and the first version of this got it
+    // wrong: it retried only once a body byte had landed, so the ordinary shape
+    // — header, then a stall — fell straight through to `Gone`, and `Gone` reaps
+    // the target.
+    let mut stalls = 0u32;
+    loop {
+        match recv_exact(fd, &mut body) {
+            Read::Filled => break,
+            Read::TimedOutClean if stalls + 1 < MID_MESSAGE_STALLS => {
+                // Nothing was taken, so the next attempt starts where this one
+                // did and refills the same buffer from the same place.
+                stalls += 1;
+            }
+            // Out of patience, or a channel that is finished for another reason.
+            Read::TimedOutClean | Read::Ended => return Snapshot::Gone,
+        }
     }
     match String::from_utf8(body) {
         Ok(text) => Snapshot::Answered(text),
@@ -321,6 +357,7 @@ enum Read {
 /// that did not arrive.
 fn recv_exact(fd: i32, buf: &mut [u8]) -> Read {
     let mut filled = 0usize;
+    let mut stalls = 0u32;
     while filled < buf.len() {
         // Safety: writing into `buf`'s own bytes from a socket this process owns.
         let read = unsafe {
@@ -339,14 +376,30 @@ fn recv_exact(fd: i32, buf: &mut [u8]) -> Read {
             if error.kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
-            // The receive deadline. Clean only if nothing has been taken yet —
-            // once bytes are gone from the stream, retrying reads the remainder
-            // of this reply as the start of the next.
             if matches!(
                 error.kind(),
                 std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
             ) {
-                return if filled == 0 { Read::TimedOutClean } else { Read::Ended };
+                // Nothing taken yet: the stream is where it was, so the next
+                // window can ask again.
+                if filled == 0 {
+                    return Read::TimedOutClean;
+                }
+                // Part way through. Retrying is safe HERE and only here —
+                // `filled` says exactly how much of this reply is still owed, so
+                // reading on continues the same message rather than parsing the
+                // next one's length out of its tail.
+                //
+                // Given more deadlines rather than one, because each already
+                // measures a stall with no bytes at all, and a child that is
+                // merely slow deserves better than being cut off mid-sentence.
+                // Bounded, because a writer that has genuinely stopped must not
+                // hold the view open for as long as it likes.
+                stalls += 1;
+                if stalls < MID_MESSAGE_STALLS {
+                    continue;
+                }
+                return Read::Ended;
             }
             return Read::Ended;
         }

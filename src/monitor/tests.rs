@@ -1375,6 +1375,60 @@ echo call_hot(1);
         );
     }
 
+    /// A reply that arrives in pieces is waited for, not cut off mid-sentence.
+    ///
+    /// The deadline resets on every piece, so a child that is merely slow keeps
+    /// the channel. Only a stall with NOTHING arriving mid-message ends it — and
+    /// ending it reaps the target, which is why the difference between "slow"
+    /// and "stopped" is worth spending three deadlines on.
+    ///
+    /// Driven over a real socketpair with a real writer, because what is under
+    /// test is how the kernel delivers a stream, not how this code imagines it.
+    #[test]
+    fn a_reply_arriving_in_pieces_is_waited_for() {
+        let mut channel = super::open_polled_control_channel().expect("a socketpair");
+        // One second, so the pause below genuinely PASSES the deadline. With the
+        // production five, a test short enough to keep would never reach the
+        // path it exists to cover.
+        super::set_receive_deadline(channel.parent, 1);
+        let child = channel.child;
+        let body = b"elephc-probe: {main};hot 12\n";
+        let header = (body.len() as u32).to_le_bytes();
+
+        // A writer that sends the length, pauses, then the body a byte at a
+        // time — the shape a loaded child produces.
+        let writer = std::thread::spawn(move || {
+            // The request byte the caller sends first, taken so it does not sit
+            // in front of anything.
+            let mut request = [0u8; 1];
+            unsafe {
+                libc::recv(child, request.as_mut_ptr() as *mut libc::c_void, 1, 0);
+                libc::send(child, header.as_ptr() as *const libc::c_void, 4, 0);
+            }
+            // Longer than the deadline: the reader stalls mid-message, with the
+            // length already consumed. Retrying is only safe because `filled`
+            // says how much of THIS reply is still owed.
+            std::thread::sleep(std::time::Duration::from_millis(1_800));
+            for byte in body {
+                unsafe {
+                    libc::send(child, byte as *const u8 as *const libc::c_void, 1, 0);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        });
+
+        match super::request_snapshot(&channel) {
+            super::Snapshot::Answered(text) => assert_eq!(text.as_bytes(), body),
+            super::Snapshot::Late => panic!("a reply that did arrive was reported as absent"),
+            super::Snapshot::Gone => {
+                panic!("a child sending its reply in pieces was reported as gone, which reaps it")
+            }
+        }
+        writer.join().expect("the writer finished");
+        channel.forget_child();
+        unsafe { libc::close(child) };
+    }
+
     /// The profiler's own lines are removed from a program's stderr; the
     /// program's are not.
     ///
