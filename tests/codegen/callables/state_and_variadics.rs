@@ -118,6 +118,67 @@ counter();
     assert_eq!(out, "123");
 }
 
+/// A static ARRAY grows across calls, and each return is a copy of it at that moment.
+///
+/// Two halves of one contract, and each was broken on its own:
+///
+/// `return $s` handed the caller a reference the STATIC still owns. That is what
+/// `acquire_borrowed_return_value` exists to retain — the doc on
+/// `value_is_owned_unboxed_local_load` says a caller that publishes a pointer without consuming
+/// the local's ownership must retain — but the owning-temporary early-out preempted it, because
+/// a PLAIN local's frame is about to die and its reference can simply move. A static slot
+/// outlives the call. Without the retain the array read as refcount 1, so the next `$s[]` wrote
+/// in place instead of copying, and the array the FIRST call returned changed underneath its
+/// holder: `var_dump(f(), f())` printed two-element arrays for both where php prints one and
+/// then two, and a growth that reallocated left the first holder reading zero elements.
+///
+/// With the retain the copy happened, and then went nowhere: the growth write-back knew how to
+/// republish into a frame slot but not into a static's symbol, so the copy that received the
+/// push was dropped and the static never got past its first element. `php -n` 8.5.6 is the
+/// oracle for both numbers.
+#[test]
+fn test_static_array_grows_and_each_return_is_a_snapshot() {
+    let out = compile_and_run(
+        r#"<?php
+function f(): array { static $s = []; $s[] = count($s); return $s; }
+$first = f();
+$second = f();
+f();
+var_dump(count($first), count($second));
+var_dump($second);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)
+int(2)
+array(2) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(1)
+}
+"
+    );
+}
+
+/// The same contract for a static held in a METHOD, which shares one symbol across instances.
+#[test]
+fn test_static_array_in_a_method_is_shared_and_still_snapshots() {
+    let out = compile_and_run(
+        r#"<?php
+class K { public function m(): array { static $q = []; $q[] = count($q); return $q; } }
+$a = new K(); $b = new K();
+$first = $a->m();
+$second = $b->m();
+var_dump(count($first), count($second));
+"#,
+    );
+    assert_eq!(out, "int(1)
+int(2)
+");
+}
+
 /// Verifies that a static variable declared without an initializer defaults to null.
 #[test]
 fn test_static_without_initializer_defaults_to_null() {

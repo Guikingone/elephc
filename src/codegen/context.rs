@@ -505,6 +505,42 @@ impl<'a> FunctionContext<'a> {
         self.local_slot_representation(slot) == LocalSlotRepresentation::RefCell
     }
 
+    /// Returns whether the slot's storage is a function static's symbol rather than this frame.
+    fn local_is_static(&self, slot: LocalSlotId) -> bool {
+        self.function
+            .locals
+            .get(slot.as_raw() as usize)
+            .is_some_and(|local| local.kind == crate::ir::LocalKind::StaticLocal)
+    }
+
+    /// Republishes a container pointer into a function static's symbol.
+    ///
+    /// The plain-slot write-back this mirrors is a bare store: the slot already owned what it
+    /// held, and a helper that split or grew the container hands back the pointer that ownership
+    /// now attaches to, so no reference is created or dropped here. Only the ADDRESS the value is
+    /// written to differs, which is the whole reason a static needs its own arm.
+    fn store_value_to_static_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
+        let local = self
+            .function
+            .locals
+            .get(slot.as_raw() as usize)
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))?;
+        let name = local.name.clone().ok_or_else(|| {
+            CodegenIrError::invalid_module("static local write-back is missing a source name")
+        })?;
+        let php_type = local.php_type.codegen_repr();
+        let symbol = crate::names::static_local_symbol(&self.function.name, &name);
+        self.data.add_comm(symbol.clone(), 16);
+        self.load_value_to_result(value)?;
+        // `release_previous: false`. This is a REPUBLISH, not a fresh store: the reference the
+        // symbol held is the one the helper just moved onto the pointer being written back, and
+        // when nothing was split or reallocated the two pointers are the SAME. Releasing first
+        // dropped that single reference to zero and freed the array the very next instruction
+        // stored — measured as a static that never grew past its first element.
+        abi::emit_store_result_to_symbol(self.emitter, &symbol, &php_type, false);
+        Ok(())
+    }
+
     /// Classifies the slot as raw, definitely ref-cell, or path-dependent at this instruction.
     fn local_slot_representation(&self, slot: LocalSlotId) -> LocalSlotRepresentation {
         if self.is_by_ref_param_slot(slot) || self.current_inst_promoted_ref_cells.contains(&slot) {
@@ -722,6 +758,13 @@ impl<'a> FunctionContext<'a> {
 
     /// Stores an SSA value into an addressable local slot.
     pub(super) fn store_value_to_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
+        // A function static does not live in this frame at all: its storage is a `.comm` symbol
+        // that outlives the call, so the representation dispatch below — raw offset, ref cell, or
+        // the runtime choice between them — has no answer for it and would write to a frame offset
+        // that belongs to something else.
+        if self.local_is_static(slot) {
+            return self.store_value_to_static_local(slot, value);
+        }
         match self.local_slot_representation(slot) {
             LocalSlotRepresentation::Raw => self.store_value_to_raw_local(slot, value),
             LocalSlotRepresentation::RefCell => self.store_value_to_ref_cell_local(slot, value),

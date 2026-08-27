@@ -139,10 +139,27 @@ pub(super) fn acquire_borrowed_return_value(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
+    let php_type = ctx.builder.value_php_type(value.value);
+    // A STATIC slot is asked first, and is the one shape the owning-temporary answer below
+    // cannot be trusted for. `value_is_owned_unboxed_local_load` calls an array/object load a
+    // provisional owner because a PLAIN local's frame is about to die, so its reference can
+    // simply move to the caller. A static slot outlives the call and keeps owning what it
+    // holds, so the same load has to be RETAINED instead — its own doc names the rule
+    // ("callers that publish the pointer without consuming the local's ownership must still
+    // retain"). Without it `function f() { static $s = []; $s[] = 1; return $s; }` handed the
+    // caller a reference it did not own: the slot then read as refcount 1, the next $s[] wrote
+    // in place instead of copying, and the array a previous call returned changed underneath
+    // its holder — measured as php `1` / elephc `2`, then `0` once a growth reallocated.
+    if matches!(
+        ctx.builder.value_defining_op(value.value),
+        Some(Op::LoadStaticLocal)
+    ) && Ownership::php_type_needs_lifetime_tracking(&php_type)
+    {
+        return crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    }
     if ctx.value_is_owning_temporary(value) {
         return value;
     }
-    let php_type = ctx.builder.value_php_type(value.value);
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }

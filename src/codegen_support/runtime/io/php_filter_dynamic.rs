@@ -233,7 +233,7 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #8]");                                    // bytes remaining after the direction
     emitter.instruction("add x10, x9, #10");                                    // does "/resource=" still fit here?
     emitter.instruction("cmp x10, x1");
-    emitter.instruction("b.gt __rt_pfp_no_resource");                           // ran out: the URL names no resource
+    emitter.instruction("b.gt __rt_pfp_try_bare");                              // no separator: try the bare `resource=` form
     emitter.instruction("ldr x0, [sp, #0]");                                    // the filter-name cursor
     emitter.instruction("add x0, x0, x9");                                      // the candidate separator position
     emitter.instruction("sub x1, x1, x9");                                      // bytes left from there
@@ -246,6 +246,29 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #24]");
     emitter.instruction("b __rt_pfp_scan");
 
+    // The scan ran off the end without meeting `/resource=`. php still opens the URL when what
+    // is left BEGINS with `resource=`, and reads that one segment twice over: the bytes after
+    // the `=` are the resource, and the segment as a whole is a filter name. That name resolves
+    // to nothing, which is why php prints `Unable to locate filter "resource=f.txt"` and then
+    // `Unable to create filter (resource=f.txt)` before handing back the file unfiltered — two
+    // warnings the unresolved-name path below already emits for any name it cannot place.
+    emitter.label("__rt_pfp_try_bare");
+    emitter.instruction("ldr x1, [sp, #8]");                                    // bytes after the direction
+    emitter.instruction("cmp x1, #10");                                         // `resource=` plus at least one byte
+    emitter.instruction("b.lt __rt_pfp_no_resource");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the filter-name cursor
+    abi::emit_symbol_address(emitter, "x2", "_pf_n_resource");
+    emitter.instruction("add x2, x2, #1");                                      // `resource=`, the separator without its slash
+    emitter.instruction("mov x3, #9");
+    emitter.instruction("bl __rt_pf_match");
+    emitter.instruction("cbz x0, __rt_pfp_no_resource");                        // it names no resource at all
+    emitter.instruction("ldr x0, [sp, #0]");
+    emitter.instruction("ldr x1, [sp, #8]");
+    emitter.instruction("str x1, [sp, #24]");                                   // the WHOLE segment is the filter name
+    emitter.instruction("add x10, x0, #9");                                     // the resource begins after `resource=`
+    emitter.instruction("sub x11, x1, #9");
+    emitter.instruction("b __rt_pfp_have_resource");
+
     emitter.label("__rt_pfp_found");
     emitter.instruction("ldr x9, [sp, #24]");                                   // the separator offset IS the name length
     emitter.instruction("ldr x0, [sp, #0]");                                    // the filter name starts at the cursor
@@ -254,6 +277,8 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, #10");                                   // the resource begins after it
     emitter.instruction("sub x11, x1, x9");                                     // bytes from the separator on
     emitter.instruction("sub x11, x11, #10");                                   // minus the separator itself
+
+    emitter.label("__rt_pfp_have_resource");
     emitter.instruction("cmp x11, #1");                                         // an empty resource names nothing
     emitter.instruction("b.lt __rt_pfp_no_resource");                           // php throws for it, and the caller does the throwing
     abi::emit_symbol_address(emitter, "x12", "_php_filter_res_ptr");
@@ -923,7 +948,7 @@ fn emit_filter_parse_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // bytes remaining after the direction
     emitter.instruction("lea r10, [r9 + 10]");                                  // does "/resource=" still fit here?
     emitter.instruction("cmp r10, rsi");
-    emitter.instruction("jg __rt_pfp_no_resource_x");                           // ran out: the URL names no resource
+    emitter.instruction("jg __rt_pfp_try_bare_x");                              // no separator: try the bare `resource=` form
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the filter-name cursor
     emitter.instruction("add rdi, r9");                                         // the candidate separator position
     emitter.instruction("sub rsi, r9");                                         // bytes left from there
@@ -937,6 +962,27 @@ fn emit_filter_parse_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r9");
     emitter.instruction("jmp __rt_pfp_scan_x");
 
+    // The aarch64 twin above carries the reasoning: `resource=X` with no separator in front of
+    // it is a resource AND a filter name at once, and php warns twice about the name.
+    emitter.label("__rt_pfp_try_bare_x");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // bytes after the direction
+    emitter.instruction("cmp rsi, 10");                                         // `resource=` plus at least one byte
+    emitter.instruction("jl __rt_pfp_no_resource_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the filter-name cursor
+    abi::emit_symbol_address(emitter, "rdx", "_pf_n_resource");
+    emitter.instruction("add rdx, 1");                                          // `resource=`, the separator without its slash
+    emitter.instruction("mov rcx, 9");
+    emitter.instruction("call __rt_pf_match");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_pfp_no_resource_x");                           // it names no resource at all
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // the WHOLE segment is the filter name
+    emitter.instruction("lea r10, [rdi + 9]");                                  // the resource begins after `resource=`
+    emitter.instruction("mov r11, rsi");
+    emitter.instruction("sub r11, 9");
+    emitter.instruction("jmp __rt_pfp_have_resource_x");
+
     emitter.label("__rt_pfp_found_x");
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // the separator offset IS the name length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the filter name starts at the cursor
@@ -946,6 +992,8 @@ fn emit_filter_parse_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, rsi");
     emitter.instruction("sub r11, r9");                                         // bytes from the separator on
     emitter.instruction("sub r11, 10");                                         // minus the separator itself
+
+    emitter.label("__rt_pfp_have_resource_x");
     emitter.instruction("cmp r11, 1");                                          // an empty resource names nothing
     emitter.instruction("jl __rt_pfp_no_resource_x");                           // php throws for it, and the caller does the throwing
     abi::emit_symbol_address(emitter, "r8", "_php_filter_res_ptr");

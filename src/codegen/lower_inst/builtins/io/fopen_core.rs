@@ -1453,15 +1453,44 @@ pub(super) fn emit_static_diag_warning(ctx: &mut FunctionContext<'_>, text: &str
 ///
 /// This is the case php answers with `Error: No URL resource specified`; a nested resource
 /// also makes [`parse_php_filter_url`] decline, but that is a different php behavior.
+///
+/// A spec that IS `resource=x`, with no chain in front of it, names one after all — see
+/// [`split_filter_spec`]. It reached this error before, which made `php://filter/resource=f.txt`
+/// throw where php reads the file.
 pub(super) fn literal_filter_url_names_no_resource(path: &str) -> bool {
-    match path
-        .strip_prefix("php://filter/")
-        .map(|spec| spec.split_once("/resource="))
-    {
-        Some(None) => true,                                  // no separator at all
-        Some(Some((_, resource))) => resource.is_empty(),    // an empty resource names nothing
+    match path.strip_prefix("php://filter/") {
+        Some(spec) => match split_filter_spec(spec) {
+            Some((_, resource)) => resource.is_empty(),
+            None => true,                                    // nothing names a resource here
+        },
         None => false,                                       // not a filter URL: not this error
     }
+}
+
+/// Splits a `php://filter/` spec into its filter chain and the resource it wraps.
+///
+/// The ordinary spelling puts the chain first and separates with `/resource=`. php also accepts
+/// the chain-less `php://filter/resource=f.txt`, and reads that single segment TWICE: the bytes
+/// after the `=` are the resource, and the segment ENTIRE is a filter name. That name matches no
+/// filter, which is why php prints
+///
+/// ```text
+/// Warning: file_get_contents(): Unable to locate filter "resource=f.txt"
+/// Warning: file_get_contents(): Unable to create filter (resource=f.txt)
+/// ```
+///
+/// and then hands back the file unfiltered — measured on `php -n` 8.5.6. Returning the whole
+/// segment as the chain is what reproduces both warnings, through the same unresolved-name path
+/// every other unknown filter takes; inventing a separate diagnostic here would have to keep its
+/// wording in step by hand.
+///
+/// `php://filter/` itself still names nothing, and stays the `Error: No URL resource specified`
+/// php reserves for it.
+fn split_filter_spec(spec: &str) -> Option<(&str, &str)> {
+    if let Some(split) = spec.split_once("/resource=") {
+        return Some(split);
+    }
+    spec.strip_prefix("resource=").map(|resource| (spec, resource))
 }
 
 /// Parses `php://filter/[read=|write=]a|b|.../resource=path` for literal `fopen`.
@@ -1472,7 +1501,7 @@ pub(super) fn literal_filter_url_names_no_resource(path: &str) -> bool {
 /// either, which is why the unresolved names come back in [`PhpFilterUrl::unknown`].
 pub(super) fn parse_php_filter_url(path: &str) -> Option<PhpFilterUrl> {
     let spec = path.strip_prefix("php://filter/")?;
-    let (filter_part, resource) = spec.split_once("/resource=")?;
+    let (filter_part, resource) = split_filter_spec(spec)?;
     if resource.is_empty() {
         return None;
     }
@@ -1549,3 +1578,59 @@ pub(super) struct PhpFilterUrl {
     pub(super) resource: String,
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `php://filter/resource=X` names a resource, and names it as a filter too.
+    ///
+    /// MEASURED on `php -n` 8.5.6: the URL opens `X` and returns its bytes UNFILTERED, after
+    /// warning `Unable to locate filter "resource=X"` and `Unable to create filter (resource=X)`.
+    /// Reading the segment only as a resource would open the file in silence; reading it only as
+    /// a chain would lose the file. Both readings are what php does, and taking the WHOLE segment
+    /// as the name is what makes those two warnings fall out of the ordinary unresolved-name path
+    /// instead of needing a diagnostic of their own to keep in step.
+    #[test]
+    fn a_chain_less_filter_url_is_a_resource_and_an_unresolvable_filter_name() {
+        let parsed = parse_php_filter_url("php://filter/resource=f.txt").expect("parses");
+        assert_eq!(parsed.resource, "f.txt");
+        assert!(parsed.filter_ids.is_empty(), "no filter resolves");
+        assert_eq!(
+            parsed
+                .unknown
+                .iter()
+                .map(|u| u.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["resource=f.txt"],
+            "the WHOLE segment is the name php reports"
+        );
+        assert!(!literal_filter_url_names_no_resource(
+            "php://filter/resource=f.txt"
+        ));
+    }
+
+    /// And the URL php really does refuse keeps refusing: `php://filter/` names nothing at all.
+    #[test]
+    fn a_filter_url_with_nothing_after_the_slash_still_names_no_resource() {
+        assert!(literal_filter_url_names_no_resource("php://filter/"));
+        assert!(parse_php_filter_url("php://filter/").is_none());
+        // An empty resource is the same answer, by the same rule.
+        assert!(literal_filter_url_names_no_resource(
+            "php://filter/read=x/resource="
+        ));
+        // A name that merely STARTS like the keyword is not the keyword.
+        assert!(literal_filter_url_names_no_resource("php://filter/resourceful"));
+    }
+
+    /// The ordinary spelling is untouched: the chain is still what precedes `/resource=`.
+    #[test]
+    fn a_chain_before_the_resource_still_splits_at_the_separator() {
+        let parsed = parse_php_filter_url("php://filter/read=string.toupper/resource=f.txt")
+            .expect("parses");
+        assert_eq!(parsed.resource, "f.txt");
+        assert_eq!(parsed.mode_bits, 1, "read=");
+        assert_eq!(parsed.filter_ids.len(), 1);
+        assert!(parsed.unknown.is_empty());
+    }
+}

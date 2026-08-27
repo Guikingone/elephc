@@ -2554,7 +2554,16 @@ fn emit_array_elem_addr_result_x86_64(
     Ok(())
 }
 
-/// Returns the local/ref-cell slot loaded by an array operand when it can be written back after growth.
+/// Returns the local/ref-cell/static slot loaded by an array operand when it can be written back
+/// after growth.
+///
+/// `LoadStaticLocal` belongs here for exactly the reason the other two do: every helper below may
+/// return a DIFFERENT container pointer than it was given — a growth reallocates, and a
+/// copy-on-write split allocates a whole new array — and whoever holds the old pointer has to be
+/// told. A static slot was missing, so `function f() { static $s = []; $s[] = 1; return $s; }`
+/// grew a copy and dropped it on the floor: the symbol kept pointing at the pre-growth array and
+/// the second call returned the same one-element result as the first. `store_value_to_local`
+/// routes the write-back to the symbol rather than a frame offset.
 fn source_load_local_slot(
     ctx: &FunctionContext<'_>,
     value: ValueId,
@@ -2568,7 +2577,10 @@ fn source_load_local_slot(
     let Some(inst_ref) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
-    if matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if matches!(
+        inst_ref.op,
+        Op::LoadLocal | Op::LoadRefCell | Op::LoadStaticLocal
+    ) {
         if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
             return Ok(Some(slot));
         }
