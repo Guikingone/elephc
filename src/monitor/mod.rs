@@ -188,7 +188,9 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     }
     if let Some(pid) = cmd.attach_pid {
         return if cmd.live {
-            run_live(&cmd, pid, None, None)
+            // Attach never launched the target, so it never owns its
+            // lifetime and there is nothing here to leave alone or reap.
+            run_live(&cmd, pid, None, None).code
         } else {
             run_once(&cmd, pid, None, None)
         };
@@ -256,20 +258,25 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
             .ok();
     }
     let root = child.id();
-    let code = if cmd.live {
-        run_live(&cmd, root, Some(&mut child), channel.as_ref())
+    let (code, leave_target_running) = if cmd.live {
+        let outcome = run_live(&cmd, root, Some(&mut child), channel.as_ref());
+        (outcome.code, outcome.leave_target_running)
     } else {
-        run_once(&cmd, root, Some(&binary), php_source.as_deref())
+        (run_once(&cmd, root, Some(&binary), php_source.as_deref()), false)
     };
-    // A short-lived program is allowed to finish naturally after a successful
-    // one-shot capture. But when sampling failed, or when the live loop ended
-    // with the target still up (it only exits once monitoring is over), waiting
-    // would hang forever on a long-running target — reap it instead.
     let still_running = child.try_wait().ok().flatten().is_none();
-    if still_running && (code != 0 || cmd.live) {
-        let _ = child.kill();
+    match disposition(still_running, code, cmd.live, leave_target_running) {
+        Disposition::Stop => {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Disposition::Collect => {
+            let _ = child.wait();
+        }
+        // Not even waited for: waiting is what would hang this process on a
+        // program that is still doing its work.
+        Disposition::LeaveAlone => {}
     }
-    let _ = child.wait();
     code
 }
 
@@ -831,6 +838,42 @@ pub(crate) fn parse_hex_key(hex: &str) -> Option<[u8; 32]> {
         key[i] = u8::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
     }
     Some(key)
+}
+
+/// What becomes of a target this process launched, now that the capture is over.
+enum Disposition {
+    /// Stop it, then collect it.
+    Stop,
+    /// Collect it: it has finished, or is about to on its own.
+    Collect,
+    /// Leave it running and do not wait for it.
+    LeaveAlone,
+}
+
+/// Decides between them from the four facts that matter, in one place, so the
+/// rule can be read and tested rather than inferred from where it sits.
+///
+/// A short-lived program is allowed to finish on its own after a successful
+/// one-shot capture. A capture that FAILED, and every live view, stops one that
+/// is still up: `--live` runs until monitoring is over, so waiting on a
+/// long-running target would hang forever.
+///
+/// `lost_channel` is the exception that outranks all of it, and the reason is
+/// whose fault it is. The view ended because THIS tool's plumbing stopped
+/// answering, not because the program did anything, and stopping a program over
+/// our own quiet socket ends work the operator never asked us to end. It stays
+/// up, uncollected — they have its pid.
+fn disposition(still_running: bool, code: i32, live: bool, lost_channel: bool) -> Disposition {
+    if !still_running {
+        return Disposition::Collect;
+    }
+    if lost_channel {
+        return Disposition::LeaveAlone;
+    }
+    if code != 0 || live {
+        return Disposition::Stop;
+    }
+    Disposition::Collect
 }
 
 /// A display-ready frame: its user-facing name and what kind of time it is.

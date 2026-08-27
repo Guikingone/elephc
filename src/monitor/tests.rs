@@ -1375,6 +1375,39 @@ echo call_hot(1);
         );
     }
 
+    /// What gets stopped when a capture ends, and what does not.
+    ///
+    /// The rule decides the fate of a program this process launched, so getting
+    /// it wrong either orphans work or destroys it. A program that ended on its
+    /// own is never touched; a live view or a failed capture stops one that is
+    /// still up, because both run until monitoring is over and waiting on a
+    /// long-running target would hang forever.
+    ///
+    /// The case this rule deliberately does NOT see is a view whose channel
+    /// broke: that is decided before it, because whose fault it is changes the
+    /// answer.
+    #[test]
+    fn only_a_capture_that_owns_the_target_stops_it() {
+        use super::Disposition::{Collect, LeaveAlone, Stop};
+        // Already exited: nothing to stop, whatever the capture did.
+        assert!(matches!(super::disposition(false, 0, true, false), Collect));
+        assert!(matches!(super::disposition(false, 1, true, false), Collect));
+        assert!(matches!(super::disposition(false, 1, false, false), Collect));
+        // A one-shot capture that worked lets a live program finish by itself.
+        assert!(matches!(super::disposition(true, 0, false, false), Collect));
+        // A live view owns its target; a failed capture stops it too.
+        assert!(matches!(super::disposition(true, 0, true, false), Stop));
+        assert!(matches!(super::disposition(true, 1, false, false), Stop));
+        // …but not when the view ended because OUR channel broke. This is the
+        // one input that reverses the answer, on exactly the case that would
+        // otherwise be stopped: a live view over a program that is still up.
+        assert!(matches!(super::disposition(true, 0, true, true), LeaveAlone));
+        assert!(matches!(super::disposition(true, 1, true, true), LeaveAlone));
+        // A program that already exited is still collected, so a lost channel
+        // never leaves a zombie behind.
+        assert!(matches!(super::disposition(false, 0, true, true), Collect));
+    }
+
     /// A reply that arrives in pieces is waited for, not cut off mid-sentence.
     ///
     /// The deadline resets on every piece, so a child that is merely slow keeps

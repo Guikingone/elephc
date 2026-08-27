@@ -90,6 +90,19 @@ pub(crate) fn run_once(
     0
 }
 
+/// How a live view ended, and what that means for the program it was watching.
+///
+/// `--live` normally owns its target's lifetime: it launched the program so the
+/// operator could watch it, and leaving it behind when the view ends would be
+/// its own surprise. Losing the CHANNEL is the exception. That is this tool's
+/// plumbing failing, not the program's, and killing a running program because
+/// our own socket stopped answering destroys work the operator did not ask us to
+/// end — it just tells them which pid is still theirs to stop.
+pub(crate) struct LiveOutcome {
+    pub(crate) code: i32,
+    pub(crate) leave_target_running: bool,
+}
+
 /// The live loop: sample a window, merge the process tree, redraw, repeat
 /// until the target goes away. Prints the cumulative table on exit.
 pub(crate) fn run_live(
@@ -97,7 +110,7 @@ pub(crate) fn run_live(
     root: u32,
     mut child: Option<&mut process::Child>,
     channel: Option<&ControlChannel>,
-) -> i32 {
+) -> LiveOutcome {
     use std::io::IsTerminal;
     let interactive = std::io::stdout().is_terminal();
     let started = std::time::Instant::now();
@@ -112,6 +125,9 @@ pub(crate) fn run_live(
     let mut activated = false;
     // Whether a late window has already been mentioned.
     let mut reported_late = false;
+    // Whether the view ended because the channel broke rather than because the
+    // program did.
+    let mut lost_channel = false;
     let mut previous: HashMap<String, f64> = HashMap::new();
     let mut windows = 0u32;
     let graph_title = if cmd.target.is_empty() {
@@ -175,16 +191,15 @@ pub(crate) fn run_live(
                     continue;
                 }
                 Snapshot::Gone => {
-                    // Ending here reaps a target that is still up — that is what
-                    // `--live` does with a program it launched, since the program
-                    // exists to be watched. What it must not do is that
-                    // SILENTLY: an operator whose program disappeared is owed
-                    // the difference between "it finished" and "I lost the
-                    // channel to it".
+                    // The channel is finished. Whether the PROGRAM is finished is
+                    // a different question, and the answer decides whether it
+                    // gets stopped: this tool's own plumbing failing is not a
+                    // reason to end work the operator is in the middle of.
                     if child.as_deref_mut().is_some_and(|c| c.try_wait().ok().flatten().is_none()) {
+                        lost_channel = true;
                         eprintln!(
-                            "elephc monitor: lost the channel to the target while it was still \
-                             running; stopping it and reporting what was collected"
+                            "elephc monitor: lost the channel to the target; it is still running \
+                             as pid {root} and is left alone. Reporting what was collected."
                         );
                     }
                     break;
@@ -250,7 +265,7 @@ pub(crate) fn run_live(
         println!("\n=== cumulative ({windows} windows) ===");
         print!("{}", why_table(&merged, 1));
     }
-    0
+    LiveOutcome { code: 0, leave_target_running: lost_channel }
 }
 
 /// Samples every pid of one window in parallel and returns the reports that
