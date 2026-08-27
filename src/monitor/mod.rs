@@ -29,6 +29,10 @@ pub(crate) use command::*;
 // Parsing only, so it is exercised by ordinary tests on any host — which is what
 // makes code whose real use is on another platform reviewable at all.
 mod elf;
+// Naming what an out-of-process sampler read. Also parsing only: the syscalls
+// that produce those addresses are the one part a host without `ptrace` cannot
+// run, and they are kept apart from this for exactly that reason.
+mod attach;
 mod channel;
 pub(crate) use channel::*;
 mod local;
