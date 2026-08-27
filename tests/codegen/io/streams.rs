@@ -11798,6 +11798,48 @@ file_put_contents("php://bogus", "x");
     }
 }
 
+/// A refused `php://` URL prints php's TWO lines and no more, through a computed URL too.
+///
+/// The run-time route let the refusal fall through to the readers below it, so the FILE opener
+/// warned a THIRD time — `No such file or directory` about a path nothing had looked for. The
+/// wrapper has already recognised the URL and reported; php answers false there.
+///
+/// `readfile` needed the route at all: its dynamic dispatch consulted the compress schemes and
+/// then went straight to the file opener, so a computed `php://` URL never reached the wrapper.
+#[test]
+fn test_a_refused_php_url_prints_two_lines_and_stops() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$u = "php://bogus";
+fopen($u, "r");
+file_get_contents($u);
+file($u);
+readfile($u);
+file_put_contents($u, "x");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    for callee in [
+        "fopen",
+        "file_get_contents",
+        "file",
+        "readfile",
+        "file_put_contents",
+    ] {
+        assert_eq!(
+            out.diagnostics.matches(&format!("Warning: {callee}(")).count(),
+            2,
+            "{callee} must print php's two lines and no more, got: {}",
+            out.diagnostics
+        );
+    }
+    assert!(
+        !out.diagnostics.contains("No such file or directory"),
+        "the file opener spoke about a path nothing looked for, got: {}",
+        out.diagnostics
+    );
+}
+
 /// A resource is not an int, however it travels.
 ///
 /// `is_int(STDIN)` answered TRUE. The predicate compared `value_php_type`, which reports

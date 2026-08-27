@@ -271,8 +271,14 @@ pub(super) fn emit_dynamic_php_substream_read_route(ctx: &mut FunctionContext<'_
             abi::emit_release_temporary_stack(ctx.emitter, 16);                 // the saved filename outlived its use
             ctx.emitter.instruction(&format!("b {}", done));
             ctx.emitter.label(&refused);
-            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                    // hand the next route the pair it was promised
-            ctx.emitter.instruction(&format!("b {}", not_php));
+            // The opener RECOGNISED the URL as php:// and refused it, warning as php does. php
+            // stops there and answers false; falling through to the readers below reached the FILE
+            // opener, which warned a THIRD time about a path nothing had looked for. The empty
+            // pair is the shape a failed read hands the tail.
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            ctx.emitter.instruction("mov x1, #0");
+            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction(&format!("b {}", done));
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rdx, 7");                              // `php://` plus the naming byte
@@ -837,7 +843,22 @@ fn lower_readfile_named(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     } else {
         None
     };
+    // A run-time `php://` URL, for the same reason and by the same shape: the dispatch below is
+    // the FILE opener, which answered `No such file or directory` about a path nothing had looked
+    // for, in one line, where php prints the wrapper's own two.
+    let php_substream_bytes = if optional_const_string_operand(ctx, path)?.is_none() {
+        Some(emit_dynamic_php_substream_read_route(ctx))
+    } else {
+        None
+    };
     emit_readfile_wrapper_dispatch(ctx)?;
+    if let Some(landing) = php_substream_bytes {
+        let after = ctx.next_label("readfile_dyn_php_after");
+        abi::emit_jump(ctx.emitter, &after);
+        ctx.emitter.label(&landing);
+        super::wrapper_dispatch::emit_readfile_bytes_tail(ctx, "readfile_dyn_php");
+        ctx.emitter.label(&after);
+    }
     if let Some(landing) = compress_bytes {
         let after = ctx.next_label("readfile_dyn_compress_after");
         abi::emit_jump(ctx.emitter, &after);
