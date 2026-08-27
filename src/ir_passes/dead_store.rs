@@ -274,10 +274,12 @@ fn instruction_slot(
 /// `br` names, and the liveness that follows is the liveness of the path where
 /// nothing threw.
 ///
-///     $t = 0;
-///     try { $t = 5; boom(); $t = 9; }   // boom() throws
-///     catch (RuntimeException $e) { }
-///     return $t;                        // PHP says 5
+/// ```text
+/// $t = 0;
+/// try { $t = 5; boom(); $t = 9; }   // boom() throws
+/// catch (RuntimeException $e) { }
+/// return $t;                        // PHP says 5
+/// ```
 ///
 /// `$t = 9` looked like it overwrote `$t = 5` on the only path there was, so
 /// both earlier stores were neutralized — and the catch fell through to a
@@ -353,10 +355,12 @@ fn compute_slot_live_in(
 /// literal `throw` had NOTHING live on the way out, so every store before it was
 /// dead by construction:
 ///
-///     $t = 0;
-///     try { $t = 5; throw new RuntimeException('x'); }
-///     catch (RuntimeException $e) { }
-///     return $t;                        // PHP says 5
+/// ```text
+/// $t = 0;
+/// try { $t = 5; throw new RuntimeException('x'); }
+/// catch (RuntimeException $e) { }
+/// return $t;                        // PHP says 5
+/// ```
 ///
 /// This is the terminator half of what `instruction_may_reach_a_handler` covers
 /// for a throwing CALL; the same program is wrong in a different way depending
