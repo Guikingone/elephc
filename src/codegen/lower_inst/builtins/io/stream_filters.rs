@@ -188,8 +188,14 @@ fn lower_dynamic_iconv_filter_attach(
     use crate::codegen_support::runtime::io::ICONV_SPEC_BUFFER_BYTES;
 
     let next_label = ctx.next_label("filter_dyn_next");
-    let from_symbol = ctx.next_label("iconv_dyn_from");
-    let to_symbol = ctx.next_label("iconv_dyn_to");
+    // `next_global_label`, not `next_label`: these two name `.comm` BUFFERS, and a `.comm` needs a
+    // real symbol. The assembler-local prefix made the directive itself invalid — `non-local symbol
+    // required` — and then left every `adrp`/`lea` that took their address pointing at a label
+    // nothing defined. Six `io::streams` filter tests did not ASSEMBLE, and the failure named the
+    // address-taking line rather than the directive that caused it. `next_global_label`'s own doc
+    // names this error.
+    let from_symbol = ctx.next_global_label("iconv_dyn_from");
+    let to_symbol = ctx.next_global_label("iconv_dyn_to");
     ctx.data
         .add_comm(from_symbol.clone(), ICONV_SPEC_BUFFER_BYTES);
     ctx.data.add_comm(to_symbol.clone(), ICONV_SPEC_BUFFER_BYTES);
