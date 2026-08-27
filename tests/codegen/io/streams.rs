@@ -11758,6 +11758,53 @@ fclose($f);
     assert_eq!(out, "[xyz]");
 }
 
+/// A resource is not an int, however it travels.
+///
+/// `is_int(STDIN)` answered TRUE. The predicate compared `value_php_type`, which reports
+/// `codegen_repr()` — and a resource's representation is the machine word it rides in, an
+/// integer. The same value's `gettype()` said `resource`, because that one asks the runtime
+/// rather than the type, so the program could contradict itself in two lines.
+///
+/// A resource is the only shape whose representation collides with another predicate's answer:
+/// every other mapping `codegen_repr` performs is either identity or onto `Mixed`, and `Mixed`
+/// has its own branch that reads the runtime tag. That is why the fix is a check for it rather
+/// than a change of accessor for everything.
+///
+/// Every predicate is asked, of a statically-typed resource and of one reaching a `mixed`
+/// parameter, because the two take different paths: the first is decided at compile time from
+/// the type, the second at run time from the tag. Measured on `php -n` 8.5.6.
+#[test]
+fn test_no_type_predicate_mistakes_a_resource_for_an_int() {
+    let out = compile_and_run(
+        r#"<?php
+function ask($v): string {
+    return (is_int($v) ? "int " : "") . (is_integer($v) ? "integer " : "")
+         . (is_long($v) ? "long " : "") . (is_string($v) ? "string " : "")
+         . (is_float($v) ? "float " : "") . (is_bool($v) ? "bool " : "")
+         . (is_array($v) ? "array " : "") . (is_object($v) ? "object " : "")
+         . (is_null($v) ? "null " : "") . (is_resource($v) ? "resource " : "")
+         . (is_scalar($v) ? "scalar " : "") . "| " . gettype($v);
+}
+function viaMixed(mixed $v): string { return ask($v); }
+$f = fopen("php://memory", "r+");
+echo ask(STDIN), "\n";
+echo ask($f), "\n";
+echo viaMixed($f), "\n";
+echo ask(7), "\n";
+fclose($f);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "resource | resource\n",
+            "resource | resource\n",
+            "resource | resource\n",
+            "int integer long scalar | integer\n",
+        )
+    );
+}
+
 /// `ftell()` on a stream `lseek` REFUSES reports php's logical position, not the errno.
 ///
 /// The probe is `lseek(fd, 0, SEEK_CUR)` and its failure was never checked. On macOS the errno
