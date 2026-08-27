@@ -11758,6 +11758,77 @@ fclose($f);
     assert_eq!(out, "[xyz]");
 }
 
+/// `ftell()` on a stream `lseek` REFUSES reports php's logical position, not the errno.
+///
+/// The probe is `lseek(fd, 0, SEEK_CUR)` and its failure was never checked. On macOS the errno
+/// arrives in the register a real offset would, so a socket answered `29` — ESPIPE, read as a byte
+/// count — and answered it forever, whatever the program had written.
+///
+/// php keeps a position for such a stream and reports the bytes that crossed the handle, in either
+/// direction. MEASURED on `php -n` 8.5.6 over a socket pair, and every number below is php's:
+///
+/// ```text
+/// fresh                        a=0   b=0
+/// a: fwrite 6 bytes            a=6
+/// b: fread 3                   b=3
+/// b: fgets (3 more)            b=6
+/// a: fwrite 5 more             a=11
+/// b: fgetc                     b=7
+/// b: stream_get_contents       b=11
+/// a: fseek that returns -1     a=11    unchanged
+/// ```
+///
+/// The count itself is not new: `emit_advance_wrapper_position` already ran on every `fread`,
+/// `fgets`, `fgetc`, `fwrite` and `stream_get_contents` for EVERY stream carrying state — its doc
+/// says the field is simply never read for anything but a wrapper. This gave it a second reader,
+/// which is why the hot read path pays nothing for it.
+///
+/// A pipe is asserted beside the socket because it reaches the same refusal by another route, and
+/// a plain FILE is asserted because it must NOT change: its descriptor answer is php's answer, and
+/// a seek has to keep moving it.
+#[test]
+fn test_ftell_on_a_non_seekable_stream_reports_phps_logical_position() {
+    let out = compile_and_run(
+        r#"<?php
+[$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_set_blocking($b, false);
+echo ftell($a), ",", ftell($b), "|";
+fwrite($a, "hello\n");
+echo ftell($a), "|";
+fread($b, 3);
+echo ftell($b), "|";
+fgets($b);
+echo ftell($b), "|";
+fwrite($a, "world");
+echo ftell($a), "|";
+fgetc($b);
+echo ftell($b), "|";
+stream_get_contents($b);
+echo ftell($b), "|";
+@fseek($a, 0);
+echo ftell($a), "|";
+fclose($a); fclose($b);
+
+$p = popen("printf 'abcdef'", "r");
+echo ftell($p), ",";
+fread($p, 2);
+echo ftell($p), "|";
+pclose($p);
+
+file_put_contents("elephc_ftell_ns.txt", "0123456789");
+$h = fopen("elephc_ftell_ns.txt", "r");
+echo ftell($h), ",";
+fread($h, 4);
+echo ftell($h), ",";
+fseek($h, 8);
+echo ftell($h), "\n";
+fclose($h);
+unlink("elephc_ftell_ns.txt");
+"#,
+    );
+    assert_eq!(out, "0,0|6|3|6|11|7|11|11|0,2|0,4,8\n");
+}
+
 /// Regression: `ftell()` on a filtered read stream reported the READ-AHEAD position.
 ///
 /// php advances `stream->position` by the bytes each read RETURNED TO THE CALLER, never by the

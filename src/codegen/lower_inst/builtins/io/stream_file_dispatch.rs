@@ -214,6 +214,7 @@ pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     }
     load_stream_fd_to_result(ctx, stream, "ftell")?;
     let wrapper_label = ctx.next_label("ftell_user_wrapper");
+    let seekable_label = ctx.next_label("ftell_seekable");
     let after_dispatch_label = ctx.next_label("ftell_after_dispatch");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -224,6 +225,27 @@ pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             ctx.emitter.instruction("mov x1, #0");                              // use offset 0 for the ftell lseek probe
             ctx.emitter.instruction("mov x2, #1");                              // use SEEK_CUR for the ftell lseek probe
             ctx.emitter.syscall(199);
+            let plat = ctx.emitter.platform;
+            if plat.needs_cmp_before_error_branch() {
+                ctx.emitter.instruction("cmp x0, #0");                          // Linux: a negative result means lseek failed
+            }
+            ctx.emitter
+                .instruction(&plat.branch_on_syscall_success(&seekable_label));
+            // NOT SEEKABLE. The probe's answer is an ERRNO, and on macOS it arrives in the same
+            // register a real offset would, so `ftell()` on a socket answered 29 — ESPIPE read as
+            // a byte count. php keeps a logical position for such a stream and reports that: the
+            // bytes that have crossed the handle in either direction. Measured on `php -n` 8.5.6,
+            // a socket pair reads 0 fresh, 5 after a five-byte write, 11 after six more, and stays
+            // 11 across a failed `fseek`; the reading end counts what it reads, 3 then 5 then 11.
+            //
+            // That count already exists: `emit_advance_wrapper_position` runs on every `fread`,
+            // `fgets`, `fgetc`, `fwrite` and `stream_get_contents` for EVERY stream with state,
+            // not just a wrapper — its own doc notes the field is simply never read for the rest.
+            // This is the reader that gives it a second use.
+            load_stream_handle_to_result(ctx, stream, "ftell")?;
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos");
+            ctx.emitter.instruction(&format!("b {}", after_dispatch_label));
+            ctx.emitter.label(&seekable_label);
             // Only the DESCRIPTOR runs ahead of php's position. A wrapper's own tracked position
             // already reports what was handed to the caller, so subtracting there would count
             // the read-ahead twice.
@@ -242,6 +264,17 @@ pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             ctx.emitter.instruction("xor esi, esi");                            // use offset 0 for the ftell lseek probe
             ctx.emitter.instruction("mov edx, 1");                              // use SEEK_CUR for the ftell lseek probe
             ctx.emitter.instruction("call lseek");                              // query the current stream position
+            // libc reports the failure as -1 rather than leaking the errno, but the answer is the
+            // same one the AArch64 counterpart explains: a stream `lseek` refuses is one php keeps
+            // a logical position for.
+            ctx.emitter.instruction("cmp rax, -1");
+            ctx.emitter
+                .instruction(&format!("jne {}", seekable_label));
+            load_stream_handle_to_result(ctx, stream, "ftell")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // the handle owns the tracked position
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos");
+            ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));
+            ctx.emitter.label(&seekable_label);
             // See the AArch64 counterpart: only the descriptor runs ahead of php's position.
             emit_subtract_pending_held(ctx, stream)?;
             ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));  // skip wrapper stream_tell after the native probe
