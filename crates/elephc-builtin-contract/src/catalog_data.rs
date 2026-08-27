@@ -4368,7 +4368,11 @@ writes: None,
             },
             ParamSpec {
                 name: "group",
-                ty: TypeSpec::Str,
+                // php declares `string|int`, and the members are NOT interchangeable: a
+                // string is looked up as a NAME, an int is a uid. Declaring `Str` made the
+                // argument coercion convert an int-valued union to a string, so
+                // `chgrp($p, filegroup($p))` looked up the principal named "501".
+                ty: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Int]),
                 default: None,
                 by_ref: false,
 writes: None,
@@ -4479,7 +4483,11 @@ writes: None,
             },
             ParamSpec {
                 name: "user",
-                ty: TypeSpec::Str,
+                // php declares `string|int`, and the members are NOT interchangeable: a
+                // string is looked up as a NAME, an int is a uid. Declaring `Str` made the
+                // argument coercion convert an int-valued union to a string, so
+                // `chown($p, fileowner($p))` looked up the principal named "501".
+                ty: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Int]),
                 default: None,
                 by_ref: false,
 writes: None,
@@ -10571,7 +10579,11 @@ writes: None,
             },
             ParamSpec {
                 name: "group",
-                ty: TypeSpec::Str,
+                // php declares `string|int`, and the members are NOT interchangeable: a
+                // string is looked up as a NAME, an int is a uid. Declaring `Str` made the
+                // argument coercion convert an int-valued union to a string, so
+                // `lchgrp($p, filegroup($p))` looked up the principal named "501".
+                ty: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Int]),
                 default: None,
                 by_ref: false,
 writes: None,
@@ -10608,7 +10620,11 @@ writes: None,
             },
             ParamSpec {
                 name: "user",
-                ty: TypeSpec::Str,
+                // php declares `string|int`, and the members are NOT interchangeable: a
+                // string is looked up as a NAME, an int is a uid. Declaring `Str` made the
+                // argument coercion convert an int-valued union to a string, so
+                // `lchown($p, fileowner($p))` looked up the principal named "501".
+                ty: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Int]),
                 default: None,
                 by_ref: false,
 writes: None,

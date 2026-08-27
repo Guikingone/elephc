@@ -91,6 +91,19 @@ pub enum TypeSpec {
     /// `stream_select($r, $w, $e, "abc")`, which php refuses, and this builtin has no check hook
     /// to catch it afterwards.
     Nullable(&'static TypeSpec),
+    /// PHP's `A|B` — a parameter that accepts either type, and TELLS THEM APART.
+    ///
+    /// Not interchangeable with `Mixed`, and not collapsible to either member. `chown()` declares
+    /// `string|int $user` and the two members mean OPPOSITE things: a string is looked up as a
+    /// user NAME, an int is used as a uid. MEASURED on `php -n` 8.5.6, `chown($f, "501")` warns
+    /// `Unable to find uid for 501` where `chown($f, 501)` succeeds.
+    ///
+    /// Declaring one member instead — `Str`, as this contract did — is what made the argument
+    /// coercion convert an int-valued operand to a string, so `chown($p, fileowner($p))` looked
+    /// up the user named "501" and answered `false` for a program php answers `true` for.
+    /// Declaring `Mixed` would fix that and then document a lie, the same one `Ptr` exists to
+    /// avoid: the generated page would say `mixed $user` where php says `string|int $user`.
+    Union(&'static [TypeSpec]),
 }
 
 /// Static PHP value used as an optional builtin parameter default.

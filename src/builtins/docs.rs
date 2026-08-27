@@ -38,6 +38,11 @@ fn type_spec_str(ty: &TypeSpec) -> String {
         TypeSpec::Ptr => "pointer".to_string(),
         TypeSpec::Callable => "callable".to_string(),
         TypeSpec::Nullable(inner) => format!("?{}", type_spec_str(inner)),
+        TypeSpec::Union(members) => members
+            .iter()
+            .map(type_spec_str)
+            .collect::<Vec<_>>()
+            .join("|"),
     }
 }
 

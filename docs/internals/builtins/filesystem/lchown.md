@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function lchown(string $filename, string $user): bool
+function lchown(string $filename, mixed $user): bool
 ```
 
 ## What the type checker enforces

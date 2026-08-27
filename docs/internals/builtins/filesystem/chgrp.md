@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function chgrp(string $filename, string $group): bool
+function chgrp(string $filename, mixed $group): bool
 ```
 
 ## What the type checker enforces

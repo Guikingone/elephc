@@ -287,6 +287,13 @@ fn type_name(ty: TypeSpec) -> String {
         // parameter declared `?int $x = null` accepts an omitted argument AND a written null,
         // where a plain `int` accepts only the first.
         TypeSpec::Nullable(inner) => return format!("?{}", type_name(*inner)),
+        TypeSpec::Union(members) => {
+            return members
+                .iter()
+                .map(|member| type_name(*member))
+                .collect::<Vec<_>>()
+                .join("|")
+        }
     }
     .to_string()
 }

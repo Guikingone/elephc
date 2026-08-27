@@ -460,3 +460,111 @@ echo ($ok ? "y" : "n") . "|" . filemtime("both.txt");
     assert_eq!(out, "y|1000000000");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies chown()/chgrp() decide php's `string|int` principal from the VALUE, not the static type.
+///
+/// `fileowner()` is declared `int|false`, so `chown($p, fileowner($p))` hands over a boxed cell.
+/// The principal was declared `string` in the builtin contract, which made the argument coercion
+/// convert that cell to a string and sent the call down the NAME path: php answered `bool(true)`
+/// for the file's own owner while elephc looked up the user named "501" and answered `bool(false)`.
+/// A string principal is genuinely a name — MEASURED, `chown($p, "501")` warns
+/// `Unable to find uid for 501` on `php -n` 8.5.6 — so the two paths cannot be merged; the tag
+/// has to pick between them at run time.
+#[test]
+fn test_chown_principal_union_takes_the_uid_path_not_the_name_path() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("owner-union.txt", "x");
+echo chown("owner-union.txt", fileowner("owner-union.txt")) ? "u" : "U";
+echo chgrp("owner-union.txt", filegroup("owner-union.txt")) ? "g" : "G";
+unlink("owner-union.txt");
+"#,
+    );
+    assert_eq!(out, "ug");
+}
+
+/// Verifies a `mixed` chown() principal reaches php's coercive `string|int` boundary per TAG.
+///
+/// Each answer was MEASURED on `php -n` 8.5.6: an int is a uid, a bool and `null` coerce to
+/// uid 0 and fail for an unprivileged process, a float truncates, and a string is looked up as a
+/// NAME — which is why `"501"` fails where the int `501` succeeds.
+#[test]
+fn test_chown_mixed_principal_dispatches_on_the_runtime_tag() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("owner-tags.txt", "x");
+$self = fileowner("owner-tags.txt");
+foreach ([$self, true, null, "501", (float)$self] as $v) {
+    echo @chown("owner-tags.txt", $v) ? "y" : "n";
+}
+unlink("owner-tags.txt");
+"#,
+    );
+    assert_eq!(out, "ynnny");
+}
+
+/// Verifies a `mixed` chown() principal holding a container throws php's own TypeError.
+///
+/// The class name is read from the dense table `get_class()` uses, because php prints
+/// `stdClass given`, not `object given`.
+#[test]
+fn test_chown_mixed_principal_container_throws_php_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("owner-bad.txt", "x");
+foreach ([[1, 2], new stdClass()] as $v) {
+    try { @chown("owner-bad.txt", $v); }
+    catch (Throwable $e) { echo $e->getMessage(), "\n"; }
+}
+unlink("owner-bad.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "chown(): Argument #2 ($user) must be of type string|int, array given\n\
+         chown(): Argument #2 ($user) must be of type string|int, stdClass given\n"
+    );
+}
+
+/// Verifies lchown()/lchgrp() take the same runtime principal decision as their non-link siblings.
+#[test]
+fn test_lchown_mixed_principal_dispatches_on_the_runtime_tag() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("link-target.txt", "x");
+symlink("link-target.txt", "link-union.txt");
+echo lchown("link-union.txt", fileowner("link-target.txt")) ? "u" : "U";
+echo lchgrp("link-union.txt", filegroup("link-target.txt")) ? "g" : "G";
+echo @lchown("link-union.txt", "501") ? "s" : "S";
+unlink("link-union.txt");
+unlink("link-target.txt");
+"#,
+    );
+    assert_eq!(out, "ugS");
+}
+
+/// Verifies a WRITTEN `null` principal is coerced, not refused.
+///
+/// php's ZPP takes it into `string|int` as uid/gid 0 — MEASURED on `php -n` 8.5.6, a written
+/// null answers exactly what an explicit `0` answers, after a deprecation. Refusing it was doubly
+/// wrong: php runs the program, and the refusal came from the BACKEND, after the checker had
+/// already accepted the call.
+///
+/// The assertion compares the two spellings rather than naming an outcome, because whether
+/// uid/gid 0 SUCCEEDS depends on who owns the test directory.
+#[test]
+fn test_ownership_builtins_coerce_a_written_null_principal() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("null-principal.txt", "x");
+symlink("null-principal.txt", "null-principal.link");
+echo @chown("null-principal.txt", null) === @chown("null-principal.txt", 0) ? "y" : "n";
+echo @chgrp("null-principal.txt", null) === @chgrp("null-principal.txt", 0) ? "y" : "n";
+echo @lchown("null-principal.link", null) === @lchown("null-principal.link", 0) ? "y" : "n";
+echo @lchgrp("null-principal.link", null) === @lchgrp("null-principal.link", 0) ? "y" : "n";
+unlink("null-principal.link");
+unlink("null-principal.txt");
+"#,
+    );
+    assert_eq!(out, "yyyy");
+}

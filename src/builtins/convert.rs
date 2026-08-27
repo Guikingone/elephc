@@ -37,6 +37,11 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Nullable(inner) => {
             PhpType::Union(vec![type_spec_to_php(inner), PhpType::Void])
         }
+        // php's own `A|B`, in DECLARED order — the same shape `Nullable` builds, and the same
+        // one the checker's own union normalization consumes.
+        TypeSpec::Union(members) => {
+            PhpType::Union(members.iter().map(type_spec_to_php).collect())
+        }
     }
 }
 

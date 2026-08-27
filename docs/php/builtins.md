@@ -123,9 +123,9 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`time()`](./builtins/date/time.md) | `(): int` | `int` | ✓ | ✓ |
 | [`basename()`](./builtins/filesystem/basename.md) | `(string $path, string $suffix = ''): string` | `string` | ✓ | ✓ |
 | [`chdir()`](./builtins/filesystem/chdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
-| [`chgrp()`](./builtins/filesystem/chgrp.md) | `(string $filename, string $group): bool` | `bool` | ✓ | ✓ |
+| [`chgrp()`](./builtins/filesystem/chgrp.md) | `(string $filename, mixed $group): bool` | `bool` | ✓ | ✓ |
 | [`chmod()`](./builtins/filesystem/chmod.md) | `(string $filename, int $permissions): bool` | `bool` | ✓ | ✓ |
-| [`chown()`](./builtins/filesystem/chown.md) | `(string $filename, string $user): bool` | `bool` | ✓ | ✓ |
+| [`chown()`](./builtins/filesystem/chown.md) | `(string $filename, mixed $user): bool` | `bool` | ✓ | ✓ |
 | [`clearstatcache()`](./builtins/filesystem/clearstatcache.md) | `(bool $clear_realpath_cache = false, string $filename = ''): void` | `void` | ✓ | ✓ |
 | [`copy()`](./builtins/filesystem/copy.md) | `(string $from, string $to, mixed $context = null): bool` | `bool` | ✓ | ✓ |
 | [`dirname()`](./builtins/filesystem/dirname.md) | `(string $path, int $levels = 1): string` | `string` | ✓ | ✓ |
@@ -152,8 +152,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`is_readable()`](./builtins/filesystem/is_readable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_writable()`](./builtins/filesystem/is_writable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_writeable()`](./builtins/filesystem/is_writeable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
-| [`lchgrp()`](./builtins/filesystem/lchgrp.md) | `(string $filename, string $group): bool` | `bool` | ✓ | ✓ |
-| [`lchown()`](./builtins/filesystem/lchown.md) | `(string $filename, string $user): bool` | `bool` | ✓ | ✓ |
+| [`lchgrp()`](./builtins/filesystem/lchgrp.md) | `(string $filename, mixed $group): bool` | `bool` | ✓ | ✓ |
+| [`lchown()`](./builtins/filesystem/lchown.md) | `(string $filename, mixed $user): bool` | `bool` | ✓ | ✓ |
 | [`link()`](./builtins/filesystem/link.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`linkinfo()`](./builtins/filesystem/linkinfo.md) | `(string $path): int` | `int` | ✓ | ✓ |
 | [`lstat()`](./builtins/filesystem/lstat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |

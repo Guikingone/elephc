@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function chown(string $filename, string $user): bool
+function chown(string $filename, mixed $user): bool
 ```
 
 ## What the type checker enforces
