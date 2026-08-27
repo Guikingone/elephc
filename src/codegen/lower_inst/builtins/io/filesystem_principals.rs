@@ -23,6 +23,27 @@ pub(super) enum TouchTimeShape {
     ExplicitBoth,
 }
 
+/// Emits the notice php raises for a null in a non-nullable internal parameter.
+///
+/// php 8.1 deprecated the coercion rather than removing it, so the notice precedes the call and
+/// the call still happens. MEASURED on `php -n` 8.5.6:
+/// `Deprecated: chown(): Passing null to parameter #2 ($user) of type string|int is deprecated`,
+/// then the ordinary `Warning` for uid 0.
+fn emit_null_principal_deprecation(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    kind: PrincipalKind,
+) {
+    super::fopen_core::emit_static_diag_warning(
+        ctx,
+        &format!(
+            "Deprecated: {}(): Passing null to parameter #2 ({}) of type string|int is deprecated\n",
+            name,
+            principal_argument_name(kind),
+        ),
+    );
+}
+
 /// Which principal argument php names in its `string|int` TypeError.
 fn principal_argument_name(kind: PrincipalKind) -> &'static str {
     match kind {
@@ -92,6 +113,9 @@ fn emit_mixed_principal_dispatch(
     abi::emit_jump(ctx.emitter, &l_int);
 
     ctx.emitter.label(&l_null);
+    // A null that ARRIVES in a boxed cell is the same written null to php's ZPP, and draws the
+    // same notice as the literal spelling does.
+    emit_null_principal_deprecation(ctx, name, kind);
     abi::emit_load_int_immediate(ctx.emitter, tag_reg, 0);
     abi::emit_jump(ctx.emitter, &l_int);
 
@@ -253,6 +277,7 @@ pub(super) fn lower_chown_or_chgrp_aarch64(
         // `Operation not permitted` — the answer for uid 0, not for a name. Leaving it to the
         // arm below refused a program php runs, and refused it in the BACKEND, where the
         // checker had already accepted the call.
+            emit_null_principal_deprecation(ctx, name, kind);
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             emit_owner_group_wrapper_dispatch(ctx, principal_int_option(kind));
         }
@@ -304,6 +329,7 @@ pub(super) fn lower_chown_or_chgrp_x86_64(
         // `Operation not permitted` — the answer for uid 0, not for a name. Leaving it to the
         // arm below refused a program php runs, and refused it in the BACKEND, where the
         // checker had already accepted the call.
+            emit_null_principal_deprecation(ctx, name, kind);
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             emit_owner_group_wrapper_dispatch(ctx, principal_int_option(kind));
         }
@@ -364,6 +390,7 @@ pub(super) fn lower_lchown_or_lchgrp_aarch64(
         // `Operation not permitted` — the answer for uid 0, not for a name. Leaving it to the
         // arm below refused a program php runs, and refused it in the BACKEND, where the
         // checker had already accepted the call.
+            emit_null_principal_deprecation(ctx, name, kind);
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             emit_lprincipal_id_dispatch_aarch64(ctx, kind);
         }
@@ -403,6 +430,7 @@ pub(super) fn lower_lchown_or_lchgrp_x86_64(
         // `Operation not permitted` — the answer for uid 0, not for a name. Leaving it to the
         // arm below refused a program php runs, and refused it in the BACKEND, where the
         // checker had already accepted the call.
+            emit_null_principal_deprecation(ctx, name, kind);
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             emit_lprincipal_id_dispatch_x86_64(ctx, kind);
         }
@@ -442,7 +470,7 @@ fn emit_lprincipal_id_dispatch_aarch64(ctx: &mut FunctionContext<'_>, kind: Prin
         ctx.emitter.instruction("mov x3, #-1");                                 // keep the symlink owner unchanged
         ctx.emitter.instruction("mov x4, x9");                                  // pass gid and leave symlink owner unchanged
     }
-    abi::emit_call_label(ctx.emitter, "__rt_lchown");
+    abi::emit_call_label(ctx.emitter, lprincipal_int_runtime(kind));
 }
 
 /// Emits the x86_64 symlink ownership call for a NAME principal in the string-result registers.
@@ -464,7 +492,27 @@ fn emit_lprincipal_id_dispatch_x86_64(ctx: &mut FunctionContext<'_>, kind: Princ
         ctx.emitter.instruction("mov rdi, -1");                                 // keep the symlink owner unchanged
         ctx.emitter.instruction("mov rsi, r9");                                 // pass gid and leave symlink owner unchanged
     }
-    abi::emit_call_label(ctx.emitter, "__rt_lchown");
+    abi::emit_call_label(ctx.emitter, lprincipal_int_runtime(kind));
+}
+
+/// Returns the ownership syscall entry point that names THIS caller in its warning.
+///
+/// `chown()` and `chgrp()` are one syscall with the other principal set to `-1`, but php names
+/// the caller in the diagnostic — `Warning: chgrp(): No such file or directory` — so each has its
+/// own entry point rather than a shared one taking the name as an argument.
+pub(super) fn principal_int_runtime(kind: PrincipalKind) -> &'static str {
+    match kind {
+        PrincipalKind::Owner => "__rt_chown",
+        PrincipalKind::Group => "__rt_chgrp",
+    }
+}
+
+/// The symlink-aware sibling of [`principal_int_runtime`].
+pub(super) fn lprincipal_int_runtime(kind: PrincipalKind) -> &'static str {
+    match kind {
+        PrincipalKind::Owner => "__rt_lchown",
+        PrincipalKind::Group => "__rt_lchgrp",
+    }
 }
 
 /// Returns the wrapper metadata option for string ownership changes.
@@ -683,6 +731,11 @@ pub(super) fn emit_owner_group_wrapper_dispatch(ctx: &mut FunctionContext<'_>, o
     let wrapper = ctx.next_label("meta_owngrp_wrapper");
     let after = ctx.next_label("meta_owngrp_after");
     let is_owner = option == STREAM_META_OWNER;
+    let runtime = principal_int_runtime(if is_owner {
+        PrincipalKind::Owner
+    } else {
+        PrincipalKind::Group
+    });
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x9, x0");                              // preserve the uid/gid value across path restoration
@@ -705,7 +758,7 @@ pub(super) fn emit_owner_group_wrapper_dispatch(ctx: &mut FunctionContext<'_>, o
                 ctx.emitter.instruction("ldr x4, [sp, #16]");                   // pass gid and leave uid unchanged
             }
             ctx.emitter.instruction("add sp, sp, #32");                         // release scratch before native chown
-            abi::emit_call_label(ctx.emitter, "__rt_chown");
+            abi::emit_call_label(ctx.emitter, runtime);
             ctx.emitter.instruction(&format!("b {}", after));                   // skip wrapper stream_metadata after native helper
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload uid/gid for boxing
@@ -748,7 +801,7 @@ pub(super) fn emit_owner_group_wrapper_dispatch(ctx: &mut FunctionContext<'_>, o
                 ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");       // pass gid and leave uid unchanged
             }
             ctx.emitter.instruction("add rsp, 32");                             // release scratch before native chown
-            abi::emit_call_label(ctx.emitter, "__rt_chown");
+            abi::emit_call_label(ctx.emitter, runtime);
             ctx.emitter.instruction(&format!("jmp {}", after));                 // skip wrapper stream_metadata after native helper
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload uid/gid for boxing

@@ -104,3 +104,68 @@ echo "quiet\n";
     assert_eq!(out.diagnostics, "", "every one of these honours @");
     assert_eq!(out.stdout, "quiet\n");
 }
+
+/// Verifies each ownership builtin names ITSELF, and tells the two failures apart.
+///
+/// `chown()` and `chgrp()` are one syscall with the other principal set to `-1`, and `lchown()`
+/// and `lchgrp()` likewise — but php names the CALLER, so a shared entry point would report
+/// `chown()` for all four. A principal NAME that does not resolve is a second, differently worded
+/// failure: no `errno` is involved and php quotes the name. elephc printed none of these lines,
+/// and answered `false` in silence.
+///
+/// Every expectation measured on `php -n` 8.5.6.
+#[test]
+fn a_failing_ownership_call_names_itself_and_its_reason() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("f.txt", "x");
+chown("nope.txt", 0);
+chgrp("nope.txt", 0);
+lchown("nope.txt", 0);
+lchgrp("nope.txt", 0);
+chown("f.txt", "nosuchuser");
+chgrp("f.txt", "nosuchgroup");
+lchown("f.txt", "nosuchuser");
+lchgrp("f.txt", "nosuchgroup");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.diagnostics,
+        "Warning: chown(): No such file or directory\n\
+         Warning: chgrp(): No such file or directory\n\
+         Warning: lchown(): No such file or directory\n\
+         Warning: lchgrp(): No such file or directory\n\
+         Warning: chown(): Unable to find uid for nosuchuser\n\
+         Warning: chgrp(): Unable to find gid for nosuchgroup\n\
+         Warning: lchown(): Unable to find uid for nosuchuser\n\
+         Warning: lchgrp(): Unable to find gid for nosuchgroup\n",
+        "each ownership builtin warns in ITS name, and an unresolvable principal is its own line"
+    );
+}
+
+/// Verifies a null principal draws php's deprecation BEFORE the call it still makes.
+///
+/// php 8.1 deprecated passing null to a non-nullable internal parameter rather than removing the
+/// coercion, so both lines come out: the notice, then the ordinary warning for uid/gid 0. The
+/// path is one that cannot exist, which keeps the second line the same on every machine.
+#[test]
+fn a_null_ownership_principal_deprecates_and_still_runs() {
+    let out = compile_and_run_capture(
+        r#"<?php
+chown("nope.txt", null);
+chgrp("nope.txt", null);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.diagnostics,
+        "Deprecated: chown(): Passing null to parameter #2 ($user) of type string|int is \
+         deprecated\n\
+         Warning: chown(): No such file or directory\n\
+         Deprecated: chgrp(): Passing null to parameter #2 ($group) of type string|int is \
+         deprecated\n\
+         Warning: chgrp(): No such file or directory\n",
+        "the notice precedes the call php still makes"
+    );
+}

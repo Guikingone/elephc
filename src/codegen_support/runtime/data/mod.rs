@@ -468,6 +468,40 @@ pub(crate) const MKDIR_WARNING_HEAD: &str = "Warning: mkdir(): ";
 /// See [`UNLINK_WARNING_HEAD`]. The parentheses stay empty even though a path was passed.
 pub(crate) const CHMOD_WARNING_HEAD: &str = "Warning: chmod(): ";
 
+/// See [`UNLINK_WARNING_HEAD`]. The ownership builtins keep the parentheses empty too, and each
+/// one names ITSELF — MEASURED on `php -n` 8.5.6, `chgrp()` on a missing path reports
+/// `Warning: chgrp(): No such file or directory`, not the `chown()` the syscall belongs to.
+/// elephc printed none of these lines at all: a failing ownership change answered `false` in
+/// silence.
+pub(crate) const CHOWN_WARNING_HEAD: &str = "Warning: chown(): ";
+
+/// See [`CHOWN_WARNING_HEAD`].
+pub(crate) const CHGRP_WARNING_HEAD: &str = "Warning: chgrp(): ";
+
+/// See [`CHOWN_WARNING_HEAD`].
+pub(crate) const LCHOWN_WARNING_HEAD: &str = "Warning: lchown(): ";
+
+/// See [`CHOWN_WARNING_HEAD`].
+pub(crate) const LCHGRP_WARNING_HEAD: &str = "Warning: lchgrp(): ";
+
+/// The head of the line php prints when the PRINCIPAL NAME does not resolve.
+///
+/// A different failure from the syscall's, and worded differently: no `errno` is involved, the
+/// name itself is quoted, and php says `uid` for an owner and `gid` for a group. MEASURED:
+/// `Warning: chown(): Unable to find uid for nosuchuser`.
+pub(crate) const CHOWN_UNKNOWN_PRINCIPAL_HEAD: &str = "Warning: chown(): Unable to find uid for ";
+
+/// See [`CHOWN_UNKNOWN_PRINCIPAL_HEAD`].
+pub(crate) const CHGRP_UNKNOWN_PRINCIPAL_HEAD: &str = "Warning: chgrp(): Unable to find gid for ";
+
+/// See [`CHOWN_UNKNOWN_PRINCIPAL_HEAD`].
+pub(crate) const LCHOWN_UNKNOWN_PRINCIPAL_HEAD: &str =
+    "Warning: lchown(): Unable to find uid for ";
+
+/// See [`CHOWN_UNKNOWN_PRINCIPAL_HEAD`].
+pub(crate) const LCHGRP_UNKNOWN_PRINCIPAL_HEAD: &str =
+    "Warning: lchgrp(): Unable to find gid for ";
+
 /// See [`UNLINK_WARNING_HEAD`]. The path sits inside a sentence rather than in parentheses.
 pub(crate) const TOUCH_WARNING_HEAD: &str = "Warning: touch(): Unable to create file ";
 

@@ -9,9 +9,11 @@
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen_support::runtime::data::{
-    CHMOD_URL_WARNING_HEAD, CHMOD_URL_WARNING_MIDDLE, CHMOD_WARNING_HEAD,
-    TOUCH_URL_WARNING_HEAD, TOUCH_URL_WARNING_MIDDLE, TOUCH_WARNING_HEAD,
-    TOUCH_WARNING_MIDDLE,
+    CHGRP_UNKNOWN_PRINCIPAL_HEAD, CHGRP_WARNING_HEAD, CHMOD_URL_WARNING_HEAD,
+    CHMOD_URL_WARNING_MIDDLE, CHMOD_WARNING_HEAD, CHOWN_UNKNOWN_PRINCIPAL_HEAD,
+    CHOWN_WARNING_HEAD, LCHGRP_UNKNOWN_PRINCIPAL_HEAD, LCHGRP_WARNING_HEAD,
+    LCHOWN_UNKNOWN_PRINCIPAL_HEAD, LCHOWN_WARNING_HEAD, TOUCH_URL_WARNING_HEAD,
+    TOUCH_URL_WARNING_MIDDLE, TOUCH_WARNING_HEAD, TOUCH_WARNING_MIDDLE,
 };
 use crate::codegen_support::{abi, emit::Emitter};
 
@@ -82,183 +84,45 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return predicate
 
-    // -- chown --
-    emitter.blank();
-    emitter.comment("--- runtime: chown ---");
-    emitter.label_global("__rt_chown");
-    emitter.instruction("push rbp");                                            // preserve caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish frame
-    emitter.instruction("sub rsp, 32");                                         // align stack + spill uid/gid
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve uid
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve gid
-    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
-    emitter.instruction("mov rdi, rax");                                        // first libc chown arg = path
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second arg = uid
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // third arg = gid
-    emitter.instruction("call chown");                                          // libc chown(path, uid, gid)
-    emitter.instruction("cmp eax, 0");                                          // did libc chown() return success as a C int?
-    emitter.instruction("sete al");                                             // boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen
-    emitter.instruction("add rsp, 32");                                         // release stack
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return predicate
+    // -- the six ownership helpers --
+    // See the AArch64 counterpart: FOUR entry points over two syscalls, because php names the
+    // CALLER in the diagnostic and a shared body cannot know which one it is.
+    for (symbol, libc, head, head_len) in [
+        ("__rt_chown", "chown", "_warn_chown_head", CHOWN_WARNING_HEAD.len()),
+        ("__rt_chgrp", "chown", "_warn_chgrp_head", CHGRP_WARNING_HEAD.len()),
+        ("__rt_lchown", "lchown", "_warn_lchown_head", LCHOWN_WARNING_HEAD.len()),
+        ("__rt_lchgrp", "lchown", "_warn_lchgrp_head", LCHGRP_WARNING_HEAD.len()),
+    ] {
+        emit_ownership_syscall_x86_64(emitter, symbol, libc, head, head_len);
+    }
 
-    // -- lchown --
-    emitter.blank();
-    emitter.comment("--- runtime: lchown ---");
-    emitter.label_global("__rt_lchown");
-    emitter.instruction("push rbp");                                            // preserve caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish frame
-    emitter.instruction("sub rsp, 32");                                         // align stack + spill uid/gid
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve uid
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve gid
-    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
-    emitter.instruction("mov rdi, rax");                                        // first libc lchown arg = path
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second arg = uid
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // third arg = gid
-    emitter.instruction("call lchown");                                         // libc lchown(path, uid, gid) without following symlinks
-    emitter.instruction("cmp eax, 0");                                          // did libc lchown() return success as a C int?
-    emitter.instruction("sete al");                                             // boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen
-    emitter.instruction("add rsp, 32");                                         // release stack
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return predicate
+    for (symbol, libc, owner, head, head_len, absent, absent_len) in [
+        (
+            "__rt_chown_user", "chown", true,
+            "_warn_chown_head", CHOWN_WARNING_HEAD.len(),
+            "_warn_chown_noprincipal", CHOWN_UNKNOWN_PRINCIPAL_HEAD.len(),
+        ),
+        (
+            "__rt_lchown_user", "lchown", true,
+            "_warn_lchown_head", LCHOWN_WARNING_HEAD.len(),
+            "_warn_lchown_noprincipal", LCHOWN_UNKNOWN_PRINCIPAL_HEAD.len(),
+        ),
+        (
+            "__rt_chgrp_group", "chown", false,
+            "_warn_chgrp_head", CHGRP_WARNING_HEAD.len(),
+            "_warn_chgrp_noprincipal", CHGRP_UNKNOWN_PRINCIPAL_HEAD.len(),
+        ),
+        (
+            "__rt_lchgrp_group", "lchown", false,
+            "_warn_lchgrp_head", LCHGRP_WARNING_HEAD.len(),
+            "_warn_lchgrp_noprincipal", LCHGRP_UNKNOWN_PRINCIPAL_HEAD.len(),
+        ),
+    ] {
+        emit_ownership_name_lookup_x86_64(
+            emitter, symbol, libc, owner, head, head_len, absent, absent_len,
+        );
+    }
 
-    // -- chown by user name --
-    emitter.blank();
-    emitter.comment("--- runtime: chown user name ---");
-    emitter.label_global("__rt_chown_user");
-    emitter.instruction("push rbp");                                            // preserve caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish frame
-    emitter.instruction("sub rsp, 32");                                         // align stack + spill user string and path pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // preserve user-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // preserve user-name length
-    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload user-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload user-name length
-    emitter.instruction("call __rt_cstr2");                                     // user name → secondary C string in rax
-    emitter.instruction("mov rdi, rax");                                        // first lookup arg = C user name
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // second lookup arg = user-name length
-    emitter.instruction("call __rt_lookup_passwd_uid");                         // resolve uid from /etc/passwd without NSS
-    emitter.instruction("cmp eax, -1");                                         // was the user name absent?
-    emitter.instruction("je __rt_chown_user_fail_x86");                         // unknown user name → false
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first chown arg = C path
-    emitter.instruction("mov esi, eax");                                        // second chown arg = resolved uid
-    emitter.instruction("mov rdx, -1");                                         // gid = -1 (leave group unchanged)
-    emitter.instruction("call chown");                                          // libc chown(path, uid, -1)
-    emitter.instruction("cmp eax, 0");                                          // did libc chown() return success as a C int?
-    emitter.instruction("sete al");                                             // boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen
-    emitter.instruction("jmp __rt_chown_user_done_x86");                        // skip failure return
-    emitter.label("__rt_chown_user_fail_x86");
-    emitter.instruction("xor eax, eax");                                        // unknown name returns false
-    emitter.label("__rt_chown_user_done_x86");
-    emitter.instruction("add rsp, 32");                                         // release stack
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return predicate
-
-    // -- lchown by user name --
-    emitter.blank();
-    emitter.comment("--- runtime: lchown user name ---");
-    emitter.label_global("__rt_lchown_user");
-    emitter.instruction("push rbp");                                            // preserve caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish frame
-    emitter.instruction("sub rsp, 32");                                         // align stack + spill user string and path pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // preserve user-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // preserve user-name length
-    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload user-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload user-name length
-    emitter.instruction("call __rt_cstr2");                                     // user name → secondary C string in rax
-    emitter.instruction("mov rdi, rax");                                        // first lookup arg = C user name
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // second lookup arg = user-name length
-    emitter.instruction("call __rt_lookup_passwd_uid");                         // resolve uid from /etc/passwd without NSS
-    emitter.instruction("cmp eax, -1");                                         // was the user name absent?
-    emitter.instruction("je __rt_lchown_user_fail_x86");                        // unknown user name → false
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first lchown arg = C path
-    emitter.instruction("mov esi, eax");                                        // second lchown arg = resolved uid
-    emitter.instruction("mov rdx, -1");                                         // gid = -1 (leave group unchanged)
-    emitter.instruction("call lchown");                                         // libc lchown(path, uid, -1) without following symlinks
-    emitter.instruction("cmp eax, 0");                                          // did libc lchown() return success as a C int?
-    emitter.instruction("sete al");                                             // boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen
-    emitter.instruction("jmp __rt_lchown_user_done_x86");                       // skip failure return
-    emitter.label("__rt_lchown_user_fail_x86");
-    emitter.instruction("xor eax, eax");                                        // unknown name returns false
-    emitter.label("__rt_lchown_user_done_x86");
-    emitter.instruction("add rsp, 32");                                         // release stack
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return predicate
-
-    // -- chgrp by group name --
-    emitter.blank();
-    emitter.comment("--- runtime: chgrp group name ---");
-    emitter.label_global("__rt_chgrp_group");
-    emitter.instruction("push rbp");                                            // preserve caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish frame
-    emitter.instruction("sub rsp, 32");                                         // align stack + spill group string and path pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // preserve group-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // preserve group-name length
-    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload group-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload group-name length
-    emitter.instruction("call __rt_cstr2");                                     // group name → secondary C string in rax
-    emitter.instruction("mov rdi, rax");                                        // first lookup arg = C group name
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // second lookup arg = group-name length
-    emitter.instruction("call __rt_lookup_group_gid");                          // resolve gid from /etc/group without NSS
-    emitter.instruction("cmp eax, -1");                                         // was the group name absent?
-    emitter.instruction("je __rt_chgrp_group_fail_x86");                        // unknown group name → false
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first chown arg = C path
-    emitter.instruction("mov rsi, -1");                                         // uid = -1 (leave owner unchanged)
-    emitter.instruction("mov edx, eax");                                        // third chown arg = resolved gid
-    emitter.instruction("call chown");                                          // libc chown(path, -1, gid)
-    emitter.instruction("cmp eax, 0");                                          // did libc chown() return success as a C int?
-    emitter.instruction("sete al");                                             // boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen
-    emitter.instruction("jmp __rt_chgrp_group_done_x86");                       // skip failure return
-    emitter.label("__rt_chgrp_group_fail_x86");
-    emitter.instruction("xor eax, eax");                                        // unknown name returns false
-    emitter.label("__rt_chgrp_group_done_x86");
-    emitter.instruction("add rsp, 32");                                         // release stack
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return predicate
-
-    // -- lchgrp by group name --
-    emitter.blank();
-    emitter.comment("--- runtime: lchgrp group name ---");
-    emitter.label_global("__rt_lchgrp_group");
-    emitter.instruction("push rbp");                                            // preserve caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish frame
-    emitter.instruction("sub rsp, 32");                                         // align stack + spill group string and path pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // preserve group-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // preserve group-name length
-    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload group-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload group-name length
-    emitter.instruction("call __rt_cstr2");                                     // group name → secondary C string in rax
-    emitter.instruction("mov rdi, rax");                                        // first lookup arg = C group name
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // second lookup arg = group-name length
-    emitter.instruction("call __rt_lookup_group_gid");                          // resolve gid from /etc/group without NSS
-    emitter.instruction("cmp eax, -1");                                         // was the group name absent?
-    emitter.instruction("je __rt_lchgrp_group_fail_x86");                       // unknown group name → false
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first lchown arg = C path
-    emitter.instruction("mov rsi, -1");                                         // uid = -1 (leave owner unchanged)
-    emitter.instruction("mov edx, eax");                                        // third lchown arg = resolved gid
-    emitter.instruction("call lchown");                                         // libc lchown(path, -1, gid) without following symlinks
-    emitter.instruction("cmp eax, 0");                                          // did libc lchown() return success as a C int?
-    emitter.instruction("sete al");                                             // boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen
-    emitter.instruction("jmp __rt_lchgrp_group_done_x86");                      // skip failure return
-    emitter.label("__rt_lchgrp_group_fail_x86");
-    emitter.instruction("xor eax, eax");                                        // unknown name returns false
-    emitter.label("__rt_lchgrp_group_done_x86");
-    emitter.instruction("add rsp, 32");                                         // release stack
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return predicate
 
     // -- umask --
     emitter.blank();
@@ -422,6 +286,111 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");
     emitter.label("__rt_touch_done_x86");
     emitter.instruction("add rsp, 80");                                         // release frame
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return predicate
+}
+
+/// The x86_64 counterpart of `emit_ownership_syscall_aarch64`.
+fn emit_ownership_syscall_x86_64(
+    emitter: &mut Emitter,
+    symbol: &str,
+    libc: &str,
+    head: &str,
+    head_len: usize,
+) {
+    emitter.blank();
+    emitter.comment(&format!("--- runtime: {} ---", &symbol[5..]));
+    emitter.label_global(symbol);
+    emitter.instruction("push rbp");                                            // preserve caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish frame
+    emitter.instruction("sub rsp, 32");                                         // align stack + spill uid/gid
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve uid
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve gid
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
+    emitter.instruction("mov rdi, rax");                                        // first libc arg = path
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second arg = uid
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // third arg = gid
+    emitter.instruction(&format!("call {libc}"));                               // libc chown/lchown(path, uid, gid)
+    emitter.instruction("cmp eax, 0");                                          // did libc return success as a C int?
+    emitter.instruction(&format!("je {symbol}_ok_x86"));                        // php warns about nothing it managed
+    super::path_op_warning::emit_libc_call_x86_64(emitter, head, head_len, None, head, 0);
+    emitter.instruction("xor eax, eax");                                        // php answers false for the failure it just named
+    emitter.instruction(&format!("jmp {symbol}_done_x86"));
+    emitter.label(&format!("{symbol}_ok_x86"));
+    emitter.instruction("mov eax, 1");
+    emitter.label(&format!("{symbol}_done_x86"));
+    emitter.instruction("add rsp, 32");                                         // release stack
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return predicate
+}
+
+/// The x86_64 counterpart of `emit_ownership_name_lookup_aarch64`.
+fn emit_ownership_name_lookup_x86_64(
+    emitter: &mut Emitter,
+    symbol: &str,
+    libc: &str,
+    owner: bool,
+    head: &str,
+    head_len: usize,
+    absent: &str,
+    absent_len: usize,
+) {
+    let lookup = if owner {
+        "__rt_lookup_passwd_uid"
+    } else {
+        "__rt_lookup_group_gid"
+    };
+    emitter.blank();
+    emitter.comment(&format!("--- runtime: {} ---", &symbol[5..]));
+    emitter.label_global(symbol);
+    emitter.instruction("push rbp");                                            // preserve caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish frame
+    emitter.instruction("sub rsp, 48");                                         // align stack + spill principal string and path pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // preserve principal pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // preserve principal length
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload principal pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload principal length
+    emitter.instruction("call __rt_cstr2");                                     // principal → secondary C string in rax
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // the name php quotes when it does not resolve
+    emitter.instruction("mov rdi, rax");                                        // first lookup arg = C principal name
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // second lookup arg = principal length
+    emitter.instruction(&format!("call {lookup}"));                             // resolve id from the local database without NSS
+    emitter.instruction("cmp eax, -1");                                         // was the name absent?
+    emitter.instruction(&format!("je {symbol}_absent_x86"));                    // unknown name is its own diagnostic
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first argument = C path
+    if owner {
+        emitter.instruction("mov esi, eax");                                    // second argument = resolved uid
+        emitter.instruction("mov rdx, -1");                                     // gid = -1 (leave group unchanged)
+    } else {
+        emitter.instruction("mov edx, eax");                                    // third argument = resolved gid
+        emitter.instruction("mov rsi, -1");                                     // uid = -1 (leave owner unchanged)
+    }
+    emitter.instruction(&format!("call {libc}"));                               // libc chown/lchown with the resolved principal
+    emitter.instruction("cmp eax, 0");                                          // did libc return success as a C int?
+    emitter.instruction(&format!("je {symbol}_ok_x86"));                        // php warns about nothing it managed
+    super::path_op_warning::emit_libc_call_x86_64(emitter, head, head_len, None, head, 0);
+    emitter.instruction("xor eax, eax");                                        // php answers false for the failure it just named
+    emitter.instruction(&format!("jmp {symbol}_done_x86"));
+
+    emitter.label(&format!("{symbol}_absent_x86"));
+    // The shared composer spells `head` + this string + newline when the middle is empty and the
+    // reason is zero, which is exactly php's wording for an unresolvable principal.
+    abi::emit_symbol_address(emitter, "rdi", absent);
+    emitter.instruction(&format!("mov rsi, {absent_len}"));
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // the principal name php quotes
+    abi::emit_symbol_address(emitter, "rcx", absent);
+    emitter.instruction("mov r8, 0");                                           // no middle: the name ends the sentence
+    emitter.instruction("mov r9, 0");                                           // and no errno describes it
+    emitter.instruction("call __rt_path_op_warning");
+    emitter.instruction("xor eax, eax");                                        // unknown name returns false
+    emitter.instruction(&format!("jmp {symbol}_done_x86"));
+
+    emitter.label(&format!("{symbol}_ok_x86"));
+    emitter.instruction("mov eax, 1");
+    emitter.label(&format!("{symbol}_done_x86"));
+    emitter.instruction("add rsp, 48");                                         // release stack
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return predicate
 }
