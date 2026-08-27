@@ -647,3 +647,19 @@ fn lower_test_probe(
         call.name,
     )))
 }
+
+/// The [`runtime_fn_semantics`] descriptor with a per-CALL-SITE effect summary.
+///
+/// A builtin whose OPTIONAL argument is by-reference is pure at one call site and not at the
+/// next, and the effects table is keyed by `RuntimeFnId`, which cannot say that. Declaring the
+/// pessimistic answer for every call would keep dead `str_replace()` statements alive; declaring
+/// the optimistic one deleted the call that fills `$count`.
+pub const fn runtime_fn_semantics_with_effects(
+    target: RuntimeFnId,
+    effects: EffectsFn,
+) -> BuiltinSemantics {
+    BuiltinSemantics {
+        effects: BuiltinEffects::Shared(effects),
+        ..runtime_fn_semantics(target)
+    }
+}

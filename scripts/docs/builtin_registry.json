@@ -63679,7 +63679,7 @@
           "type": "string"
         },
         {
-          "by_ref": false,
+          "by_ref": true,
           "default": null,
           "name": "count",
           "optional": true,
@@ -63695,7 +63695,7 @@
     "canonical_name": "str_ireplace",
     "description": "Case-insensitive version of str_replace().",
     "eval": {
-      "adapter_reason": "interpreter-specific-value-semantics",
+      "adapter_reason": "by-reference-or-lvalue",
       "area": "string",
       "execution": "interpreter-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/str_ireplace.rs",
@@ -63727,7 +63727,7 @@
           "type": "string"
         },
         {
-          "by_ref": false,
+          "by_ref": true,
           "default": "null",
           "name": "count",
           "optional": true,
@@ -63769,8 +63769,7 @@
         "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
-        "kind": "static",
-        "names": []
+        "kind": "shared"
       },
       "lowering": {
         "kind": "runtime_call",
@@ -63784,7 +63783,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "str_ireplace"
       ],
@@ -63795,7 +63794,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -63822,7 +63822,7 @@
           "type": "string"
         },
         {
-          "by_ref": false,
+          "by_ref": true,
           "default": "null",
           "name": "count",
           "optional": true,
@@ -64187,7 +64187,7 @@
           "type": "string"
         },
         {
-          "by_ref": false,
+          "by_ref": true,
           "default": null,
           "name": "count",
           "optional": true,
@@ -64203,7 +64203,7 @@
     "canonical_name": "str_replace",
     "description": "Replaces all occurrences of a search string with a replacement string.",
     "eval": {
-      "adapter_reason": "interpreter-specific-value-semantics",
+      "adapter_reason": "by-reference-or-lvalue",
       "area": "string",
       "execution": "interpreter-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/str_replace.rs",
@@ -64235,7 +64235,7 @@
           "type": "string"
         },
         {
-          "by_ref": false,
+          "by_ref": true,
           "default": "null",
           "name": "count",
           "optional": true,
@@ -64277,8 +64277,7 @@
         "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
-        "kind": "static",
-        "names": []
+        "kind": "shared"
       },
       "lowering": {
         "kind": "runtime_call",
@@ -64331,7 +64330,7 @@
           "type": "string"
         },
         {
-          "by_ref": false,
+          "by_ref": true,
           "default": "null",
           "name": "count",
           "optional": true,

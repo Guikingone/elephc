@@ -30,23 +30,51 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 ///
 /// # Output
 /// - `x0`/`rax`: a fresh array of the replaced elements
+/// php's `str_ireplace()` is case-insensitive in EVERY argument shape, not only the scalar one.
+/// Both array loops used to call `__rt_str_replace` unconditionally, so
+/// `str_ireplace(["A","N"], ["x","y"], "banana")` answered `"banana"` where php answers
+/// `"bxyxyx"` — MEASURED on `php -n` 8.5.6. Each loop is emitted twice, once per case, because
+/// the only difference is which inner helper it delegates to, and a flag threaded through a call
+/// site is a thing a call site can forget.
 pub fn emit_str_replace_subject_array(emitter: &mut Emitter) {
-    match emitter.target.arch {
-        Arch::AArch64 => emit_aarch64(emitter),
-        Arch::X86_64 => emit_x86_64(emitter),
+    for (symbol, tag, inner, inner_search_array) in [
+        (
+            "__rt_str_replace_subject_array",
+            "__rt_srsu",
+            "__rt_str_replace",
+            "__rt_str_replace_search_array",
+        ),
+        (
+            "__rt_str_ireplace_subject_array",
+            "__rt_isrsu",
+            "__rt_str_ireplace",
+            "__rt_str_ireplace_search_array",
+        ),
+    ] {
+        match emitter.target.arch {
+            Arch::AArch64 => emit_aarch64(emitter, symbol, tag, inner, inner_search_array),
+            Arch::X86_64 => emit_x86_64(emitter, symbol, tag, inner, inner_search_array),
+        }
     }
 }
 
 /// The AArch64 map.
-fn emit_aarch64(emitter: &mut Emitter) {
+fn emit_aarch64(
+    emitter: &mut Emitter,
+    symbol: &str,
+    tag: &str,
+    inner: &str,
+    inner_search_array: &str,
+) {
     emitter.blank();
     emitter.comment("--- runtime: str_replace over an array subject ---");
-    emitter.label_global("__rt_str_replace_subject_array");
+    emitter.label_global(symbol);
     // Frame: [0]=search arr [8]=search ptr [16]=search len [24]=replace arr [32]=replace ptr
-    //        [40]=replace len [48]=subject arr [56]=index [64]=count [72]=result arr.
-    emitter.instruction("sub sp, sp, #96");                                     // reserve the map frame
-    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #80");                                    // establish the helper frame pointer
+    //        [40]=replace len [48]=subject arr [56]=index [64]=count [72]=result arr
+    //        [80]=replacements so far.
+    emitter.instruction("sub sp, sp, #112");                                    // reserve the map frame, plus the replacement tally
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");
     emitter.instruction("str x1, [sp, #8]");
     emitter.instruction("str x2, [sp, #16]");
@@ -63,12 +91,17 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // an empty array to grow into
     emitter.instruction("bl __rt_array_new");
     emitter.instruction("str x0, [sp, #72]");
+    // php counts every replacement across the WHOLE call — all elements together — so the tally
+    // is accumulated from what each inner call reports. It leaves in `x1`, because the result
+    // ARRAY already occupies `x0` here; the scalar-subject helpers, which answer a string pair in
+    // `x1`/`x2`, use `x0` for the same purpose.
+    emitter.instruction("str xzr, [sp, #80]");                                  // no replacement has fired yet
 
-    emitter.label("__rt_srsu_loop");
+    emitter.label(&format!("{tag}_loop"));
     emitter.instruction("ldr x9, [sp, #56]");
     emitter.instruction("ldr x10, [sp, #64]");
     emitter.instruction("cmp x9, x10");
-    emitter.instruction("b.ge __rt_srsu_done");                                 // every element replaced
+    emitter.instruction(&format!("b.ge {tag}_done"));                                 // every element replaced
 
     // -- subject[i] --
     emitter.instruction("ldr x11, [sp, #48]");
@@ -80,23 +113,26 @@ fn emit_aarch64(emitter: &mut Emitter) {
 
     // -- replace inside it, by whichever form $search takes --
     emitter.instruction("ldr x0, [sp, #0]");                                    // the search array, or zero
-    emitter.instruction("cbz x0, __rt_srsu_scalar_search");
+    emitter.instruction(&format!("cbz x0, {tag}_scalar_search"));
     emitter.instruction("ldr x1, [sp, #24]");                                   // the replace array, or zero
     emitter.instruction("ldr x2, [sp, #32]");                                   // the scalar replacement pointer
     emitter.instruction("ldr x3, [sp, #40]");                                   // and its length
     emitter.instruction("mov x4, x13");                                         // this element is the subject
     emitter.instruction("mov x5, x14");
-    emitter.instruction("bl __rt_str_replace_search_array");                    // x1/x2 = the replaced element
-    emitter.instruction("b __rt_srsu_replaced");
-    emitter.label("__rt_srsu_scalar_search");
+    emitter.instruction(&format!("bl {inner_search_array}"));                    // x1/x2 = the replaced element
+    emitter.instruction(&format!("b {tag}_replaced"));
+    emitter.label(&format!("{tag}_scalar_search"));
     emitter.instruction("ldr x1, [sp, #8]");                                    // the scalar search pointer
     emitter.instruction("ldr x2, [sp, #16]");                                   // and its length
     emitter.instruction("ldr x3, [sp, #32]");                                   // the scalar replacement pointer
     emitter.instruction("ldr x4, [sp, #40]");                                   // and its length
     emitter.instruction("mov x5, x13");                                         // this element is the subject
     emitter.instruction("mov x6, x14");
-    emitter.instruction("bl __rt_str_replace");                                 // x1/x2 = the replaced element
-    emitter.label("__rt_srsu_replaced");
+    emitter.instruction(&format!("bl {inner}"));                                 // x1/x2 = the replaced element
+    emitter.label(&format!("{tag}_replaced"));
+    emitter.instruction("ldr x9, [sp, #80]");                                   // add this element to the running tally
+    emitter.instruction("add x9, x9, x0");                                      // before the result array takes x0 back
+    emitter.instruction("str x9, [sp, #80]");
 
     // -- push it onto the result --
     emitter.instruction("ldr x0, [sp, #72]");                                   // the result array so far, or zero
@@ -105,23 +141,30 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #56]");
     emitter.instruction("add x9, x9, #1");
     emitter.instruction("str x9, [sp, #56]");
-    emitter.instruction("b __rt_srsu_loop");
+    emitter.instruction(&format!("b {tag}_loop"));
 
-    emitter.label("__rt_srsu_done");
+    emitter.label(&format!("{tag}_done"));
     emitter.instruction("ldr x0, [sp, #72]");                                   // the completed array
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // release the map frame
+    emitter.instruction("ldr x1, [sp, #80]");                                   // the whole call's replacement count
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // release the map frame
     emitter.instruction("ret");
 }
 
 /// The x86_64 map.
-fn emit_x86_64(emitter: &mut Emitter) {
+fn emit_x86_64(
+    emitter: &mut Emitter,
+    symbol: &str,
+    tag: &str,
+    inner: &str,
+    inner_search_array: &str,
+) {
     emitter.blank();
     emitter.comment("--- runtime: str_replace over an array subject ---");
-    emitter.label_global("__rt_str_replace_subject_array");
+    emitter.label_global(symbol);
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the map frame
-    emitter.instruction("sub rsp, 96");                                         // reserve the map slots
+    emitter.instruction("sub rsp, 112");                                        // reserve the map slots, plus the replacement tally
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // the search array, or zero
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // the scalar search pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // and its length
@@ -137,11 +180,12 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edi, edi");                                        // an empty array to grow into
     emitter.instruction("call __rt_array_new");
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");
+    emitter.instruction("mov QWORD PTR [rbp - 104], 0");                        // no replacement has fired yet
 
-    emitter.label("__rt_srsu_loop_x86");
+    emitter.label(&format!("{tag}_loop_x86"));
     emitter.instruction("mov r10, QWORD PTR [rbp - 64]");
     emitter.instruction("cmp r10, QWORD PTR [rbp - 72]");
-    emitter.instruction("jge __rt_srsu_done_x86");                              // every element replaced
+    emitter.instruction(&format!("jge {tag}_done_x86"));                              // every element replaced
 
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");
     emitter.instruction("mov rax, r10");
@@ -155,15 +199,15 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the search array, or zero
     emitter.instruction("test rdi, rdi");
-    emitter.instruction("jz __rt_srsu_scalar_search_x86");
+    emitter.instruction(&format!("jz {tag}_scalar_search_x86"));
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // the replace array, or zero
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // the scalar replacement pointer
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // and its length
     emitter.instruction("mov r8, QWORD PTR [rbp - 88]");                        // this element is the subject
     emitter.instruction("mov r9, QWORD PTR [rbp - 96]");
-    emitter.instruction("call __rt_str_replace_search_array");                  // rax/rdx = the replaced element
-    emitter.instruction("jmp __rt_srsu_replaced_x86");
-    emitter.label("__rt_srsu_scalar_search_x86");
+    emitter.instruction(&format!("call {inner_search_array}"));                  // rax/rdx = the replaced element
+    emitter.instruction(&format!("jmp {tag}_replaced_x86"));
+    emitter.label(&format!("{tag}_scalar_search_x86"));
     // `__rt_str_replace` takes rax/rdx = search, rdi/rsi = replace, rcx/r8 = subject.
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // the scalar replacement pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // and its length
@@ -171,8 +215,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // and its length
     emitter.instruction("mov rcx, QWORD PTR [rbp - 88]");                       // this element is the subject
     emitter.instruction("mov r8, QWORD PTR [rbp - 96]");
-    emitter.instruction("call __rt_str_replace");                               // rax/rdx = the replaced element
-    emitter.label("__rt_srsu_replaced_x86");
+    emitter.instruction(&format!("call {inner}"));                               // rax/rdx = the replaced element
+    emitter.label(&format!("{tag}_replaced_x86"));
+    emitter.instruction("add QWORD PTR [rbp - 104], rcx");                      // add this element to the running tally
 
     emitter.instruction("mov rsi, rax");                                        // the replaced element pointer
     emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // the result array; push takes it in rdi
@@ -181,11 +226,12 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 64]");
     emitter.instruction("inc r10");
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");
-    emitter.instruction("jmp __rt_srsu_loop_x86");
+    emitter.instruction(&format!("jmp {tag}_loop_x86"));
 
-    emitter.label("__rt_srsu_done_x86");
+    emitter.label(&format!("{tag}_done_x86"));
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // the completed array
-    emitter.instruction("add rsp, 96");                                         // release the map frame
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 104]");                      // the whole call's replacement count
+    emitter.instruction("add rsp, 112");                                        // release the map frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");
 }

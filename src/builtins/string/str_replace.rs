@@ -22,9 +22,25 @@ use crate::types::PhpType;
 builtin! {
     contract: "str_replace",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
+    semantics: crate::builtins::semantics::runtime_fn_semantics_with_effects(
         crate::ir::RuntimeFnId::StrReplace,
+        effects,
     ),
+}
+
+/// php's optional fourth argument is BY REFERENCE, so a call that passes it writes its caller's
+/// variable and cannot be deleted for having an unused result.
+///
+/// This is per CALL SITE: the three-argument spelling really is pure, and saying otherwise would
+/// keep every discarded `str_replace()` alive. MEASURED: with the static `empty()` summary,
+/// `str_replace("a", "b", $s, $n);` in statement position left `$n` untouched, because the whole
+/// call had already been eliminated before it could write.
+fn effects(input: &crate::builtins::semantics::BuiltinSemanticInput<'_>) -> crate::ir::Effects {
+    if input.arg_types.len() >= 4 {
+        crate::ir::Effects::WRITES_LOCAL
+    } else {
+        crate::ir::Effects::empty()
+    }
 }
 
 /// Answers php's result shape, which follows `$subject` alone.

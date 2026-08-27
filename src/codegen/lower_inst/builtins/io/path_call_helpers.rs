@@ -76,7 +76,7 @@ pub(super) fn store_flock_would_block(ctx: &mut FunctionContext<'_>, slot: Local
 }
 
 /// Returns the local slot loaded by a stream builtin operand when it came from `load_local`.
-pub(super) fn source_load_local_slot(
+pub(in crate::codegen::lower_inst::builtins) fn source_load_local_slot(
     ctx: &FunctionContext<'_>,
     value: ValueId,
 ) -> Result<Option<LocalSlotId>> {

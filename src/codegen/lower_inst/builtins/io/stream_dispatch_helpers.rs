@@ -341,7 +341,7 @@ pub(super) fn emit_socket_open_failure_warning(
 /// became a small integer — a NULL dereference on the next read, with no diagnostic anywhere.
 /// The checker binds each out-parameter to its declared written type, which is what normally
 /// makes the slot an integer; this guard is what stops a future divergence from being silent.
-pub(super) fn store_int_output_to_local(
+pub(in crate::codegen::lower_inst::builtins) fn store_int_output_to_local(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     value_reg: &str,

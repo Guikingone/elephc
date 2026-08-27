@@ -17,7 +17,7 @@ Replaces all occurrences of a search string with a replacement string.
 - `$search` (`string`)
 - `$replace` (`string`)
 - `$subject` (`string`)
-- `$count` (`int`), default `null`, optional
+- `$count` (`int`), passed by reference, default `null`, optional
 
 **Returns**: `string`
 

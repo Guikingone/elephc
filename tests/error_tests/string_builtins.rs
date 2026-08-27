@@ -246,9 +246,15 @@ function pos(): int {
 /// Verifies that `str_replace()` with only two arguments produces the correct arity error.
 #[test]
 fn test_error_str_replace_wrong_args() {
+    // Three OR FOUR: php's fourth argument is the by-reference `$count`, and it used to be capped
+    // out of the signature, so the idiomatic four-argument call was refused as an arity error.
     expect_error(
         "<?php str_replace(\"a\", \"b\");",
-        "str_replace() takes exactly 3 arguments",
+        "str_replace() takes 3 or 4 arguments",
+    );
+    expect_error(
+        "<?php str_replace(\"a\", \"b\", \"c\", $n, 5);",
+        "str_replace() takes 3 or 4 arguments",
     );
 }
 

@@ -17,7 +17,7 @@ Case-insensitive version of str_replace().
 - `$search` (`string`)
 - `$replace` (`string`)
 - `$subject` (`string`)
-- `$count` (`int`), default `null`, optional
+- `$count` (`int`), passed by reference, default `null`, optional
 
 **Returns**: `string`
 

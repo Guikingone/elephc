@@ -1077,3 +1077,106 @@ var_dump($subject);
         )
     );
 }
+
+/// Verifies `str_ireplace()` is case-insensitive in EVERY argument shape, not just the scalar one.
+///
+/// Both array loops called `__rt_str_replace` unconditionally, so an array `$search` silently
+/// matched case-SENSITIVELY: `str_ireplace(["A","N"], ["x","y"], "banana")` answered `"banana"`
+/// where php answers `"bxyxyx"`. The single-element spelling hid it — `["A"]` against `"BANANA"`
+/// answers the same either way — so the fixture uses a subject with no uppercase match at all.
+///
+/// The array SUBJECT was a second failure with the same cause and a different symptom: with no
+/// `check` hook this builtin took the contract's declared `Str`, so it answered a string where
+/// php answers an array, having replaced inside the last element only.
+///
+/// Every expectation measured on `php -n` 8.5.6.
+#[test]
+fn test_str_ireplace_folds_case_in_every_argument_shape() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(str_ireplace(["A", "N"], ["x", "y"], "banana"));
+var_dump(str_ireplace(["A"], "x", "BANANA"));
+var_dump(str_ireplace("A", "x", ["banana", "Apple"]));
+var_dump(str_ireplace(["A", "P"], ["x", "y"], ["banana", "Apple"]));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(6) \"bxyxyx\"\n",
+            "string(6) \"BxNxNx\"\n",
+            "array(2) {\n  [0]=>\n  string(6) \"bxnxnx\"\n  [1]=>\n  string(5) \"xpple\"\n}\n",
+            "array(2) {\n  [0]=>\n  string(6) \"bxnxnx\"\n  [1]=>\n  string(5) \"xyyle\"\n}\n",
+        )
+    );
+}
+
+/// Verifies php's fourth `str_replace()` argument reports the replacements the WHOLE call made.
+///
+/// The parameter was declared by VALUE and capped out by `max_args: 3`, so
+/// `str_replace($a, $b, $s, $n)` — the idiomatic spelling — did not compile at all:
+/// `str_replace() takes exactly 3 arguments`.
+///
+/// The count is written even when nothing matched, which is why `$z` starts at 99 here: php
+/// leaves `int(0)`, not the previous value. Every expectation measured on `php -n` 8.5.6.
+#[test]
+fn test_str_replace_reports_its_replacement_count() {
+    let out = compile_and_run(
+        r#"<?php
+$n = 0;
+var_dump(str_replace("a", "b", "banana", $n), $n);
+$m = 0;
+var_dump(str_replace(["a", "n"], ["x", "y"], "banana", $m), $m);
+$z = 99;
+var_dump(str_replace("q", "w", "banana", $z), $z);
+$i = 0;
+var_dump(str_ireplace("A", "b", "banana", $i), $i);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(6) \"bbnbnb\"\nint(3)\n",
+            "string(6) \"bxyxyx\"\nint(5)\n",
+            "string(6) \"banana\"\nint(0)\n",
+            "string(6) \"bbnbnb\"\nint(3)\n",
+        )
+    );
+}
+
+/// Verifies the count spans every element when `$subject` is an array.
+///
+/// The array-subject helper answers the result ARRAY in the register the scalar helpers use for
+/// the count, so it reports the count beside it — and the write-back has to take that register
+/// before the array reclaims it. Measured on `php -n` 8.5.6.
+#[test]
+fn test_str_replace_counts_across_an_array_subject() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 0;
+str_replace("a", "b", ["banana", "apple", "kiwi"], $a);
+var_dump($a);
+$b = 0;
+str_replace(["a", "n"], ["x", "y"], ["banana", "apple"], $b);
+var_dump($b);
+$c = 7;
+str_replace("z", "q", ["banana", "apple"], $c);
+var_dump($c);
+$d = 0;
+str_ireplace(["A", "P"], ["x", "y"], ["banana", "Apple"], $d);
+var_dump($d);
+$e = 3;
+var_dump(str_replace("a", "b", [], $e), $e);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(4)\n",
+            "int(6)\n",
+            "int(0)\n",
+            "int(6)\n",
+            "array(0) {\n}\nint(0)\n",
+        )
+    );
+}

@@ -16,9 +16,9 @@ pub(crate) fn lower_string_replace(
     name: &str,
     runtime_label: &str,
 ) -> Result<()> {
-    if inst.operands.len() != 3 {
+    if !matches!(inst.operands.len(), 3 | 4) {
         return Err(CodegenIrError::invalid_module(format!(
-            "{} expected 3 args, got {}",
+            "{} expected 3 or 4 args, got {}",
             name,
             inst.operands.len()
         )));
@@ -44,7 +44,83 @@ pub(crate) fn lower_string_replace(
         Arch::X86_64 => lower_string_replace_x86_64(ctx, inst, name)?,
     }
     abi::emit_call_label(ctx.emitter, runtime_label);
+    store_replacement_count(ctx, inst, ReplacementResult::StringPair)?;
     store_if_result(ctx, inst)
+}
+
+/// Which register pair the just-called replacement helper answered in.
+///
+/// It decides where the COUNT can be, because the count uses whatever the result leaves free: the
+/// helpers answering a string pair in `x1`/`x2` (`rax`/`rdx`) report it in `x0` (`rcx`), and the
+/// one answering an ARRAY in `x0` (`rax`) reports it in `x1` (`rcx`).
+#[derive(Clone, Copy)]
+enum ReplacementResult {
+    StringPair,
+    Array,
+}
+
+/// Writes php's by-reference `$count` into the caller's variable, preserving the result.
+///
+/// php's fourth argument is the number of replacements the WHOLE call made, and it is written
+/// even when nothing matched — `str_replace("q", "w", "banana", $z)` leaves `$z` as `int(0)`,
+/// not as whatever it held. MEASURED on `php -n` 8.5.6.
+///
+/// The boxing call clobbers everything, so the result is pushed across it. That is why the count
+/// is read into a scratch register FIRST: the push itself would otherwise overwrite the register
+/// carrying it.
+fn store_replacement_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    shape: ReplacementResult,
+) -> Result<()> {
+    if inst.operands.len() < 4 {
+        return Ok(());
+    }
+    let count = expect_operand(inst, 3)?;
+    let Some(slot) = super::super::io::path_call_helpers::source_load_local_slot(ctx, count)? else {
+        return Err(CodegenIrError::unsupported(
+            "str_replace() count output for non-local arguments",
+        ));
+    };
+    match (ctx.emitter.target.arch, shape) {
+        (Arch::AArch64, ReplacementResult::StringPair) => {
+            ctx.emitter.instruction("mov x9, x0");                              // the count, before the result takes the stack
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            super::super::io::stream_dispatch_helpers::store_int_output_to_local(ctx, slot, "x9")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        (Arch::AArch64, ReplacementResult::Array) => {
+            ctx.emitter.instruction("mov x9, x1");                              // the count, beside the array in x0
+            // A single register, not the PAIR: `stp x0, x0` names one register twice, which is
+            // CONSTRAINED UNPREDICTABLE on AArch64 and executed as SIGILL here.
+            abi::emit_push_reg(ctx.emitter, "x0");
+            super::super::io::stream_dispatch_helpers::store_int_output_to_local(ctx, slot, "x9")?;
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        (Arch::X86_64, ReplacementResult::StringPair) => {
+            ctx.emitter.instruction("mov r10, rcx");                            // the count, before the result takes the stack
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            super::super::io::stream_dispatch_helpers::store_int_output_to_local(ctx, slot, "r10")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+        (Arch::X86_64, ReplacementResult::Array) => {
+            ctx.emitter.instruction("mov r10, rcx");                            // the count, beside the array in rax
+            abi::emit_push_reg(ctx.emitter, "rax");
+            super::super::io::stream_dispatch_helpers::store_int_output_to_local(ctx, slot, "r10")?;
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    Ok(())
+}
+
+/// Returns the array-shape runtime entry point for THIS caller's case sensitivity.
+///
+/// `str_ireplace()` is case-insensitive in every argument shape, and both array loops used to
+/// call the case-SENSITIVE inner helper: `str_ireplace(["A","N"], ["x","y"], "banana")`
+/// answered "banana" where php answers "bxyxyx". MEASURED on `php -n` 8.5.6.
+fn replace_array_runtime(name: &str, shape: &str) -> String {
+    let stem = if name == "str_ireplace" { "ireplace" } else { "replace" };
+    format!("__rt_str_{stem}_{shape}_array")
 }
 
 /// Lowers `str_replace()` with an ARRAY `$subject`, over `__rt_str_replace_subject_array`.
@@ -133,7 +209,8 @@ fn lower_string_replace_array_subject(
             abi::emit_push_reg(ctx.emitter, "r11");                             // the subject as the seventh argument
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_str_replace_subject_array");
+    abi::emit_call_label(ctx.emitter, &replace_array_runtime(name, "subject"));
+    store_replacement_count(ctx, inst, ReplacementResult::Array)?;
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         abi::emit_release_temporary_stack(ctx.emitter, 8);                      // drop the stacked subject
     }
@@ -197,7 +274,8 @@ fn lower_string_replace_array_search(
             abi::emit_pop_reg(ctx.emitter, "rdi");                              // the search array
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_str_replace_search_array");
+    abi::emit_call_label(ctx.emitter, &replace_array_runtime(name, "search"));
+    store_replacement_count(ctx, inst, ReplacementResult::StringPair)?;
     store_if_result(ctx, inst)
 }
 
