@@ -342,10 +342,13 @@ die();
 #[test]
 fn test_cli_monitor_profiles_an_uncaught_codegen_error() {
     let dir = make_cli_test_dir("elephc_cli_monitor_uncaught_codegen_error");
+    // The negative-value recursive branch keeps the failing function out of the
+    // inliner while `$argc` still takes the direct uncaught path at runtime.
     fs::write(
         dir.join("uncaught.php"),
         r#"<?php
 function fail_uncaught(int $value): int {
+    if ($value < 0) { return fail_uncaught(-$value); }
     return intdiv($value, $value - $value);
 }
 fail_uncaught($argc);
