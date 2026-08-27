@@ -892,6 +892,40 @@ echo '|', intdiv(7, 2), '|', fdiv(1, 0), '|', (1 * $n) << (3 * $n), '|', (-8 * $
     assert_eq!(out, "1|1|4|3|3|INF|8|-4");
 }
 
+/// The caught exception shadows whatever its name held before the `try`.
+///
+/// A catch binds its variable from the handler's first statement. The constant
+/// environment the handler is walked in is derived from the try body's writes,
+/// so a body that never touches that name left the incoming value standing — and
+/// the handler then read the Throwable as that value. Substituting a string for
+/// an exception does not even reach a wrong answer: it stops the compile at
+/// `method call receiver for PHP type Str`.
+///
+/// The exit-path simulation had always removed the binding. Two walks over the
+/// same block that disagree about what is live in it can only be right in one.
+#[test]
+fn test_a_catch_binding_shadows_the_name_it_reuses() {
+    let out = compile_and_run(
+        r#"<?php
+function shadowed(): string {
+    $e = 'stale';
+    try { throw new RuntimeException('fresh'); }
+    catch (RuntimeException $e) { return $e->getMessage(); }
+}
+function untouched(): string {
+    $keep = 'kept';
+    try { throw new RuntimeException('x'); }
+    catch (RuntimeException $e) { return $keep; }
+}
+echo shadowed(), '|', untouched();
+"#,
+    );
+    // The second half is the other direction: a name the try body cannot write
+    // and the catch does not bind still folds, so the fix stays a rule about the
+    // BINDING rather than a blanket clear of the handler's environment.
+    assert_eq!(out, "fresh|kept");
+}
+
 /// A value written inside a `try` survives into the `catch`.
 ///
 /// It did not. Every write the try body made was discarded the moment the

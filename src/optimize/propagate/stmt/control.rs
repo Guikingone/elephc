@@ -253,10 +253,34 @@ pub(super) fn propagate_try_stmt(
     };
     let catches: Vec<_> = catches
         .into_iter()
-        .map(|catch| crate::parser::ast::CatchClause {
-            exception_types: catch.exception_types,
-            variable: catch.variable,
-            body: propagate_block(catch.body, catch_env.clone()).0,
+        .map(|catch| {
+            // The caught exception SHADOWS whatever the name held before, and it
+            // holds it from the first statement of the handler. A try body that
+            // never writes that name leaves the incoming value in the shared env
+            // above, and the handler then read the Throwable as that value:
+            //
+            // ```text
+            // $e = 'stale';
+            // try { throw new RuntimeException('fresh'); }
+            // catch (RuntimeException $e) { return $e->getMessage(); }
+            // ```
+            //
+            // substituted the string and stopped the compile at `method call
+            // receiver for PHP type Str`, where PHP answers `fresh`. Per catch
+            // and not shared, because each clause binds its own name.
+            //
+            // `simulate_catch_constant_env` has always removed it for the exit
+            // path. Two walks over the same block that disagree about what is
+            // live in it can only be wrong in one of them.
+            let mut body_env = catch_env.clone();
+            if let Some(name) = &catch.variable {
+                body_env.remove(name);
+            }
+            crate::parser::ast::CatchClause {
+                exception_types: catch.exception_types,
+                variable: catch.variable,
+                body: propagate_block(catch.body, body_env).0,
+            }
         })
         .collect();
     let finally_body = finally_body.map(|body| propagate_block(body, HashMap::new()).0);

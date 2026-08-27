@@ -520,6 +520,22 @@ impl State {
         if self.stack[index].id != id {
             return;
         }
+        // A group already standing under this coroutine belongs to a DEAD one.
+        //
+        // `coro` is the running fiber's address, so two live coroutines never
+        // share it and one coroutine never has two suspensions in flight. A
+        // match therefore means the fiber that parked it was freed and its
+        // address handed to this one, and nothing will ever resume those frames
+        // — they were closed when they parked, and their own resume is keyed on
+        // a frame pointer their fiber no longer owns.
+        //
+        // Dropped BEFORE the cap check, which is the case it exists for. A park
+        // refused at `MAX_PARKED` leaves this activation on the stack and parks
+        // nothing, and the runtime unpark that a non-returning suspend path
+        // fires would then find the older occupant and push it ABOVE the live
+        // activation — the `(id, fp)` guard in `restore` does not catch it,
+        // because a different function's ids do not match.
+        self.parked.retain(|group| group.coro != coro);
         if self.parked.len() >= MAX_PARKED {
             self.parks_refused += 1;
             return;
@@ -3153,33 +3169,39 @@ mod tests {
 
     /// A resume does not open a second copy of an activation that is already live.
     ///
-    /// A park refused at `MAX_PARKED` leaves its frame on the stack, and a
-    /// coroutine stack that has been freed is handed back out — so an older,
-    /// abandoned group can be sitting at the same address under the same
-    /// function. The resume that follows the refused park found THAT group and
-    /// pushed a duplicate activation on top of the live one.
+    /// A park refused at `MAX_PARKED` leaves its frame on the stack. A coroutine
+    /// STACK that has been freed is handed back out too, so a later generator of
+    /// the same function can run at the same address under a different fiber —
+    /// and its resume, which is keyed on the frame pointer and the id, then finds
+    /// the older group.
     ///
-    /// The pairing is what the id check alone cannot settle, because here the
-    /// ids match too; being live is the signal, since a suspension takes its
-    /// frame off the stack and a resume can never find its own there.
+    /// The coroutines differ here, which is what keeps this reachable: a park
+    /// drops any group standing under its own `coro`, so a genuine twin at the
+    /// same coroutine is already gone by the time this could matter. What is left
+    /// is the pair that agrees on `(id, fp)` and disagrees on nothing the lookup
+    /// checks — and being live is the signal, since a suspension takes its frame
+    /// off the stack and a resume can never find its own still there.
     #[test]
     fn a_refused_park_does_not_resume_an_abandoned_twin() {
         let mut state = State::default();
-        // An older activation of function 7 suspended at this address and was
-        // never resumed.
+        let (first_coro, second_coro) = (0x1000usize, 0x2000usize);
+
+        // An older generator of function 7, on the coroutine stack at CORO_BASE.
         state.enter_at(7, CORO_BASE, 0, 0, 0, 0, 0);
-        state.suspend_sim(7, CORO_BASE, 10, 0, 0, 0, 0);
+        state.suspend_at(7, CORO_BASE, first_coro, 10, 0, 0, 0, 0);
         assert_eq!(state.parked.len(), 1);
 
-        // The cap fills, then a new activation of 7 reuses that freed address
-        // and has its own park refused.
+        // The table fills with unrelated coroutines.
         for index in 1..MAX_PARKED {
-            let other = CORO_BASE + index * 64;
-            state.enter_at(8, other, index as u64, 0, 0, 0, 0);
-            state.suspend_sim(8, other, index as u64, 0, 0, 0, 0);
+            let fp = CORO_BASE + index * 64;
+            state.enter_at(8, fp, index as u64, 0, 0, 0, 0);
+            state.suspend_at(8, fp, fp, index as u64, 0, 0, 0, 0);
         }
+
+        // A new generator of the SAME function reuses that stack address under a
+        // different fiber, and its park is refused at the cap.
         state.enter_at(7, CORO_BASE, 2_000, 0, 0, 0, 0);
-        state.suspend_sim(7, CORO_BASE, 2_010, 0, 0, 0, 0);
+        state.suspend_at(7, CORO_BASE, second_coro, 2_010, 0, 0, 0, 0);
         assert_eq!(state.parks_refused, 1, "the cap refused it");
         assert_eq!(state.stack.len(), 1, "so its frame is still standing");
 
@@ -3189,10 +3211,61 @@ mod tests {
             1,
             "the abandoned twin was opened on top of the live activation"
         );
-        assert_eq!(
-            state.parked.len(),
-            MAX_PARKED,
+        assert!(
+            state.parked.iter().any(|group| group.coro == first_coro),
             "and its group is untouched, not consumed by somebody else's resume"
+        );
+    }
+
+    /// A coroutine address handed to a new occupant does not resurrect the old one.
+    ///
+    /// `coro` is the running fiber's address, so a freed fiber's is handed to the
+    /// next. At the cap the new occupant's park is refused and its frame stays on
+    /// the stack; if the suspension then takes one of the runtime's non-returning
+    /// paths, the unpark looks that address up — and found the ABANDONED group.
+    /// The `(id, fp)` guard in `restore` does not catch that one, because the two
+    /// activations are different functions and their ids do not match, so the
+    /// dead group was pushed above the live activation.
+    ///
+    /// Driven through `suspend_at` rather than `suspend_sim` because this is the
+    /// case where the frame pointer and the coroutine must differ: two different
+    /// activations, one fiber address.
+    #[test]
+    fn a_reused_coroutine_address_does_not_resurrect_its_last_occupant() {
+        let mut state = State::default();
+        let old_frame = CORO_BASE;
+        let new_frame = CORO_BASE - 4_096;
+        let shared_coro = 0x9_000usize;
+
+        // An older coroutine at this fiber address, function 7, never resumed.
+        state.enter_at(7, old_frame, 0, 0, 0, 0, 0);
+        state.suspend_at(7, old_frame, shared_coro, 10, 0, 0, 0, 0);
+        assert_eq!(state.parked.len(), 1);
+
+        // Everything else fills the table, each under its own coroutine.
+        for index in 1..MAX_PARKED {
+            let fp = CORO_BASE + index * 64;
+            state.enter_at(8, fp, index as u64, 0, 0, 0, 0);
+            state.suspend_at(8, fp, fp, index as u64, 0, 0, 0, 0);
+        }
+
+        // A new fiber takes the freed address, under a different function, and
+        // suspends into one of the paths that raises instead of returning.
+        state.enter_at(9, new_frame, 2_000, 0, 0, 0, 0);
+        state.suspend_at(9, new_frame, shared_coro, 2_010, 0, 0, 0, 0);
+        state.unpark_at(shared_coro, 2_020, 0, 0, 0, 0);
+
+        assert_eq!(
+            state.stack.iter().map(|frame| frame.id).collect::<Vec<_>>(),
+            vec![9],
+            "the dead occupant of this address was opened over the live one"
+        );
+        assert!(
+            !state
+                .parked
+                .iter()
+                .any(|group| group.frames.contains(&(7, old_frame))),
+            "and its group is gone rather than waiting to be found again"
         );
     }
 
