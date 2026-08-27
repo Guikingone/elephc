@@ -2951,6 +2951,9 @@ mod tests {
             CURRENT_ROUTE.store(other, Ordering::Relaxed);
         }
 
+        // Event callbacks are intentionally inert before the first sampled
+        // ask, so open the window this reporting regression exercises.
+        activate_shared_window(base);
         elephc_probe_note_io();
         elephc_probe_note_wait(4_000);
 
