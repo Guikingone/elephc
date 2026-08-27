@@ -204,15 +204,6 @@ pub(super) fn lower_throwable_get_trace_as_string(
     Ok(PhpType::Str)
 }
 
-/// Materializes a synthetic empty-string result.
-pub(super) fn lower_throwable_empty_string(ctx: &mut FunctionContext<'_>) -> Result<PhpType> {
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    let (label, len) = ctx.data.add_string(b"");
-    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
-    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
-    Ok(PhpType::Str)
-}
-
 /// Loads `Throwable::getFile()` from the compiled script's canonical path.
 ///
 /// The path is a per-MODULE constant rather than a per-object field because EIR spans carry a line
