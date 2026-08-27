@@ -413,7 +413,12 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 default
                     .as_ref()
                     .map(|expr| expr_effect(expr))
-                    .unwrap_or(Effect::PURE),
+                    // A match with NO default is the one that can THROW: php raises
+                    // `UnhandledMatchError` when no arm answers. Calling that absence PURE made a
+                    // match in STATEMENT position — its value discarded — a pure expression the
+                    // statement pruner dropped whole, so `match (99) { 1 => "a" };` did nothing
+                    // where php throws.
+                    .unwrap_or_else(|| Effect::PURE.with_may_throw()),
             ),
         ExprKind::ArrayAccess { array, index } => {
             let evaluated = expr_effect(array).combine(expr_effect(index));

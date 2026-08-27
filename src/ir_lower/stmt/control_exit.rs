@@ -245,6 +245,31 @@ pub(crate) fn lower_throw_access_error(
     terminate_throw(ctx, error_value.value);
 }
 
+/// Lowers `throw new <class>($message)` where the caller composed the message expression.
+///
+/// The sibling above builds its own `Error` around a message known at lowering time. A message
+/// that has to name a RUN-TIME value cannot be a `&str`, and the class is not always `Error`:
+/// an unanswered `match` throws `UnhandledMatchError` and names the subject it was given.
+pub(crate) fn lower_throw_builtin_with_message(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    message: Expr,
+    span: Span,
+) {
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let throwable = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified(class_name),
+            args: vec![message],
+        },
+        span,
+    );
+    let value = crate::ir_lower::expr::lower_expr(ctx, &throwable);
+    terminate_throw(ctx, value.value);
+}
+
 /// Lowers a statically-decided access violation as a catchable `Error` throw in
 /// expression position and returns a placeholder null value.
 ///
