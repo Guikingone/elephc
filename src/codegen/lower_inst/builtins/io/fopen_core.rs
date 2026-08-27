@@ -1373,7 +1373,7 @@ pub(super) fn emit_literal_php_filter_fopen_result(
         emit_record_stream_meta_after_boxed_literal(ctx, 6, path);
     }
     if parsed.mode_bits != 0 {
-        emit_php_filter_table_stamps(ctx, parsed.mode_bits, &parsed.filter_ids);
+        emit_php_filter_table_stamps(ctx, &parsed.filter_ids);
     }
     emit_unknown_filter_warnings(ctx, &parsed.unknown, mode_read, mode_write, callee);
     ctx.emitter.label(&done);
@@ -1505,26 +1505,40 @@ pub(super) fn parse_php_filter_url(path: &str) -> Option<PhpFilterUrl> {
     if resource.is_empty() {
         return None;
     }
-    let (mode_bits, filters) = if let Some(filters) = filter_part.strip_prefix("read=") {
-        (1u8, filters)
-    } else if let Some(filters) = filter_part.strip_prefix("write=") {
-        (2u8, filters)
-    } else {
-        (3u8, filter_part)
-    };
-    // An unrecognised name is SKIPPED, not fatal, and does not cancel its neighbours:
-    // `php -n` 8.5.6 opens `read=string.toupper|no.such.filter` successfully and returns the
-    // uppercased bytes. Measured, because the opposite reading is just as plausible.
-    let filter_ids: Vec<u8> = filters.split('|').filter_map(stream_filter_id).collect();
-    // An EMPTY segment names nothing at all and php says nothing about it: `read=` on its own
-    // opens in silence, because php-src walks the list with `php_strtok_r`, which skips empty
-    // tokens rather than trying to create a filter called "".
-    let unknown: Vec<UnknownFilterName> = filters
-        .split('|')
-        .filter(|name| !name.is_empty() && stream_filter_id(name).is_none())
-        .map(|name| UnknownFilterName { name: name.to_string(), direction: mode_bits })
-        .collect();
-    let mode_bits = if filter_ids.is_empty() { 0 } else { mode_bits };
+    // The chain is `/`-separated SEGMENTS, each carrying its own direction, and the segments
+    // ACCUMULATE. `read=string.toupper/write=string.rot13/resource=x` read back `ABCDEF` from
+    // `abcDEF` on `php -n` 8.5.6 — the write half sat out — and reading it as ONE chain named
+    // `string.toupper/write=string.rot13` instead reported an unresolvable filter and handed back
+    // the bytes untouched. The full table these follow is on `filter_segment_direction`.
+    let mut filter_ids: Vec<(u8, u8)> = Vec::new();
+    let mut unknown: Vec<UnknownFilterName> = Vec::new();
+    for segment in filter_part.split('/') {
+        let (direction, names) = filter_segment_direction(segment);
+        // An unrecognised name is SKIPPED, not fatal, and does not cancel its neighbours:
+        // `php -n` 8.5.6 opens `read=string.toupper|no.such.filter` successfully and returns the
+        // uppercased bytes. Measured, because the opposite reading is just as plausible.
+        filter_ids.extend(
+            names
+                .split('|')
+                .filter_map(stream_filter_id)
+                .map(|id| (direction, id)),
+        );
+        // An EMPTY segment names nothing at all and php says nothing about it: `read=` on its own
+        // opens in silence, because php-src walks the list with `php_strtok_r`, which skips empty
+        // tokens rather than trying to create a filter called "".
+        unknown.extend(
+            names
+                .split('|')
+                .filter(|name| !name.is_empty() && stream_filter_id(name).is_none())
+                .map(|name| UnknownFilterName {
+                    name: name.to_string(),
+                    direction,
+                }),
+        );
+    }
+    // The URL's own direction is the union of what its segments asked for, and zero when nothing
+    // resolved — which is what tells the opener there is no chain to attach.
+    let mode_bits = filter_ids.iter().fold(0u8, |bits, (dir, _)| bits | dir);
     // A NESTED resource recurses, as php does: the inner level sits closest to the bytes, so
     // its chain applies FIRST and the outer chain sees what the inner one produced —
     // `read=string.rot13/resource=php://filter/read=string.toupper/resource=x` uppercases and
@@ -1533,10 +1547,9 @@ pub(super) fn parse_php_filter_url(path: &str) -> Option<PhpFilterUrl> {
     // rather than half-filtered.
     if resource.starts_with("php://filter/") {
         let inner = parse_php_filter_url(resource)?;
-        if inner.mode_bits != 0 && mode_bits != 0 && inner.mode_bits != mode_bits {
-            return None;
-        }
-        let bits = if mode_bits == 0 { inner.mode_bits } else { mode_bits };
+        // No direction conflict to refuse any more: each filter carries the direction of the
+        // segment that named it, so an inner `read=` and an outer `write=` simply coexist.
+        let bits = inner.mode_bits | mode_bits;
         let mut ids = inner.filter_ids;
         ids.extend(filter_ids);
         // The inner level is opened first, so php reaches its filter names first as well.
@@ -1550,6 +1563,28 @@ pub(super) fn parse_php_filter_url(path: &str) -> Option<PhpFilterUrl> {
         });
     }
     Some(PhpFilterUrl { mode_bits, filter_ids, unknown, resource: resource.to_string() })
+}
+
+/// Splits one `php://filter` segment into the direction it asks for and the names it carries.
+///
+/// MEASURED on `php -n` 8.5.6, reading `abcDEF` and writing it back:
+///
+/// ```text
+/// read=A/write=B      read A        write B      only the open's own direction applies
+/// write=B/read=A      read A        write B      order between directions does not matter
+/// A/read=B            read A then B write A      an unprefixed segment is BOTH, and accumulates
+/// read=A|B/write=C    read A then B write C      `|` chains within one segment
+/// read=A/read=B       read A then B              two segments for one direction accumulate too
+/// write=B (read open) unfiltered                 the other direction sits out entirely
+/// ```
+fn filter_segment_direction(segment: &str) -> (u8, &str) {
+    if let Some(names) = segment.strip_prefix("read=") {
+        return (1, names);
+    }
+    if let Some(names) = segment.strip_prefix("write=") {
+        return (2, names);
+    }
+    (3, segment)
 }
 
 /// A name from a `php://filter` chain that resolves to no built-in filter.
@@ -1571,7 +1606,10 @@ pub(super) struct PhpFilterUrl {
     /// Direction bits for the resolved filters: 1 = read, 2 = write, 3 = both, 0 = none resolved.
     pub(super) mode_bits: u8,
     /// The built-in filter ids to stamp, innermost level first.
-    pub(super) filter_ids: Vec<u8>,
+    /// Each filter with the direction bits of the SEGMENT that named it: 1 read, 2 write, 3 both.
+    /// One list rather than two, because php applies them in the order the URL spells them and a
+    /// pair of lists would have to carry that order anyway.
+    pub(super) filter_ids: Vec<(u8, u8)>,
     /// The names that resolved to nothing, in the order php tries to create them.
     pub(super) unknown: Vec<UnknownFilterName>,
     /// The resource the whole URL finally opens.
@@ -1621,6 +1659,48 @@ mod tests {
         ));
         // A name that merely STARTS like the keyword is not the keyword.
         assert!(literal_filter_url_names_no_resource("php://filter/resourceful"));
+    }
+
+    /// A spec is `/`-separated SEGMENTS, each carrying its own direction, and they ACCUMULATE.
+    ///
+    /// MEASURED on `php -n` 8.5.6 reading `abcDEF`: `read=A/write=B` applies A on a read open and
+    /// B on a write one; `A/read=B` applies A to both and then B on read; `read=A|B` and
+    /// `read=A/read=B` both apply A then B. Reading the whole thing as ONE chain instead reported
+    /// `Unable to locate filter "string.toupper/write=string.rot13"` and handed back the bytes
+    /// untouched — a plausible answer, which is what makes it worth pinning.
+    #[test]
+    fn each_filter_carries_the_direction_of_the_segment_that_named_it() {
+        let parsed = parse_php_filter_url(
+            "php://filter/read=string.toupper/write=string.rot13/resource=f.txt",
+        )
+        .expect("parses");
+        assert_eq!(parsed.resource, "f.txt");
+        assert_eq!(parsed.mode_bits, 3, "the URL asks for both directions");
+        assert_eq!(parsed.filter_ids.len(), 2);
+        assert_eq!(parsed.filter_ids[0].0, 1, "read=");
+        assert_eq!(parsed.filter_ids[1].0, 2, "write=");
+        assert_ne!(
+            parsed.filter_ids[0].1, parsed.filter_ids[1].1,
+            "two different filters, in the order the URL spells them"
+        );
+        assert!(parsed.unknown.is_empty(), "both names resolve");
+
+        // An unprefixed segment is BOTH, and does not inherit the previous segment's direction.
+        let both =
+            parse_php_filter_url("php://filter/string.tolower/read=string.toupper/resource=f.txt")
+                .expect("parses");
+        assert_eq!(both.filter_ids[0].0, 3, "unprefixed");
+        assert_eq!(both.filter_ids[1].0, 1, "read=");
+
+        // Two segments for ONE direction accumulate, exactly as `|` does inside one.
+        let piped =
+            parse_php_filter_url("php://filter/read=string.toupper|string.rot13/resource=f.txt")
+                .expect("parses");
+        let split =
+            parse_php_filter_url("php://filter/read=string.toupper/read=string.rot13/resource=f.txt")
+                .expect("parses");
+        assert_eq!(piped.filter_ids, split.filter_ids);
+        assert_eq!(piped.filter_ids.len(), 2);
     }
 
     /// The ordinary spelling is untouched: the chain is still what precedes `/resource=`.

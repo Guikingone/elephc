@@ -20,13 +20,15 @@ use super::*;
 /// crashed every `php://filter` open.
 pub(super) fn emit_php_filter_table_stamps(
     ctx: &mut FunctionContext<'_>,
-    mode_bits: u8,
-    filter_ids: &[u8],
+    filter_ids: &[(u8, u8)],
 ) {
     // `php://filter/a|b/resource=x` runs a THROUGH b. Each name gets its own node appended
     // at the chain tail, so applying only the first — which is what this used to do — both
     // dropped a transform and left the output looking plausible.
-    for &filter_id in filter_ids {
+    //
+    // The direction travels WITH each filter rather than once for the URL: a spec may name both
+    // (`read=a/write=b`), and only the open's own direction is meant to apply.
+    for &(mode_bits, filter_id) in filter_ids {
         emit_one_php_filter_stamp(ctx, mode_bits, filter_id);
     }
 }
