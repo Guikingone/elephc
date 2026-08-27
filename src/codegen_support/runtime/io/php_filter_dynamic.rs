@@ -169,10 +169,11 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_php_filter_parse");
     // Frame: [0]=cursor [8]=remaining [16]=direction [24]=scan index / name length
     //        [32]=segment start [40]=filters resolved [48]=separator offset [56]=segment pointer
-    //        [64]=segment length [72]=unresolved names, saved pair at [80].
-    emitter.instruction("sub sp, sp, #96");                                     // reserve the parse frame
-    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #80");                                    // establish the helper frame pointer
+    //        [64]=segment length [72]=unresolved names [80]=THIS segment\'s direction
+    //        [88]=1 when the previous segment ended on `/`, saved pair at [96].
+    emitter.instruction("sub sp, sp, #112");                                    // reserve the parse frame
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the path
     emitter.instruction("str x1, [sp, #8]");                                    // preserve its length
     abi::emit_symbol_address(emitter, "x2", "_pf_n_prefix");
@@ -297,6 +298,15 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #32]");                                  // the current segment's start offset
     emitter.instruction("str xzr, [sp, #40]");                                  // filters resolved so far
     emitter.instruction("str xzr, [sp, #72]");                                  // names that resolved to nothing
+    // A spec is `/`-separated SEGMENTS and each carries its OWN direction, which is why the
+    // prefix stripped off the front above is only the FIRST segment\'s. `read=A/write=B` applies
+    // A on a read open and B on a write one; reading it as one chain named a filter called
+    // `A/write=B`, which resolves to nothing, so php\'s two warnings came out and the bytes went
+    // through untouched. Measured on `php -n` 8.5.6, with the whole table on
+    // `fopen_core::filter_segment_direction`.
+    emitter.instruction("ldr x9, [sp, #16]");                                   // the direction the front prefix asked for
+    emitter.instruction("str x9, [sp, #80]");                                   // is this first segment\'s
+    emitter.instruction("str xzr, [sp, #88]");                                  // nothing has ended on a slash yet
 
     emitter.label("__rt_pfp_seg");
     emitter.instruction("ldr x9, [sp, #24]");                                   // the full name length
@@ -306,14 +316,22 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     // Measure this segment: it ends at the next '|', or at the end of the name.
     emitter.instruction("ldr x0, [sp, #0]");                                    // the name
     emitter.instruction("mov x11, x10");                                        // scan index, from the segment start
+    emitter.instruction("str xzr, [sp, #88]");                                  // until a slash says otherwise
     emitter.label("__rt_pfp_pipe");
     emitter.instruction("cmp x11, x9");                                         // reached the end of the name?
     emitter.instruction("b.hs __rt_pfp_seg_end");                               // no further pipe: the segment runs to it
     emitter.instruction("ldrb w12, [x0, x11]");
     emitter.instruction("cmp w12, #124");                                       // ASCII '|'
     emitter.instruction("b.eq __rt_pfp_seg_end");                               // this one closes the segment
+    // A SLASH closes it too, and unlike a pipe it ends the direction with it: `read=A|B` reads
+    // both, `read=A/B` reads A and applies B to BOTH — an unprefixed segment does not inherit.
+    emitter.instruction("cmp w12, #47");                                        // ASCII '/'
+    emitter.instruction("b.eq __rt_pfp_seg_slash");
     emitter.instruction("add x11, x11, #1");
     emitter.instruction("b __rt_pfp_pipe");
+    emitter.label("__rt_pfp_seg_slash");
+    emitter.instruction("mov x13, #1");
+    emitter.instruction("str x13, [sp, #88]");                                  // the NEXT segment starts fresh
 
     emitter.label("__rt_pfp_seg_end");
     emitter.instruction("str x11, [sp, #48]");                                  // remember where the separator sits
@@ -322,6 +340,39 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x0, x0, x10");                                     // the segment's first byte
     emitter.instruction("str x0, [sp, #56]");                                   // remember the span: the id lookup destroys both
     emitter.instruction("str x1, [sp, #64]");
+    // `read=`/`write=` on THIS segment sets its direction and is not part of the name.
+    abi::emit_symbol_address(emitter, "x2", "_pf_n_read");
+    emitter.instruction("mov x3, #5");                                          // "read="
+    emitter.instruction("bl __rt_pf_match");
+    emitter.instruction("cbz x0, __rt_pfp_seg_try_write");
+    emitter.instruction("mov x9, #1");
+    emitter.instruction("str x9, [sp, #80]");
+    emitter.instruction("ldr x0, [sp, #56]");
+    emitter.instruction("ldr x1, [sp, #64]");
+    emitter.instruction("add x0, x0, #5");
+    emitter.instruction("sub x1, x1, #5");
+    emitter.instruction("str x0, [sp, #56]");
+    emitter.instruction("str x1, [sp, #64]");
+    emitter.instruction("b __rt_pfp_seg_resolve");
+    emitter.label("__rt_pfp_seg_try_write");
+    emitter.instruction("ldr x0, [sp, #56]");
+    emitter.instruction("ldr x1, [sp, #64]");
+    abi::emit_symbol_address(emitter, "x2", "_pf_n_write");
+    emitter.instruction("mov x3, #6");                                          // "write="
+    emitter.instruction("bl __rt_pf_match");
+    emitter.instruction("cbz x0, __rt_pfp_seg_resolve");
+    emitter.instruction("mov x9, #2");
+    emitter.instruction("str x9, [sp, #80]");
+    emitter.instruction("ldr x0, [sp, #56]");
+    emitter.instruction("ldr x1, [sp, #64]");
+    emitter.instruction("add x0, x0, #6");
+    emitter.instruction("sub x1, x1, #6");
+    emitter.instruction("str x0, [sp, #56]");
+    emitter.instruction("str x1, [sp, #64]");
+    emitter.label("__rt_pfp_seg_resolve");
+    emitter.instruction("ldr x0, [sp, #56]");
+    emitter.instruction("ldr x1, [sp, #64]");
+    emitter.instruction("cbz x1, __rt_pfp_seg_next");                           // a bare `read=` names nothing
     emitter.instruction("bl __rt_builtin_filter_id");                           // x0 = the built-in id, or 0
     emitter.instruction("cbnz x0, __rt_pfp_seg_known");                         // it named a built-in filter
     // An unrecognised name is SKIPPED — its neighbours still apply — but php does not skip it in
@@ -346,11 +397,20 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x11, #{PHP_FILTER_PENDING_MAX}"));
     emitter.instruction("b.hs __rt_pfp_seg_next");                              // the hand-off array is full
     abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_ids");
+    // The direction rides in bits 8..9 of the same word. A parallel array would have needed its
+    // own entry in `PENDING_STATE` and its own save/restore for a nested parse; the id is a byte.
+    emitter.instruction("ldr x13, [sp, #80]");                                  // this segment's direction
+    emitter.instruction("orr x0, x0, x13, lsl #8");
     emitter.instruction("str x0, [x12, x11, lsl #3]");                          // append this filter to the list
     emitter.instruction("add x11, x11, #1");
     emitter.instruction("str x11, [sp, #40]");
 
     emitter.label("__rt_pfp_seg_next");
+    emitter.instruction("ldr x13, [sp, #88]");                                  // did this segment end on a slash?
+    emitter.instruction("cbz x13, __rt_pfp_seg_keep_dir");
+    emitter.instruction("mov x13, #3");                                         // yes: the next one is BOTH unless it says otherwise
+    emitter.instruction("str x13, [sp, #80]");
+    emitter.label("__rt_pfp_seg_keep_dir");
     emitter.instruction("ldr x11, [sp, #48]");                                  // the separator this segment ended on
     emitter.instruction("add x11, x11, #1");                                    // the next segment starts after it
     emitter.instruction("str x11, [sp, #32]");
@@ -373,15 +433,15 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_mode");
     emitter.instruction("str x9, [x12]");                                       // publish the direction
     emitter.instruction("mov x0, #1");                                          // the caller should open the resource
-    emitter.instruction("ldp x29, x30, [sp, #80]");
-    emitter.instruction("add sp, sp, #96");
+    emitter.instruction("ldp x29, x30, [sp, #96]");
+    emitter.instruction("add sp, sp, #112");
     emitter.instruction("ret");
 
     emitter.label("__rt_pfp_no");
     emit_clear_parse_state_aarch64(emitter);
     emitter.instruction("mov x0, #0");                                          // the path is not a usable filter URL
-    emitter.instruction("ldp x29, x30, [sp, #80]");
-    emitter.instruction("add sp, sp, #96");
+    emitter.instruction("ldp x29, x30, [sp, #96]");
+    emitter.instruction("add sp, sp, #112");
     emitter.instruction("ret");
 
     // A filter URL that names NO resource — missing or empty — is verdict 2: php answers it
@@ -390,8 +450,8 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_pfp_no_resource");
     emit_clear_parse_state_aarch64(emitter);
     emitter.instruction("mov x0, #2");                                          // the caller must throw php's Error
-    emitter.instruction("ldp x29, x30, [sp, #80]");
-    emitter.instruction("add sp, sp, #96");
+    emitter.instruction("ldp x29, x30, [sp, #96]");
+    emitter.instruction("add sp, sp, #112");
     emitter.instruction("ret");
 }
 
@@ -425,9 +485,9 @@ fn emit_filter_attach_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the boxed result
     abi::emit_symbol_address(emitter, "x9", "_php_filter_pending_mode");
-    emitter.instruction("ldr x10, [x9]");                                       // the direction the URL asked for
+    emitter.instruction("ldr x10, [x9]");                                       // the UNION of what the segments asked for
     emitter.instruction("str xzr, [x9]");                                       // clear it: exactly one open consumes it
-    emitter.instruction("str x10, [sp, #24]");
+    emitter.instruction("str x10, [sp, #24]");                                  // only the `cbz` gate below reads this
     abi::emit_symbol_address(emitter, "x9", "_php_filter_pending_count");
     emitter.instruction("ldr x11, [x9]");                                       // how many filters the URL named
     emitter.instruction("str xzr, [x9]");                                       // cleared for the same reason
@@ -450,11 +510,17 @@ fn emit_filter_attach_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");
     emitter.instruction("b.hs __rt_pfa_done");                                  // the whole chain is attached
     abi::emit_symbol_address(emitter, "x11", "_php_filter_pending_ids");
-    emitter.instruction("ldr x0, [x11, x9, lsl #3]");                           // the built-in filter id
+    emitter.instruction("ldr x0, [x11, x9, lsl #3]");                           // id in the low byte, direction above it
     emitter.instruction("add x9, x9, #1");                                      // advance before the calls clobber it
     emitter.instruction("str x9, [sp, #32]");
+    // THIS filter\'s direction, not the URL\'s: a spec names segments and each carries its own,
+    // so `read=A/write=B` links A onto the read chain and B onto the write one. The parse packs
+    // the two into one word rather than a second array that would need its own save/restore.
+    emitter.instruction("ubfx x10, x0, #8, #2");                                // the segment\'s direction bits
+    emitter.instruction("str x10, [sp, #24]");
+    emitter.instruction("and x0, x0, #0xff");                                   // and the id on its own
     emitter.instruction("mov x1, #0");                                          // built-ins carry no user-filter object
-    emitter.instruction("ldr x2, [sp, #24]");                                   // direction bits from the URL
+    emitter.instruction("ldr x2, [sp, #24]");                                   // direction bits from this segment
     emitter.instruction("mov x3, #0");                                          // built-ins retain no params value
     abi::emit_call_label(emitter, "__rt_filter_create");
     emitter.instruction("str x0, [sp, #16]");                                   // preserve the filter handle
@@ -1753,8 +1819,8 @@ mod tests {
                 Arch::AArch64 => {
                     // The parse writes [sp, #72]; its saved pair must sit above that.
                     assert!(
-                        asm.contains("sub sp, sp, #96") && asm.contains("stp x29, x30, [sp, #80]"),
-                        "the parse frame must clear the unresolved-name slots before the linkage"
+                        asm.contains("sub sp, sp, #112") && asm.contains("stp x29, x30, [sp, #96]"),
+                        "the parse frame must clear the per-segment direction slots before the linkage"
                     );
                     assert!(
                         asm.contains("sub sp, sp, #64") && asm.contains("stp x29, x30, [sp, #48]"),
