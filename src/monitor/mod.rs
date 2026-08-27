@@ -25,6 +25,10 @@ use std::process;
 
 mod command;
 pub(crate) use command::*;
+// Reading an image from the outside, for the one path that has no channel in.
+// Parsing only, so it is exercised by ordinary tests on any host — which is what
+// makes code whose real use is on another platform reviewable at all.
+mod elf;
 mod channel;
 pub(crate) use channel::*;
 mod local;
