@@ -378,6 +378,36 @@ pub struct ClassInfo {
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
 
+/// Returns the class whose `__construct` PHP runs when `class_name` is instantiated.
+///
+/// A private method is not inherited, so `ClassInfo::methods` deliberately carries no
+/// `__construct` entry on a descendant of a class with a private constructor. PHP still
+/// instantiates that descendant through the ancestor's constructor and names the declaring
+/// class when the call site may not reach it, which is also what
+/// `ReflectionClass::getConstructor()` reports while `method_exists()` answers `false`.
+/// Walking to the nearest ancestor that still owns the entry models both halves.
+///
+/// The owner is the instantiated class itself whenever its own map has the entry, so an
+/// inherited public or protected constructor resolves exactly as before.
+pub fn constructor_owner<'a>(
+    classes: &'a HashMap<String, ClassInfo>,
+    class_name: &str,
+) -> Option<(&'a str, &'a ClassInfo)> {
+    let mut current = Some(class_name);
+    let mut seen = HashSet::new();
+    while let Some(name) = current {
+        if !seen.insert(name) {
+            return None;
+        }
+        let (owner_name, info) = classes.get_key_value(name)?;
+        if info.methods.contains_key("__construct") {
+            return Some((owner_name.as_str(), info));
+        }
+        current = info.parent.as_deref();
+    }
+    None
+}
+
 impl ClassInfo {
     /// Resolves the layout index of the property visible by name on this class.
     ///
