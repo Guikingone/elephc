@@ -11758,6 +11758,46 @@ fclose($f);
     assert_eq!(out, "[xyz]");
 }
 
+/// A refused `php://` URL names the builtin the PROGRAM called, in both of php's lines.
+///
+/// php words them with the caller — `file_get_contents(): Invalid php:// URL specified` and
+/// `file_get_contents(php://bogus): Failed to open stream: operation failed` — and elephc said
+/// `fopen` for every one of them, because the strings were fixed constants in the wrapper opener.
+/// Measured on `php -n` 8.5.6 across all five readers; each names itself.
+///
+/// `readfile` needed more than a name: its literal route sent only `data:` and the compress
+/// schemes through the shared opener, so a refused `php://` URL reached the FILE opener instead
+/// and answered `No such file or directory` about a path nothing had looked for — one line where
+/// php prints two.
+#[test]
+fn test_a_refused_php_url_names_the_builtin_that_asked() {
+    let out = compile_and_run_capture(
+        r#"<?php
+fopen("php://bogus", "r");
+file_get_contents("php://bogus");
+file("php://bogus");
+readfile("php://bogus");
+file_put_contents("php://bogus", "x");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    for callee in ["fopen", "file_get_contents", "file", "readfile", "file_put_contents"] {
+        assert!(
+            out.diagnostics
+                .contains(&format!("Warning: {callee}(): Invalid php:// URL specified")),
+            "{callee} did not name itself in the direct line, got: {}",
+            out.diagnostics
+        );
+        assert!(
+            out.diagnostics.contains(&format!(
+                "Warning: {callee}(php://bogus): Failed to open stream: operation failed"
+            )),
+            "{callee} did not name itself in the failed-open line, got: {}",
+            out.diagnostics
+        );
+    }
+}
+
 /// A resource is not an int, however it travels.
 ///
 /// `is_int(STDIN)` answered TRUE. The predicate compared `value_php_type`, which reports

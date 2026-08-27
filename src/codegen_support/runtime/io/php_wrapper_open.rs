@@ -185,11 +185,21 @@ fn emit_aarch64(emitter: &mut Emitter) {
     // php-src reports this one with a DIRECT `php_error_docref`, so it prints at once, on its own
     // line, and leaves the wrapper error stack empty — which is why the failed-open line below has
     // nothing left to say but `operation failed`. Measured: `fopen("php://bogus","r")` prints both.
+    // php names the CALLING builtin here, and this helper sees only a path. The lowering knows
+    // the name at every call site and publishes the whole line; zero means it did not, and the
+    // `fopen` wording this always had is the fallback.
     abi::emit_symbol_address(emitter, "x1", "_diag_php_invalid_url");
     emitter.instruction(&format!(
         "mov x2, #{}",
         crate::codegen_support::runtime::io::PHP_INVALID_URL_LINE.len()
     ));
+    abi::emit_symbol_address(emitter, "x9", "_pwo_callee_invalid_ptr");
+    emitter.instruction("ldr x10, [x9]");
+    emitter.instruction("cbz x10, __rt_pwo_invalid_line_ready");
+    emitter.instruction("mov x1, x10");
+    abi::emit_symbol_address(emitter, "x9", "_pwo_callee_invalid_len");
+    emitter.instruction("ldr x2, [x9]");
+    emitter.label("__rt_pwo_invalid_line_ready");
     emitter.instruction("bl __rt_diag_warning");
     abi::emit_symbol_address(emitter, "x9", "_diag_open_operation_failed");
     emitter.instruction("str x9, [sp, #0]");
@@ -211,6 +221,14 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [sp, #8]");
     abi::emit_symbol_address(emitter, "x0", "_diag_open_failed_fopen_prefix");
     emitter.instruction(&format!("mov x1, #{}", "Warning: fopen(".len()));
+    // The same published prefix, for the same reason.
+    abi::emit_symbol_address(emitter, "x9", "_pwo_callee_prefix_ptr");
+    emitter.instruction("ldr x10, [x9]");
+    emitter.instruction("cbz x10, __rt_pwo_prefix_ready");
+    emitter.instruction("mov x0, x10");
+    abi::emit_symbol_address(emitter, "x9", "_pwo_callee_prefix_len");
+    emitter.instruction("ldr x1, [x9]");
+    emitter.label("__rt_pwo_prefix_ready");
     emitter.instruction("bl __rt_open_failed_reason_warning");
     emitter.instruction("mov x0, #-1");                                         // an unrecognised php:// URL opens nothing
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
@@ -356,6 +374,15 @@ fn emit_x86_64(emitter: &mut Emitter) {
         "mov esi, {}",
         crate::codegen_support::runtime::io::PHP_INVALID_URL_LINE.len()
     ));
+    // The line the LOWERING composed in the calling builtin's name, when it published one.
+    abi::emit_symbol_address(emitter, "r9", "_pwo_callee_invalid_ptr");
+    emitter.instruction("mov r10, QWORD PTR [r9]");
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_pwo_invalid_line_ready_x");
+    emitter.instruction("mov rdi, r10");
+    abi::emit_symbol_address(emitter, "r9", "_pwo_callee_invalid_len");
+    emitter.instruction("mov rsi, QWORD PTR [r9]");
+    emitter.label("__rt_pwo_invalid_line_ready_x");
     emitter.instruction("call __rt_diag_warning");
     abi::emit_symbol_address(emitter, "r9", "_diag_open_operation_failed");
     emitter.instruction("mov QWORD PTR [rbp - 8], r9");
@@ -374,6 +401,15 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");
     abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fopen_prefix");
     emitter.instruction(&format!("mov esi, {}", "Warning: fopen(".len()));
+    // The same published prefix, for the same reason.
+    abi::emit_symbol_address(emitter, "r9", "_pwo_callee_prefix_ptr");
+    emitter.instruction("mov r10, QWORD PTR [r9]");
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_pwo_prefix_ready_x");
+    emitter.instruction("mov rdi, r10");
+    abi::emit_symbol_address(emitter, "r9", "_pwo_callee_prefix_len");
+    emitter.instruction("mov rsi, QWORD PTR [r9]");
+    emitter.label("__rt_pwo_prefix_ready_x");
     emitter.instruction("call __rt_open_failed_reason_warning");
     emitter.instruction("mov rax, -1");                                         // an unrecognised php:// URL opens nothing
     emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp

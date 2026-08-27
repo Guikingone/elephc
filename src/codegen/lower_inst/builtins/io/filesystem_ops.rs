@@ -247,7 +247,7 @@ fn emit_copy_from_lowered_source(
     let destination = expect_operand(inst, 1)?;
     let failed = ctx.next_label("copy_source_failed");
     let done = ctx.next_label("copy_done");
-    let context_scope = super::phar_read::emit_file_get_contents_bytes(ctx, inst, true)?;
+    let context_scope = super::phar_read::emit_file_get_contents_bytes(ctx, inst, true, "copy")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbz x1, {}", failed));            // a failed open writes nothing

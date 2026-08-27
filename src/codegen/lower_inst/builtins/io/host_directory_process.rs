@@ -631,6 +631,9 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 /// flags are resolved and spilled BEFORE the path, because coercing a non-string path calls a
 /// conversion helper that clobbers the caller-saved register the flags would otherwise sit in.
 pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // php names THIS builtin in the two lines a refused `php://` URL prints, and the
+    // run-time opener sees only a path; publish them before any open can reach it.
+    super::fopen_core::emit_publish_wrapper_open_callee(ctx, "file");
     super::super::ensure_arg_count_between(inst, "file", 1, 3)?;
     let path = expect_operand(inst, 0)?;
     // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
@@ -686,7 +689,7 @@ fn lower_file_named(
             // false where php answers an empty array, and `SplFileObject` loads its lines here.
             || super::is_php_substream_uri(&literal)
         {
-            super::emit_literal_wrapper_file_get_contents_bytes(ctx, &literal)?;
+            super::emit_literal_wrapper_file_get_contents_bytes(ctx, &literal, "file")?;
             emit_file_flags_then_call(ctx, flags, "__rt_file_from_bytes")?;
             box_listing_or_false_result(ctx, "file");
             finish_fopen_context_scope(ctx);

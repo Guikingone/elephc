@@ -1813,6 +1813,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // The directions the OPEN MODE selects: bit 0 = read, bit 1 = write. php applies a
     // prefix-less filter list once per direction it applies, so `r+` warns twice per unknown
     // name and `x` — a mode naming neither — warns not at all.
+    // The CALLER's name in the two lines a refused `php://` URL prints. php names the builtin
+    // the program actually called — `file_get_contents(): Invalid php:// URL specified` — and the
+    // run-time opener cannot know it, so the lowering composes both lines whole and publishes
+    // them here. Zero means "nothing published", and the opener falls back to the `fopen` wording
+    // it had: a call site that forgets to publish is then no worse than before, never garbled.
+    out.push_str(&comm_directive("_pwo_callee_invalid_ptr", 8, target));
+    out.push_str(&comm_directive("_pwo_callee_invalid_len", 8, target));
+    out.push_str(&comm_directive("_pwo_callee_prefix_ptr", 8, target));
+    out.push_str(&comm_directive("_pwo_callee_prefix_len", 8, target));
     out.push_str(&comm_directive("_php_filter_open_dirs", 8, target));
     // One frame per filtered open IN FLIGHT. A user wrapper's `stream_open` is PHP and may open
     // something itself, and that inner open republishes the single-slot hand-off above; each

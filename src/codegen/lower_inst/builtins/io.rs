@@ -300,14 +300,16 @@ pub(super) fn emit_empty_path_value_error(
 fn emit_literal_wrapper_file_get_contents_bytes(
     ctx: &mut FunctionContext<'_>,
     path: &str,
+    callee: &str,
 ) -> Result<()> {
-    fopen_core::emit_literal_fopen_result(ctx, LiteralOpenMode::Fixed("r"), path)?;
+    fopen_core::emit_literal_fopen_result(ctx, LiteralOpenMode::Fixed("r"), path, callee)?;
     emit_open_read_close_tail(ctx, "fgc_wrapper")
 }
 
 fn emit_literal_php_filter_file_get_contents_bytes(
     ctx: &mut FunctionContext<'_>,
     path: &str,
+    callee: &str,
 ) -> Result<()> {
     // php names `file_get_contents` in BOTH diagnostics a literal filter URL can print — the
     // failed-open line and the two lines an unresolvable filter name earns — so the callee
@@ -315,12 +317,7 @@ fn emit_literal_php_filter_file_get_contents_bytes(
     // that emitter in suppression, which is what this route used to do, silenced the
     // unresolvable-name warnings along with the inner opener's: php prints them, and elephc
     // turned a typo in a filter name into a silently unfiltered read.
-    emit_literal_php_filter_fopen_result(
-        ctx,
-        LiteralOpenMode::Fixed("r"),
-        path,
-        "file_get_contents",
-    )?;
+    emit_literal_php_filter_fopen_result(ctx, LiteralOpenMode::Fixed("r"), path, callee)?;
     emit_open_read_close_tail(ctx, "fgc_filter")
 }
 

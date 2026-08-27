@@ -26,6 +26,9 @@ pub(crate) fn lower_file_get_contents(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    // php names THIS builtin in the two lines a refused `php://` URL prints, and the
+    // run-time opener sees only a path; publish them before any open can reach it.
+    super::fopen_core::emit_publish_wrapper_open_callee(ctx, "file_get_contents");
     super::super::ensure_arg_count_between(inst, "file_get_contents", 1, 5)?;
     // php opens a stream internally for this call, so it consumes one PHP-visible resource
     // id even though the caller never sees a handle. elephc uses raw syscalls and minted
@@ -39,7 +42,7 @@ pub(crate) fn lower_file_get_contents(
     }
     let range = FileReadRange::from_operands(ctx, inst, 3, 4)?;
     range.emit_negative_length_guard(ctx, FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE)?;
-    let context_scope = emit_file_get_contents_bytes(ctx, inst, range.is_active())?;
+    let context_scope = emit_file_get_contents_bytes(ctx, inst, range.is_active(), "file_get_contents")?;
     range.emit(ctx, "file_get_contents")?;
     box_owned_string_or_false_result(ctx, "fgc");
     // The context scope closes AFTER the boxing, never before: its teardown reads the boxed
@@ -62,6 +65,7 @@ pub(super) fn emit_file_get_contents_bytes(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     persist_literal_bytes: bool,
+    callee: &str,
 ) -> Result<bool> {
     let path = expect_operand(inst, 0)?;
     let path_literal = optional_const_string_operand(ctx, path)?;
@@ -71,7 +75,7 @@ pub(super) fn emit_file_get_contents_bytes(
             return Ok(false);
         }
         if path_literal.starts_with("php://filter/") {
-            emit_literal_php_filter_file_get_contents_bytes(ctx, path_literal)?;
+            emit_literal_php_filter_file_get_contents_bytes(ctx, path_literal, callee)?;
             return Ok(false);
         }
         // `data:` is the whole scheme; RFC 2397 has no `//` and php makes it optional, so the
@@ -91,7 +95,7 @@ pub(super) fn emit_file_get_contents_bytes(
         if path_literal.starts_with("compress.zlib://")
             || path_literal.starts_with("compress.bzip2://")
         {
-            super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal)?;
+            super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal, callee)?;
             return Ok(false);
         }
         if path_literal.starts_with("data:") {
@@ -102,7 +106,7 @@ pub(super) fn emit_file_get_contents_bytes(
         // is `open(2)` and can only take them for filenames. `php://input` keeps its own reader
         // just above, and `php://filter/` was handled before that.
         if super::is_php_substream_uri(path_literal) && path_literal != "php://input" {
-            super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal)?;
+            super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal, callee)?;
             return Ok(false);
         }
         if let Some(scheme_end) = path_literal.find("://") {
@@ -113,7 +117,7 @@ pub(super) fn emit_file_get_contents_bytes(
                 || scheme == "compress.zlib"
                 || scheme == "compress.bzip2";
             if !builtin {
-                super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal)?;
+                super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal, callee)?;
                 return Ok(false);
             }
         }
@@ -792,6 +796,9 @@ pub(crate) fn lower_readfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 
 /// The body of `readfile()`, with its open-failure name already published.
 fn lower_readfile_named(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // php names THIS builtin in the two lines a refused `php://` URL prints, and the
+    // run-time opener sees only a path; publish them before any open can reach it.
+    super::fopen_core::emit_publish_wrapper_open_callee(ctx, "readfile");
     let path = expect_operand(inst, 0)?;
     // Same reason as file_get_contents(): the wrapper reads its options from the
     // published context, so a `$context` argument has to be published for this call.
@@ -802,11 +809,16 @@ fn lower_readfile_named(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     // Without this the URL reached the plain dispatch as a filename: `readfile("data:,abc")` and
     // `readfile("compress.zlib://f.gz")` both failed where php writes them.
     if let Some(literal) = optional_const_string_operand(ctx, path)? {
+        // A `php://` URL no wrapper opens belongs here too: php answers it with the wrapper's
+        // own two lines — `readfile(): Invalid php:// URL specified` then the failed-open line —
+        // and reaching the plain dispatch instead sent it to the FILE opener, which reported
+        // `No such file or directory` about a path nothing had looked for, in one line.
         if literal.starts_with("data:")
             || literal.starts_with("compress.zlib://")
             || literal.starts_with("compress.bzip2://")
+            || super::fopen_core::literal_wrapper_refusal_applies(&literal)
         {
-            super::emit_literal_wrapper_file_get_contents_bytes(ctx, &literal)?;
+            super::emit_literal_wrapper_file_get_contents_bytes(ctx, &literal, "readfile")?;
             super::wrapper_dispatch::emit_readfile_bytes_tail(ctx, "readfile_literal_wrapper");
             box_readfile_result(ctx);
             finish_fopen_context_scope(ctx);

@@ -11,6 +11,9 @@ use super::*;
 
 /// Lowers `fopen(filename, mode)` and boxes stream resources or PHP false.
 pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // php names THIS builtin in the two lines a refused `php://` URL prints, and the
+    // run-time opener sees only a path; publish them before any open can reach it.
+    emit_publish_wrapper_open_callee(ctx, "fopen");
     // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
     if let Some(path) = inst.operands.get(0).copied() {
         super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
@@ -28,7 +31,7 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             // The compress schemes are NOT special-cased here. They used to be, in a copy of the
             // branches that now live in `emit_literal_fopen_result`, and the copy is what kept
             // `fopen()` from seeing the run-time mode classification the shared opener grew.
-            emit_literal_fopen_result(ctx, open_mode, path)?;
+            emit_literal_fopen_result(ctx, open_mode, path, "fopen")?;
         }
         emit_record_stream_mode_after_boxed(ctx, mode)?;
         finish_fopen_context_scope(ctx);
@@ -344,6 +347,43 @@ pub(super) fn emit_dynamic_php_filter_swap(
     crate::codegen::lower_inst::exceptions::emit_error(ctx, "No URL resource specified");
     ctx.emitter.label(&past_throw);
     ctx.emitter.label(&unchanged);
+}
+
+/// Publishes, for the RUN-TIME `php://` opener, the two lines a refusal prints in `callee`'s name.
+///
+/// php names the builtin the program called in both — `file_get_contents(): Invalid php:// URL
+/// specified` and `file_get_contents(php://bogus): Failed to open stream: operation failed` — and
+/// `__rt_php_wrapper_open` sees only a path. The names are compile-time constants at every call
+/// site, so the lines are composed here rather than concatenated in the runtime.
+///
+/// Publishing rather than passing keeps the opener's signature, and its failure mode is the old
+/// behaviour: a site that does not publish leaves the slots zero and the opener uses the `fopen`
+/// wording it always had. A wrong name is loud in a diff; a garbled one would not be.
+pub(super) fn emit_publish_wrapper_open_callee(ctx: &mut FunctionContext<'_>, callee: &str) {
+    let (invalid_label, invalid_len) = ctx
+        .data
+        .add_string(format!("Warning: {callee}(): Invalid php:// URL specified\n").as_bytes());
+    let (prefix_label, prefix_len) = ctx.data.add_string(format!("Warning: {callee}(").as_bytes());
+    for (label, len, ptr_symbol, len_symbol) in [
+        (
+            invalid_label,
+            invalid_len,
+            "_pwo_callee_invalid_ptr",
+            "_pwo_callee_invalid_len",
+        ),
+        (
+            prefix_label,
+            prefix_len,
+            "_pwo_callee_prefix_ptr",
+            "_pwo_callee_prefix_len",
+        ),
+    ] {
+        let scratch = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, scratch, &label);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, ptr_symbol, 0);
+        abi::emit_load_int_immediate(ctx.emitter, scratch, len as i64);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, len_symbol, 0);
+    }
 }
 
 /// Publishes the directions the open mode selects, for the run-time unknown-name report.
@@ -1060,7 +1100,18 @@ impl LiteralOpenMode {
 /// elephc used to send all of these to the FILE opener, which reported `No such file or
 /// directory` for a path no filesystem was ever asked about — or, for the dynamic route, said
 /// nothing at all.
-fn literal_wrapper_refusal(path: &str) -> Option<Vec<String>> {
+///
+/// `callee` is the php function the program actually called. php names it in BOTH lines —
+/// `file_get_contents(): Invalid php:// URL specified` and
+/// `file_get_contents(php://bogus): Failed to open stream: operation failed` — and these were
+/// hardcoded to `fopen`, so every other reader lied about who was speaking. Measured across
+/// `fopen`, `file_get_contents`, `file`, `readfile` and `file_put_contents` on `php -n` 8.5.6:
+/// each names itself, in both lines.
+pub(super) fn literal_wrapper_refusal_applies(path: &str) -> bool {
+    literal_wrapper_refusal(path, "").is_some()
+}
+
+fn literal_wrapper_refusal(path: &str, callee: &str) -> Option<Vec<String>> {
     if let Some(target) = path.strip_prefix("php://") {
         // Everything php-src's `php_stream_url_wrap_php` knows how to open. `temp` takes an
         // optional `/maxmemory:N`, and `filter` is resolved long before this point.
@@ -1079,20 +1130,20 @@ fn literal_wrapper_refusal(path: &str) -> Option<Vec<String>> {
         }
         if target.starts_with("fd/") {
             return Some(vec![format!(
-                "Warning: fopen({path}): Failed to open stream: \
+                "Warning: {callee}({path}): Failed to open stream: \
                  php://fd/ stream must be specified in the form php://fd/<orig fd>\n"
             )]);
         }
         return Some(vec![
-            "Warning: fopen(): Invalid php:// URL specified\n".to_string(),
-            format!("Warning: fopen({path}): Failed to open stream: operation failed\n"),
+            format!("Warning: {callee}(): Invalid php:// URL specified\n"),
+            format!("Warning: {callee}({path}): Failed to open stream: operation failed\n"),
         ]);
     }
     if path.starts_with("glob://") {
         // php-src registers `glob` with no `stream_opener` at all, so the generic caller reports
         // the absence rather than any wrapper of its own. `glob://` still opens as a DIRECTORY.
         return Some(vec![format!(
-            "Warning: fopen({path}): Failed to open stream: {}\n",
+            "Warning: {callee}({path}): Failed to open stream: {}\n",
             crate::codegen_support::runtime::io::GLOB_NO_STREAM_OPEN
         )]);
     }
@@ -1103,6 +1154,7 @@ pub(super) fn emit_literal_fopen_result(
     ctx: &mut FunctionContext<'_>,
     mode: LiteralOpenMode,
     path: &str,
+    callee: &str,
 ) -> Result<()> {
     // The compress wrappers are resolved HERE, not only in `lower_fopen`, because php-src has one
     // opener: `php_stream_open_wrapper_ex` resolves the scheme for every function that takes a
@@ -1177,7 +1229,7 @@ pub(super) fn emit_literal_fopen_result(
         emit_record_stream_meta_after_boxed_literal(ctx, 6, path);
         return Ok(());
     }
-    if let Some(lines) = literal_wrapper_refusal(path) {
+    if let Some(lines) = literal_wrapper_refusal(path, callee) {
         for line in &lines {
             emit_static_diag_warning(ctx, line);
         }
@@ -1307,7 +1359,7 @@ pub(super) fn emit_literal_php_filter_fopen_result(
     // user wrapper, whose `stream_open` is PHP that php lets warn; `__rt_fopen` stands this
     // scope down for the dispatch, which only works because `@` does not share the counter.
     abi::emit_call_label(ctx.emitter, "__rt_diag_push_filter_suppression");
-    emit_literal_fopen_result(ctx, mode, &parsed.resource)?;
+    emit_literal_fopen_result(ctx, mode, &parsed.resource, callee)?;
     abi::emit_call_label(ctx.emitter, "__rt_diag_pop_filter_suppression");      // preserves the boxed result: x9/x10 (r10) only
     let opened = ctx.next_label("fopen_filter_lit_opened");
     let done = ctx.next_label("fopen_filter_lit_done");

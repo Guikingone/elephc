@@ -128,6 +128,9 @@ pub(crate) fn lower_file_put_contents(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    // php names THIS builtin in the two lines a refused `php://` URL prints, and the
+    // run-time opener sees only a path; publish them before any open can reach it.
+    super::fopen_core::emit_publish_wrapper_open_callee(ctx, "file_put_contents");
     super::super::ensure_arg_count_between(inst, "file_put_contents", 2, 4)?;
     // php opens a stream internally for this call, so it consumes one PHP-visible resource
     // id even though the caller never sees a handle. elephc uses raw syscalls and minted
@@ -235,6 +238,7 @@ fn lower_literal_wrapper_file_put_contents(
         ctx,
         super::fopen_core::LiteralOpenMode::Fixed(if appending { "a" } else { "w" }),
         uri,
+        "file_put_contents",
     )?;
     finish_fopen_context_scope(ctx);
     match ctx.emitter.target.arch {
