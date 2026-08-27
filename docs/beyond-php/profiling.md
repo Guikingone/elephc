@@ -759,6 +759,16 @@ where a figure would otherwise be trusted further than it should be:
   outer body took **52.6%** of a program for 52 µs of work before this, and reads
   0.3% now — and the consumer's loop is what drives those resumes, so the edge
   names something real.
+- **A suspension that raises instead of returning still puts the frame back.**
+  The runtime's suspend helper leaves three ways without returning to the
+  suspension site: `Fiber::suspend()` outside a fiber and a live `unserialize()`
+  both raise `FiberError` before the stack switch, and a `Fiber::throw()` /
+  `Generator::throw()` delivered on resume raises after it. All three reach PHP
+  handlers, so the helper restores the activation before the raise — keyed by the
+  running coroutine, which is the one identity it has at each of those points.
+  Without it, a body whose own `catch` did the work had that work attributed to
+  the consumer instead: the graph read `drive → heavy` for a call `drive` never
+  makes.
 - **A suspension from inside a nested call parks only the innermost frame.**
   `Fiber::suspend()` called from a function the fiber body called suspends the
   whole coroutine, but what the hook is told is one frame pointer, and the frames

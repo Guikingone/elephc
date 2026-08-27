@@ -1421,6 +1421,19 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
         &target.extern_symbol("elephc_instr_throw_fn"),
         0,
     );
+    // Sixth slot: elephc_instr_unpark, called from the runtime's suspend helper
+    // on the paths that raise instead of returning. Those are the only ways a
+    // parked activation can reach a PHP handler without its resume hook, and the
+    // helper is shared by every coroutine — so it has no function id, and it
+    // passes the running coroutine instead, which is what the park recorded.
+    let unpark_fn = target.extern_symbol("elephc_instr_unpark");
+    abi::emit_symbol_address(ctx.emitter, scratch, &unpark_fn);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_unpark_fn"),
+        0,
+    );
     let request = target.extern_symbol("elephc_instr_request");
     abi::emit_symbol_address(ctx.emitter, scratch, &request);
     abi::emit_store_reg_to_symbol(
@@ -1527,7 +1540,19 @@ fn emit_instr_coroutine_hook(
     for reg in live {
         abi::emit_push_reg(ctx.emitter, reg);
     }
-    emit_instr_hook_call(ctx, hook, id);
+    emit_instr_hook_args(ctx, id);
+    // A fifth argument these two take and the enter/exit pair does not: WHICH
+    // coroutine this is, read from the runtime's own `_fiber_current`.
+    //
+    // The frame pointer says which ACTIVATION and this says which SUSPENSION,
+    // and only the second can be had from inside the suspend helper — which is
+    // where it is needed, because that helper does not always return. Loaded
+    // last for the same reason the frame pointer is: the symbol loads above
+    // borrow a scratch register, and this one must survive to the call.
+    let coro_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_load_symbol_to_reg(ctx.emitter, coro_arg, "_fiber_current", 0);
+    let entry = ctx.emitter.target.extern_symbol(hook);
+    abi::emit_call_label(ctx.emitter, &entry);
     for reg in live.iter().rev() {
         abi::emit_pop_reg(ctx.emitter, reg);
     }
@@ -1560,6 +1585,14 @@ fn emit_instr_coroutine_hook(
 /// runtime's business, not this emission's; see `Frame::fp` and `dropped_fps`
 /// in `elephc-instr`.
 fn emit_instr_hook_call(ctx: &mut FunctionContext<'_>, hook: &str, id: usize) {
+    emit_instr_hook_args(ctx, id);
+    let entry = ctx.emitter.target.extern_symbol(hook);
+    abi::emit_call_label(ctx.emitter, &entry);
+}
+
+/// Places the four arguments every `elephc_instr_*` hook takes, without calling
+/// one. Split out because the coroutine hooks take a fifth.
+fn emit_instr_hook_args(ctx: &mut FunctionContext<'_>, id: usize) {
     let target = ctx.emitter.target;
     let id_arg = abi::int_arg_reg_name(target, 0);
     abi::emit_load_int_immediate(ctx.emitter, id_arg, id as i64);
@@ -1573,8 +1606,6 @@ fn emit_instr_hook_call(ctx: &mut FunctionContext<'_>, hook: &str, id: usize) {
     let frame_ptr = abi::frame_pointer_reg(ctx.emitter);
     ctx.emitter
         .instruction(&format!("mov {frame_arg}, {frame_ptr}"));
-    let entry = target.extern_symbol(hook);
-    abi::emit_call_label(ctx.emitter, &entry);
 }
 
 /// Emits the `--instrument` exit dump call at main's epilogue (and per `--web`

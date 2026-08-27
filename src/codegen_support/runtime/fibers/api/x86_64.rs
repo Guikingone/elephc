@@ -241,12 +241,17 @@ pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r12", "_fiber_current", 0);          // r12 = currently running fiber* (NULL means main)
     emitter.instruction("test r12, r12");                                       // are we executing inside a Fiber?
     emitter.instruction("jne __rt_fiber_suspend_state_ok");                     // proceed when suspend() is called from a Fiber
+    // Raises without returning, so the suspension site's second hook never runs.
+    // r12 is NULL on this path, which is exactly what the park recorded.
+    super::common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_outside_no_instr_x", "r12");
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_suspend_outside");     // rdi = pointer to the static error message
     emitter.instruction("mov esi, 33");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise FiberError; this call does not return
     emitter.label("__rt_fiber_suspend_state_ok");
     emitter.instruction("cmp QWORD PTR [rip + _unser_active], 0");              // is global unserialize parser state currently owned?
     emitter.instruction("je __rt_fiber_suspend_unserialize_ok_x");              // switching is safe only when no parser context is live
+    // Also raises without returning, and also before the switch.
+    super::common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_unser_no_instr_x", "r12");
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_suspend_unserialize"); // rdi = stable FiberError message for the forbidden switch
     emitter.instruction("mov esi, 52");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise before publishing a yielded value or Suspended state
@@ -261,6 +266,10 @@ pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_fiber_suspend_no_throw");                      // skip the raise path when no exception is pending
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_PENDING_THROW_OFFSET)); // clear pending_throw before re-raising
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_value", 0);             // _exc_value = Throwable to raise inside this Fiber
+    // We are back on this fiber's stack and about to unwind into ITS handlers,
+    // so the activation has to be live again first — the resume half of the
+    // suspension site's hook is past this point and will never run.
+    super::common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_pending_no_instr_x", "r12");
     emitter.instruction("call __rt_throw_current");                             // unwind into the active try/catch on the fiber stack
     emitter.label("__rt_fiber_suspend_no_throw");
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", FIBER_TRANSFER_VALUE_OFFSET)); // rax = value delivered by resume()

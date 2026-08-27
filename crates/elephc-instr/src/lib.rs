@@ -178,6 +178,25 @@ struct Parked {
     /// one, so this is not unique over time; the newest match wins and the id is
     /// checked beside it, the same pairing `exit_at` uses.
     fp: usize,
+    /// Which coroutine suspended: the runtime's `_fiber_current` at that instant,
+    /// read by the emitted hook and passed through.
+    ///
+    /// The frame pointer answers "which activation" and this answers "which
+    /// suspension", and only the second can be had from inside the runtime's own
+    /// suspend helper — which is where the answer is needed, because that helper
+    /// does not always return. It leaves three ways: `Fiber::suspend()` outside a
+    /// fiber and a live `unserialize()` both raise before switching, and a
+    /// `Fiber::throw()`/`Generator::throw()` delivered on resume raises after it.
+    /// All three reach PHP handlers, and the post-call hook at the suspension site
+    /// is never reached to put the frame back.
+    ///
+    /// The helper holds this value in a register at each of those points. A frame
+    /// pointer does not survive the same way: reading the caller's from the frame
+    /// chain gives the PHP function for a direct `Fiber::suspend()` and gives
+    /// `__rt_gen_suspend`'s own frame for a `yield`, since generators reach the
+    /// same helper one level deeper. Zero for a suspension attempted outside any
+    /// coroutine, which is exactly the first of those three cases.
+    coro: usize,
     /// `(id, fp)` per parked activation, the suspending one first.
     frames: Vec<(u32, usize)>,
 }
@@ -491,7 +510,7 @@ impl State {
     /// nested call closes only the inner frame and leaves the outer one standing;
     /// that case is no better than before this existed and no worse, and the
     /// test named for it says so rather than a comment claiming otherwise.
-    fn suspend_at(&mut self, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+    fn suspend_at(&mut self, id: u32, fp: usize, coro: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
         // Paired with the id, the way `exit_at` pairs them: a freed coroutine
         // stack is handed back out, so a frame pointer alone names an activation
         // only among the live ones.
@@ -525,7 +544,33 @@ impl State {
         // all while the aggregate table accounted for it.
         self.trace_span(frame.id, frame.t_enter, t);
         self.close_frame(frame, t, a, f, io, w);
-        self.parked.push(Parked { fp, frames });
+        self.parked.push(Parked { fp, coro, frames });
+    }
+
+    /// Opens the activations of the coroutine `coro` again, from inside the
+    /// runtime's suspend helper, on a path that will not return to the
+    /// suspension site.
+    ///
+    /// Three of those paths exist and every one of them reaches PHP handlers: a
+    /// `Fiber::suspend()` outside a fiber and a live `unserialize()` raise
+    /// `FiberError` before the stack switch, and a pending
+    /// `Fiber::throw()`/`Generator::throw()` raises after it. The post-call hook
+    /// is skipped in all three, so without this the activation stayed parked
+    /// while its own `catch` ran: the handler's work was charged to whatever
+    /// frame was below, and the function's own exit later found no frame and
+    /// closed nothing.
+    ///
+    /// Keyed by the coroutine rather than by a frame pointer because that is what
+    /// the helper has. A coroutine has one suspension in flight at a time, so the
+    /// key is exact; `rposition` still takes the newest, which is that one.
+    fn unpark_at(&mut self, coro: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+        let Some(at) = self.parked.iter().rposition(|group| group.coro == coro) else {
+            return;
+        };
+        let Some(&(id, fp)) = self.parked[at].frames.first() else {
+            return;
+        };
+        self.restore(at, id, fp, t, a, f, io, w);
     }
 
     /// Opens a resumed coroutine's activations again, at this instant.
@@ -545,6 +590,14 @@ impl State {
         if self.parked[at].frames.first().is_none_or(|(first, _)| *first != id) {
             return;
         }
+        self.restore(at, id, fp, t, a, f, io, w);
+    }
+
+    /// Puts the parked group at `at` back on the stack, at this instant.
+    ///
+    /// Shared by the two ways a coroutine can come back: its own resume, and the
+    /// runtime unparking it on a path that will not reach that resume.
+    fn restore(&mut self, at: usize, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
         // A park refused at `MAX_PARKED` left this activation ON the stack, and
         // an older abandoned coroutine of the same function can own a parked
         // group at a coroutine-stack address that has since been handed back
@@ -1931,14 +1984,39 @@ pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64, frame: usi
 /// claimed 99.8% of a program's inclusive time, and the call graph gained an
 /// edge from it to a function the consumer called.
 #[no_mangle]
-pub extern "C" fn elephc_instr_suspend(id: u32, allocs: u64, frees: u64, frame: usize) {
+pub extern "C" fn elephc_instr_suspend(
+    id: u32,
+    allocs: u64,
+    frees: u64,
+    frame: usize,
+    coro: usize,
+) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
     let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
-    STATE.with(|s| s.borrow_mut().suspend_at(id, frame, t, allocs, frees, io, w));
+    STATE.with(|s| s.borrow_mut().suspend_at(id, frame, coro, t, allocs, frees, io, w));
+}
+
+/// Puts a coroutine's activations back when the runtime's suspend helper is
+/// about to leave without returning to the suspension site.
+///
+/// Called from that helper rather than from emitted PHP code, through the same
+/// null-checked slot the throw hook uses, so a binary without the capability
+/// pays one load and a not-taken branch on paths only an error reaches. `coro`
+/// is the runtime's `_fiber_current` — the one identity available at every point
+/// where the helper raises, and the one the park recorded.
+#[no_mangle]
+pub extern "C" fn elephc_instr_unpark(allocs: u64, frees: u64, coro: usize) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let t = now_ticks();
+    let io = IO_OPS.load(Ordering::Relaxed);
+    let w = WAIT_NS.load(Ordering::Relaxed);
+    STATE.with(|s| s.borrow_mut().unpark_at(coro, t, allocs, frees, io, w));
 }
 
 /// Records that the function `id` has been resumed at the suspension point
@@ -2894,7 +2972,7 @@ mod tests {
         state.enter_sim(0, 0, 0, 0, 0, 0);
         state.enter_at(1, CORO_BASE, 10, 0, 0, 0, 0);
         // The body runs 20 ns of its own, then yields.
-        state.suspend_at(1, CORO_BASE, 30, 0, 0, 0, 0);
+        state.suspend_sim(1, CORO_BASE, 30, 0, 0, 0, 0);
         assert!(
             state.stack.iter().all(|frame| frame.id != 1),
             "a suspended body must not sit on the stack the consumer is running on"
@@ -2940,7 +3018,7 @@ mod tests {
         let mut state = State::default();
         state.enter_at(0, CORO_BASE, 100, 10, 5, 2, 50);
         // 20 ns, 3 allocs, 1 free, 1 io op and 10 ns of wait before the yield.
-        state.suspend_at(0, CORO_BASE, 120, 13, 6, 3, 60);
+        state.suspend_sim(0, CORO_BASE, 120, 13, 6, 3, 60);
         // The consumer spends a great deal of everything while it is away.
         state.resume_at(0, CORO_BASE, 5_120, 913, 406, 303, 5_060);
         // Then 5 ns, 2 allocs, 1 free, 1 io op and 5 ns of wait after it.
@@ -2969,7 +3047,7 @@ mod tests {
         let mut state = State::default();
         state.enter_sim(0, 0, 0, 0, 0, 0); // consumer
         state.enter_at(1, CORO_BASE, 10, 0, 0, 0, 0); // the body, on its own stack
-        state.suspend_at(1, CORO_BASE, 40, 0, 0, 0, 0); // 30 ns, then it yields
+        state.suspend_sim(1, CORO_BASE, 40, 0, 0, 0, 0); // 30 ns, then it yields
         // Nobody ever resumes it. The consumer goes on and returns.
         state.exit_sim(0, 1_040, 0, 0, 0, 0);
 
@@ -3008,7 +3086,7 @@ mod tests {
         state.enter_at(0, outer, 0, 0, 0, 0, 0);
         state.enter_at(0, inner, 10, 0, 0, 0, 0);
 
-        state.suspend_at(0, inner, 20, 0, 0, 0, 0);
+        state.suspend_sim(0, inner, 20, 0, 0, 0, 0);
         assert_eq!(
             state.fns[0].depth, 1,
             "the outer activation is still running and still holds the span"
@@ -3056,7 +3134,7 @@ mod tests {
         assert_eq!(state.stack.len(), 3, "the throw leaves them standing");
 
         // The catcher yields, 1000 ns later.
-        state.suspend_at(0, CORO_BASE, 1_030, 0, 0, 0, 0);
+        state.suspend_sim(0, CORO_BASE, 1_030, 0, 0, 0, 0);
 
         let group = state.parked.first().expect("the catcher parked");
         assert_eq!(
@@ -3090,7 +3168,7 @@ mod tests {
         // An older activation of function 7 suspended at this address and was
         // never resumed.
         state.enter_at(7, CORO_BASE, 0, 0, 0, 0, 0);
-        state.suspend_at(7, CORO_BASE, 10, 0, 0, 0, 0);
+        state.suspend_sim(7, CORO_BASE, 10, 0, 0, 0, 0);
         assert_eq!(state.parked.len(), 1);
 
         // The cap fills, then a new activation of 7 reuses that freed address
@@ -3098,10 +3176,10 @@ mod tests {
         for index in 1..MAX_PARKED {
             let other = CORO_BASE + index * 64;
             state.enter_at(8, other, index as u64, 0, 0, 0, 0);
-            state.suspend_at(8, other, index as u64, 0, 0, 0, 0);
+            state.suspend_sim(8, other, index as u64, 0, 0, 0, 0);
         }
         state.enter_at(7, CORO_BASE, 2_000, 0, 0, 0, 0);
-        state.suspend_at(7, CORO_BASE, 2_010, 0, 0, 0, 0);
+        state.suspend_sim(7, CORO_BASE, 2_010, 0, 0, 0, 0);
         assert_eq!(state.parks_refused, 1, "the cap refused it");
         assert_eq!(state.stack.len(), 1, "so its frame is still standing");
 
@@ -3131,7 +3209,7 @@ mod tests {
         let mut state = State::default();
 
         state.enter_at(0, CORO_BASE, 100, 0, 0, 0, 0);
-        state.suspend_at(0, CORO_BASE, 130, 0, 0, 0, 0);
+        state.suspend_sim(0, CORO_BASE, 130, 0, 0, 0, 0);
         state.resume_at(0, CORO_BASE, 500, 0, 0, 0, 0);
         state.exit_at(0, CORO_BASE, 520, 0, 0, 0, 0);
 
@@ -3156,14 +3234,14 @@ mod tests {
         for index in 0..MAX_PARKED {
             let fp = CORO_BASE + index * 64;
             state.enter_at(0, fp, index as u64, 0, 0, 0, 0);
-            state.suspend_at(0, fp, index as u64, 0, 0, 0, 0);
+            state.suspend_sim(0, fp, index as u64, 0, 0, 0, 0);
         }
         assert_eq!(state.parked.len(), MAX_PARKED);
         assert_eq!(state.parks_refused, 0, "everything up to the cap is parked");
 
         let over = CORO_BASE + MAX_PARKED * 64;
         state.enter_at(0, over, 1_000, 0, 0, 0, 0);
-        state.suspend_at(0, over, 1_000, 0, 0, 0, 0);
+        state.suspend_sim(0, over, 1_000, 0, 0, 0, 0);
         assert_eq!(state.parked.len(), MAX_PARKED, "the cap holds");
         assert_eq!(state.parks_refused, 1);
         assert_eq!(
@@ -3189,7 +3267,7 @@ mod tests {
     fn a_resume_at_a_reused_coroutine_address_restores_nothing() {
         let mut state = State::default();
         state.enter_at(7, CORO_BASE, 0, 0, 0, 0, 0);
-        state.suspend_at(7, CORO_BASE, 10, 0, 0, 0, 0);
+        state.suspend_sim(7, CORO_BASE, 10, 0, 0, 0, 0);
         assert_eq!(state.parked.len(), 1);
 
         // Another function, the same address, never parked.
@@ -3224,7 +3302,7 @@ mod tests {
         // body() on the coroutine stack, then inner() above it, which suspends.
         state.enter_at(0, CORO_BASE, 0, 0, 0, 0, 0);
         state.enter_at(1, CORO_BASE - 64, 10, 0, 0, 0, 0);
-        state.suspend_at(1, CORO_BASE - 64, 20, 0, 0, 0, 0);
+        state.suspend_sim(1, CORO_BASE - 64, 20, 0, 0, 0, 0);
 
         assert_eq!(state.parked.len(), 1);
         assert_eq!(
@@ -4618,6 +4696,17 @@ mod tests {
             let fp = SIM_BASE - self.stack.len() * 64;
             self.enter_at(id, fp, t, a, f, io, w);
             fp
+        }
+
+        /// Suspends the activation at `fp`, taking its address as the coroutine
+        /// it belongs to.
+        ///
+        /// One coroutine per address is what a simulated stack means, and the two
+        /// keys answer different questions in production — the pointer says which
+        /// activation, `_fiber_current` says which suspension — so a test that
+        /// needs them to differ says so by calling `suspend_at` itself.
+        fn suspend_sim(&mut self, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+            self.suspend_at(id, fp, fp, t, a, f, io, w);
         }
 
         /// Exits the innermost live activation of `id`.

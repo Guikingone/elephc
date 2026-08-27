@@ -1228,6 +1228,219 @@ fn test_cli_executables_strip_symbols_by_default_and_keep_symbols_retains_them()
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Returns the `incl` percentage the exact profile reports for `name`.
+///
+/// The table prints one row per function as `<name> <bar> incl <n>%  self …`.
+/// Parsing the number rather than matching a literal keeps the assertion about
+/// the attribution instead of about the formatting.
+#[cfg(test)]
+fn exact_incl_percent(report: &str, name: &str) -> f64 {
+    for line in report.lines() {
+        let mut fields = line.split_whitespace();
+        if fields.next() != Some(name) {
+            continue;
+        }
+        let Some(index) = line.find("incl") else {
+            continue;
+        };
+        let after = &line[index + 4..];
+        let Some(percent) = after.split('%').next() else {
+            continue;
+        };
+        if let Ok(value) = percent.trim().parse::<f64>() {
+            return value;
+        }
+    }
+    panic!("the profile has no row for `{name}`:\n{report}");
+}
+
+/// A suspended coroutine is not charged for what its consumer does.
+///
+/// The only test on this branch that runs with the profiler ACTIVE. Every other
+/// check of the attribution is either a unit test driving `State` directly — which
+/// cannot see the emitted hooks — or the dormant-output test above, which asserts
+/// the profiler stays quiet and so is blind to what it says when it speaks.
+///
+/// `yield` and `Fiber::suspend` switch stacks rather than returning, so the body's
+/// frame used to stay open across everything the consumer did next: it became the
+/// caller of that work and the owner of its cost. Measured before the fix, a
+/// generator body that ran 23 µs reported **99.8%** of the program's inclusive
+/// time, and the call graph carried an edge from it to a function the loop called
+/// and the generator never did. A delegating generator reported 52.6% for the same
+/// reason on the `yield from` half.
+///
+/// The thresholds are deliberately loose. The gap being asserted is three orders
+/// of magnitude — a coroutine that runs microseconds against a consumer that runs
+/// milliseconds — so anything under 10% passes and every shape of the defect
+/// lands far above it.
+#[test]
+fn test_cli_monitor_does_not_charge_a_coroutine_for_its_consumer() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_coroutine");
+    fs::write(
+        dir.join("coro.php"),
+        "<?php\n\
+         function heavy(int $rounds): int { $n = 0; for ($i = 0; $i < $rounds; $i++) { $n += $i; } return $n; }\n\
+         function inner(): iterable { yield 1; yield 2; }\n\
+         function outer(): iterable { yield 0; yield from inner(); }\n\
+         function body(): int { Fiber::suspend(1); return 7; }\n\
+         function drain(): int {\n\
+         $t = 0;\n\
+         foreach (outer() as $v) { $t += heavy(120000); }\n\
+         $f = new Fiber('body');\n\
+         $f->start();\n\
+         $t += heavy(120000);\n\
+         $f->resume(0);\n\
+         return $t + $f->getReturn();\n\
+         }\n\
+         echo drain();\n",
+    )
+    .expect("failed to write the coroutine fixture");
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "coro.php"])
+        .output()
+        .expect("failed to compile the coroutine fixture");
+    assert!(
+        compile.status.success(),
+        "compile failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let watched = elephc_cli_command(&dir)
+        .args(["monitor", "./coro", "--dot", "coro.dot"])
+        .output()
+        .expect("failed to run elephc monitor");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&watched.stdout),
+        String::from_utf8_lossy(&watched.stderr)
+    );
+
+    assert!(
+        exact_incl_percent(&report, "heavy") > 90.0,
+        "the consumer's own work should dominate:\n{report}"
+    );
+    for coroutine in ["outer", "inner", "body"] {
+        let share = exact_incl_percent(&report, coroutine);
+        assert!(
+            share < 10.0,
+            "`{coroutine}` was charged {share}% of the program while suspended:\n{report}"
+        );
+    }
+
+    // The edge is the other half: a suspended coroutine that keeps its frame is
+    // read as the CALLER of whatever the consumer does next, so the graph gains
+    // an edge that does not exist. `drain` is what calls `heavy`.
+    let graph = fs::read_to_string(dir.join("coro.dot")).expect("monitor wrote no graph");
+    let node_of = |name: &str| -> Option<String> {
+        graph.lines().find_map(|line| {
+            let (id, rest) = line.trim().split_once(" [label=\"")?;
+            rest.starts_with(name).then(|| id.to_string())
+        })
+    };
+    let heavy = node_of("heavy").expect("the graph has no `heavy` node");
+    for coroutine in ["outer", "inner", "body"] {
+        if let Some(node) = node_of(coroutine) {
+            assert!(
+                !graph.contains(&format!("{node} -> {heavy}")),
+                "the graph says `{coroutine}` calls `heavy`, which it never does:\n{graph}"
+            );
+        }
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A coroutine resumed with a pending exception gets its frame back before its
+/// own handler runs.
+///
+/// `__rt_fiber_suspend` does not always return to the suspension site. Three
+/// paths leave without returning — `Fiber::suspend()` outside a fiber, a live
+/// `unserialize()`, and a `Fiber::throw()`/`Generator::throw()` delivered on
+/// resume — and all three reach PHP handlers. The second half of the bracket at
+/// the suspension site is skipped, so the activation stayed parked while its own
+/// `catch` ran.
+///
+/// The edge is what says it: `body`'s handler calls `heavy`, so `body → heavy`
+/// is the true edge. With the activation still parked, `heavy` entered on a
+/// stack whose top was the CONSUMER, and the graph read `drive → heavy` — a call
+/// `drive` never makes. Asserting an edge that must EXIST, where the sibling
+/// test asserts ones that must not.
+///
+/// The third path is the one real async code hits; the first two are error
+/// paths that reach the same helper and are covered by the same hook.
+#[test]
+fn test_cli_monitor_restores_a_coroutine_resumed_into_a_throw() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_fiber_throw");
+    fs::write(
+        dir.join("ft.php"),
+        "<?php\n\
+         function heavy(int $rounds): int { $n = 0; for ($i = 0; $i < $rounds; $i++) { $n += $i; } return $n; }\n\
+         function body(): int {\n\
+         $t = 0;\n\
+         try { Fiber::suspend(1); } catch (RuntimeException $e) { $t += heavy(300000); }\n\
+         return $t;\n\
+         }\n\
+         function drive(): int {\n\
+         $f = new Fiber('body');\n\
+         $f->start();\n\
+         $f->throw(new RuntimeException('x'));\n\
+         return $f->getReturn();\n\
+         }\n\
+         echo drive();\n",
+    )
+    .expect("failed to write the fiber-throw fixture");
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "ft.php"])
+        .output()
+        .expect("failed to compile the fiber-throw fixture");
+    assert!(
+        compile.status.success(),
+        "compile failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let watched = elephc_cli_command(&dir)
+        .args(["monitor", "./ft", "--dot", "ft.dot"])
+        .output()
+        .expect("failed to run elephc monitor");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&watched.stdout),
+        String::from_utf8_lossy(&watched.stderr)
+    );
+    assert!(
+        report.contains("44999850000"),
+        "the program's own answer changed, so the hooks are not transparent:\n{report}"
+    );
+
+    let graph = fs::read_to_string(dir.join("ft.dot")).expect("monitor wrote no graph");
+    let node_of = |name: &str| -> String {
+        graph
+            .lines()
+            .find_map(|line| {
+                let (id, rest) = line.trim().split_once(" [label=\"")?;
+                rest.starts_with(name).then(|| id.to_string())
+            })
+            .unwrap_or_else(|| panic!("the graph has no `{name}` node:\n{graph}"))
+    };
+    let (body, drive, heavy) = (node_of("body"), node_of("drive"), node_of("heavy"));
+    assert!(
+        graph.contains(&format!("{body} -> {heavy}")),
+        "the handler's work was not attributed to the coroutine that ran it:\n{graph}"
+    );
+    assert!(
+        !graph.contains(&format!("{drive} -> {heavy}")),
+        "the graph says `drive` calls `heavy`, which only holds while `body` is \
+         still parked:\n{graph}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// End-to-end `--with-monitoring`: a binary that carries the tooling is silent
 /// until asked, and reports fully when `monitor` asks.
 ///
