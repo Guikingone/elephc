@@ -1338,3 +1338,85 @@ echo call_hot(1);
         let out = instrument_recommendations(&instr_graph());
         assert!(out.contains("leaf is the hotspot"), "{out}");
     }
+
+    /// A window nobody answered in time does not end the view.
+    ///
+    /// The live loop ending is what REAPS the target: the program only outlives
+    /// the view while the view is still running. So a slow answer treated as a
+    /// dead one does not merely lose a window — it stops the healthy program the
+    /// operator was in the middle of profiling.
+    ///
+    /// Driven against a real socketpair with a real receive deadline and nobody
+    /// on the other end, because the distinction being tested is what the KERNEL
+    /// reports, not what this code believes it will.
+    #[test]
+    fn a_window_that_times_out_is_not_a_dead_child() {
+        let channel = super::open_polled_control_channel().expect("a socketpair");
+        // Nothing answers, so the deadline is what ends the read. The marker the
+        // parent wrote is on the child's side and is not read back here.
+        let started = std::time::Instant::now();
+        let outcome = super::request_snapshot(&channel);
+        assert!(
+            matches!(outcome, super::Snapshot::Late),
+            "a target that has not answered YET must not be reported as gone"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the read waited far past its own deadline"
+        );
+
+        // And a closed peer is the other answer, from the same call.
+        unsafe { libc::close(channel.child) };
+        let mut closed = channel;
+        closed.forget_child();
+        assert!(
+            matches!(super::request_snapshot(&closed), super::Snapshot::Gone),
+            "a channel whose peer is closed must end the view rather than stall it"
+        );
+    }
+
+    /// The profiler's own lines are removed from a program's stderr; the
+    /// program's are not.
+    ///
+    /// Both mechanisms write to the same stderr, so a monitor forwarding a
+    /// program's diagnostics has to tell them apart — and a prefix alone is not
+    /// enough. A program that writes `elephc-instrumentation disabled` had that
+    /// line deleted by the tool watching it, silently, which is the failure this
+    /// rule exists to prevent: the author's own message, gone, with nothing to
+    /// say it ever existed.
+    #[test]
+    fn profiler_lines_are_told_from_the_programs_own() {
+        for profiler in [
+            "elephc-instr: hot calls=1 incl_ns=5",
+            "elephc-instr-edge: a -> b count=1 ns=2",
+            "elephc-instr-query: 3 SELECT ?",
+            "elephc-instr-query-dropped: 2",
+            "elephc-instr-trace: wrote /tmp/t.json",
+            "elephc-probe: {main};hot 12",
+            "elephc-probe-io: 4",
+            "elephc-probe-samples: 934",
+            "elephc-probe-alloc: {main};hot 594",
+        ] {
+            assert!(
+                super::is_profiler_line(profiler),
+                "profiler output reached the operator as if the program wrote it: {profiler}"
+            );
+        }
+        for own in [
+            "elephc-instrumentation disabled by config",
+            "elephc-probes are not enabled here",
+            "elephc-instr is what we call it",
+            // A name the profiler does not use, which a prefix-and-colon rule
+            // would still have taken.
+            "elephc-instr-custom: our own channel",
+            "elephc-probe-of-ours: hello",
+            "warning: something the program wanted to say",
+            "",
+            "   ",
+        ] {
+            assert!(
+                !super::is_profiler_line(own),
+                "the program's own diagnostic was deleted by the tool watching it: {own}"
+            );
+        }
+    }

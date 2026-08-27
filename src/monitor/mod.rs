@@ -167,11 +167,14 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
             return 1;
         }
     }
-    // `--live` and `--attach` are the only paths left that read a process from
-    // the outside, and the tool that does it ships on macOS alone. Everything
-    // remaining local default — a source or equipped binary — is measured
-    // exactly and needs no sampler, which is why this is the only platform
-    // branch left.
+    // `--attach` is the only path left that reads a process from the OUTSIDE,
+    // and the tool that does it ships on macOS alone.
+    //
+    // `--live` used to be here beside it, and did not belong: it LAUNCHES the
+    // target, so it can hand it a socketpair and ask, exactly as the exact path
+    // has always done. It simply never opened one, and reading its own child
+    // from the outside was the consequence. Everything else — a source, a
+    // binary, a running service — was already platform-independent.
     if !cfg!(target_os = "macos") {
         if let Some(pid) = cmd.attach_pid {
             eprintln!(
@@ -182,18 +185,10 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
             );
             return 1;
         }
-        if cmd.live {
-            eprintln!(
-                "elephc monitor: --live refreshes from an external sampler, which only macOS \
-                 ships. For a live view here, start the program with \
-                 ELEPHC_PROBE_ADDR=127.0.0.1:9411, then `elephc monitor 127.0.0.1:9411`."
-            );
-            return 1;
-        }
     }
     if let Some(pid) = cmd.attach_pid {
         return if cmd.live {
-            run_live(&cmd, pid, None)
+            run_live(&cmd, pid, None, None)
         } else {
             run_once(&cmd, pid, None, None)
         };
@@ -214,16 +209,55 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
         // PATH carries an empty entry.
         (spawnable_path(&cmd.target), None)
     };
-    let mut child = match process::Command::new(&binary).spawn() {
+    // The live path launches the target too, so it can ask it directly rather
+    // than read it from the outside. It did not open a channel before, which is
+    // the whole reason `--live` needed an external sampler — for a program this
+    // process had started itself.
+    let mut command = process::Command::new(&binary);
+    let channel = if cmd.live { open_polled_control_channel() } else { None };
+    if let Some(channel) = &channel {
+        attach_control_channel(&mut command, channel);
+        // Asking also wakes the EXACT profiler, which writes its table to stderr
+        // when the program ends. That is the one thing a live table must not
+        // print: the operator would get the raw dump under the view they are
+        // watching, as if the program had written it. Captured and filtered, the
+        // way the exact path has always filtered the sampler's folded stacks out
+        // of a program's own diagnostics.
+        command.stderr(process::Stdio::piped());
+    }
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             eprintln!("elephc monitor: cannot run {}: {error}", binary.display());
             return 1;
         }
     };
+    // The spawn gave the program its own copy; ours would keep the socket alive
+    // after it exits and turn the next snapshot request into a permanent wait.
+    let mut channel = channel;
+    if let Some(channel) = channel.as_mut() {
+        channel.release_child();
+    }
+    // Drained as it arrives rather than at exit: a live view runs for as long as
+    // the program does, and a pipe nobody reads fills and blocks the program
+    // writing into it.
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::Builder::new()
+            .name("elephc-monitor-stderr".to_string())
+            .spawn(move || {
+                use std::io::BufRead as _;
+                for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                    if is_profiler_line(&line) {
+                        continue;
+                    }
+                    eprintln!("{line}");
+                }
+            })
+            .ok();
+    }
     let root = child.id();
     let code = if cmd.live {
-        run_live(&cmd, root, Some(&mut child))
+        run_live(&cmd, root, Some(&mut child), channel.as_ref())
     } else {
         run_once(&cmd, root, Some(&binary), php_source.as_deref())
     };
@@ -497,24 +531,63 @@ pub(crate) const CONTROL_FD: i32 = 3;
 /// Marker written into the channel before spawning, so it is already buffered
 /// when the child looks and no handshake can race the program's own start.
 pub(crate) const CONTROL_MAGIC: &[u8] = b"ELEPHC-MONITOR-1";
+/// The same marker, from a monitor that will POLL the child for snapshots.
+///
+/// Deliberately the same length: the child's check peeks a fixed sixteen bytes
+/// and compares, so a second marker costs it nothing. Mirrors
+/// `CONTROL_MAGIC_LIVE` in `elephc-probe`; the two are one protocol and share a
+/// name so a `grep` finds the pair.
+pub(crate) const CONTROL_MAGIC_LIVE: &[u8] = b"ELEPHC-MONITOR-L";
 /// Acknowledgement returned after the child consumed the control marker and
 /// activated its embedded monitoring runtime.
 pub(crate) const CONTROL_ACK: &[u8] = b"ELEPHC-MONITOR-ACK-1";
 
 /// Holds the parent's end of the control channel open for the child's lifetime.
 pub(crate) struct ControlChannel {
-    parent: i32,
+    /// This process's end. `request_snapshot` asks over it; nothing else on the
+    /// machine can, which is what makes it a credential.
+    pub(crate) parent: i32,
     child: i32,
+}
+
+impl ControlChannel {
+    /// Drops the parent's copy of the CHILD end, once the spawn has handed the
+    /// real one to the profiled program.
+    ///
+    /// Only matters to a caller that reads the channel. While this process holds
+    /// a copy, the socket has a writer that never writes — so when the profiled
+    /// program exits, `recv` on the parent end does not report EOF, it blocks
+    /// forever waiting for us. A `--live` loop asking for a snapshot hung there
+    /// instead of noticing the target was gone.
+    /// Marks the child end as no longer ours to close, for a caller that closed
+    /// it itself. Closing a descriptor twice closes whatever was opened on that
+    /// number in between.
+    #[cfg(test)]
+    fn forget_child(&mut self) {
+        self.child = -1;
+    }
+
+    fn release_child(&mut self) {
+        if self.child >= 0 {
+            unsafe {
+                libc::close(self.child);
+            }
+            self.child = -1;
+        }
+    }
 }
 
 impl Drop for ControlChannel {
     /// Closes both ends. The child end is inherited across the spawn, so
     /// leaking either would leave the profiled program holding a channel
-    /// nobody reads.
+    /// nobody reads. Already-released ends are left alone rather than closed
+    /// twice — a second `close` on a recycled number closes somebody else's file.
     fn drop(&mut self) {
         unsafe {
             libc::close(self.parent);
-            libc::close(self.child);
+            if self.child >= 0 {
+                libc::close(self.child);
+            }
         }
     }
 }

@@ -92,11 +92,26 @@ pub(crate) fn run_once(
 
 /// The live loop: sample a window, merge the process tree, redraw, repeat
 /// until the target goes away. Prints the cumulative table on exit.
-pub(crate) fn run_live(cmd: &MonitorCommand, root: u32, mut child: Option<&mut process::Child>) -> i32 {
+pub(crate) fn run_live(
+    cmd: &MonitorCommand,
+    root: u32,
+    mut child: Option<&mut process::Child>,
+    channel: Option<&ControlChannel>,
+) -> i32 {
     use std::io::IsTerminal;
     let interactive = std::io::stdout().is_terminal();
     let started = std::time::Instant::now();
     let mut cumulative: BTreeMap<Vec<(String, Kind)>, u64> = BTreeMap::new();
+    // The previous snapshot, when the target answers over the control channel.
+    // Windows are differences between snapshots, so the first one is measured
+    // against nothing and reports everything sampled since the program started.
+    let mut sampled_before: BTreeMap<Vec<(String, Kind)>, u64> = BTreeMap::new();
+    // Whether the child's activation ACK has been taken off the channel. One
+    // byte-sequence, sent once; leaving it there would put it in front of the
+    // first snapshot reply.
+    let mut activated = false;
+    // Whether a late window has already been mentioned.
+    let mut reported_late = false;
     let mut previous: HashMap<String, f64> = HashMap::new();
     let mut windows = 0u32;
     let graph_title = if cmd.target.is_empty() {
@@ -122,14 +137,77 @@ pub(crate) fn run_live(cmd: &MonitorCommand, root: u32, mut child: Option<&mut p
             }
         }
         let pids = discover_pids(root);
-        let reports = capture_window(&pids, cmd.duration_secs);
-        let Some(samples) = samples_from_reports(&reports, None, None) else {
-            // Attach mode has no child handle: a window with zero reports is
-            // how we learn the target is gone.
-            break;
+        // A target this process launched can simply be ASKED — it holds the
+        // other end of a socketpair nothing else on the machine can open. Only
+        // a foreign process needs to be read from the outside, and that is the
+        // one tool that ships on macOS alone.
+        let display = if let Some(channel) = channel {
+            std::thread::sleep(std::time::Duration::from_secs(u64::from(cmd.duration_secs)));
+            // The child's activation ACK is sent once, at init, and sits in the
+            // buffer until somebody takes it. It has to come off BEFORE the first
+            // snapshot reply, because this reader is length-prefixed: it would
+            // otherwise read `ELEP` as a length, refuse it, and the loop would
+            // read that as a dead channel and stop after one window.
+            //
+            // Waited for rather than merely attempted. A non-blocking look
+            // succeeds whenever the child booted inside the first window, which
+            // is every run on an idle machine and not every run under load.
+            if !activated {
+                activated = await_activation(channel, std::time::Duration::from_secs(2));
+            }
+            let snapshot = match request_snapshot(channel) {
+                Snapshot::Answered(text) => text,
+                Snapshot::Late => {
+                    // Slow is not gone. Ending the loop here would REAP a healthy
+                    // program: the target only outlives the view while the view is
+                    // still running, so a window nobody answered in time would
+                    // stop the thing being profiled.
+                    //
+                    // Said once, because a busy target would otherwise bury its
+                    // own table under the same line every window.
+                    if !reported_late {
+                        reported_late = true;
+                        eprintln!(
+                            "elephc monitor: the target did not answer within the window; \
+                             still watching"
+                        );
+                    }
+                    continue;
+                }
+                Snapshot::Gone => break,
+            };
+            // Snapshots are cumulative, so the window is what this one has that
+            // the last did not. A stack that stopped being sampled contributes
+            // nothing rather than a negative.
+            // Summed, not collected. `folded_text_to_display` can emit the same
+            // display stack twice — one folded line becomes several stacks when
+            // it carries a native leaf — and `collect` into a map keeps the LAST
+            // of a pair instead of their total, which silently loses samples
+            // from the window and from every window after it.
+            let mut total: BTreeMap<Vec<(String, Kind)>, u64> = BTreeMap::new();
+            for (stack, count) in folded_text_to_display(&snapshot) {
+                *total.entry(stack).or_default() += count;
+            }
+            let window: Vec<(Vec<(String, Kind)>, u64)> = total
+                .iter()
+                .filter_map(|(stack, count)| {
+                    let before = sampled_before.get(stack).copied().unwrap_or(0);
+                    count.checked_sub(before).filter(|delta| *delta > 0).map(|delta| (stack.clone(), delta))
+                })
+                .collect();
+            sampled_before = total;
+            windows += 1;
+            window
+        } else {
+            let reports = capture_window(&pids, cmd.duration_secs);
+            let Some(samples) = samples_from_reports(&reports, None, None) else {
+                // Attach mode has no child handle: a window with zero reports is
+                // how we learn the target is gone.
+                break;
+            };
+            windows += 1;
+            render_stacks(&samples)
         };
-        windows += 1;
-        let display = render_stacks(&samples);
         for (stack, weight) in &display {
             *cumulative.entry(stack.clone()).or_default() += weight;
         }
@@ -359,7 +437,7 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
     // holds the sampler's folded stacks; forwarding those would print raw
     // profiler output as if the program had written it.
     for line in stderr.lines() {
-        if !line.starts_with("elephc-instr") && !line.starts_with("elephc-probe") {
+        if !is_profiler_line(line) {
             eprintln!("{line}");
         }
     }

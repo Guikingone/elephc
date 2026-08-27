@@ -1078,6 +1078,18 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
         flag.write(1);
         ASKED.store(true, Ordering::Relaxed);
         arm_timer();
+        // The same channel that said "you are being monitored" can also answer
+        // "what have you sampled so far" — but only for a monitor that said it
+        // would ask. The exact path spawns, waits for the program to finish and
+        // reads its output; a thread parked in `recv` for the whole of that run
+        // is one nobody wanted, and one more thing between the program and its
+        // exit.
+        if POLLED.load(Ordering::Relaxed) {
+            std::thread::Builder::new()
+                .name("elephc-probe-control".to_string())
+                .spawn(serve_control_channel)
+                .ok();
+        }
     }
 
     // fork() RESETS interval timers in the child (POSIX; `man 2 fork`), so a
@@ -1095,7 +1107,7 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
     // The remote endpoint is opt-in: a Unix socket path in ELEPHC_PROBE_ADDR
     // turns it on. A background thread accepts connections, runs the build-key
     // handshake, and serves the folded profile — so a live production process
-    // can be profiled by `elephc monitor --probe-host` without SIGPROF from
+    // can be profiled by `elephc monitor <addr>` without SIGPROF from
     // outside and without suspending the process.
     if !key.is_null() {
         if let Ok(path) = std::env::var("ELEPHC_PROBE_ADDR") {
@@ -1104,6 +1116,119 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
             }
         }
     }
+}
+
+/// Request byte the monitor sends on the control channel to ask for a snapshot
+/// of what has been sampled so far.
+///
+/// One byte, because the channel carries exactly one question. Anything else is
+/// ignored rather than answered: fd 3 is an ordinary number and this thread must
+/// never invent a reply to a protocol it does not own.
+const CONTROL_SNAPSHOT_REQUEST: u8 = b'S';
+
+/// Serves sampled snapshots to the process that launched us, over the control
+/// channel it already holds the other end of.
+///
+/// The channel IS the credential. A socketpair created before the fork cannot be
+/// opened, guessed, or replayed by anything else on the machine, which is why
+/// this path needs no key handshake where the network endpoint does — the same
+/// reasoning that lets init treat its magic byte as "you are being monitored".
+///
+/// What this buys is `--live` without an external sampler. Reading a process
+/// from the outside needs a tool that ships on macOS alone, so the live table
+/// was macOS-only — for a program `monitor` had launched ITSELF, and could
+/// therefore simply have asked. Answering here is the ask.
+///
+/// Snapshots are cumulative, exactly as the endpoint's answer is; a caller that
+/// wants one window subtracts two of them. Keeping the accumulation on this side
+/// would mean the probe deciding what a window is, which is the caller's
+/// question, and would lose a sample to every reader that ever disconnected.
+fn serve_control_channel() {
+    // Both for the reasons the endpoint thread blocks them. SIGPIPE: a monitor
+    // that exits mid-write must not take the profiled process down with it.
+    // SIGPROF: `ITIMER_PROF` is delivered to the PROCESS and the kernel picks
+    // any thread not blocking it, so the sampler would otherwise interrupt this
+    // thread and fill the ring with the profiler's own frames instead of the
+    // ones running PHP.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGPIPE);
+        libc::sigaddset(&mut set, libc::SIGPROF);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+    }
+    loop {
+        let mut request = [0u8; 1];
+        // Safety: CONTROL_FD is the socketpair end init identified; this thread
+        // is its only reader.
+        let read = unsafe {
+            libc::recv(
+                CONTROL_FD,
+                request.as_mut_ptr() as *mut libc::c_void,
+                1,
+                0,
+            )
+        };
+        if read < 0 {
+            // A signal that arrived mid-wait is not the monitor leaving. Treating
+            // `EINTR` as the end would stop serving snapshots silently, and the
+            // live loop on the other side reads that as "the target is gone" and
+            // stops with the program still running.
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return;
+        }
+        if read == 0 {
+            // A real EOF: the monitor is gone, which is the end of the reason
+            // this thread exists.
+            return;
+        }
+        if request[0] != CONTROL_SNAPSHOT_REQUEST {
+            continue;
+        }
+        let profile = sampled_answer();
+        let bytes = profile.as_bytes();
+        let header = (bytes.len() as u32).to_le_bytes();
+        if !control_send_all(&header) || !control_send_all(bytes) {
+            return;
+        }
+    }
+}
+
+/// Writes every byte of `data` to the control channel, or reports that it could
+/// not.
+///
+/// A short write on a stream socket is ordinary, not an error, and a reply that
+/// stops halfway is worse than no reply: the reader is length-prefixed and would
+/// block waiting for a body that is never coming.
+fn control_send_all(data: &[u8]) -> bool {
+    let mut sent = 0usize;
+    while sent < data.len() {
+        // Safety: writing `data`'s own bytes to a socket this thread owns.
+        let wrote = unsafe {
+            libc::send(
+                CONTROL_FD,
+                data[sent..].as_ptr() as *const libc::c_void,
+                data.len() - sent,
+                0,
+            )
+        };
+        if wrote < 0 {
+            // Same reasoning as the read side: an interrupted write has sent
+            // nothing and can simply be retried, where reporting failure would
+            // truncate a reply the reader is length-prefixed to wait for.
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return false;
+        }
+        if wrote == 0 {
+            return false;
+        }
+        sent += wrote as usize;
+    }
+    true
 }
 
 /// Starts sampled collection, because someone authenticated and asked for it.
@@ -1374,8 +1499,29 @@ const CONTROL_FD: i32 = 3;
 /// buffered when the child looks. A stray inherited socket on the same descriptor
 /// says nothing and is ignored.
 const CONTROL_MAGIC: &[u8] = b"ELEPHC-MONITOR-1";
+/// The same marker, from a monitor that intends to POLL this process for
+/// snapshots rather than read its output at the end.
+///
+/// Same length as the plain one, so the peek that decides whether fd 3 is ours
+/// is unchanged — it reads a fixed sixteen bytes and compares. Written before
+/// the fork like the other, which is what makes this free of a race: the child
+/// cannot look before the parent has decided.
+///
+/// The distinction earns its keep by NOT starting a server for a run that will
+/// never ask. `--live` polls; the exact path spawns, waits for the program to
+/// end and reads its output, and a thread parked in `recv` for the whole of that
+/// is a thread nobody wanted.
+const CONTROL_MAGIC_LIVE: &[u8] = b"ELEPHC-MONITOR-L";
 /// Returned to the spawning monitor only after the marker was consumed.
 const CONTROL_ACK: &[u8] = b"ELEPHC-MONITOR-ACK-1";
+
+/// Whether the monitor that started this process said it would poll it.
+///
+/// Set by the marker check, read by init. A plain word rather than a return
+/// value because `control_fd_present` answers a yes/no question that three
+/// callers already depend on, and widening it would make every one of them
+/// carry a distinction only one of them uses.
+static POLLED: AtomicBool = AtomicBool::new(false);
 
 /// Whether this process was started by `elephc monitor`.
 ///
@@ -1418,9 +1564,11 @@ fn control_fd_present() -> bool {
             buf.len(),
             libc::MSG_PEEK | libc::MSG_DONTWAIT,
         );
-        if read != CONTROL_MAGIC.len() as isize || buf != CONTROL_MAGIC {
+        let polled = buf == CONTROL_MAGIC_LIVE;
+        if read != CONTROL_MAGIC.len() as isize || (buf != CONTROL_MAGIC && !polled) {
             return false;
         }
+        POLLED.store(polled, Ordering::Relaxed);
         // It is ours: consume the marker so nothing downstream reads it back.
         libc::recv(
             CONTROL_FD,

@@ -202,12 +202,19 @@ elephc monitor hot.php --live          # top-style, refreshed each window
 elephc monitor --attach <pid> --live   # profile a process already running
 ```
 
-These two are the exception to *exact by default*, and the only place the
-distinction still surfaces. They read a process from the **outside**, once per
-millisecond of CPU time, because that is the only way to look at a program that
-is already running under someone else's control. So their numbers are sampled
-estimates, they cannot see time spent blocked on I/O, and they need
-`/usr/bin/sample` — which ships on macOS only.
+These two are the exception to *exact by default*. Both answer from the sampled
+ring rather than the instrumented table, once per millisecond of CPU time, so
+their numbers are estimates that sharpen as samples accumulate and neither can
+see time spent blocked on I/O.
+
+Where they differ is who is being asked. `--live` **launches** the program, so it
+hands it a socketpair and asks it directly — the same channel the exact path has
+always used, and the reason a live table needs no external tool and works
+wherever elephc does. `--attach` is given a pid that is already running under
+someone else's control, with no channel in; reading it means reading a process
+from the **outside**, which needs `/usr/bin/sample` and therefore macOS. On other
+platforms, start the program with `ELEPHC_PROBE_ADDR` and read it with
+`elephc monitor <addr>`, which asks over the endpoint instead.
 
 `--live` refreshes a top-style table once per window (`--duration`, default 3s in
 live mode) with trend arrows against the previous window and a cumulative share.
@@ -785,7 +792,11 @@ where a figure would otherwise be trusted further than it should be:
   case that is exact.
 - **At most 4,096 coroutines can be suspended at once.** Past that a suspension
   is refused and the frame is left where it was, which is the old attribution
-  rather than a new one; the report says how many.
+  rather than a new one; the report says how many. A suspension also releases
+  whatever was still parked under its own coroutine: a fiber address is handed to
+  the next fiber once the first is freed, so a group still standing under it
+  belongs to a coroutine that is gone and will never be resumed. Abandoned
+  generators therefore cost a slot only until their address is reused.
 
 **Memory too.** `incl_allocs` / `excl_allocs` are the exact number of heap
 allocations attributed to each function — the same shadow-stack math applied to
@@ -1083,6 +1094,12 @@ so any Perfetto/`chrome://tracing`-compatible viewer opens it. Standalone, set
 running a monitored binary. The trace is bounded (500k calls by default)
 so a hot program's trace stays openable; the overflow count is reported.
 
+A coroutine is the one thing that produces more than one slice per call. A
+suspension ends a span exactly as a return does, so a generator resumed three
+times appears as three slices on its own row, with the consumer's work between
+them where it belongs — and an abandoned generator still gets the slice it ran
+for, even though its exit never arrives.
+
 ### Recommendations and assertions
 
 `monitor` ends with a short **recommendations** section — the time
@@ -1248,13 +1265,19 @@ sampled function makes inlining visible by difference.
   self-restart) keeps the armed sampling timer, which would kill the new image.
   Call the exported `elephc_probe_disarm` before such an exec. Ordinary
   `exec()`/`proc_open`/`popen` (which fork first) are already safe.
-- **`--live` and `--attach` are macOS-only.** They read a process from the
-  outside, which needs `/usr/bin/sample`; no equivalent ships on Linux. The
-  Linux answer needs no external tool: run the program with `ELEPHC_PROBE_ADDR`
-  set and read it with `elephc monitor <addr>`, which reaches a live process and
-  answers from the sample ring, or with `--exact` returns the measured
-  per-function table for one completed request. Everything else — profiling a
-  source, a binary, a service, the assertions, the exports, `--stitch` — is
+- **`--attach` is macOS-only.** It is handed a pid that is already running under
+  someone else's control, so there is no channel in and it has to read the
+  process from the outside, which needs `/usr/bin/sample`; no equivalent ships on
+  Linux. The Linux answer needs no external tool: run the program with
+  `ELEPHC_PROBE_ADDR` set and read it with `elephc monitor <addr>`, which reaches
+  a live process and answers from the sample ring, or with `--exact` returns the
+  measured per-function table for one completed request.
+
+  `--live` used to be listed here beside it and did not belong: it LAUNCHES the
+  target, so it can hand it a socketpair and ask, exactly as the exact path
+  always has. It simply never opened one, and reading its own child from the
+  outside was the consequence. Everything else — profiling a source, a binary, a
+  service, the assertions, the exports, `--stitch` — was already
   platform-independent.
 - **A service answers from the ring by default; `--exact` measures one request.**
   `elephc monitor <addr>` returns folded sampled stacks — shares that sharpen as
