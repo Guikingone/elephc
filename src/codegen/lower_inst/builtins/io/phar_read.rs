@@ -233,9 +233,17 @@ pub(super) fn emit_file_get_contents_bytes(
 ///
 /// `php://filter/` is excluded because it has its own route ABOVE this one, and that route needs
 /// the chain it builds — a plain open would read the resource unfiltered.
+///
+/// "Untouched" has to hold on the path that declines LATE as well. Reaching the opener costs the
+/// filename pointer — it is moved aside to make the argument pair — and the opener is a call, so
+/// a URL it answers -1 for arrives at the next route with neither half of the pair intact. The
+/// route below it reads a byte through that register, which segfaulted 16 of the 25 ordered pairs
+/// of refused `php://` opens. The pair is therefore saved across the opener and put back before
+/// the fall-through.
 pub(super) fn emit_dynamic_php_substream_read_route(ctx: &mut FunctionContext<'_>) -> String {
     let not_php = ctx.next_label("fgc_dyn_not_php");
     let done = ctx.next_label("fgc_dyn_php_done");
+    let refused = ctx.next_label("fgc_dyn_php_refused");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x2, #7");                              // `php://` plus the byte that names the sub-stream
@@ -248,14 +256,19 @@ pub(super) fn emit_dynamic_php_substream_read_route(ctx: &mut FunctionContext<'_
             ctx.emitter.instruction("ldrb w9, [x1, #6]");                       // the first byte of the sub-stream name
             ctx.emitter.instruction("cmp w9, #0x66");                           // 'f' as in filter, which has its own route
             ctx.emitter.instruction(&format!("b.eq {}", not_php));
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // the filename, for the decline below
             ctx.emitter.instruction("mov x0, x1");                              // the opener takes ptr/len in x0/x1
             ctx.emitter.instruction("mov x1, x2");
             abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");         // x0 = descriptor, or -1
             ctx.emitter.instruction("cmn x0, #1");                              // a URL it does not know answers php false
-            ctx.emitter.instruction(&format!("b.eq {}", not_php));
+            ctx.emitter.instruction(&format!("b.eq {}", refused));
             ctx.emitter.instruction("mov x1, #0");                              // let the state pick its chunk size
             abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");      // x1 = bytes, x2 = length
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // the saved filename outlived its use
             ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&refused);
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                    // hand the next route the pair it was promised
+            ctx.emitter.instruction(&format!("b {}", not_php));
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rdx, 7");                              // `php://` plus the naming byte
@@ -267,15 +280,20 @@ pub(super) fn emit_dynamic_php_substream_read_route(ctx: &mut FunctionContext<'_
             }
             ctx.emitter.instruction("cmp BYTE PTR [rax + 6], 0x66");            // 'f' as in filter
             ctx.emitter.instruction(&format!("je {}", not_php));
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // the filename, for the decline below
             ctx.emitter.instruction("mov rdi, rax");                            // the opener takes ptr/len in rdi/rsi
             ctx.emitter.instruction("mov rsi, rdx");
             abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");         // rax = descriptor, or -1
             ctx.emitter.instruction("cmp rax, -1");                             // a URL it does not know answers php false
-            ctx.emitter.instruction(&format!("je {}", not_php));
+            ctx.emitter.instruction(&format!("je {}", refused));
             ctx.emitter.instruction("mov rdi, rax");                            // the handle
             ctx.emitter.instruction("xor esi, esi");                            // let the state pick its chunk size
             abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // the saved filename outlived its use
             ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&refused);
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");                  // hand the next route the pair it was promised
+            ctx.emitter.instruction(&format!("jmp {}", not_php));
         }
     }
     ctx.emitter.label(&not_php);

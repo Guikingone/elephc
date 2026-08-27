@@ -1683,6 +1683,51 @@ echo stream_get_contents(fopen("data://text/plain,slashes", "r"));
 /// stack empty — which is exactly why the generic failed-open line that follows has nothing left
 /// to say but `operation failed`. Getting one without the other would be wrong twice over.
 ///
+/// Several refused `php://` URLs in one program all answer, and the program survives.
+///
+/// The reading routes are a chain: each recognises its own scheme and otherwise falls through
+/// with the filename pair untouched so the next one can look. `emit_dynamic_php_substream_read_route`
+/// kept that on every path that declines BEFORE its opener runs, and broke it on the path that
+/// declines after — reaching the opener costs the pointer (it is moved aside to build the argument
+/// pair) and the opener is a call, so a URL it answers -1 for arrived at the `data:` route with
+/// neither half intact. That route reads a byte through the register, and the program died.
+///
+/// One refused URL never showed it: the crash needs a SECOND reader to run after the first has
+/// clobbered the pair. Measured across every ordered pair of `fopen`, `file_get_contents`, `file`,
+/// `readfile` and `file_put_contents` on the same URL — 16 of the 25 segfaulted. `php -n` 8.5.6
+/// answers false for all of them and exits 0.
+///
+/// The URL is in a VARIABLE and the calls are UNSUPPRESSED, because both decide which route runs:
+/// a literal is resolved during lowering and never reaches the run-time chain at all, and `@`
+/// sends the readers down the suppressed path, where the same program survives. Writing this
+/// fixture the comfortable way — `@` on every call — passed against the defect it is here to catch.
+#[test]
+fn test_several_refused_php_urls_in_one_program_do_not_crash() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$u = "php://bogus";
+var_dump(file_get_contents($u));
+var_dump(file($u));
+var_dump(fopen($u, "r"));
+readfile($u);
+var_dump(file_put_contents($u, "x"));
+echo "survived\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        out.stdout.ends_with("survived\n"),
+        "the program died before its last line, got stdout={}",
+        out.stdout
+    );
+    assert_eq!(
+        out.stdout.matches("bool(false)").count(),
+        4,
+        "every refused URL answers php false, got stdout={}",
+        out.stdout
+    );
+}
+
 /// `php://fd/` is the exception and is asserted with them: it goes through
 /// `php_stream_wrapper_log_error` like an ordinary wrapper, so it prints ONE line carrying its own
 /// sentence. Measured on `php -n` 8.5.6; elephc answered a silent `false` for every case here.
