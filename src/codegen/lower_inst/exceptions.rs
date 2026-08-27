@@ -444,7 +444,7 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             abi::emit_load_int_immediate(ctx.emitter, "x2", fatal_len as i64);
             ctx.emitter.instruction("mov x0, #1");                              // fd = stdout, where PHP writes this report
             ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
+            emit_uncaught_exit(ctx);
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_exc_handler_top", 0);
@@ -463,7 +463,7 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             ctx.emitter.instruction("mov edi, 1");                              // fd = stdout, where PHP writes this report
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the specific fatal message
-            abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
+            emit_uncaught_exit(ctx);
         }
     }
     ctx.emitter.label(&throw_label);
@@ -502,7 +502,7 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
             abi::emit_symbol_address(ctx.emitter, "x1", &suffix_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", suffix_len as i64);
             ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
+            emit_uncaught_exit(ctx);
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_exc_handler_top", 0);
@@ -531,10 +531,16 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
             ctx.emitter.instruction("mov edi, 1");                              // fd = stdout to terminate the diagnostic
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the dynamic-error suffix
-            abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
+            emit_uncaught_exit(ctx);
         }
     }
     ctx.emitter.label(&throw_label);
+}
+
+/// Publishes any active exact profile before an uncaught generated error exits.
+fn emit_uncaught_exit(ctx: &mut FunctionContext<'_>) {
+    crate::codegen::frame::emit_instr_terminate(ctx);
+    abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
 }
 
 /// Allocates a built-in throwable that owns the runtime message stored on the stack.

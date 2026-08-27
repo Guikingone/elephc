@@ -865,11 +865,12 @@ impl State {
 
     /// Closes the current function and every tracked ancestor at process exit.
     ///
-    /// `exit()`/`die()` do not return through generated epilogues, so without
-    /// this path their live frames never receive an exit hook and no complete
-    /// exact graph can be published. The current id is closed first so the
-    /// ordinary exception-resynchronization path can identify a catch frame
-    /// before the remaining ancestors are drained at the same final instant.
+    /// Language exits and uncaught generated errors do not return through
+    /// generated epilogues, so without this path their live frames never receive
+    /// an exit hook and no complete exact graph can be published. The current id
+    /// is closed first so the ordinary exception-resynchronization path can
+    /// identify a catch frame before the remaining ancestors are drained at the
+    /// same final instant.
     /// Its frame pointer is paired with the function id so recursive or
     /// concurrently live activations cannot be confused.
     fn terminate_at(
@@ -2088,13 +2089,13 @@ pub extern "C" fn elephc_instr_resume(id: u32, allocs: u64, frees: u64, frame: u
     STATE.with(|s| s.borrow_mut().resume_at(id, frame, t, allocs, frees, io, w));
 }
 
-/// Finalizes and publishes an exact slice before `exit()`/`die()` terminates.
+/// Finalizes and publishes an exact slice before a generated terminal path exits.
 ///
 /// `current_id` is the compiler-assigned id of the function executing the
-/// language construct, or `u32::MAX` when selective instrumentation did not
-/// assign that function a frame. `frame` is the same activation identity passed
-/// to enter/exit hooks. All live tracked frames close at one final counter
-/// snapshot, then the normal dump path writes or hands over the slice.
+/// terminal path, or `u32::MAX` when selective instrumentation did not assign
+/// that function a frame. `frame` is the same activation identity passed to
+/// enter/exit hooks. All live tracked frames close at one final counter snapshot,
+/// then the normal dump path writes or hands over the slice.
 #[no_mangle]
 pub extern "C" fn elephc_instr_terminate(
     current_id: u32,

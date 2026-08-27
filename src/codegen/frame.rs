@@ -1645,6 +1645,22 @@ pub(super) fn emit_instr_hook_args(ctx: &mut FunctionContext<'_>, id: usize) {
         .instruction(&format!("mov {frame_arg}, {frame_ptr}"));
 }
 
+/// Finalizes the active exact profile before a generated terminal path exits.
+///
+/// The current function id and frame pointer let the runtime identify the
+/// precise activation even under recursion; an uninstrumented current function
+/// uses the sentinel id and the runtime drains the tracked ancestors directly.
+pub(super) fn emit_instr_terminate(ctx: &mut FunctionContext<'_>) {
+    if !ctx.shared.instrument.is_on() {
+        return;
+    }
+    let target = ctx.emitter.target;
+    let current_id = ctx.instr_id.map_or(u32::MAX, |id| id as u32);
+    emit_instr_hook_args(ctx, current_id as usize);
+    let entry = target.extern_symbol("elephc_instr_terminate");
+    abi::emit_call_label(ctx.emitter, &entry);
+}
+
 /// Emits the `--instrument` exit dump call at main's epilogue (and per `--web`
 /// request): writes the exact per-function table and edges to stderr.
 fn emit_instr_dump(ctx: &mut FunctionContext<'_>) {

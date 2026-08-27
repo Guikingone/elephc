@@ -337,6 +337,62 @@ die();
     );
 }
 
+/// An uncaught generated PHP error bypasses every ordinary epilogue just like
+/// `exit()`, so it must still close and publish the exact root and live callee.
+#[test]
+fn test_cli_monitor_profiles_an_uncaught_codegen_error() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_uncaught_codegen_error");
+    fs::write(
+        dir.join("uncaught.php"),
+        r#"<?php
+function fail_uncaught(int $value): int {
+    return intdiv($value, $value - $value);
+}
+fail_uncaught($argc);
+"#,
+    )
+    .expect("failed to write the uncaught-error monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "uncaught.php",
+            "--out",
+            "uncaught.prof.json",
+            "--save",
+            "uncaught.exact.json",
+        ])
+        .output()
+        .expect("failed to monitor an uncaught generated error");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "an uncaught generated error should still publish a profile\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("uncaught.exact.json"))
+            .expect("saved uncaught-error graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let failing = nodes
+        .iter()
+        .position(|node| node["name"] == "fail_uncaught")
+        .unwrap();
+    assert_eq!(nodes[main]["call_count"], 1);
+    assert!(
+        exact["edges"].as_array().expect("exact edges").iter().any(|edge| {
+            edge["from"] == main && edge["to"] == failing && edge["count"] == 1
+        }),
+        "the uncaught error must publish the complete rooted graph: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies both compiler version flags print the Cargo package version and exit successfully.
 #[test]
 fn test_cli_version_flags_report_package_version() {
