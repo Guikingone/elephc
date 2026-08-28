@@ -150,3 +150,51 @@ var_dump($before === umask(null));
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(true)\n");
 }
+
+/// Verifies php's null-to-scalar coercion reaches the CHECKER, not only the lowering.
+///
+/// `coerce_null_operands_to_builtin_params` has always replaced a `Void` operand with the
+/// parameter's zero value, but the checker ran first and the shared validators saw a bare `Void`:
+/// `$x = null; strlen($x);` was refused with `strlen() argument must be string` for a program php
+/// runs to `int(0)`. The two layers read the same rule now.
+///
+/// One assertion per declared scalar kind, so a regression names which one broke rather than just
+/// "something about null". Every value measured on `php -n` 8.5.6.
+///
+/// php ALSO prints `Deprecated: <fn>(): Passing null to parameter #N ($name) of type <T> is
+/// deprecated` for each of these, which elephc does not — the same already-recorded gap the test
+/// above names, and the reason only VALUES are asserted here.
+#[test]
+fn test_a_null_reaches_every_declared_scalar_parameter_kind() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$x = null;
+var_dump(strlen($x));
+var_dump(strtoupper($x));
+var_dump(trim($x));
+var_dump(ord($x));
+var_dump(abs($x));
+var_dump(strrev($x));
+var_dump(ucfirst($x));
+var_dump(str_repeat($x, 2));
+var_dump(substr($x, 0, 1));
+var_dump(strpos("abc", $x));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "int(0)\n",
+            "string(0) \"\"\n",
+            "string(0) \"\"\n",
+            "int(0)\n",
+            "int(0)\n",
+            "string(0) \"\"\n",
+            "string(0) \"\"\n",
+            "string(0) \"\"\n",
+            "string(0) \"\"\n",
+            "int(0)\n",
+        )
+    );
+}

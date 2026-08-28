@@ -209,7 +209,8 @@ impl Checker {
                         arg_types.push(PhpType::Mixed);
                         continue;
                     }
-                    arg_types.push(self.infer_type(arg, env)?);
+                    let inferred = self.infer_type(arg, env)?;
+                    arg_types.push(null_coerced_builtin_arg_type(def, idx, inferred));
                 }
                 let semantic_input = crate::builtins::semantics::BuiltinSemanticInput {
                     name: &builtin_key,
@@ -286,5 +287,42 @@ impl Checker {
             return language_constructs::check(self, &builtin_key, args, span, env).map(Some);
         }
         Ok(None)
+    }
+}
+
+/// Applies php's null-to-scalar coercion to ONE builtin argument type, for validation.
+///
+/// php coerces a written `null` into a non-nullable scalar parameter of an INTERNAL function
+/// rather than refusing: `strlen(null)` and `strlen($x)` with `$x = null` both answer `int(0)`,
+/// after a `Passing null to parameter #1 ($string) of type string is deprecated` notice.
+/// MEASURED on `php -n` 8.5.6.
+///
+/// The LOWERING already knows this — `coerce_null_operands_to_builtin_params` replaces the
+/// operand with the parameter's zero value — but the checker ran first and saw a bare `Void`,
+/// so the shared validators refused the program before the coercion could happen:
+/// `error: strlen() argument must be string`. The two layers now read the same rule.
+///
+/// The conditions are the lowering's, for the same reasons it states them: a BY-REFERENCE
+/// parameter receives storage rather than a value, and a parameter php spells `?T $x = null`
+/// accepts null as a VALUE of its own rather than coercing it.
+fn null_coerced_builtin_arg_type(
+    def: &crate::builtins::registry::BuiltinDef,
+    index: usize,
+    inferred: PhpType,
+) -> PhpType {
+    if !matches!(inferred, PhpType::Void) {
+        return inferred;
+    }
+    let Some(param) = def.spec.params.get(index) else {
+        return inferred;
+    };
+    if param.by_ref
+        || matches!(param.default, Some(crate::builtins::spec::DefaultSpec::Null))
+    {
+        return inferred;
+    }
+    match crate::builtins::convert::type_spec_to_php(&param.ty) {
+        scalar @ (PhpType::Int | PhpType::Str | PhpType::Float | PhpType::Bool) => scalar,
+        _ => inferred,
     }
 }
