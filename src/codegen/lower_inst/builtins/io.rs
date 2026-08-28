@@ -617,7 +617,11 @@ fn emit_open_read_close_tail(ctx: &mut FunctionContext<'_>, label_prefix: &str) 
             ctx.emitter.instruction("str x1, [sp, #8]");
             ctx.emitter.instruction("str x2, [sp, #16]");
             ctx.emitter.instruction("ldr x0, [sp, #0]");
-            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");     // php closes the stream it opened for us
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_backend");
+                                                                        // php closes the stream it opened for us,
+                                                                        // and CLOSING it is what runs a userspace
+                                                                        // wrapper's stream_flush/stream_close:
+                                                                        // marking it closed skipped both.
             ctx.emitter.instruction("ldr x0, [sp, #0]");
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");
             ctx.emitter.instruction("ldr x1, [sp, #8]");                        // the owned bytes are the result
@@ -643,7 +647,7 @@ fn emit_open_read_close_tail(ctx: &mut FunctionContext<'_>, label_prefix: &str) 
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rdx");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
-            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");     // php closes the stream it opened for us
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_backend");     // see the AArch64 counterpart
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // the owned bytes are the result

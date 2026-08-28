@@ -172,7 +172,18 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #16]");                                   // save the synthetic file descriptor
 
+    // php FLUSHES before it closes, so a wrapper that buffers its writes gets the chance to put
+    // them somewhere: `fclose($h)` on a userspace stream calls `stream_flush()` and then
+    // `stream_close()`. MEASURED on `php -n` 8.5.6 against a wrapper that traces its own calls —
+    // elephc called `stream_close` alone, and anything the wrapper was still holding was lost.
+    // The flush clobbers the object pointer, so the handle is resolved again for the close.
     emit_aarch64_handle_lookup(emitter, "__rt_uwfclose_clear");                 // resolve obj into x0, fall through to slot-clear on missing handles
+    emit_aarch64_method_lookup(emitter, "__rt_uwfclose_closing", VTABLE_SLOT_FLUSH); // stream_flush is optional
+    emitter.instruction("blr x11");                                             // invoke stream_flush on the wrapper object
+
+    emitter.label("__rt_uwfclose_closing");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the synthetic file descriptor
+    emit_aarch64_handle_lookup(emitter, "__rt_uwfclose_clear");                 // resolve obj into x0 again
     emit_aarch64_method_lookup(emitter, "__rt_uwfclose_clear", VTABLE_SLOT_CLOSE); // resolve stream_close method pointer into x11
 
     // -- call stream_close($this) --
@@ -201,7 +212,14 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // helper frame for the wrapper dispatch
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the synthetic file descriptor
 
+    // See the AArch64 counterpart: php flushes before it closes.
     emit_x86_handle_lookup(emitter, "__rt_uwfclose_clear_x86");                 // resolve obj into rdi, fall through on missing handles
+    emit_x86_method_lookup(emitter, "__rt_uwfclose_closing_x86", VTABLE_SLOT_FLUSH); // stream_flush is optional
+    emitter.instruction("call r11");                                            // invoke stream_flush on the wrapper object
+
+    emitter.label("__rt_uwfclose_closing_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the synthetic file descriptor
+    emit_x86_handle_lookup(emitter, "__rt_uwfclose_clear_x86");                 // resolve obj into rdi again
     emit_x86_method_lookup(emitter, "__rt_uwfclose_clear_x86", VTABLE_SLOT_CLOSE); // resolve stream_close method pointer into r11
 
     // -- call stream_close($this) --
