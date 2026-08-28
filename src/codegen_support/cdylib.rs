@@ -616,6 +616,9 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
         emitter.blank();
         emitter.comment(&format!("cdylib lifecycle: {lifecycle}"));
         emitter.label_global(&target.extern_symbol(lifecycle));
+        if lifecycle == "elephc_init" && matches!(target.arch, Arch::AArch64) {
+            abi::emit_frame_prologue(emitter, 16);
+        }
         emit_clear_error_inline(emitter);
         emit_reset_concat_inline(emitter);
         emit_store_immediate_to_symbol(emitter, BOUNDARY_ACTIVE, 0);
@@ -631,6 +634,9 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
                 }
                 Arch::X86_64 => emitter.instruction(&format!("mov eax, {STATUS_OK}")), // return successful runtime initialization
             }
+        }
+        if lifecycle == "elephc_init" && matches!(target.arch, Arch::AArch64) {
+            abi::emit_frame_restore(emitter, 16);
         }
         emitter.instruction("ret");                                             // return to the current C-ABI caller
     }
@@ -736,6 +742,34 @@ mod tests {
             "lazy stack init must follow host-argument preservation and precede boundary entry:\n{asm}"
         );
         assert!(data.emit(target).contains(LAST_ERROR_BUFFER));
+    }
+
+    /// AArch64 lifecycle initialization preserves the host return address around
+    /// the stack-limit helper call instead of returning to its own post-call instruction.
+    #[test]
+    fn aarch64_cdylib_init_preserves_the_host_return_address() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let export = string_export();
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            let asm = emitter.output();
+            let init_label = format!("{}:", target.extern_symbol("elephc_init"));
+            let shutdown_label = format!("{}:", target.extern_symbol("elephc_shutdown"));
+            let init_start = asm.find(&init_label).unwrap();
+            let init_end = asm[init_start..].find(&shutdown_label).unwrap() + init_start;
+            let init = &asm[init_start..init_end];
+            let save = init.find("stp x29, x30, [sp, #0]").unwrap();
+            let call = init.find("bl __rt_stack_limit_init").unwrap();
+            let restore = init.find("ldp x29, x30, [x9]").unwrap();
+            assert!(
+                save < call && call < restore,
+                "{target:?} did not preserve x30 around cdylib initialization:\n{init}"
+            );
+        }
     }
 
     /// Emits an x86_64 boundary with the System V status/out-parameter shape.
