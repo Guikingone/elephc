@@ -310,6 +310,21 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save 'from' path ptr and len on stack
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save 'to' path ptr and len on stack
 
+    // -- EITHER end may be served by a registered userspace wrapper --
+    //
+    // Everything below this point is paths and syscalls, which cannot reach one: MEASURED,
+    // `copy("cc://a", "out.txt")` warned `Failed to open stream` and answered false where php
+    // copies and answers true. The probe is done here rather than in the lowering because a
+    // wrapper is registered at RUN time, so a literal path is not what decides it.
+    emitter.instruction("ldp x0, x1, [sp, #0]");                                // the source path
+    emitter.instruction("bl __rt_path_is_wrapper");
+    emitter.instruction("cbnz x0, __rt_copy_via_wrapper");
+    emitter.instruction("ldp x0, x1, [sp, #16]");                               // the destination path
+    emitter.instruction("bl __rt_path_is_wrapper");
+    emitter.instruction("cbnz x0, __rt_copy_via_wrapper");
+    // The probe CLOBBERS x0/x1, and `__rt_path_cstr` below reads the source path from x1/x2.
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // restore the source path for the stat that follows
+
     // php refuses to copy a file onto ITSELF, and decides that by (st_dev, st_ino) rather than by
     // comparing the paths: a hard link and a symlink to the source are refused too, and `./x` is
     // refused for `x`. It answers false, says nothing, and leaves the file alone. A destination
@@ -383,6 +398,14 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", copy_frame));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    // -- hand the whole copy to the stream route, with this frame already gone --
+    emitter.label("__rt_copy_via_wrapper");
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // the source path, in the shape the route takes
+    emitter.instruction("ldp x3, x4, [sp, #16]");                               // and the destination
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", copy_frame));               // deallocate stack frame
+    emitter.instruction("b __rt_copy_wrapper");                                 // tail call: its answer is this one's
 }
 
 /// Emits x86_64 Linux variants of all filesystem helpers using libc calls.
@@ -489,6 +512,26 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the source path pointer: the same-file test below consumes it
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the source path length alongside it
 
+    // -- EITHER end may be served by a registered userspace wrapper --
+    //
+    // Everything below this point is paths and syscalls, which cannot reach one: see the AArch64 arm; MEASURED,
+    // `copy("cc://a", "out.txt")` warned `Failed to open stream` and answered false where php
+    // copies and answers true. The probe is done here rather than in the lowering because a
+    // wrapper is registered at RUN time, so a literal path is not what decides it.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // the source path
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");
+    emitter.instruction("call __rt_path_is_wrapper");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jnz __rt_copy_via_wrapper_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the destination path
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+    emitter.instruction("call __rt_path_is_wrapper");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jnz __rt_copy_via_wrapper_x86");
+    // The probe CLOBBERS rax/rdi/rsi, and `__rt_path_cstr` below reads the source path pair.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore the source path pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // and its length
+
     // See the AArch64 arm: php refuses to copy a file onto itself, judged by (st_dev, st_ino).
     emitter.instruction("call __rt_path_cstr");                                 // the source path as a C string
     emitter.instruction("mov rdi, rax");
@@ -557,6 +600,16 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("add rsp, {}", copy_frame));                   // release the aligned stack locals used by copy()
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the copy() success predicate
     emitter.instruction("ret");                                                 // return the copy() success predicate to the caller
+
+    // See the AArch64 arm: hand the whole copy to the stream route, frame already gone.
+    emitter.label("__rt_copy_via_wrapper_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the source path, in the shape the route takes
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // and the destination
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+    emitter.instruction(&format!("add rsp, {}", copy_frame));                   // release the aligned stack locals used by copy()
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_copy_wrapper");                               // tail call: its answer is this one's
 
 }
 

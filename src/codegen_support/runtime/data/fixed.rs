@@ -2039,6 +2039,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // where `stream_get_meta_data()` still reports the plain `r` above. Two strings, because
     // they answer two different questions and sharing one made the wrapper see the wrong mode.
     out.push_str(".globl _meta_mode_rb\n_meta_mode_rb:\n    .ascii \"rb\"\n");
+    out.push_str(".globl _meta_mode_wb\n_meta_mode_wb:\n    .ascii \"wb\"\n");
     out.push_str(".globl _meta_mode_w\n_meta_mode_w:\n    .ascii \"w\"\n");
     out.push_str(".globl _meta_mode_rw\n_meta_mode_rw:\n    .ascii \"r+\"\n");
     out.push_str(".p2align 3\n");

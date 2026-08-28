@@ -163,6 +163,7 @@ mod streams_ext;
 mod symlink;
 mod tempnam;
 mod path_is_wrapper;
+mod copy_wrapper;
 mod readfile_wrapper;
 mod user_filter;
 mod user_filter_brigade;
@@ -387,6 +388,7 @@ pub(crate) use user_wrapper::{
 };
 pub(crate) use user_wrapper_unbox::emit_wrapper_unbox_int;
 pub(crate) use path_is_wrapper::emit_path_is_wrapper;
+pub(crate) use copy_wrapper::emit_copy_wrapper;
 pub(crate) use readfile_wrapper::emit_readfile_wrapper;
 pub(crate) use user_wrapper_cast::emit_user_wrapper_stream_cast;
 pub(crate) use user_wrapper_dir::{

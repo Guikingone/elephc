@@ -19321,3 +19321,61 @@ file_put_contents("mm://a", "z");
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `copy()` reaches a userspace wrapper on either end.
+///
+/// `__rt_copy` is a PATH implementation — it stats both ends and moves bytes with syscalls — so it
+/// could not reach a wrapper at all: `copy("cc://a", "out.txt")` warned `Failed to open stream: No
+/// such file or directory` and answered `bool(false)` where php copies and answers `bool(true)`.
+/// The probe for a wrapper is done in the RUNTIME rather than the lowering, because a wrapper is
+/// registered while the program runs, so a literal path is not what decides it.
+///
+/// The syscall route still owns every plain copy — the same-file refusal, the directory refusal,
+/// the truncating append — and those are the tests that caught the first attempt: the wrapper
+/// probe clobbered the registers `__rt_path_cstr` reads the source path from, so nine ordinary
+/// copies broke while the wrapper case passed.
+///
+/// Measured on `php -n` 8.5.6.
+#[test]
+fn test_copy_reaches_a_userspace_wrapper_on_either_end() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class C {
+    public $pos = 0;
+    public function stream_open($p, $m, $o, &$x) { return true; }
+    public function stream_read($n) {
+        $r = substr("payload", $this->pos, $n);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_write($d) { echo "wrote:", $d, "\n"; return strlen($d); }
+    public function stream_eof() { return $this->pos >= 7; }
+    public function stream_close() {}
+    public function url_stat($p, $f) { return ["size" => 7]; }
+}
+stream_wrapper_register("cc", "C");
+
+var_dump(copy("cc://a", "out.txt"));
+var_dump(file_get_contents("out.txt"));
+unlink("out.txt");
+
+file_put_contents("in.txt", "from-disk");
+var_dump(copy("in.txt", "cc://b"));
+unlink("in.txt");
+
+var_dump(copy("cc://a", "cc://b"));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "string(7) \"payload\"\n",
+            "wrote:from-disk\n",
+            "bool(true)\n",
+            "wrote:payload\n",
+            "bool(true)\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
