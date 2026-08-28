@@ -109,20 +109,26 @@
 
     use super::*;
 
-    /// The refusal of an unequipped target must not sit behind a platform
-    /// branch.
+    /// The refusal of an unequipped target must not depend on the platform.
     ///
-    /// It did, once: `require_monitoring` was called after the
+    /// It did, once: `require_monitoring` was called after a
     /// `cfg!(target_os = "macos")` block, so the same binary that was refused on
     /// a laptop was run and quietly under-reported on a Linux server — an
     /// environment-dependent behaviour in the one command whose whole purpose is
     /// not to have any.
     ///
-    /// Nothing that runs can catch this. CI is macOS-only, so a Linux-only
-    /// ordering bug is invisible to every test that executes the binary, and the
-    /// two branches cannot both be taken in one process. What is left is the
-    /// order of the source itself, so that is what this reads — the file as an
-    /// interface, because here it is the only witness.
+    /// Nothing that runs can catch this. A Linux-only ordering bug is invisible
+    /// to every test that executes the binary on macOS, and the two branches
+    /// cannot both be taken in one process. What is left is the order of the
+    /// source itself, so that is what this reads — the file as an interface,
+    /// because here it is the only witness.
+    ///
+    /// The dispatch has no runtime platform branch left: `--attach` was the last
+    /// one, and it is no longer refused off macOS. So the ordering rule is
+    /// vacuous TODAY and the test says so rather than pretending to check it —
+    /// but it stays armed, because the way this broke the first time was
+    /// somebody adding a branch above the gate, and that is precisely the edit
+    /// this still catches.
     #[test]
     fn the_capability_gate_runs_before_any_platform_branch() {
         // `mod.rs`, because that is where `run` lives now: a guard that reads a
@@ -137,14 +143,16 @@
         let gate = body
             .find("require_monitoring(")
             .expect("the dispatch must refuse an unequipped target");
-        let platform = body
-            .find("cfg!(target_os = \"macos\")")
-            .expect("the dispatch must still have its one platform branch");
-        assert!(
-            gate < platform,
-            "the capability check is inside or after the platform branch, so it \
-             would be enforced on macOS and skipped on Linux"
-        );
+        // A compile-time `#[cfg]` picks which code EXISTS and cannot put one
+        // platform's behaviour behind another's branch; only a runtime `cfg!`
+        // inside this one body can, which is why that is what is looked for.
+        if let Some(platform) = body.find("cfg!(target_os") {
+            assert!(
+                gate < platform,
+                "the capability check is inside or after a platform branch, so it \
+                 would be enforced on one platform and skipped on another"
+            );
+        }
     }
 
     /// The exact capture's Speedscope/pprof export must account for the run

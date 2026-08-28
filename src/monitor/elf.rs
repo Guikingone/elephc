@@ -104,6 +104,17 @@ pub(crate) fn function_symbols(bytes: &[u8]) -> Vec<FuncSymbol> {
             break;
         }
     }
+    // A symbol table is in whatever order the linker wrote it, which is not
+    // address order — and `symbolize` binary-searches. Sorting HERE rather than
+    // asking every caller to is what makes the two halves fit: the requirement
+    // belongs to the search, so the guarantee belongs to the thing that feeds
+    // it. Unsorted, the search does not fail loudly; it silently answers `None`
+    // for nearly every address, and a profile of a real program comes back
+    // naming nothing at all.
+    //
+    // By name on a tie, so two symbols at one address resolve the same way on
+    // every run rather than on symbol-table order.
+    best.sort_by(|a, b| a.value.cmp(&b.value).then_with(|| a.name.cmp(&b.name)));
     best
 }
 
@@ -249,6 +260,12 @@ mod tests {
     /// symbol table, so the parser is exercised on bytes rather than on a file
     /// this host may not be able to produce.
     fn image(sym_value: u64, sym_size: u64, name: &str, load_vaddr: u64) -> Vec<u8> {
+        image_of(&[(sym_value, sym_size, name)], load_vaddr)
+    }
+
+    /// The same, carrying several symbols in the order given — which is how a
+    /// real symbol table arrives, and never sorted by address.
+    fn image_of(symbols: &[(u64, u64, &str)], load_vaddr: u64) -> Vec<u8> {
         let mut bytes = vec![0u8; 0x40];
         bytes[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
         bytes[4] = ELFCLASS64;
@@ -263,22 +280,28 @@ mod tests {
         bytes[phoff..phoff + 4].copy_from_slice(&PT_LOAD.to_le_bytes());
         bytes[phoff + 0x10..phoff + 0x18].copy_from_slice(&load_vaddr.to_le_bytes());
 
-        // A string table holding a leading NUL and the name.
+        // A string table holding a leading NUL and every name.
         let str_off = bytes.len();
         bytes.push(0);
-        let name_off = bytes.len() - str_off;
-        bytes.extend_from_slice(name.as_bytes());
-        bytes.push(0);
+        let mut name_offsets = Vec::new();
+        for (_, _, name) in symbols {
+            name_offsets.push(bytes.len() - str_off);
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.push(0);
+        }
         let str_size = bytes.len() - str_off;
 
-        // One symbol entry.
+        // The symbol entries, in the order given.
         let sym_off = bytes.len();
-        let mut sym = vec![0u8; 24];
-        sym[0..4].copy_from_slice(&(name_off as u32).to_le_bytes());
-        sym[4] = STT_FUNC;
-        sym[8..16].copy_from_slice(&sym_value.to_le_bytes());
-        sym[16..24].copy_from_slice(&sym_size.to_le_bytes());
-        bytes.extend_from_slice(&sym);
+        for ((value, size, _), name_off) in symbols.iter().zip(&name_offsets) {
+            let mut sym = vec![0u8; 24];
+            sym[0..4].copy_from_slice(&(*name_off as u32).to_le_bytes());
+            sym[4] = STT_FUNC;
+            sym[8..16].copy_from_slice(&value.to_le_bytes());
+            sym[16..24].copy_from_slice(&size.to_le_bytes());
+            bytes.extend_from_slice(&sym);
+        }
+        let sym_size = bytes.len() - sym_off;
 
         // Two sections: the symbol table, and the string table it links to.
         let shoff = bytes.len();
@@ -286,7 +309,7 @@ mod tests {
         let mut sections = vec![0u8; shentsize * 2];
         sections[4..8].copy_from_slice(&SHT_SYMTAB.to_le_bytes());
         sections[0x18..0x20].copy_from_slice(&(sym_off as u64).to_le_bytes());
-        sections[0x20..0x28].copy_from_slice(&24u64.to_le_bytes());
+        sections[0x20..0x28].copy_from_slice(&(sym_size as u64).to_le_bytes());
         sections[0x28..0x2c].copy_from_slice(&1u32.to_le_bytes());
         sections[0x38..0x40].copy_from_slice(&24u64.to_le_bytes());
         let second = shentsize;
@@ -297,6 +320,38 @@ mod tests {
         bytes[0x3a..0x3c].copy_from_slice(&(shentsize as u16).to_le_bytes());
         bytes[0x3c..0x3e].copy_from_slice(&2u16.to_le_bytes());
         bytes
+    }
+
+    /// A symbol table arrives in the linker's order, and the search over it
+    /// needs address order.
+    ///
+    /// The two halves were written together and never met: nothing called both
+    /// until an attached sampler did, and then the failure was silent in the
+    /// worst way. A binary search over unsorted input does not error — it just
+    /// answers `None` for nearly every address. A real program came back
+    /// profiled as 251 samples of `<native>`, which reads as "this program is
+    /// not PHP" rather than as "the names were never looked up".
+    ///
+    /// So the order is asserted where it is PRODUCED. A test that sorted first
+    /// and then searched would have passed against the bug.
+    #[test]
+    fn symbols_come_out_in_address_order_whatever_order_they_were_written_in() {
+        // Descending, which is close to what the table looked like in practice.
+        let bytes = image_of(
+            &[(0x9240, 0, "_php_last"), (0x8100, 0, "_php_middle"), (0x2000, 0, "_php_first")],
+            0,
+        );
+        let symbols = function_symbols(&bytes);
+        let values: Vec<u64> = symbols.iter().map(|entry| entry.value).collect();
+        assert_eq!(values, vec![0x2000, 0x8100, 0x9240], "{symbols:?}");
+
+        // And the consequence: addresses resolve, including ones BETWEEN
+        // symbols, which is where an interrupted program actually is.
+        assert_eq!(symbolize(&symbols, 0, 0x2000), Some("_php_first"));
+        assert_eq!(symbolize(&symbols, 0, 0x8104), Some("_php_middle"));
+        assert_eq!(symbolize(&symbols, 0, 0x9300), Some("_php_last"));
+        // Below the first symbol there is nothing to name an address after.
+        assert_eq!(symbolize(&symbols, 0, 0x100), None);
     }
 
     #[test]

@@ -28,11 +28,24 @@ pub(crate) use command::*;
 // Reading an image from the outside, for the one path that has no channel in.
 // Parsing only, so it is exercised by ordinary tests on any host — which is what
 // makes code whose real use is on another platform reviewable at all.
+//
+// Its CALLER is Linux's, so on any other host every item here is dead outside
+// the tests. Allowed rather than gated away: gating it would take the tests with
+// it, and then the parsing that Linux depends on would be checked nowhere but
+// Linux — which is the opposite of why it was separated.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod elf;
-// Naming what an out-of-process sampler read. Also parsing only: the syscalls
-// that produce those addresses are the one part a host without `ptrace` cannot
-// run, and they are kept apart from this for exactly that reason.
+// Naming what an out-of-process sampler read. Also parsing only, allowed dead on
+// non-Linux hosts for the same reason: the syscalls that produce those addresses
+// are the one part a host without `ptrace` cannot run, and they are kept apart
+// from this so that everything except them stays testable.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod attach;
+// The syscalls themselves, and the loop that drives them. Linux only, and the
+// one file here no test on this host reaches — which is why it holds nothing
+// but them.
+#[cfg(target_os = "linux")]
+mod ptrace;
 mod channel;
 pub(crate) use channel::*;
 mod local;
@@ -175,32 +188,27 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
             return 1;
         }
     }
-    // `--attach` is the only path left that reads a process from the OUTSIDE,
-    // and the tool that does it ships on macOS alone.
-    //
-    // `--live` used to be here beside it, and did not belong: it LAUNCHES the
-    // target, so it can hand it a socketpair and ask, exactly as the exact path
-    // has always done. It simply never opened one, and reading its own child
-    // from the outside was the consequence. Everything else — a source, a
-    // binary, a running service — was already platform-independent.
-    if !cfg!(target_os = "macos") {
-        if let Some(pid) = cmd.attach_pid {
-            eprintln!(
-                "elephc monitor: attaching to a running process needs an external sampler, \
-                 which only macOS ships. Read it through its endpoint instead: start it \
-                 with ELEPHC_PROBE_ADDR=127.0.0.1:9411, then `elephc monitor \
-                 127.0.0.1:9411` (pid {pid} is untouched)."
-            );
-            return 1;
-        }
-    }
+    // `--attach` is the only path that reads a process from the OUTSIDE. It used
+    // to be macOS-only, and `--live` was refused beside it for the same stated
+    // reason — wrongly, since `--live` LAUNCHES its target and can hand it a
+    // socketpair and ask. Attach cannot ask: it is handed a pid already running
+    // under someone else's control, so reading it from the outside is not a
+    // shortcut here, it is the whole job. macOS has `/usr/bin/sample` for that;
+    // on Linux this tool does it itself, with `ptrace`.
     if let Some(pid) = cmd.attach_pid {
+        let image = match attach_image(pid) {
+            Ok(image) => image,
+            Err(reason) => {
+                eprintln!("elephc monitor: {reason}");
+                return 1;
+            }
+        };
         return if cmd.live {
-            // Attach never launched the target, so it never owns its
-            // lifetime and there is nothing here to leave alone or reap.
-            run_live(&cmd, pid, None, None).code
+            // Attach never launched the target, so it never owns its lifetime
+            // and there is nothing here to leave alone or reap.
+            run_live(&cmd, pid, None, None, image.as_ref()).code
         } else {
-            run_once(&cmd, pid, None, None)
+            run_once(&cmd, pid, None, None, image.as_ref())
         };
     }
     let (binary, php_source) = if cmd.target.ends_with(".php") {
@@ -267,10 +275,10 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     }
     let root = child.id();
     let (code, leave_target_running) = if cmd.live {
-        let outcome = run_live(&cmd, root, Some(&mut child), channel.as_ref());
+        let outcome = run_live(&cmd, root, Some(&mut child), channel.as_ref(), None);
         (outcome.code, outcome.leave_target_running)
     } else {
-        (run_once(&cmd, root, Some(&binary), php_source.as_deref()), false)
+        (run_once(&cmd, root, Some(&binary), php_source.as_deref(), None), false)
     };
     let still_running = child.try_wait().ok().flatten().is_none();
     match disposition(still_running, code, cmd.live, leave_target_running) {
@@ -846,6 +854,39 @@ pub(crate) fn parse_hex_key(hex: &str) -> Option<[u8; 32]> {
         key[i] = u8::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
     }
     Some(key)
+}
+
+/// What `--attach` needs to read a process it was only handed a pid for, or the
+/// sentence explaining why this host cannot.
+///
+/// `None` is not a failure: macOS reads a process through `/usr/bin/sample`,
+/// which resolves its own symbols, so there is nothing to prepare. Linux reads
+/// the process itself and needs the image first. Anywhere else there is no way
+/// in at all, and saying so — with the way that DOES work on every host — beats
+/// an `EPERM` from a syscall the reader did not know was being made.
+fn attach_image(pid: u32) -> Result<Option<attach::Image>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        attach::image_for(pid).map(Some).map_err(|reason| {
+            match ptrace::attach_refusal_hint() {
+                Some(hint) => format!("{reason} ({hint})"),
+                None => reason,
+            }
+        })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = pid;
+        Ok(None)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err(format!(
+            "attaching to a running process is not implemented on this platform. Read it \
+             through its endpoint instead: start it with ELEPHC_PROBE_ADDR=127.0.0.1:9411, \
+             then `elephc monitor 127.0.0.1:9411` (pid {pid} is untouched)."
+        ))
+    }
 }
 
 /// What becomes of a target this process launched, now that the capture is over.

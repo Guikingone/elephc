@@ -30,6 +30,11 @@ pub(crate) const UNNAMED: &str = "<native>";
 /// from the root inwards. Reversing here rather than at each of them is what
 /// keeps `{main}` at the top of a table instead of the bottom.
 ///
+/// Names are demangled on the way out, to the same spelling the in-process
+/// paths print: an operator comparing an attached profile against an asked one
+/// is looking at one program, and `_fn_hot_u_leaf` beside `hot_leaf` reads as
+/// two different functions.
+///
 /// A run of consecutive unnamed frames collapses to one. A profile is read to
 /// find the code that costs, and six rows of `<native>` between two PHP
 /// functions tell a reader nothing while pushing what they came for off the
@@ -43,7 +48,13 @@ pub(crate) fn display_stack(
     let mut out: Vec<(String, Kind)> = Vec::new();
     for address in frames.iter().rev() {
         match symbolize(symbols, bias, *address) {
-            Some(name) => out.push((name.to_string(), kind_of(name))),
+            // Classified on the MANGLED name and displayed as the SOURCE one.
+            // The prefix is what says which kind of time this is, and it is
+            // exactly what demangling removes — so the order is not a
+            // preference. Reading the other way round leaves every PHP function
+            // classified as native, and a profile that says a PHP program spends
+            // none of its time in PHP.
+            Some(name) => out.push((super::render::demangle(name), kind_of(name))),
             None => {
                 if out.last().map(|(name, _)| name.as_str()) != Some(UNNAMED) {
                     out.push((UNNAMED.to_string(), Kind::Native));
@@ -89,15 +100,66 @@ pub(crate) fn fold(stacks: Vec<Vec<(String, Kind)>>) -> Vec<(Vec<(String, Kind)>
     counted.into_iter().collect()
 }
 
+/// What a running process's addresses have to be read against: the function
+/// symbols of the image behind it, and where that image actually landed.
+///
+/// Built once per `--attach` rather than per window. The symbols do not change
+/// while the program runs, and re-reading a binary's symbol table every two
+/// seconds to answer the same question is work charged to a live view for
+/// nothing.
+pub(crate) struct Image {
+    pub(crate) symbols: Vec<FuncSymbol>,
+    pub(crate) bias: u64,
+}
+
+/// Reads the image behind a running pid, or says which part was not readable.
+///
+/// Four things can be missing and they are not interchangeable — a stripped
+/// binary, an unreadable `/proc`, an image that is not ELF, a mapping that is
+/// not there. An operator who is told "cannot attach" learns nothing; one told
+/// which of the four learns what to do about it.
+#[cfg(target_os = "linux")]
+pub(crate) fn image_for(pid: u32) -> Result<Image, String> {
+    use super::elf;
+    use super::ptrace;
+
+    let exe = ptrace::executable_path(pid)
+        .map_err(|error| format!("cannot read /proc/{pid}/exe: {error}"))?;
+    let bytes = std::fs::read(&exe)
+        .map_err(|error| format!("cannot read the target's binary {}: {error}", exe.display()))?;
+    let first_vaddr = elf::first_load_vaddr(&bytes)
+        .ok_or_else(|| format!("{} is not an ELF64 image this can read", exe.display()))?;
+    let maps = ptrace::memory_maps(pid)
+        .map_err(|error| format!("cannot read /proc/{pid}/maps: {error}"))?;
+    let bias = elf::load_bias(&maps, &exe.to_string_lossy(), first_vaddr).ok_or_else(|| {
+        format!("{} is running but is not mapped in /proc/{pid}/maps", exe.display())
+    })?;
+    let symbols = elf::function_symbols(&bytes);
+    if symbols.is_empty() {
+        return Err(format!(
+            "{} carries no function symbols, so an attached sampler has nothing to name its \
+             addresses with. elephc strips them by default because nothing INSIDE a program \
+             reads them; a sampler reads them from the outside. Rebuild it with \
+             --keep-symbols (or --debug-info), or read it through its endpoint instead: \
+             ELEPHC_PROBE_ADDR=127.0.0.1:9411, then `elephc monitor 127.0.0.1:9411`.",
+            exe.display()
+        ));
+    }
+    Ok(Image { symbols, bias })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn symbols() -> Vec<FuncSymbol> {
-        // Sorted by address, which is what `symbolize` binary-searches.
+        // Sorted by address, which is what `symbolize` binary-searches, and
+        // spelled the way the compiler actually emits them: `fn_`-prefixed with
+        // `_u_` standing in for an underscore. Reading an attached profile of a
+        // real program is what these names have to survive.
         vec![
-            FuncSymbol { value: 0x1000, size: 0x100, name: "_php_spin".into() },
-            FuncSymbol { value: 0x2000, size: 0x100, name: "_php_descend".into() },
+            FuncSymbol { value: 0x1000, size: 0x100, name: "_fn_spin".into() },
+            FuncSymbol { value: 0x2000, size: 0x100, name: "_fn_hot_u_leaf".into() },
             FuncSymbol { value: 0x3000, size: 0x100, name: "__rt_mixed_add".into() },
             FuncSymbol { value: 0x4000, size: 0x100, name: "main".into() },
         ]
@@ -110,15 +172,15 @@ mod tests {
     #[test]
     fn a_chain_is_turned_around_so_the_root_comes_first() {
         let bias = 0xaaaa_0000_0000;
-        // Innermost first, as a sampler reads it: spin called by descend called
-        // by main.
+        // Innermost first, as a sampler reads it: spin called by hot_leaf
+        // called by main.
         let frames = [bias + 0x1010, bias + 0x2010, bias + 0x4010];
         assert_eq!(
             display_stack(&frames, &symbols(), bias),
             vec![
-                ("main".to_string(), Kind::Php),
-                ("_php_descend".to_string(), Kind::Php),
-                ("_php_spin".to_string(), Kind::Php),
+                ("{main}".to_string(), Kind::Php),
+                ("hot_leaf".to_string(), Kind::Php),
+                ("spin".to_string(), Kind::Php),
             ]
         );
     }
@@ -147,9 +209,9 @@ mod tests {
         assert_eq!(
             display_stack(&frames, &symbols(), bias),
             vec![
-                ("main".to_string(), Kind::Php),
+                ("{main}".to_string(), Kind::Php),
                 (UNNAMED.to_string(), Kind::Native),
-                ("_php_spin".to_string(), Kind::Php),
+                ("spin".to_string(), Kind::Php),
             ]
         );
     }
@@ -163,11 +225,41 @@ mod tests {
         assert_eq!(
             display_stack(&frames, &symbols(), bias),
             vec![
-                ("main".to_string(), Kind::Php),
+                ("{main}".to_string(), Kind::Php),
                 (UNNAMED.to_string(), Kind::Native),
-                ("_php_descend".to_string(), Kind::Php),
+                ("hot_leaf".to_string(), Kind::Php),
                 (UNNAMED.to_string(), Kind::Native),
             ]
+        );
+    }
+
+    /// A frame is CLASSIFIED on its mangled name and DISPLAYED as its source
+    /// one, and both halves have to hold at once.
+    ///
+    /// The prefix that says which kind of time a frame is — `fn_`, `__rt_` — is
+    /// exactly what demangling removes, so doing them in the wrong order is not
+    /// a matter of taste: classify after demangling and every PHP function comes
+    /// out native, leaving a profile that says a PHP program spends none of its
+    /// time in PHP.
+    ///
+    /// The spelling matters on its own too. An operator comparing an attached
+    /// profile against an asked one is looking at one program, and
+    /// `_fn_hot_u_leaf` beside `hot_leaf` reads as two different functions.
+    #[test]
+    fn a_frame_is_classified_mangled_and_displayed_demangled() {
+        let named = display_stack(&[0x2010, 0x3010, 0x4010], &symbols(), 0);
+        assert_eq!(
+            named,
+            vec![
+                ("{main}".to_string(), Kind::Php),
+                // A helper's name is not a PHP name, so demangling leaves it be.
+                ("__rt_mixed_add".to_string(), Kind::Helper),
+                ("hot_leaf".to_string(), Kind::Php),
+            ]
+        );
+        assert!(
+            !named.iter().any(|(name, _)| name.contains("_u_") || name.starts_with("_fn_")),
+            "a mangled spelling reached the display: {named:?}"
         );
     }
 

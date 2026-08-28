@@ -12,6 +12,7 @@
 //! - The control channel is established before the spawn; the program reads it
 //!   during its own init.
 
+use super::attach::Image;
 use super::*;
 
 /// One sampling window over the whole process tree, rendered once: the bar
@@ -21,11 +22,11 @@ pub(crate) fn run_once(
     root: u32,
     binary: Option<&Path>,
     php_source: Option<&Path>,
+    image: Option<&Image>,
 ) -> i32 {
     let pids = discover_pids(root);
-    let reports = capture_window(&pids, cmd.duration_secs);
-    let samples = match samples_from_reports(&reports, binary, php_source) {
-        Some(samples) => samples,
+    let window = match capture_display(&pids, cmd.duration_secs, binary, php_source, image) {
+        Some(window) => window,
         None => {
             eprintln!(
                 "elephc monitor: no samples captured — the program may have exited before \
@@ -34,7 +35,7 @@ pub(crate) fn run_once(
             return 1;
         }
     };
-    let display = render_stacks(&samples);
+    let display = window.display;
     let out_path = cmd
         .out
         .clone()
@@ -68,10 +69,10 @@ pub(crate) fn run_once(
     };
     // Per-line attribution needs the dSYM and the source, so it rides the same
     // .php-target path that recovers inlined frames.
-    let lines = match (binary, php_source) {
-        (Some(binary), Some(source)) => reports
+    let lines = match (binary, php_source, &window.source) {
+        (Some(binary), Some(source), Some((reports, samples))) => reports
             .iter()
-            .find_map(|report| line_profile(&samples, report, binary, source)),
+            .find_map(|report| line_profile(samples, report, binary, source)),
         _ => None,
     };
     if let Err(error) = write_graph_exports(cmd, &display, &graph_title, lines.as_ref()) {
@@ -110,6 +111,7 @@ pub(crate) fn run_live(
     root: u32,
     mut child: Option<&mut process::Child>,
     channel: Option<&ControlChannel>,
+    image: Option<&Image>,
 ) -> LiveOutcome {
     use std::io::IsTerminal;
     let interactive = std::io::stdout().is_terminal();
@@ -228,14 +230,14 @@ pub(crate) fn run_live(
             windows += 1;
             window
         } else {
-            let reports = capture_window(&pids, cmd.duration_secs);
-            let Some(samples) = samples_from_reports(&reports, None, None) else {
-                // Attach mode has no child handle: a window with zero reports is
-                // how we learn the target is gone.
+            let Some(window) = capture_display(&pids, cmd.duration_secs, None, None, image)
+            else {
+                // Attach mode has no child handle: an empty window is how we
+                // learn the target is gone.
                 break;
             };
             windows += 1;
-            render_stacks(&samples)
+            window.display
         };
         for (stack, weight) in &display {
             *cumulative.entry(stack.clone()).or_default() += weight;
@@ -266,6 +268,51 @@ pub(crate) fn run_live(
         print!("{}", why_table(&merged, 1));
     }
     LiveOutcome { code: 0, leave_target_running: lost_channel }
+}
+
+/// One window of samples, already named and folded, whichever way it was read.
+///
+/// Two ways exist and they meet here. A process this tool can ask — anything
+/// launched or reachable through its endpoint — answers for itself. A process it
+/// can only WATCH answers for nothing, and has to be read from the outside:
+/// through `/usr/bin/sample` on macOS, and by stopping it with `ptrace` on
+/// Linux. `image` is what says which: it exists only for `--attach`, and only
+/// where reading a process from the outside is this tool's own job.
+///
+/// `None` means the window is empty, which is the same thing both ways: no
+/// samples landed, and for `--attach` that is how the target's disappearance is
+/// noticed at all.
+pub(crate) struct Window {
+    /// What every consumer downstream reads: named stacks and their weights.
+    pub(crate) display: Vec<(Vec<(String, Kind)>, u64)>,
+    /// The text a sampler produced, and the frames parsed out of it.
+    ///
+    /// Kept only because per-line attribution needs both again, and re-deriving
+    /// them from `display` is impossible — a name is not an address. `None` for
+    /// a window this tool sampled itself, which never had text to begin with.
+    pub(crate) source: Option<(Vec<String>, Vec<(Vec<Frame>, u64)>)>,
+}
+
+fn capture_display(
+    pids: &[u32],
+    duration_secs: u32,
+    binary: Option<&Path>,
+    php_source: Option<&Path>,
+    image: Option<&Image>,
+) -> Option<Window> {
+    #[cfg(target_os = "linux")]
+    if let Some(image) = image {
+        // One pid, not the tree: `ptrace` reaches threads, and a child process
+        // is a separate address space with its own image and its own bias.
+        let display =
+            super::ptrace::attach_window(*pids.first()?, duration_secs, &image.symbols, image.bias);
+        return (!display.is_empty()).then_some(Window { display, source: None });
+    }
+    // Bound so the macOS build does not warn on an argument only Linux reads.
+    let _ = &image;
+    let reports = capture_window(pids, duration_secs);
+    let samples = samples_from_reports(&reports, binary, php_source)?;
+    Some(Window { display: render_stacks(&samples), source: Some((reports, samples)) })
 }
 
 /// Samples every pid of one window in parallel and returns the reports that

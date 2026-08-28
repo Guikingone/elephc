@@ -211,10 +211,24 @@ Where they differ is who is being asked. `--live` **launches** the program, so i
 hands it a socketpair and asks it directly — the same channel the exact path has
 always used, and the reason a live table needs no external tool and works
 wherever elephc does. `--attach` is given a pid that is already running under
-someone else's control, with no channel in; reading it means reading a process
-from the **outside**, which needs `/usr/bin/sample` and therefore macOS. On other
-platforms, start the program with `ELEPHC_PROBE_ADDR` and read it with
-`elephc monitor <addr>`, which asks over the endpoint instead.
+someone else's control, with no channel in, so reading it means reading a process
+from the **outside**: `/usr/bin/sample` on macOS, and on Linux elephc does it
+itself, stopping each thread with `ptrace` and walking its frame chain.
+
+Reading from the outside asks two things of the target that asking it does not:
+
+- **Its symbols.** An address is not a name. elephc strips the symbol table by
+  default, because nothing *inside* a program reads it — so build a program you
+  intend to attach to with `--keep-symbols` (or `--debug-info`). Attaching to a
+  stripped binary says so rather than reporting a profile of `<native>`.
+- **Permission to trace it.** On Linux, `yama/ptrace_scope` commonly restricts
+  attaching to descendants; the refusal names the setting when it is what stopped
+  you. In a container, `--cap-add=SYS_PTRACE` and a seccomp profile that permits
+  `ptrace`.
+
+Neither applies to the endpoint, which is why it stays the answer for a program
+you cannot rebuild or are not allowed to trace: start it with
+`ELEPHC_PROBE_ADDR` and read it with `elephc monitor <addr>`.
 
 `--live` refreshes a top-style table once per window (`--duration`, default 3s in
 live mode) with trend arrows against the previous window and a cumulative share.
@@ -350,8 +364,9 @@ card rather than a glaring white one, while the hot end stays gold → magenta.
 
 ### Per-line source view
 
-A **sampled** capture (`--live`, `--attach`) can place every sample on a *source
-line*, because a sample is an address and the dSYM says which line owns it. Open
+A **sampled** capture can place every sample on a *source line*, because a sample
+is an address and the dSYM says which line owns it — so this view needs a macOS
+build with its `.dSYM` beside the binary. Open
 the call graph and hit **📄 Source** (or `s`):
 
 ```text
@@ -678,14 +693,15 @@ its callees'). Across a run the exclusive times sum to the root's inclusive — 
 real partition of the program's time.
 
 A **sampled** view exists alongside it in three paths. A running service's
-default endpoint answer comes from the in-process CPU-time ring;
-`--live` and `--attach` read a process from the outside with `/usr/bin/sample`.
-All three report estimates that sharpen as samples accumulate, carry noise
-(around ±0.3 points at ~1,500 samples), and cannot see time spent blocked on I/O
-because their CPU-time clocks do not tick while a program waits. Only the
-in-process ring carries sampled allocation deltas and route tags; external
-`--live`/`--attach` do not. Where a page or table shows sampled numbers it says
-so.
+default endpoint answer comes from the in-process CPU-time ring, and so does
+`--live`, which launches its target and asks it over a socketpair. Only
+`--attach` reads a process from the outside, because it is handed a pid and has
+no channel in. All three report estimates that sharpen as samples accumulate,
+carry noise (around ±0.3 points at ~1,500 samples), and cannot see time spent
+blocked on I/O because their CPU-time clocks do not tick while a program waits.
+An outside reading carries no sampled allocation deltas or route tags — those
+come from the in-process ring, which `--attach` is not talking to. Where a page
+or table shows sampled numbers it says so.
 
 ### Narrowing it to a few functions
 
@@ -1265,13 +1281,18 @@ sampled function makes inlining visible by difference.
   self-restart) keeps the armed sampling timer, which would kill the new image.
   Call the exported `elephc_probe_disarm` before such an exec. Ordinary
   `exec()`/`proc_open`/`popen` (which fork first) are already safe.
-- **`--attach` is macOS-only.** It is handed a pid that is already running under
-  someone else's control, so there is no channel in and it has to read the
-  process from the outside, which needs `/usr/bin/sample`; no equivalent ships on
-  Linux. The Linux answer needs no external tool: run the program with
-  `ELEPHC_PROBE_ADDR` set and read it with `elephc monitor <addr>`, which reaches
-  a live process and answers from the sample ring, or with `--exact` returns the
-  measured per-function table for one completed request.
+- **`--attach` needs symbols, permission, and frame pointers.** It is handed a
+  pid already running under someone else's control, so there is no channel in and
+  it has to read the process from the outside — `/usr/bin/sample` on macOS,
+  `ptrace` on Linux. That costs three things asking does not: the target must
+  keep its symbol table (`--keep-symbols`), the kernel must permit tracing it
+  (`yama/ptrace_scope`, `CAP_SYS_PTRACE` in a container), and its stacks are
+  walked through the frame pointer, so a chain that loses one ends there rather
+  than being guessed past. Where any of the three is missing, the endpoint needs
+  none of them: run the program with `ELEPHC_PROBE_ADDR` set and read it with
+  `elephc monitor <addr>`, which reaches a live process and answers from the
+  sample ring, or with `--exact` returns the measured per-function table for one
+  completed request.
 
   `--live` used to be listed here beside it and did not belong: it LAUNCHES the
   target, so it can hand it a socketpair and ask, exactly as the exact path
