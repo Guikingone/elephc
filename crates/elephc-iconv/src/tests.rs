@@ -229,6 +229,23 @@ fn malformed_quoted_printable_words_respect_continue_on_error() {
     }
 }
 
+/// Verifies php-src's accepted trailing and linear-whitespace `Q` escape edge cases.
+#[test]
+fn quoted_printable_escape_edges_match_php() {
+    assert_eq!(
+        mime::decode::mime_decode(b"=?UTF-8?Q?a=?=", 0, None).unwrap(),
+        b"a"
+    );
+    assert_eq!(
+        mime::decode::mime_decode(b"=?UTF-8?Q?= 41?=", 0, None).unwrap(),
+        b"1"
+    );
+    assert_eq!(
+        mime::decode::mime_decode(b"=?UTF-8?Q?=\t41?=", 0, None).unwrap(),
+        b"1"
+    );
+}
+
 /// Verifies header-block decoding rejects malformed quoted-printable encoded-words.
 #[test]
 fn malformed_quoted_printable_header_fails() {

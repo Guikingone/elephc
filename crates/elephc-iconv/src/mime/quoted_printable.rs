@@ -64,8 +64,17 @@ pub fn decode(input: &[u8]) -> Option<Vec<u8>> {
                 index += 1;
             }
             b'=' => {
-                let high = hex_value(*input.get(index + 1)?)?;
-                let low = hex_value(*input.get(index + 2)?)?;
+                if index + 1 == input.len() {
+                    break;
+                }
+                let first = *input.get(index + 1)?;
+                let second = *input.get(index + 2)?;
+                if matches!(first, b' ' | b'\t') {
+                    index += 3;
+                    continue;
+                }
+                let high = hex_value(first)?;
+                let low = hex_value(second)?;
                 out.push((high << 4) | low);
                 index += 3;
             }
