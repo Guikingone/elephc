@@ -264,8 +264,23 @@ pub(crate) fn lower_fstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
     }
     ctx.emitter.label(&wrapper_label);
-    if matches!(ctx.emitter.target.arch, Arch::X86_64) {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the synthetic wrapper descriptor to the stat helper
+    // php names the CALLER when the class has no `stream_stat`, so the head travels in.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", "_uwmh_head_fstat");
+            ctx.emitter.instruction(&format!(
+                "mov x2, #{}",
+                crate::codegen_support::runtime::data::WRAPPER_MISSING_HOOK_HEAD_FSTAT.len()
+            ));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the synthetic wrapper descriptor to the stat helper
+            abi::emit_symbol_address(ctx.emitter, "rsi", "_uwmh_head_fstat");
+            ctx.emitter.instruction(&format!(
+                "mov rdx, {}",
+                crate::codegen_support::runtime::data::WRAPPER_MISSING_HOOK_HEAD_FSTAT.len()
+            ));
+        }
     }
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fstat");
     ctx.emitter.label(&done_label);

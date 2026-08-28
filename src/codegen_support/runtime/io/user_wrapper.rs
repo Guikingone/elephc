@@ -138,6 +138,30 @@ fn emit_missing_hook_warning_call(emitter: &mut Emitter, head_symbol: &str, head
     }
 }
 
+/// The [`emit_missing_hook_warning_call`] variant whose HEAD arrives in registers.
+///
+/// `__rt_user_wrapper_fstat` is reached from more than one php function, and php names the CALLER:
+/// `fstat()` for the builtin, `file_get_contents()` for the whole-file reader that stats the
+/// stream itself. The head is a register argument rather than a published global because a call
+/// site that forgot to publish would name whichever caller published last, silently, where one
+/// that forgets an argument does not compile.
+fn emit_missing_hook_warning_call_with_head(emitter: &mut Emitter, tail_symbol: &str, tail_len: usize) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [x0]");                                // class_id stored at the head of every wrapper object
+            abi::emit_symbol_address(emitter, "x3", tail_symbol);
+            emitter.instruction(&format!("mov x4, #{}", tail_len));             // x1/x2 already carry the caller's head
+            emitter.instruction("bl __rt_wrapper_missing_hook_warning");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rdi, QWORD PTR [rdi]");                    // class_id stored at the head of every wrapper object
+            abi::emit_symbol_address(emitter, "rcx", tail_symbol);
+            emitter.instruction(&format!("mov r8, {}", tail_len));              // rsi/rdx already carry the caller's head
+            emitter.instruction("call __rt_wrapper_missing_hook_warning");
+        }
+    }
+}
+
 const FD_BASE_LOW16: u32 = 0x4000;
 const FD_BASE: u32 = 0x40000000;
 const VTABLE_SLOT_CLOSE: usize = 1;
@@ -1013,6 +1037,8 @@ pub fn emit_user_wrapper_fstat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: user_wrapper_fstat ---");
     emitter.label_global("__rt_user_wrapper_fstat");
+    // Input: x0 = synthetic fd, x1/x2 = the CALLER's warning head, used only when the class
+    // has no `stream_stat` — php names the function the user called, not this helper.
 
     emitter.instruction("sub sp, sp, #16");                                     // helper frame for the wrapper dispatch
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
@@ -1030,10 +1056,8 @@ pub fn emit_user_wrapper_fstat(emitter: &mut Emitter) {
 
     // -- the class does not implement stream_stat: warn, then box false as before --
     emitter.label("__rt_uwfstat_missing");
-    emit_missing_hook_warning_call(
+    emit_missing_hook_warning_call_with_head(
         emitter,
-        "_uwmh_head_fstat",
-        WRAPPER_MISSING_HOOK_HEAD_FSTAT.len(),
         "_uwmh_tail_stat",
         WRAPPER_MISSING_HOOK_TAIL_STAT.len(),
     );
@@ -1066,10 +1090,8 @@ fn emit_user_wrapper_fstat_linux_x86_64(emitter: &mut Emitter) {
 
     // -- the class does not implement stream_stat: warn, then box false as before --
     emitter.label("__rt_uwfstat_missing_x86");
-    emit_missing_hook_warning_call(
+    emit_missing_hook_warning_call_with_head(
         emitter,
-        "_uwmh_head_fstat",
-        WRAPPER_MISSING_HOOK_HEAD_FSTAT.len(),
         "_uwmh_tail_stat",
         WRAPPER_MISSING_HOOK_TAIL_STAT.len(),
     );

@@ -19428,3 +19428,36 @@ echo "\n";
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies the missing-`stream_stat` warning names the CALLER, not the helper it went through.
+///
+/// `__rt_user_wrapper_fstat` is reached from more than one php function, and php names the one the
+/// user called: `fstat()` for the builtin, `file_get_contents()` for the whole-file reader that
+/// stats the stream itself. The head is a register argument rather than a published global,
+/// because a site that forgot to publish would name whichever caller published last — silently —
+/// where one that forgets an argument does not compile.
+///
+/// Measured on `php -n` 8.5.6: `file_get_contents(): K::stream_stat is not implemented!`.
+#[test]
+fn test_a_missing_stream_stat_names_the_caller_that_asked() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class K {
+    public $pos = 0;
+    public function stream_open($p, $m, $o, &$x) { return true; }
+    public function stream_read($n) { $r = substr("ab", $this->pos, $n); $this->pos += strlen($r); return $r; }
+    public function stream_eof() { return $this->pos >= 2; }
+    public function stream_close() {}
+    public function url_stat($p, $f) { return ["size" => 2]; }
+}
+stream_wrapper_register("kk", "K");
+file_get_contents("kk://a");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        out.diagnostics.contains("file_get_contents(): K::stream_stat is not implemented!"),
+        "the warning must name the caller, not fstat(): {}",
+        out.diagnostics
+    );
+}

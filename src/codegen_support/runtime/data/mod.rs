@@ -228,6 +228,12 @@ pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FEOF: &str = "Warning: feof(): ";
 /// `fstat()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
 pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FSTAT: &str = "Warning: fstat(): ";
 
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FSTAT`]. php names the CALLER, and the whole-file readers
+/// stat the stream themselves, so a wrapper without `stream_stat` is told which of its own
+/// callers noticed. MEASURED: `file_get_contents(): K::stream_stat is not implemented!`.
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILE_GET_CONTENTS: &str =
+    "Warning: file_get_contents(): ";
+
 /// `flock()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
 pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FLOCK: &str = "Warning: flock(): ";
 

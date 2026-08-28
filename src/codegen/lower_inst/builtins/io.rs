@@ -632,6 +632,11 @@ fn emit_open_read_close_tail(ctx: &mut FunctionContext<'_>, label_prefix: &str) 
             ctx.emitter.instruction("mov x9, #0x40000000");                     // USER_WRAPPER_FD_BASE
             ctx.emitter.instruction("cmp x0, x9");
             ctx.emitter.instruction(&format!("b.lt {}", stat_done));            // a plain file has no wrapper to ask
+            abi::emit_symbol_address(ctx.emitter, "x1", "_uwmh_head_fgc");      // php names the CALLER, not fstat()
+            ctx.emitter.instruction(&format!(
+                "mov x2, #{}",
+                crate::codegen_support::runtime::data::WRAPPER_MISSING_HOOK_HEAD_FILE_GET_CONTENTS.len()
+            ));
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fstat");       // stream_stat($this)
             abi::emit_call_label(ctx.emitter, "__rt_decref_any");               // the answer may be a TAGGED value, not a cell
             ctx.emitter.label(&stat_done);
@@ -672,6 +677,11 @@ fn emit_open_read_close_tail(ctx: &mut FunctionContext<'_>, label_prefix: &str) 
             ctx.emitter.instruction("cmp rax, r9");
             ctx.emitter.instruction(&format!("jl {}", stat_done));              // a plain file has no wrapper to ask
             ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_symbol_address(ctx.emitter, "rsi", "_uwmh_head_fgc");     // php names the CALLER, not fstat()
+            ctx.emitter.instruction(&format!(
+                "mov rdx, {}",
+                crate::codegen_support::runtime::data::WRAPPER_MISSING_HOOK_HEAD_FILE_GET_CONTENTS.len()
+            ));
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fstat");       // stream_stat($this)
             ctx.emitter.instruction("mov rdi, rax");
             abi::emit_call_label(ctx.emitter, "__rt_decref_any");               // the answer may be a TAGGED value, not a cell
