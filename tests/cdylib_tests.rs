@@ -511,15 +511,175 @@ int main(void) {
 "#;
 
 const STACK_GUARD_SKIP_INIT_HOST_C: &str = r#"
+#define _GNU_SOURCE
 #include "libstack_guard.h"
+#include <dlfcn.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <ucontext.h>
+
+extern void elephc_agent_stack_guard_state(
+    uintptr_t *limit,
+    uintptr_t *limit_main,
+    uintptr_t *boundary_active,
+    uintptr_t *handler_top
+);
+
+static unsigned char agent_altstack[64 * 1024];
+static uintptr_t agent_image_base;
+
+static void agent_read_state(
+    uintptr_t *limit,
+    uintptr_t *limit_main,
+    uintptr_t *boundary_active,
+    uintptr_t *handler_top
+) {
+    elephc_agent_stack_guard_state(limit, limit_main, boundary_active, handler_top);
+}
+
+static void agent_log(
+    const char *hypothesis,
+    const char *message,
+    uintptr_t stack_pointer,
+    uintptr_t instruction_pointer,
+    uintptr_t fault_address,
+    uintptr_t limit,
+    uintptr_t limit_main,
+    uintptr_t boundary_active,
+    uintptr_t handler_top,
+    int event_value
+) {
+    // #region agent log
+    FILE *log = fopen("/opt/cursor/logs/debug.log", "a");
+    if (log == NULL) return;
+    fprintf(
+        log,
+        "{\"hypothesisId\":\"%s\",\"location\":\"tests/cdylib_tests.rs:STACK_GUARD_SKIP_INIT_HOST_C\","
+        "\"message\":\"%s\",\"data\":{\"sp\":%llu,\"ip\":%llu,\"imageBase\":%llu,"
+        "\"ipOffset\":%llu,\"faultAddress\":%llu,\"stackLimit\":%llu,"
+        "\"stackLimitMain\":%llu,\"boundaryActive\":%llu,\"handlerTop\":%llu,"
+        "\"eventValue\":%d},\"timestamp\":%lld}\n",
+        hypothesis,
+        message,
+        (unsigned long long)stack_pointer,
+        (unsigned long long)instruction_pointer,
+        (unsigned long long)agent_image_base,
+        (unsigned long long)(instruction_pointer - agent_image_base),
+        (unsigned long long)fault_address,
+        (unsigned long long)limit,
+        (unsigned long long)limit_main,
+        (unsigned long long)boundary_active,
+        (unsigned long long)handler_top,
+        event_value,
+        (long long)time(NULL) * 1000
+    );
+    fclose(log);
+    // #endregion
+}
+
+static void agent_signal_handler(int signal_number, siginfo_t *info, void *raw_context) {
+    ucontext_t *context = (ucontext_t *)raw_context;
+    uintptr_t stack_pointer = 0;
+    uintptr_t instruction_pointer = 0;
+#if defined(__linux__) && defined(__x86_64__)
+    stack_pointer = (uintptr_t)context->uc_mcontext.gregs[REG_RSP];
+    instruction_pointer = (uintptr_t)context->uc_mcontext.gregs[REG_RIP];
+#elif defined(__linux__) && defined(__aarch64__)
+    stack_pointer = (uintptr_t)context->uc_mcontext.sp;
+    instruction_pointer = (uintptr_t)context->uc_mcontext.pc;
+#elif defined(__APPLE__) && defined(__aarch64__)
+    stack_pointer = (uintptr_t)context->uc_mcontext->__ss.__sp;
+    instruction_pointer = (uintptr_t)context->uc_mcontext->__ss.__pc;
+#endif
+    uintptr_t limit = 0;
+    uintptr_t limit_main = 0;
+    uintptr_t boundary_active = 0;
+    uintptr_t handler_top = 0;
+    agent_read_state(&limit, &limit_main, &boundary_active, &handler_top);
+    // #region agent log
+    agent_log(
+        "A,B,C,D,E",
+        "host received fatal signal",
+        stack_pointer,
+        instruction_pointer,
+        (uintptr_t)info->si_addr,
+        limit,
+        limit_main,
+        boundary_active,
+        handler_top,
+        signal_number
+    );
+    // #endregion
+    _Exit(128 + signal_number);
+}
+
+static int agent_install_signal_handlers(void) {
+    stack_t alternate = {
+        .ss_sp = agent_altstack,
+        .ss_size = sizeof(agent_altstack),
+        .ss_flags = 0,
+    };
+    if (sigaltstack(&alternate, NULL) != 0) return -1;
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    sigemptyset(&action.sa_mask);
+    action.sa_sigaction = agent_signal_handler;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    if (sigaction(SIGSEGV, &action, NULL) != 0) return -1;
+    if (sigaction(SIGBUS, &action, NULL) != 0) return -1;
+    if (sigaction(SIGILL, &action, NULL) != 0) return -1;
+    if (sigaction(SIGABRT, &action, NULL) != 0) return -1;
+    return 0;
+}
 
 int main(void) {
+    if (agent_install_signal_handlers() != 0) return 90;
+    Dl_info image;
+    if (dladdr((void *)deep_probe, &image) == 0) return 91;
+    agent_image_base = (uintptr_t)image.dli_fbase;
+    uintptr_t limit = 0;
+    uintptr_t limit_main = 0;
+    uintptr_t boundary_active = 0;
+    uintptr_t handler_top = 0;
+    char stack_marker;
+    agent_read_state(&limit, &limit_main, &boundary_active, &handler_top);
+    // #region agent log
+    agent_log(
+        "A,B",
+        "before first export",
+        (uintptr_t)&stack_marker,
+        0,
+        0,
+        limit,
+        limit_main,
+        boundary_active,
+        handler_top,
+        0
+    );
+    // #endregion
+
     char *output = (char *)(uintptr_t)1;
     size_t output_len = 99;
     int32_t status = deep_probe("", 0, &output, &output_len);
+    agent_read_state(&limit, &limit_main, &boundary_active, &handler_top);
+    // #region agent log
+    agent_log(
+        "C,D",
+        "first export returned",
+        (uintptr_t)&stack_marker,
+        0,
+        0,
+        limit,
+        limit_main,
+        boundary_active,
+        handler_top,
+        status
+    );
+    // #endregion
     if (status != ELEPHC_STATUS_RUNTIME_FAILURE ||
         elephc_last_status() != ELEPHC_STATUS_RUNTIME_FAILURE ||
         output != NULL || output_len != 0 || elephc_last_error() == NULL) return 1;
@@ -527,6 +687,21 @@ int main(void) {
     output = NULL;
     output_len = 0;
     status = after_overflow("", 0, &output, &output_len);
+    agent_read_state(&limit, &limit_main, &boundary_active, &handler_top);
+    // #region agent log
+    agent_log(
+        "E",
+        "recovery export returned",
+        (uintptr_t)&stack_marker,
+        0,
+        0,
+        limit,
+        limit_main,
+        boundary_active,
+        handler_top,
+        status
+    );
+    // #endregion
     if (status != ELEPHC_STATUS_OK || output == NULL || output_len != 10 ||
         memcmp(output, "HOST-ALIVE", 10) != 0) return 2;
 
