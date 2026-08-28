@@ -16,7 +16,8 @@
 //!   synthetic handle (`>= USER_WRAPPER_FD_BASE`), so the close goes through
 //!   `__rt_user_wrapper_fclose`. `__rt_fpassthru` is already wrapper-fd-aware
 //!   (its feof-first drain handles synthetic descriptors).
-//! - The mode is the shared single-byte `_meta_mode_r` ("r") read-only string.
+//! - The mode is `_meta_mode_rb` ("rb"): php opens its OWN streams binary, and a userspace
+//!   wrapper sees that string. `_meta_mode_r` stays what `stream_get_meta_data()` reports.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -44,9 +45,9 @@ pub fn emit_readfile_wrapper(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
-    // -- fopen(path, "r"): path already in x1/x2, mode in x3/x4 --
-    abi::emit_symbol_address(emitter, "x3", "_meta_mode_r");
-    emitter.instruction("mov x4, #1");                                          // strlen("r")
+    // -- fopen(path, "rb"): path already in x1/x2, mode in x3/x4 --
+    abi::emit_symbol_address(emitter, "x3", "_meta_mode_rb");
+    emitter.instruction("mov x4, #2");                                          // strlen("rb")
     emitter.instruction("bl __rt_fopen");                                       // x0 = synthetic wrapper fd, or -1 on failure
     emitter.instruction("cmp x0, #0");                                          // did fopen() fail (negative fd)?
     emitter.instruction("b.lt __rt_rfw_fail");                                  // → -2 open-failure sentinel
@@ -105,9 +106,9 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 48");                                         // spill slots for fd/total/chunk
 
-    // -- fopen(path, "r"): path already in rax/rdx, mode in rdi/rsi --
-    abi::emit_symbol_address(emitter, "rdi", "_meta_mode_r");                   // mode pointer "r" (secondary string-arg slot)
-    emitter.instruction("mov rsi, 1");                                          // strlen("r")
+    // -- fopen(path, "rb"): path already in rax/rdx, mode in rdi/rsi --
+    abi::emit_symbol_address(emitter, "rdi", "_meta_mode_rb");                  // mode pointer "rb" (secondary string-arg slot)
+    emitter.instruction("mov rsi, 2");                                          // strlen("rb")
     emitter.instruction("call __rt_fopen");                                     // rax = synthetic wrapper fd, or -1 on failure
     emitter.instruction("cmp rax, 0");                                          // did fopen() fail (negative fd)?
     emitter.instruction("jl __rt_rfw_fail_x86");                                // → -2 open-failure sentinel

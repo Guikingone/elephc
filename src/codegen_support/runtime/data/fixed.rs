@@ -2035,6 +2035,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // built-in, whose name has no such suffix. Measured on `php -n` 8.5.6.
     out.push_str(".globl _meta_wrapper_zip\n_meta_wrapper_zip:\n    .ascii \"zip wrapper\"\n");
     out.push_str(".globl _meta_mode_r\n_meta_mode_r:\n    .ascii \"r\"\n");
+    // php opens its own read streams BINARY, so `readfile()` hands a userspace wrapper `rb`
+    // where `stream_get_meta_data()` still reports the plain `r` above. Two strings, because
+    // they answer two different questions and sharing one made the wrapper see the wrong mode.
+    out.push_str(".globl _meta_mode_rb\n_meta_mode_rb:\n    .ascii \"rb\"\n");
     out.push_str(".globl _meta_mode_w\n_meta_mode_w:\n    .ascii \"w\"\n");
     out.push_str(".globl _meta_mode_rw\n_meta_mode_rw:\n    .ascii \"r+\"\n");
     out.push_str(".p2align 3\n");

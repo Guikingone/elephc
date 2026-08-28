@@ -302,7 +302,12 @@ fn emit_literal_wrapper_file_get_contents_bytes(
     path: &str,
     callee: &str,
 ) -> Result<()> {
-    fopen_core::emit_literal_fopen_result(ctx, LiteralOpenMode::Fixed("r"), path, callee)?;
+    // php opens its OWN streams in BINARY mode — a userspace wrapper sees `rb` from
+    // `file_get_contents()`, `file()`, `readfile()` and `copy()`, and `wb` from
+    // `file_put_contents()`, while an explicit `fopen($p, "r")` passes the string the
+    // caller wrote. MEASURED on `php -n` 8.5.6. The `b` is a no-op on POSIX, so this only
+    // matters to a wrapper that inspects its $mode — which is exactly what it is given for.
+    fopen_core::emit_literal_fopen_result(ctx, LiteralOpenMode::Fixed("rb"), path, callee)?;
     emit_open_read_close_tail(ctx, "fgc_wrapper")
 }
 
@@ -317,7 +322,8 @@ fn emit_literal_php_filter_file_get_contents_bytes(
     // that emitter in suppression, which is what this route used to do, silenced the
     // unresolvable-name warnings along with the inner opener's: php prints them, and elephc
     // turned a typo in a filter name into a silently unfiltered read.
-    emit_literal_php_filter_fopen_result(ctx, LiteralOpenMode::Fixed("r"), path, callee)?;
+    // See above: php's own opens are binary.
+    emit_literal_php_filter_fopen_result(ctx, LiteralOpenMode::Fixed("rb"), path, callee)?;
     emit_open_read_close_tail(ctx, "fgc_filter")
 }
 

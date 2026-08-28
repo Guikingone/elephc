@@ -19270,3 +19270,54 @@ unlink($p);
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies php's OWN opens reach a userspace wrapper in binary mode, and are closed.
+///
+/// php opens the streams it creates for itself with a `b` appended — `rb` for
+/// `file_get_contents()`, `file()`, `readfile()` and `copy()`, `wb` for `file_put_contents()` —
+/// while an explicit `fopen($p, "r")` passes the caller's string through untouched. elephc passed
+/// `r` and `w`, which is the string the wrapper's `stream_open()` is handed and can branch on.
+///
+/// The closes are the other half. These routes ran `__rt_resource_mark_closed` before releasing,
+/// and marking a resource closed SKIPS the backend close — which is where a userspace wrapper's
+/// `stream_flush()`/`stream_close()` are dispatched from. So `file_put_contents()` wrote through
+/// the wrapper and never let it finish, and `file_get_contents()` never closed it either.
+///
+/// Every line measured on `php -n` 8.5.6.
+#[test]
+fn test_a_wrapper_sees_binary_mode_for_phps_own_opens() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class M {
+    public $pos = 0;
+    public function stream_open($p, $m, $o, &$x) { echo "open(", $m, ")\n"; return true; }
+    public function stream_read($n) {
+        $r = substr("payload", $this->pos, $n);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_write($d) { echo "write\n"; return strlen($d); }
+    public function stream_eof() { return $this->pos >= 7; }
+    public function stream_close() { echo "close\n"; }
+    public function url_stat($p, $f) { return ["size" => 7]; }
+}
+stream_wrapper_register("mm", "M");
+file_get_contents("mm://a");
+file("mm://a");
+fclose(fopen("mm://a", "r"));
+fclose(fopen("mm://a", "w"));
+file_put_contents("mm://a", "z");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "open(rb)\nclose\n",
+            "open(rb)\nclose\n",
+            "open(r)\nclose\n",
+            "open(w)\nclose\n",
+            "open(wb)\nwrite\nclose\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

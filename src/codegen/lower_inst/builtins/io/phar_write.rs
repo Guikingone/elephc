@@ -5,6 +5,12 @@
 //! - `crate::codegen::lower_inst::builtins::io`.
 //!
 //! Key details:
+//! - THESE ROUTES CLOSE THE STREAM THEY OPENED, through `__rt_stream_close_backend` rather than
+//!   `__rt_resource_mark_closed`. Marking a resource closed is what SKIPS the backend close, and
+//!   the backend close is where a userspace wrapper's `stream_flush()`/`stream_close()` are
+//!   dispatched from — so `file_put_contents("wrapper://x", $d)` wrote through the wrapper and
+//!   then never let it finish. MEASURED on `php -n` 8.5.6 against a wrapper that traces its own
+//!   calls: php closes, elephc did not.
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
@@ -236,7 +242,8 @@ fn lower_literal_wrapper_file_put_contents(
     begin_fopen_context_scope(ctx, inst.operands.get(3).copied())?;
     super::fopen_core::emit_literal_fopen_result(
         ctx,
-        super::fopen_core::LiteralOpenMode::Fixed(if appending { "a" } else { "w" }),
+        // php's own writer opens BINARY: a wrapper sees `wb` from `file_put_contents()`.
+        super::fopen_core::LiteralOpenMode::Fixed(if appending { "ab" } else { "wb" }),
         uri,
         "file_put_contents",
     )?;
@@ -254,7 +261,7 @@ fn lower_literal_wrapper_file_put_contents(
             abi::emit_call_label(ctx.emitter, "__rt_fwrite");                   // reaches the wrapper's stream_write()
             ctx.emitter.instruction("str x0, [sp, #8]");                        // php reports the INPUT byte count
             ctx.emitter.instruction("ldr x0, [sp, #0]");
-            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_backend");
             ctx.emitter.instruction("ldr x0, [sp, #0]");
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");
             ctx.emitter.instruction("ldr x0, [sp, #8]");                        // the count is this route's raw result
@@ -277,7 +284,7 @@ fn lower_literal_wrapper_file_put_contents(
             abi::emit_call_label(ctx.emitter, "__rt_fwrite");                   // reaches the wrapper's stream_write()
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // php reports the INPUT byte count
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
-            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_backend");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // the count is this route's raw result
@@ -348,7 +355,7 @@ fn lower_literal_compress_zlib_file_put_contents(
             abi::emit_call_label(ctx.emitter, "__rt_stream_fd");                // the deflate tail is keyed by DESCRIPTOR
             super::close_crypto_arch::emit_zlib_flush_on_close_for_current_fd(ctx);
             ctx.emitter.instruction("ldr x0, [sp, #0]");
-            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_backend");
             ctx.emitter.instruction("ldr x0, [sp, #0]");
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");
             ctx.emitter.instruction("ldr x0, [sp, #8]");                        // the count is this route's raw result
@@ -374,7 +381,7 @@ fn lower_literal_compress_zlib_file_put_contents(
             abi::emit_call_label(ctx.emitter, "__rt_stream_fd");                // the deflate tail is keyed by DESCRIPTOR
             super::close_crypto_arch::emit_zlib_flush_on_close_for_current_fd(ctx);
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
-            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_backend");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // the count is this route's raw result
@@ -586,7 +593,7 @@ fn emit_file_put_contents_filter_route(
             abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");          // x0 = the input byte count php reports
             ctx.emitter.instruction("str x0, [sp, #8]");
             ctx.emitter.instruction("ldr x0, [sp, #0]");
-            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_backend");
             ctx.emitter.instruction("ldr x0, [sp, #0]");
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");
             ctx.emitter.instruction("ldr x0, [sp, #8]");                        // the count is the route's raw result
@@ -675,7 +682,7 @@ fn emit_file_put_contents_filter_route(
             abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");          // rax = the input byte count php reports
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
-            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_backend");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // the count is the route's raw result
