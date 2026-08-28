@@ -171,8 +171,22 @@ pub(crate) fn resume(tid: u32) {
 }
 
 /// Stops tracing a thread, leaving it running as it was found.
+///
+/// The stop first is not ceremony: `PTRACE_DETACH` requires a STOPPED tracee and
+/// restarts it as it detaches. Asked of a running one it fails with `ESRCH` and
+/// changes nothing — the thread stays traced, invisibly, because nothing here
+/// reads the result.
+///
+/// That is exactly how a live view died after one window. The seizes happen per
+/// window; the second one was refused, because a thread that is already traced
+/// cannot be seized again. An empty window is how `--attach` learns its target
+/// is gone, so the view reported the program had ended while it was still
+/// running — a wrong answer produced by a failure nobody was told about.
 pub(crate) fn detach(tid: u32) {
-    // SAFETY: no memory operands; ESRCH for a thread that has gone is fine.
+    let _ = interrupt(tid);
+    let _ = wait_for_stop(tid);
+    // SAFETY: no memory operands; ESRCH for a thread that has gone is fine, and
+    // a tracer that exits detaches whatever it still holds.
     unsafe {
         libc::ptrace(libc::PTRACE_DETACH, tid as libc::pid_t, 0, 0);
     }
