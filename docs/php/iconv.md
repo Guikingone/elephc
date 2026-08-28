@@ -73,6 +73,13 @@ explicitly empty string uses PHP's `default_charset`, which is `UTF-8`. An empty
 `$needle` never matches. An `$offset` outside `$haystack` throws a catchable
 `\ValueError`, matching PHP 8.
 
+elephc converts the whole subject to UCS-4LE before `iconv_strlen()` and
+`iconv_substr()` operate. This preserves shift state for stateful encodings such
+as `ISO-2022-JP`: `日本語` counts as three characters and every one-character
+slice converts back correctly. PHP with GNU libiconv 1.11 loses shift state
+between slices, counts this input as four characters, and can return undecodable
+fragments. elephc intentionally keeps the correct whole-subject behavior.
+
 ## MIME header fields
 
 RFC 2047 encoded-words carry non-ASCII text through mail headers that only allow
@@ -93,6 +100,10 @@ ASCII.
 | `output-charset` | `input-charset` | Charset the header is encoded into |
 | `line-length` | `76` | Maximum length of one output line |
 | `line-break-chars` | `"\r\n"` | Bytes written between folded lines |
+
+For `["line-length" => -1]`, elephc returns `false`. PHP 8.5 instead terminates
+with an integer-overflow fatal while calculating the allocation size; elephc
+intentionally avoids that crash.
 
 ```php
 $subject = iconv_mime_encode("Subject", "Prüfung");
@@ -130,7 +141,9 @@ echo implode(", ", $headers["To"]);    // alice@example.com, bob@example.com
 
 The extension keeps three process-wide charset settings. All three start at
 `UTF-8`, and the character-oriented functions fall back to `internal_encoding`
-when their `$encoding` argument is omitted.
+when their `$encoding` argument is omitted. The compiler accepts
+`--ini default_charset=...`, but that directive is not wired into the iconv
+bridge yet; an explicitly empty `$encoding` therefore still uses `UTF-8`.
 
 | Function | Signature | Notes |
 |---|---|---|
@@ -147,7 +160,9 @@ echo iconv_strlen("Prüfung café");           // 14 — the bytes are now read 
 
 Like PHP, `iconv_set_encoding()` stores the charset without validating it, so
 only an unrecognized `$type` reports `false`. `$type` is matched
-case-insensitively.
+case-insensitively. PHP 8.5 emits a deprecation diagnostic for all three
+`iconv_set_encoding()` slots. elephc provides the function but has no runtime
+deprecation channel, so it does not emit that diagnostic.
 
 ## Constants
 
@@ -161,7 +176,8 @@ case-insensitively.
 PHP bakes `ICONV_IMPL` and `ICONV_VERSION` when the interpreter is built. elephc
 compiles ahead of time for a target whose libc build is not knowable, so
 `ICONV_IMPL` is derived from the target platform and `ICONV_VERSION` reports the
-`unknown` spelling php-src itself uses when it cannot identify its provider.
+portable fallback `"unknown"`. A normal PHP build reports the provider version
+detected while PHP itself was built instead.
 
 ## Stream filters
 

@@ -116,8 +116,9 @@ pub fn set(kind: EncodingKind, value: &[u8]) -> bool {
 ///
 /// php-src distinguishes two kinds of "absent": an omitted or `null` `$encoding`
 /// falls back to `iconv.internal_encoding`, while an explicitly empty string reaches
-/// the generic engine and resolves to `default_charset`. elephc has no ini surface,
-/// so `default_charset` is the fixed `UTF-8` PHP ships with.
+/// the generic engine and resolves to `default_charset`. elephc's compile-time `--ini`
+/// surface does not wire that directive into this bridge yet, so it remains fixed at
+/// PHP's `UTF-8` default.
 pub fn effective_charset(explicit: Option<&[u8]>) -> Vec<u8> {
     match explicit {
         None => get(EncodingKind::Internal).into_bytes(),

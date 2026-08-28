@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - Every operation works on the fixed-width UCS-4LE superset, so offsets and lengths
-//!   are character counts exactly like php-src.
+//!   are stable character counts even for stateful encodings. This intentionally avoids
+//!   php-src's provider-dependent loss of shift state while slicing those encodings.
 //! - `strlen`/`substr` convert the whole subject up front and fail on the first bad byte;
 //!   the search pair instead walks the subject one character at a time and stops at the
 //!   first match, so a match before a malformed tail is still reported.

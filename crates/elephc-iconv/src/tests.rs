@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Expectations were captured from `php -r` on a glibc host; charsets used here
-//!   (`UTF-8`, `ISO-8859-1`, `ASCII`, `UCS-4LE`) exist in every supported platform's iconv.
+//!   (`UTF-8`, `ISO-8859-1`, `ISO-2022-JP`, `ASCII`, `UCS-4LE`) exist in every
+//!   supported platform's iconv.
 //! - Diagnostics are asserted as full message bodies because both backends render them.
 
 use crate::error::IconvError;
@@ -115,6 +116,21 @@ fn slices_by_character_offsets() {
     assert_eq!(search::substr(subject, -99, Some(2), None).unwrap(), "h\u{e9}".as_bytes());
 }
 
+/// Verifies whole-subject conversion preserves shift state while counting and slicing.
+#[test]
+fn stateful_charset_slices_round_trip() {
+    let subject =
+        convert::convert(b"UTF-8", b"ISO-2022-JP", "\u{65e5}\u{672c}\u{8a9e}".as_bytes()).unwrap();
+    assert_eq!(search::strlen(&subject, Some(b"ISO-2022-JP")).unwrap(), 3);
+
+    for (index, expected) in ["\u{65e5}", "\u{672c}", "\u{8a9e}"].iter().enumerate() {
+        let slice =
+            search::substr(&subject, index as i64, Some(1), Some(b"ISO-2022-JP")).unwrap();
+        let decoded = convert::convert(b"ISO-2022-JP", b"UTF-8", &slice).unwrap();
+        assert_eq!(decoded, expected.as_bytes());
+    }
+}
+
 /// Verifies forward and backward search, including PHP's empty-needle and offset rules.
 #[test]
 fn finds_character_positions() {
@@ -191,6 +207,34 @@ fn malformed_words_respect_continue_on_error() {
     assert_eq!(
         mime::decode::mime_decode(b"=?UTF-8?X?zz?=", crate::MODE_CONTINUE_ON_ERROR, None).unwrap(),
         b"=?UTF-8?X?zz?="
+    );
+}
+
+/// Verifies malformed quoted-printable escapes fail or preserve the raw word by mode.
+#[test]
+fn malformed_quoted_printable_words_respect_continue_on_error() {
+    for payload in [b"=ZZ".as_slice(), b"=Z", b"a=Zb", b"==41"] {
+        let mut word = b"=?UTF-8?Q?".to_vec();
+        word.extend_from_slice(payload);
+        word.extend_from_slice(b"?=");
+
+        assert_eq!(
+            mime::decode::mime_decode(&word, 0, None).unwrap_err(),
+            IconvError::MalformedString
+        );
+        assert_eq!(
+            mime::decode::mime_decode(&word, crate::MODE_CONTINUE_ON_ERROR, None).unwrap(),
+            word
+        );
+    }
+}
+
+/// Verifies header-block decoding rejects malformed quoted-printable encoded-words.
+#[test]
+fn malformed_quoted_printable_header_fails() {
+    assert_eq!(
+        mime::decode::mime_decode_headers(b"Subject: =?UTF-8?Q?=ZZ?=", 0, None).unwrap_err(),
+        IconvError::MalformedString
     );
 }
 

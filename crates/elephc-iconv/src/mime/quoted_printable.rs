@@ -52,9 +52,9 @@ pub fn encode(input: &[u8]) -> Vec<u8> {
 
 /// Decodes an RFC 2047 `Q` payload back into raw bytes.
 ///
-/// `_` becomes a space and `=XX` becomes the escaped byte; a malformed escape is kept
-/// literally, which is what php-src's decoder does with unparsable input.
-pub fn decode(input: &[u8]) -> Vec<u8> {
+/// `_` becomes a space and `=XX` becomes the escaped byte. A malformed escape rejects
+/// the whole encoded-word so the caller can apply strict or continue-on-error handling.
+pub fn decode(input: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(input.len());
     let mut index = 0usize;
     while index < input.len() {
@@ -63,17 +63,11 @@ pub fn decode(input: &[u8]) -> Vec<u8> {
                 out.push(b' ');
                 index += 1;
             }
-            b'=' if index + 2 < input.len() => {
-                match (hex_value(input[index + 1]), hex_value(input[index + 2])) {
-                    (Some(high), Some(low)) => {
-                        out.push((high << 4) | low);
-                        index += 3;
-                    }
-                    _ => {
-                        out.push(b'=');
-                        index += 1;
-                    }
-                }
+            b'=' => {
+                let high = hex_value(*input.get(index + 1)?)?;
+                let low = hex_value(*input.get(index + 2)?)?;
+                out.push((high << 4) | low);
+                index += 3;
             }
             byte => {
                 out.push(byte);
@@ -81,7 +75,7 @@ pub fn decode(input: &[u8]) -> Vec<u8> {
             }
         }
     }
-    out
+    Some(out)
 }
 
 /// Maps one ASCII hex digit onto its value.

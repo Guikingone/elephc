@@ -50,6 +50,6 @@ pub const fn implementation_name(macos_target: bool) -> &'static str {
 
 /// Version elephc reports through the `ICONV_VERSION` constant.
 ///
-/// The runtime libc version cannot be known while compiling, so elephc reports the
-/// `unknown` spelling php-src itself uses when it cannot identify its iconv provider.
+/// The runtime libc version cannot be known while cross-compiling, so elephc reports
+/// `unknown`; a normal php-src build instead records the provider version it detected.
 pub const ICONV_VERSION: &str = "unknown";

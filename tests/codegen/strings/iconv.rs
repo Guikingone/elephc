@@ -7,7 +7,8 @@
 //! Key details:
 //! - Expected values were captured from PHP 8.3 CLI, including the diagnostic wording.
 //! - Only charsets every supported platform's iconv provides are used (`UTF-8`,
-//!   `ISO-8859-1`, `ASCII`, `UCS-4LE`), so the fixtures stay target-independent.
+//!   `ISO-8859-1`, `ISO-2022-JP`, `ASCII`, `UCS-4LE`), so the fixtures stay
+//!   target-independent.
 //! - Byte-exact results are asserted through `bin2hex()` wherever a charset other than
 //!   UTF-8 is involved, so the assertions do not depend on the test harness's encoding.
 
@@ -101,6 +102,23 @@ iconv_substr('héllo', 1, 0), ':', iconv_substr('héllo', 1);",
     assert_eq!(out, "éll:llo:éll:::éllo");
 }
 
+/// Verifies stateful encodings keep shift state across character counting and slices.
+#[test]
+fn test_iconv_stateful_charset_slices_round_trip() {
+    let out = compile_and_run(
+        "<?php $subject = iconv('UTF-8', 'ISO-2022-JP', '日本語');
+echo iconv_strlen($subject, 'ISO-2022-JP');
+for ($i = 0; $i < 3; $i++) {
+    echo ':', iconv(
+        'ISO-2022-JP',
+        'UTF-8',
+        iconv_substr($subject, $i, 1, 'ISO-2022-JP')
+    );
+}",
+    );
+    assert_eq!(out, "3:日:本:語");
+}
+
 /// Verifies both search builtins report character positions and PHP's miss result.
 #[test]
 fn test_iconv_search_reports_character_positions() {
@@ -189,6 +207,38 @@ fn test_iconv_mime_decode_reports_malformed_words() {
         out.stderr
             .contains("Warning: iconv_mime_decode(): Malformed string"),
         "missing malformed-string warning: {}",
+        out.stderr
+    );
+}
+
+/// Verifies malformed `Q` escapes fail strictly, preserve raw words leniently, and fail in headers.
+#[test]
+fn test_iconv_mime_decode_rejects_malformed_quoted_printable() {
+    let out = compile_and_run_capture(
+        "<?php var_dump(iconv_mime_decode('=?UTF-8?Q?=ZZ?='));
+echo iconv_mime_decode(
+    '=?UTF-8?Q?a=Zb?=',
+    ICONV_MIME_DECODE_CONTINUE_ON_ERROR
+), \"\\n\";
+var_dump(iconv_mime_decode_headers('Subject: =?UTF-8?Q?==41?='));",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\n=?UTF-8?Q?a=Zb?=\nbool(false)\n"
+    );
+    assert_eq!(
+        out.stderr.matches("Warning: iconv_mime_decode(): Malformed string").count(),
+        1,
+        "unexpected decode diagnostics: {}",
+        out.stderr
+    );
+    assert_eq!(
+        out.stderr
+            .matches("Warning: iconv_mime_decode_headers(): Malformed string")
+            .count(),
+        1,
+        "unexpected header diagnostics: {}",
         out.stderr
     );
 }

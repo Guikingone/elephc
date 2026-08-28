@@ -430,13 +430,13 @@ impl LineScanner<'_> {
         let (start, end) = self.payload.take().unwrap_or((index, index));
         let raw = &self.input[start..end];
         let decoded = if self.base64_payload {
-            base64::decode(raw)
+            Some(base64::decode(raw))
         } else {
             quoted_printable::decode(raw)
         };
-        let converted = match self.word_converter.as_mut() {
-            Some(converter) => converter.convert_all(&decoded),
-            None => Err(IconvError::MalformedString),
+        let converted = match (decoded, self.word_converter.as_mut()) {
+            (Some(decoded), Some(converter)) => converter.convert_all(&decoded),
+            _ => Err(IconvError::MalformedString),
         };
         match converted {
             Ok(bytes) => {
