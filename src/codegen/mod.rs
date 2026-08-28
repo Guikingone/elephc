@@ -420,7 +420,6 @@ fn finalize_user_asm(
                 "elephc_last_status",
                 "elephc_last_error",
                 "elephc_free",
-                "elephc_agent_stack_guard_state",
             ] {
                 exported.insert(module.target.extern_symbol(lifecycle));
             }

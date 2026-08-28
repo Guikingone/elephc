@@ -68,38 +68,6 @@ fn reserve_boundary_data(data: &mut DataSection) {
     data.add_comm(LAST_ERROR_BUFFER.to_string(), LAST_ERROR_CAPACITY);
 }
 
-/// Emits the temporary host-visible state probe used to diagnose stack-guard failures.
-///
-/// Each pointer argument receives, respectively, `_stack_limit`, `_stack_limit_main`,
-/// boundary depth, and the active exception-handler record. The probe performs no calls,
-/// so a signal handler running on an alternate stack can safely inspect the failed state.
-fn emit_agent_stack_guard_probe(emitter: &mut Emitter, target: Target) {
-    emitter.blank();
-    emitter.comment("agent debug probe for cdylib stack-guard state");
-    emitter.label_global(&target.extern_symbol("elephc_agent_stack_guard_state"));
-    let symbols = [
-        crate::codegen_support::runtime::STACK_LIMIT_SYMBOL,
-        crate::codegen_support::runtime::STACK_LIMIT_MAIN_SYMBOL,
-        BOUNDARY_ACTIVE,
-        "_exc_handler_top",
-    ];
-    match target.arch {
-        Arch::AArch64 => {
-            for (pointer, symbol) in ["x0", "x1", "x2", "x3"].into_iter().zip(symbols) {
-                abi::emit_load_symbol_to_reg(emitter, "x10", symbol, 0);
-                emitter.instruction(&format!("str x10, [{pointer}]"));          // publish one stack-guard state word to the diagnostic host
-            }
-        }
-        Arch::X86_64 => {
-            for (pointer, symbol) in ["rdi", "rsi", "rdx", "rcx"].into_iter().zip(symbols) {
-                abi::emit_load_symbol_to_reg(emitter, "r10", symbol, 0);
-                emitter.instruction(&format!("mov QWORD PTR [{pointer}], r10")); // publish one stack-guard state word to the diagnostic host
-            }
-        }
-    }
-    abi::emit_return(emitter);
-}
-
 /// Emits all public export trampolines and lifecycle/error helpers.
 pub(crate) fn emit_cdylib_exports(
     emitter: &mut Emitter,
@@ -136,7 +104,6 @@ pub(crate) fn emit_cdylib_exports(
         }
     }
     emit_lifecycle_exports(emitter, target, heap_debug);
-    emit_agent_stack_guard_probe(emitter, target);
 }
 
 /// Builds a deterministic local-label suffix from a public PHP export name.
