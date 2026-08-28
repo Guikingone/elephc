@@ -449,7 +449,8 @@ impl LineScanner<'_> {
                 }
                 // php-src re-emits the word without the byte that follows it.
                 let word_start = self.encoded_word.unwrap_or(index);
-                self.append_literal_range(word_start, index)?;
+                let word_end = if eos { index + 1 } else { index };
+                self.append_literal_range(word_start, word_end)?;
                 self.encoded_word = None;
             }
         }
