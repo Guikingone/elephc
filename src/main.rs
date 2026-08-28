@@ -60,6 +60,7 @@ mod pipeline;
 mod progress;
 mod resolver;
 mod runtime_cache;
+mod similar_text_prelude;
 mod scanf_prelude;
 mod debug_info;
 mod source;

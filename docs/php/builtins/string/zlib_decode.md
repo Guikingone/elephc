@@ -2,7 +2,7 @@
 title: "zlib_decode()"
 description: "Decompresses a raw, zlib or gzip framed string, detecting which."
 sidebar:
-  order: 507
+  order: 508
 ---
 
 ## zlib_decode()

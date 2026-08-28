@@ -1180,3 +1180,70 @@ var_dump(str_replace("a", "b", [], $e), $e);
         )
     );
 }
+
+/// Verifies `similar_text()` answers php's count, in every shape its recursion branches on.
+///
+/// The builtin was absent entirely — `Undefined function: similar_text` — and php's algorithm
+/// recurses into BOTH remainders around the longest common substring it finds. The corpus is
+/// chosen for the branches: empty strings, a shared prefix only, a shared suffix only, both,
+/// repeated runs (`mississippi`/`missouri`), and a reversal that shares no run longer than one.
+///
+/// Every expectation measured on `php -n` 8.5.6, and the engine was differed against php's own
+/// builtin over 576 pairs of this corpus with zero mismatches before it was wired up.
+#[test]
+fn test_similar_text_counts_the_way_php_does() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(similar_text("World shares", "Hello World"));
+var_dump(similar_text("abc", "abd"));
+var_dump(similar_text("", ""));
+var_dump(similar_text("abc", ""));
+var_dump(similar_text("mississippi", "missouri"));
+var_dump(similar_text("abcdefghij", "jihgfedcba"));
+var_dump(similar_text("aXbXc", "abc"));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(5)\n",
+            "int(2)\n",
+            "int(0)\n",
+            "int(0)\n",
+            "int(5)\n",
+            "int(1)\n",
+            "int(3)\n",
+        )
+    );
+}
+
+/// Verifies the optional third argument receives php's percentage, by reference.
+///
+/// Two things had to be right for this to land. The prelude's parameter is declared `mixed`, not
+/// left untyped: an untyped by-reference parameter takes its type from the call site, and a
+/// prelude is resolved before any call site is seen, so the caller read back its own initial
+/// `0.0` twice and uninitialized memory once. And the backend refused a FLOAT caller local
+/// outright — `by-reference Mixed parameter writeback to PHP type Float` — for a program php runs.
+///
+/// Both strings empty is the case that would divide by zero; php answers `float(0)`.
+#[test]
+fn test_similar_text_writes_its_percentage_by_reference() {
+    let out = compile_and_run(
+        r#"<?php
+$p = 0.0;
+var_dump(similar_text("abc", "abd", $p), round($p, 6));
+$q = 0.0;
+var_dump(similar_text("World shares", "Hello World", $q), round($q, 6));
+$r = 0.0;
+var_dump(similar_text("", "", $r), $r);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(2)\nfloat(66.666667)\n",
+            "int(5)\nfloat(43.478261)\n",
+            "int(0)\nfloat(0)\n",
+        )
+    );
+}

@@ -2,7 +2,7 @@
 title: "zlib_get_coding_type() — internals"
 description: "Compiler internals for zlib_get_coding_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 509
+  order: 510
 ---
 
 ## `zlib_get_coding_type()` — internals

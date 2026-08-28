@@ -81,6 +81,7 @@ pub(crate) mod prelude_prune;
 /// Resolution of includes.
 pub mod resolver;
 /// PHP `sscanf`/`fscanf` engine prelude injection.
+pub mod similar_text_prelude;
 pub mod scanf_prelude;
 /// Physical source-file classification and per-file language profiles.
 pub mod source;

@@ -75,6 +75,7 @@ pub mod rawurlencode;
 pub mod rtrim;
 pub mod sha1;
 pub mod sprintf;
+pub mod similar_text;
 pub mod sscanf;
 pub mod str_contains;
 pub mod str_ends_with;

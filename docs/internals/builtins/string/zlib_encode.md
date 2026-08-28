@@ -2,7 +2,7 @@
 title: "zlib_encode() — internals"
 description: "Compiler internals for zlib_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 508
+  order: 509
 ---
 
 ## `zlib_encode()` — internals

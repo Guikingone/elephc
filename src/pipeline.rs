@@ -363,6 +363,20 @@ pub(crate) fn compile(config: CliConfig) {
     }
     timings.record_since("scanf-prelude", phase_started);
 
+    // php's `similar_text()` engine, injected only when the program references it. Same shape as
+    // the scanf prelude: the declarations are named by the builtin's lowering and never by PHP
+    // source, so the group has to be forced or reachability prunes what the backend then calls.
+    crate::progress::phase("similar-text-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::similar_text_prelude::inject_if_used(ast, &mut prelude_inventory);
+    if prelude_inventory
+        .groups
+        .contains_key(crate::similar_text_prelude::PRELUDE_GROUP_ID)
+    {
+        forced_groups.insert(crate::similar_text_prelude::PRELUDE_GROUP_ID.to_string());
+    }
+    timings.record_since("similar-text-prelude", phase_started);
+
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(

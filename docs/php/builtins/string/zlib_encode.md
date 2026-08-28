@@ -2,7 +2,7 @@
 title: "zlib_encode()"
 description: "Compresses a string with the requested zlib framing."
 sidebar:
-  order: 508
+  order: 509
 ---
 
 ## zlib_encode()

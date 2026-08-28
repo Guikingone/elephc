@@ -255,6 +255,9 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "octdec",
     "readgzfile",
     "serialize",
+    // The AOT engine is an injected elephc-PHP prelude, not a runtime helper, so there is nothing
+    // for a Magician binding to route to until it grows its own copy of php's recursion.
+    "similar_text",
     "strncasecmp",
     "strncmp",
     "substr_count",
@@ -310,11 +313,12 @@ mod tests {
 
         assert_eq!(eval_registry, 484);
         assert_eq!(eval_internal, 40);
-        assert_eq!(eval_pending, 53);                                   // + zlib_get_coding_type
+        assert_eq!(eval_pending, 54);                                   // + zlib_get_coding_type, + similar_text
         // 544 on the merged catalogue: this branch counted 543 and main 531, and main also
         // PROMOTES get_object_vars out of the external surface into the registry. Neither
         // branch's number survives the merge; this one is measured on the result.
-        assert_eq!(aot_registry, 544);
+        // 545 with `similar_text`, whose AOT route is the injected elephc-PHP prelude.
+        assert_eq!(aot_registry, 545);
         assert_eq!(aot_external, 30);                                   // + zlib_get_coding_type
         assert_eq!(aot_unsupported, 3);
     }
@@ -363,7 +367,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 463);
-        assert_eq!(unsupported, 93);                                   // + zlib_get_coding_type
+        assert_eq!(unsupported, 94);                                   // + zlib_get_coding_type, + similar_text
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

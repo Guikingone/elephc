@@ -294,6 +294,8 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved =
         elephc::scanf_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved =
+        elephc::similar_text_prelude::inject_if_used(resolved, &mut prelude_inventory);
     // `zend_version()`, `php_sapi_name()` and `ini_restore()` are ordinary php-visible functions;
     // without this the suite could not compile a program that calls one.
     let resolved =
@@ -333,6 +335,14 @@ fn try_compile_source_to_asm_with_defines_repr(
         .contains_key(elephc::scanf_prelude::PRELUDE_GROUP_ID)
     {
         forced_groups.insert(elephc::scanf_prelude::PRELUDE_GROUP_ID.to_string());
+    }
+    // Same for the `similar_text()` engine: its declarations are named only by that builtin's
+    // lowering, so reachability has no edge to follow to them.
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::similar_text_prelude::PRELUDE_GROUP_ID)
+    {
+        forced_groups.insert(elephc::similar_text_prelude::PRELUDE_GROUP_ID.to_string());
     }
     let optimized = elephc::optimize::prune_unreachable_declarations(
         optimized,
