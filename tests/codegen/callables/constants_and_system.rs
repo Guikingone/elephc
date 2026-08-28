@@ -2300,8 +2300,10 @@ fn test_getenv_home() {
     assert_eq!(out, "ok");
 }
 
-// Tests `getenv("ELEPHC_NONEXISTENT_VAR_XYZ")` returns an empty string (strlen=0)
-// for a non-existent environment variable.
+// Tests `strlen()` of a missing variable is 0, which holds whether the answer is
+// `false` or `""` — those coerce alike, so this pins the length only. The
+// difference between the two is pinned by
+// `test_getenv_unset_is_false_but_empty_is_a_string` below.
 /// Verifies that getenv nonexistent.
 #[test]
 fn test_getenv_nonexistent() {
@@ -2309,6 +2311,79 @@ fn test_getenv_nonexistent() {
         "<?php $missing = getenv(\"ELEPHC_NONEXISTENT_VAR_XYZ\"); echo strlen($missing);",
     );
     assert_eq!(out, "0");
+}
+
+// Tests that a variable which is NOT SET and one set to the empty string give
+// different answers, which is the whole of what `getenv` is asked for.
+/// Verifies an unset variable answers `false` and an empty one answers `""`.
+///
+/// PHP separates the two, and every "is this configured" check is written on
+/// that separation: `getenv($name) !== false`. Collapsing them makes that test
+/// true for every name, silently — no error, no warning, just the wrong branch.
+///
+/// `strlen()` cannot see the difference, which is why the existing
+/// `test_getenv_nonexistent` kept passing against the bug: `strlen(false)` and
+/// `strlen("")` are both 0. It takes `=== false` to tell them apart, so that is
+/// what this asserts, in both directions and on one program — a variable that
+/// IS set to the empty string is the case a fix in the wrong place breaks.
+#[test]
+fn test_getenv_unset_is_false_but_empty_is_a_string() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("ELEPHC_SET_BUT_EMPTY=");
+$missing = getenv("ELEPHC_NONEXISTENT_VAR_XYZ");
+$empty = getenv("ELEPHC_SET_BUT_EMPTY");
+echo $missing === false ? "unset:false" : "unset:string";
+echo " ";
+echo $empty === false ? "empty:false" : "empty:string";
+echo " ";
+echo $missing !== false ? "idiom:taken" : "idiom:not-taken";
+"#,
+    );
+    assert_eq!(out, "unset:false empty:string idiom:not-taken");
+}
+
+// Tests that boxing a getenv result leaks nothing across repeated calls.
+/// Verifies every boxed `getenv` value is released, in a loop.
+///
+/// Boxing allocates: a Mixed cell per call, plus the heap copy of the value.
+/// Getting the release wrong leaks one of each per call, which a loop turns
+/// from a curiosity into a program that grows without bound.
+///
+/// What this does NOT verify, and no test here can: that the value is COPIED
+/// out of the environment block rather than borrowed. Removing the copy leaves
+/// this test green, because a free of a foreign pointer is range-rejected
+/// rather than fatal — so the copy's justification is written where the copy is,
+/// not asserted here. Claiming otherwise would be a test that passes against its
+/// own bug.
+///
+/// `HOME` is read rather than a variable this program sets. `putenv` allocates
+/// permanently ON PURPOSE — it hands libc a pointer libc keeps — so it reports
+/// as one live block at exit and would mask exactly what is being measured here.
+/// That is worth knowing before reading any heap number near an environment
+/// call: measured on its own, `putenv` alone is `allocs=1 frees=0`.
+#[test]
+fn test_getenv_result_owns_its_bytes_and_leaks_nothing() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$seen = 0;
+for ($i = 0; $i < 8; $i++) {
+    $value = getenv("HOME");
+    if ($value === false) { echo "HOME unexpectedly unset"; }
+    else { $seen = $seen + strlen($value); }
+}
+$missing = getenv("ELEPHC_NONEXISTENT_VAR_XYZ");
+echo $seen > 0 ? "read" : "empty";
+echo $missing === false ? " unset" : " set";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "read unset");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
 }
 
 // Tests `putenv("ELEPHC_TEST_VAR=hello")` followed by `getenv("ELEPHC_TEST_VAR")`

@@ -5,12 +5,14 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` returns `Union(Str, Bool)` to reflect PHP's behaviour where `getenv`
+//! - `check` returns `Union(Str, False)` to reflect PHP's behaviour where `getenv`
 //!   returns the value string on success or `false` if the variable is unset.
+//! - The EIR result carries that union too. It used to be overridden to plain
+//!   `Str` "for present and missing variables alike", which is where the two
+//!   answers were collapsed: an unset variable came back as `""`, so
+//!   `getenv($x) !== false` — the idiom for "is this set" — was true for every
+//!   name, silently.
 
-use crate::builtins::semantics::{
-    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
-};
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
@@ -18,22 +20,12 @@ use crate::types::PhpType;
 builtin! {
     contract: "getenv",
     check: check,
-    semantics: getenv_semantics(),
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Getenv,
+    ),
 }
 
-/// Builds semantics whose EIR result matches the backend's string representation.
-const fn getenv_semantics() -> BuiltinSemantics {
-    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::Getenv);
-    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
-    semantics
-}
-
-/// Returns the concrete EIR string layout produced for present and missing variables.
-fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
-    PhpType::Str
-}
-
-/// Returns `Union(Str, Bool)` reflecting that `getenv` can return a string or `false`.
+/// Returns `Union(Str, False)` reflecting that `getenv` can return a string or `false`.
 ///
 /// Infers the argument type to trigger type-environment side effects before returning
 /// the normalized union type.
