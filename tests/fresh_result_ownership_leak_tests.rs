@@ -250,6 +250,37 @@ echo $total, "\n";
     assert_output_and_clean_heap("elephc_leak_inlined_loop_local", source, "100\n");
 }
 
+/// Verifies a builtin that boxes a FRESH hash into a Mixed cell reclaims it.
+///
+/// `__rt_mixed_from_value` increfs the child it boxes, which is right for a
+/// SHARED payload and one reference too many for a hash whose only reference is
+/// the creator's. `getdate` handed that hash straight to the box and kept
+/// nothing, so the count started at two and one release could never reach zero.
+///
+/// Measured before the fix: `$x = getdate(); unset($x);` freed ONE block of
+/// fourteen, and twenty calls in a loop leaked 260 — about thirteen per call.
+///
+/// The release chain ran to completion the whole time, which is why reading it
+/// found nothing: two `__rt_decref_mixed` calls took the cell to zero, one
+/// `__rt_decref_hash` followed, and the hash was simply left at two. The
+/// debugger found that; the source did not.
+///
+/// `localtime()` shares the boxing helper and had the same leak. It is asserted
+/// here so a fix that only reached `getdate` cannot pass.
+#[test]
+fn a_builtin_that_boxes_a_fresh_hash_reclaims_it() {
+    let source = r#"<?php
+$total = 0;
+for ($i = 0; $i < 20; $i++) {
+    $when = getdate();
+    $parts = localtime(0, true);
+    $total += count($when) + count($parts);
+}
+echo $total, "\n";
+"#;
+    assert_output_and_clean_heap("elephc_leak_boxed_fresh_hash", source, "400\n");
+}
+
 // ---------------------------------------------------------------------------
 // Controls: already clean before this change, and must stay out of `Fresh`.
 // ---------------------------------------------------------------------------
