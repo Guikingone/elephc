@@ -213,7 +213,19 @@ fn malformed_words_respect_continue_on_error() {
 /// Verifies malformed quoted-printable escapes fail or preserve the raw word by mode.
 #[test]
 fn malformed_quoted_printable_words_respect_continue_on_error() {
-    for payload in [b"=ZZ".as_slice(), b"=Z", b"a=Zb", b"==41", b"ab=  "] {
+    for payload in [
+        b"=ZZ".as_slice(),
+        b"=Z",
+        b"a=Zb",
+        b"==41",
+        b"ab=  ",
+        b"=  X",
+        b"= X",
+        b"=\t\tX",
+        b"=  _",
+        b"=  =41",
+        b"ab=  X",
+    ] {
         let mut word = b"=?UTF-8?Q?".to_vec();
         word.extend_from_slice(payload);
         word.extend_from_slice(b"?=");
@@ -261,6 +273,14 @@ fn quoted_printable_escape_edges_match_php() {
         mime::decode::mime_decode(b"=?UTF-8?Q?=  41=42?=", 0, None).unwrap(),
         b"1B"
     );
+    for (input, expected) in [
+        (b"=?UTF-8?Q?=\n41?=".as_slice(), b"41".as_slice()),
+        (b"=?UTF-8?Q?=\r41?=", b"41"),
+        (b"=?UTF-8?Q?=\r\n41?=", b"41"),
+        (b"=?UTF-8?Q?ab=\n?=", b"ab"),
+    ] {
+        assert_eq!(mime::decode::mime_decode(input, 0, None).unwrap(), expected);
+    }
 }
 
 /// Verifies header-block decoding rejects malformed quoted-printable encoded-words.
@@ -268,6 +288,15 @@ fn quoted_printable_escape_edges_match_php() {
 fn malformed_quoted_printable_header_fails() {
     assert_eq!(
         mime::decode::mime_decode_headers(b"Subject: =?UTF-8?Q?=ZZ?=", 0, None).unwrap_err(),
+        IconvError::MalformedString
+    );
+    assert_eq!(
+        mime::decode::mime_decode_headers(
+            b"Subject: =?UTF-8?Q?=  X?=\r\nFrom: a@b.c\r\n",
+            0,
+            None,
+        )
+        .unwrap_err(),
         IconvError::MalformedString
     );
 }

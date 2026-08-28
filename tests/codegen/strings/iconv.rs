@@ -215,17 +215,23 @@ fn test_iconv_mime_decode_reports_malformed_words() {
 #[test]
 fn test_iconv_mime_decode_rejects_malformed_quoted_printable() {
     let out = compile_and_run_capture(
-        "<?php var_dump(iconv_mime_decode('=?UTF-8?Q?=ZZ?='));
+        "<?php var_dump(iconv_mime_decode('=?UTF-8?Q?=  X?='));
 echo iconv_mime_decode(
-    '=?UTF-8?Q?a=Zb?=',
+    '=?UTF-8?Q?ab=  X?=',
     ICONV_MIME_DECODE_CONTINUE_ON_ERROR
 ), \"\\n\";
-var_dump(iconv_mime_decode_headers('Subject: =?UTF-8?Q?==41?='));",
+var_dump(iconv_mime_decode_headers(
+    \"Subject: =?UTF-8?Q?=  =41?=\\r\\nFrom: a@b.c\\r\\n\"
+));
+echo iconv_mime_decode(\"=?UTF-8?Q?=\\n41?=\"), '|',
+    iconv_mime_decode(\"=?UTF-8?Q?=\\r41?=\"), '|',
+    iconv_mime_decode(\"=?UTF-8?Q?=\\r\\n41?=\"), '|',
+    iconv_mime_decode('=?UTF-8?Q?ab=?=');",
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(
         out.stdout,
-        "bool(false)\n=?UTF-8?Q?a=Zb?=\nbool(false)\n"
+        "bool(false)\n=?UTF-8?Q?ab=  X?=\nbool(false)\n41|41|41|ab"
     );
     assert_eq!(
         out.stderr.matches("Warning: iconv_mime_decode(): Malformed string").count(),

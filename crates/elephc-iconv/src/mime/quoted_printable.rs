@@ -9,6 +9,8 @@
 //! - php-src's `qp_table` charges one output byte to characters it can pass through and
 //!   three to everything else; `cost` is that table and drives the encoder's line fitting.
 //! - Q-encoding differs from plain quoted-printable in that `_` decodes to a space.
+//! - Decoding accepts php-src's quoted-printable soft breaks, including optional runs
+//!   of spaces or tabs before a hexadecimal digit or line ending.
 //! - Hex digits are emitted uppercase, matching php-src's `qp_digits`.
 
 /// Uppercase hex digits php-src emits for escaped bytes.
@@ -68,7 +70,11 @@ pub fn decode(input: &[u8]) -> Option<Vec<u8>> {
                     break;
                 }
                 let first = *input.get(index + 1)?;
-                if matches!(first, b' ' | b'\t') {
+                if let Some(high) = hex_value(first) {
+                    let low = hex_value(*input.get(index + 2)?)?;
+                    out.push((high << 4) | low);
+                    index += 3;
+                } else if matches!(first, b' ' | b'\t' | b'\r' | b'\n') {
                     let mut next = index + 1;
                     while input
                         .get(next)
@@ -76,15 +82,20 @@ pub fn decode(input: &[u8]) -> Option<Vec<u8>> {
                     {
                         next += 1;
                     }
-                    input.get(next)?;
-                    index = next + 1;
-                    continue;
+                    let soft_break = *input.get(next)?;
+                    if hex_value(soft_break).is_none()
+                        && !matches!(soft_break, b'\r' | b'\n')
+                    {
+                        return None;
+                    }
+                    index = if soft_break == b'\r' && input.get(next + 1) == Some(&b'\n') {
+                        next + 2
+                    } else {
+                        next + 1
+                    };
+                } else {
+                    return None;
                 }
-                let second = *input.get(index + 2)?;
-                let high = hex_value(first)?;
-                let low = hex_value(second)?;
-                out.push((high << 4) | low);
-                index += 3;
             }
             byte => {
                 out.push(byte);
