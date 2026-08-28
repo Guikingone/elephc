@@ -19379,3 +19379,52 @@ var_dump(copy("cc://a", "cc://b"));
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies php's whole-file readers stat the wrapper stream before draining it.
+///
+/// `file_get_contents()` and `file()` size their buffer from `stream_stat()`, so a userspace
+/// wrapper is asked — MEASURED on `php -n` 8.5.6 against a wrapper that traces its own calls,
+/// where `readfile()` and `copy()` do NOT ask. elephc reads in chunks and does not need the size,
+/// but the call is part of the protocol a wrapper is written against.
+///
+/// The value the shared read tail carries is an OPAQUE REGISTRY HANDLE, while
+/// `__rt_user_wrapper_fstat` indexes the handle table by synthetic fd. Passing one where the other
+/// belongs resolved a garbage object and `blr` on its garbage vtable slot was a SIGBUS — twice,
+/// which is what `__rt_stream_fd` sits between them for.
+#[test]
+fn test_the_whole_file_readers_stat_a_wrapper_before_draining_it() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class S {
+    public $pos = 0;
+    public function stream_open($p, $m, $o, &$x) { echo "open\n"; return true; }
+    public function stream_read($n) {
+        $r = substr("payload", $this->pos, $n);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_eof() { return $this->pos >= 7; }
+    public function stream_stat() { echo "stat\n"; return ["size" => 7]; }
+    public function stream_close() { echo "close\n"; }
+    public function url_stat($p, $f) { return ["size" => 7]; }
+}
+stream_wrapper_register("ss", "S");
+echo "-- file_get_contents --\n";
+var_dump(file_get_contents("ss://a"));
+echo "-- readfile --\n";
+readfile("ss://a");
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "-- file_get_contents --\n",
+            "open\nstat\nclose\n",
+            "string(7) \"payload\"\n",
+            "-- readfile --\n",
+            "open\npayloadclose\n\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

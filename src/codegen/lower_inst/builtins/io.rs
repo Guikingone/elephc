@@ -609,6 +609,7 @@ fn emit_dynamic_compress_read_route(
 fn emit_open_read_close_tail(ctx: &mut FunctionContext<'_>, label_prefix: &str) -> Result<()> {
     let fail = ctx.next_label(&format!("{label_prefix}_failed"));
     let done = ctx.next_label(&format!("{label_prefix}_done"));
+    let stat_done = ctx.next_label(&format!("{label_prefix}_stat_done"));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_reserve_temporary_stack(ctx.emitter, 32);
@@ -617,6 +618,24 @@ fn emit_open_read_close_tail(ctx: &mut FunctionContext<'_>, label_prefix: &str) 
             ctx.emitter.instruction(&format!("b.ne {}", fail));                 // a failed open reads as PHP false
             ctx.emitter.instruction("ldr x0, [x0, #8]");                        // the opaque stream handle
             ctx.emitter.instruction("str x0, [sp, #0]");                        // keep it for the close
+            // php STATS the stream it just opened, before reading it: `file_get_contents()` and
+            // `file()` size their buffer from `stream_stat()`, and a userspace wrapper sees that
+            // call. MEASURED on `php -n` 8.5.6 against a wrapper that traces its own calls.
+            // elephc reads in chunks and does not need the size, but the call is part of the
+            // protocol the wrapper is written against, so it is made and its answer released.
+            //
+            // The value this tail carries is an OPAQUE REGISTRY HANDLE; `__rt_user_wrapper_fstat`
+            // indexes the handle TABLE by synthetic fd. Passing the one where the other belongs
+            // resolved a garbage object, and `blr` on its garbage vtable slot was a SIGBUS —
+            // twice, before `__rt_stream_fd` was put between them.
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");                // x0 = the descriptor behind the handle
+            ctx.emitter.instruction("mov x9, #0x40000000");                     // USER_WRAPPER_FD_BASE
+            ctx.emitter.instruction("cmp x0, x9");
+            ctx.emitter.instruction(&format!("b.lt {}", stat_done));            // a plain file has no wrapper to ask
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fstat");       // stream_stat($this)
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");               // the answer may be a TAGGED value, not a cell
+            ctx.emitter.label(&stat_done);
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // the handle again, for the read
             ctx.emitter.instruction("mov x1, #0");                              // ask for the helper's default read chunk
             abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");      // x1/x2 = the filtered bytes
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");              // own them before the close reclaims the buffer
@@ -646,6 +665,18 @@ fn emit_open_read_close_tail(ctx: &mut FunctionContext<'_>, label_prefix: &str) 
             ctx.emitter.instruction(&format!("jne {}", fail));                  // a failed open reads as PHP false
             ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");            // the opaque stream handle
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // keep it for the close
+            // See the AArch64 arm, including why `__rt_stream_fd` has to come first.
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");                // rax = the descriptor behind the handle
+            ctx.emitter.instruction("mov r9, 0x40000000");                      // USER_WRAPPER_FD_BASE
+            ctx.emitter.instruction("cmp rax, r9");
+            ctx.emitter.instruction(&format!("jl {}", stat_done));              // a plain file has no wrapper to ask
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fstat");       // stream_stat($this)
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");               // the answer may be a TAGGED value, not a cell
+            ctx.emitter.label(&stat_done);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // the handle again, for the read
             ctx.emitter.instruction("mov rdi, rax");
             ctx.emitter.instruction("xor esi, esi");                            // ask for the helper's default read chunk
             abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");      // rax/rdx = the filtered bytes
