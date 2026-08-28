@@ -72,7 +72,7 @@ pub fn emit_getenv_all(emitter: &mut Emitter) {
     emitter.instruction("stp x21, x22, [sp, #16]");                             // preserve the key length and the entry pointer
 
     emit_load_environ(emitter, "x19");                                          // x19 = the live entry vector
-    emitter.instruction("mov x0, #256");                                         // initial capacity: a shell environment is ~60 entries, so this avoids a rebuild
+    emitter.instruction("mov x0, #128");                                        // capacity: a shell environment is ~60 entries and the table grows past 75% load, so 128 clears it without a rebuild
     emitter.instruction("mov x1, #7");                                          // value type 7 = mixed, the shape a boxed assoc array is read as
     abi::emit_call_label(emitter, "__rt_hash_new");                             // allocate the destination hash
     emitter.instruction("mov x20, x0");                                         // x20 = hash, updated after every insert
@@ -149,7 +149,7 @@ fn emit_getenv_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 8");                                          // keep rsp 16-byte aligned for the nested calls
 
     emit_load_environ(emitter, "rbx");                                          // rbx = the live entry vector
-    emitter.instruction("mov rdi, 256");                                         // initial capacity: a shell environment is ~60 entries, so this avoids a rebuild
+    emitter.instruction("mov rdi, 128");                                        // capacity: a shell environment is ~60 entries and the table grows past 75% load, so 128 clears it without a rebuild
     emitter.instruction("mov rsi, 7");                                          // value type 7 = mixed, the shape a boxed assoc array is read as
     abi::emit_call_label(emitter, "__rt_hash_new");                             // allocate the destination hash
     emitter.instruction("mov r12, rax");                                        // r12 = hash
