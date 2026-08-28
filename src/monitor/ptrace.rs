@@ -115,26 +115,45 @@ pub(crate) fn seize(tid: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// Stops a seized thread and waits until it is actually stopped.
+/// Asks a seized thread to stop. Does not wait for it.
+///
+/// Split from the wait deliberately. Once this SUCCEEDS the thread is stopped or
+/// about to be, and from that moment every exit owes it a resume — so the split
+/// is what lets the caller put the resume where nothing can step around it.
+pub(crate) fn interrupt(tid: u32) -> io::Result<()> {
+    // SAFETY: a ptrace request with no memory operands.
+    let result = unsafe { libc::ptrace(libc::PTRACE_INTERRUPT, tid as libc::pid_t, 0, 0) };
+    if result == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Waits until an interrupted thread is actually stopped.
 ///
 /// The wait is not optional. `INTERRUPT` only *requests* the stop; reading
 /// registers before the kernel delivered it returns whatever was there — a
 /// plausible-looking address from an arbitrary moment, which is a wrong profile
 /// rather than a missing one.
-pub(crate) fn interrupt_and_wait(tid: u32) -> io::Result<()> {
-    // SAFETY: as above, no memory operands.
-    let result = unsafe { libc::ptrace(libc::PTRACE_INTERRUPT, tid as libc::pid_t, 0, 0) };
-    if result == -1 {
-        return Err(io::Error::last_os_error());
+///
+/// `EINTR` is retried rather than reported. A profiler runs with signals about
+/// (its own timers, a Ctrl-C on the way) and an interrupted wait says nothing
+/// about the thread; treating it as a failure would abandon a thread that is
+/// stopped and waiting to be read.
+pub(crate) fn wait_for_stop(tid: u32) -> io::Result<()> {
+    loop {
+        let mut status: libc::c_int = 0;
+        // SAFETY: `status` is a live local for the duration of the call. __WALL
+        // is required for threads, which are not children in the waitpid sense.
+        let waited = unsafe { libc::waitpid(tid as libc::pid_t, &mut status, libc::__WALL) };
+        if waited != -1 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
     }
-    let mut status: libc::c_int = 0;
-    // SAFETY: `status` is a live local for the duration of the call. __WALL is
-    // required for threads, which are not children in the waitpid sense.
-    let waited = unsafe { libc::waitpid(tid as libc::pid_t, &mut status, libc::__WALL) };
-    if waited == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 /// Lets a stopped thread run again.
@@ -292,15 +311,23 @@ pub(crate) fn walk(pid: u32, regs: &Registers) -> Vec<u64> {
 
 /// Stops one thread, reads its stack, and lets it go again.
 ///
-/// The resume is unconditional, which is the point of the wrapper: every
-/// failure between the stop and the read still has to give the thread back.
+/// The resume is unconditional past the interrupt, which is the point of the
+/// wrapper: every failure between the stop and the read still has to give the
+/// thread back. It was not always so: the interrupt and the wait were one call,
+/// so a wait that failed returned before any resume and left the thread stopped
+/// until the window ended and the detach released it. A single `EINTR` was
+/// enough, and the symptom would have been a program that stalls for as long as
+/// it is being profiled — which reads as the profiler being slow, not as the
+/// profiler having stopped it.
 pub(crate) fn sample_thread(pid: u32, tid: u32) -> Option<Vec<u64>> {
-    if interrupt_and_wait(tid).is_err() {
+    // Below this line the thread is stopped, or on its way to being; above it,
+    // nothing has happened to it.
+    if interrupt(tid).is_err() {
         return None;
     }
-    let regs = registers(tid);
+    let read = wait_for_stop(tid).and_then(|()| registers(tid));
     resume(tid);
-    Some(walk(pid, &regs.ok()?))
+    Some(walk(pid, &read.ok()?))
 }
 
 /// How often a thread is stopped and read, per second.
