@@ -213,7 +213,7 @@ fn malformed_words_respect_continue_on_error() {
 /// Verifies malformed quoted-printable escapes fail or preserve the raw word by mode.
 #[test]
 fn malformed_quoted_printable_words_respect_continue_on_error() {
-    for payload in [b"=ZZ".as_slice(), b"=Z", b"a=Zb", b"==41"] {
+    for payload in [b"=ZZ".as_slice(), b"=Z", b"a=Zb", b"==41", b"ab=  "] {
         let mut word = b"=?UTF-8?Q?".to_vec();
         word.extend_from_slice(payload);
         word.extend_from_slice(b"?=");
@@ -243,6 +243,23 @@ fn quoted_printable_escape_edges_match_php() {
     assert_eq!(
         mime::decode::mime_decode(b"=?UTF-8?Q?=\t41?=", 0, None).unwrap(),
         b"1"
+    );
+    for input in [
+        b"=?UTF-8?Q?=  41?=".as_slice(),
+        b"=?UTF-8?Q?=   41?=",
+        b"=?UTF-8?Q?=\t\t41?=",
+        b"=?UTF-8?Q?= \t41?=",
+        b"=?UTF-8?Q?=\t 41?=",
+    ] {
+        assert_eq!(mime::decode::mime_decode(input, 0, None).unwrap(), b"1");
+    }
+    assert_eq!(
+        mime::decode::mime_decode(b"=?UTF-8?Q?a=  41b?=", 0, None).unwrap(),
+        b"a1b"
+    );
+    assert_eq!(
+        mime::decode::mime_decode(b"=?UTF-8?Q?=  41=42?=", 0, None).unwrap(),
+        b"1B"
     );
 }
 

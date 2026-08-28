@@ -137,6 +137,12 @@ echo implode(", ", $headers["To"]);    // alice@example.com, bob@example.com
 | `ICONV_MIME_DECODE_STRICT` | `1` | Only accept encoded-words RFC 2047 allows at that position; anything else stays literal text |
 | `ICONV_MIME_DECODE_CONTINUE_ON_ERROR` | `2` | Keep undecodable text verbatim instead of failing the whole call |
 
+When `ICONV_MIME_DECODE_CONTINUE_ON_ERROR` preserves a malformed encoded-word,
+elephc also preserves the surrounding header boundaries. PHP 8.5 can leak the
+carriage return into a value with CRLF input, or absorb the next header into
+that value with LF-only input. elephc intentionally returns separate, clean
+header fields in both cases.
+
 ## Default encodings
 
 The extension keeps three process-wide charset settings. All three start at
