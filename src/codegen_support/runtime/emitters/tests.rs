@@ -99,8 +99,10 @@ fn test_linux_x86_64_runtime_uses_shared_surface() {
 /// cdylib safety review must unwind an active boundary on all supported targets.
 #[test]
 fn test_remaining_runtime_fatals_escape_cdylib_boundaries() {
-    let fatal_emitters: [(&str, fn(&mut Emitter)); 5] = [
+    let fatal_emitters: [(&str, fn(&mut Emitter)); 7] = [
         ("buffer bounds", buffers::emit_buffer_bounds_fail),
+        ("buffer allocation size", buffers::emit_buffer_new),
+        ("buffer registry exhaustion", buffers::emit_buffer_registry_fail),
         ("buffer use-after-free", buffers::emit_buffer_use_after_free),
         ("pointer null", pointers::emit_ptr_check_nonnull),
         ("array capacity", arrays::emit_array_new),

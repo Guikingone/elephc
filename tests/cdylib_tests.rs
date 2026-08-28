@@ -486,8 +486,19 @@ const STACK_GUARD_HOST_C: &str = r#"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/resource.h>
+
+static int constrain_stack_for_guard_test(void) {
+    struct rlimit limit;
+    const rlim_t test_budget = 512 * 1024;
+    if (getrlimit(RLIMIT_STACK, &limit) != 0) return 0;
+    if (limit.rlim_max != RLIM_INFINITY && limit.rlim_max < test_budget) return 0;
+    limit.rlim_cur = test_budget;
+    return setrlimit(RLIMIT_STACK, &limit) == 0;
+}
 
 int main(void) {
+    if (!constrain_stack_for_guard_test()) return 90;
     if (elephc_init() != ELEPHC_STATUS_OK) return 1;
 
     char *output = (char *)(uintptr_t)1;
@@ -515,8 +526,19 @@ const STACK_GUARD_SKIP_INIT_HOST_C: &str = r#"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/resource.h>
+
+static int constrain_stack_for_guard_test(void) {
+    struct rlimit limit;
+    const rlim_t test_budget = 512 * 1024;
+    if (getrlimit(RLIMIT_STACK, &limit) != 0) return 0;
+    if (limit.rlim_max != RLIM_INFINITY && limit.rlim_max < test_budget) return 0;
+    limit.rlim_cur = test_budget;
+    return setrlimit(RLIMIT_STACK, &limit) == 0;
+}
 
 int main(void) {
+    if (!constrain_stack_for_guard_test()) return 90;
     char *output = (char *)(uintptr_t)1;
     size_t output_len = 99;
     int32_t status = deep_probe("", 0, &output, &output_len);
@@ -582,6 +604,62 @@ int main(void) {
     if (after_buffer_failure(41) != 42 ||
         elephc_last_status() != ELEPHC_STATUS_OK ||
         elephc_last_error() != NULL) return 5;
+
+    puts("HOST-ALIVE");
+    elephc_shutdown();
+    return 0;
+}
+"#;
+
+const BUFFER_ALLOCATION_FAILURE_EXPORT_PHP: &str = r#"<?php
+#[Export]
+function buffer_size_fail(int $length): int {
+    buffer<int> $buffer = buffer_new<int>($length);
+    return buffer_len($buffer);
+}
+
+#[Export]
+function buffer_registry_exhaust(int $value): int {
+    for ($i = 0; $i < 4097; $i++) {
+        buffer_new<int>(1);
+    }
+    return $value;
+}
+
+#[Export]
+function after_buffer_allocation_failure(int $value): int {
+    return $value + 1;
+}
+"#;
+
+const BUFFER_ALLOCATION_FAILURE_HOST_C: &str = r#"
+#include "libbuffer_allocation_failures.h"
+#include <stdint.h>
+#include <stdio.h>
+
+int main(void) {
+    if (elephc_init() != ELEPHC_STATUS_OK) return 1;
+
+    if (buffer_size_fail(-1) != 0 ||
+        elephc_last_status() != ELEPHC_STATUS_RUNTIME_FAILURE ||
+        elephc_last_error() == NULL) return 2;
+    if (after_buffer_allocation_failure(41) != 42 ||
+        elephc_last_status() != ELEPHC_STATUS_OK ||
+        elephc_last_error() != NULL) return 3;
+
+    if (buffer_size_fail(INT64_C(2305843009213693952)) != 0 ||
+        elephc_last_status() != ELEPHC_STATUS_RUNTIME_FAILURE ||
+        elephc_last_error() == NULL) return 4;
+    if (after_buffer_allocation_failure(41) != 42 ||
+        elephc_last_status() != ELEPHC_STATUS_OK ||
+        elephc_last_error() != NULL) return 5;
+
+    if (buffer_registry_exhaust(7) != 0 ||
+        elephc_last_status() != ELEPHC_STATUS_RUNTIME_FAILURE ||
+        elephc_last_error() == NULL) return 6;
+    if (after_buffer_allocation_failure(41) != 42 ||
+        elephc_last_status() != ELEPHC_STATUS_OK ||
+        elephc_last_error() != NULL) return 7;
 
     puts("HOST-ALIVE");
     elephc_shutdown();
@@ -729,8 +807,8 @@ fn test_cdylib_owned_string_boundary_is_binary_safe_and_recoverable() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// Arms the stack floor through `elephc_init()`, converts deep-recursion overflow
-/// to runtime-failure status, and proves the same C host can call the library again.
+/// Constrains the host stack independently of runner defaults, arms the floor through
+/// `elephc_init()`, and proves deep recursion returns without killing the C host.
 #[test]
 fn test_cdylib_stack_overflow_returns_runtime_failure_and_keeps_host_alive() {
     let dir = make_test_dir("elephc_cdylib_stack_guard");
@@ -763,8 +841,8 @@ fn test_cdylib_stack_overflow_returns_runtime_failure_and_keeps_host_alive() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// Lazily arms the stack floor on the first export call when the C host omits
-/// `elephc_init()`, then recovers from deep recursion without killing the host.
+/// Constrains the host stack independently of runner defaults, then lazily arms the
+/// floor when the C host omits `elephc_init()` and recovers from deep recursion.
 #[test]
 fn test_cdylib_stack_overflow_without_init_keeps_host_alive() {
     let dir = make_test_dir("elephc_cdylib_stack_guard_lazy");
@@ -834,6 +912,53 @@ fn test_cdylib_buffer_fatals_keep_host_alive() {
     assert!(
         run.status.success(),
         "buffer-failure C host failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "HOST-ALIVE\n");
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Converts invalid buffer allocation sizes and descriptor-registry exhaustion
+/// into runtime-failure status, with a successful export after every escape.
+#[test]
+fn test_cdylib_buffer_allocation_fatals_keep_host_alive() {
+    let dir = make_test_dir("elephc_cdylib_buffer_allocation_failures");
+    fs::write(
+        dir.join("buffer_allocation_failures.php"),
+        BUFFER_ALLOCATION_FAILURE_EXPORT_PHP,
+    )
+    .unwrap();
+
+    let output = elephc_command(&dir)
+        .args([
+            "--emit",
+            "cdylib",
+            "--heap-size=1048576",
+            "buffer_allocation_failures.php",
+        ])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "buffer-allocation cdylib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let host = compile_linked_c_host(
+        &dir,
+        BUFFER_ALLOCATION_FAILURE_HOST_C,
+        "buffer-allocation-failure-host",
+        "buffer_allocation_failures",
+    );
+    let run = Command::new(&host)
+        .output()
+        .expect("failed to run the buffer-allocation C host");
+    assert!(
+        run.status.success(),
+        "buffer-allocation C host failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
         run.status.code(),
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
