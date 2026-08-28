@@ -222,6 +222,10 @@ fn emit_string_export_aarch64(
         emitter,
         &format!("L_cdylib_{suffix}_stack_limit_ready"),
     );
+    emitter.instruction(&format!("ldr x0, [sp, #{AARCH64_INPUT_PTR_OFFSET}]")); // restore the host input pointer after the lazy initializer
+    emitter.instruction(&format!("ldr x1, [sp, #{AARCH64_INPUT_LEN_OFFSET}]")); // restore the host input length after the lazy initializer
+    emitter.instruction(&format!("ldr x2, [sp, #{AARCH64_OUT_PTR_OFFSET}]"));   // restore the host output-pointer address after the lazy initializer
+    emitter.instruction(&format!("ldr x3, [sp, #{AARCH64_OUT_LEN_OFFSET}]"));   // restore the host output-length address after the lazy initializer
     emitter.instruction(&format!("str xzr, [sp, #{AARCH64_RESULT_PTR_OFFSET}]")); // clear the borrowed PHP result pointer slot
     emitter.instruction(&format!("str xzr, [sp, #{AARCH64_OWNED_PTR_OFFSET}]")); // clear the caller-owned output pointer slot
     emit_clear_error_inline(emitter);
@@ -365,6 +369,10 @@ fn emit_string_export_x86_64(
         emitter,
         &format!("L_cdylib_{suffix}_stack_limit_ready"),
     );
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {X86_INPUT_PTR_OFFSET}]")); // restore the host input pointer after the lazy initializer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {X86_INPUT_LEN_OFFSET}]")); // restore the host input length after the lazy initializer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {X86_OUT_PTR_OFFSET}]")); // restore the host output-pointer address after the lazy initializer
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rbp - {X86_OUT_LEN_OFFSET}]")); // restore the host output-length address after the lazy initializer
     emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_RESULT_PTR_OFFSET}], 0")); // clear the borrowed PHP result pointer slot
     emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_OWNED_PTR_OFFSET}], 0")); // clear the caller-owned output pointer slot
     emit_clear_error_inline(emitter);
@@ -788,5 +796,48 @@ mod tests {
             saved_host_args < lazy_init && lazy_init < boundary_push,
             "lazy stack init must follow host-argument preservation and precede boundary entry:\n{asm}"
         );
+    }
+
+    /// Every supported target reloads all four owned-string host arguments after the
+    /// ordinary lazy-initializer call and before dereferencing either output address.
+    #[test]
+    fn restores_owned_string_host_arguments_after_lazy_stack_init_for_all_targets() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let export = string_export();
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            let asm = emitter.output();
+            let lazy_init = asm.find("__rt_stack_limit_init").unwrap();
+            let first_output_clear = match target.arch {
+                Arch::AArch64 => asm.find("str xzr, [x2]").unwrap(),
+                Arch::X86_64 => asm.find("mov QWORD PTR [rdx], 0").unwrap(),
+            };
+            let restorations = match target.arch {
+                Arch::AArch64 => [
+                    format!("ldr x0, [sp, #{AARCH64_INPUT_PTR_OFFSET}]"),
+                    format!("ldr x1, [sp, #{AARCH64_INPUT_LEN_OFFSET}]"),
+                    format!("ldr x2, [sp, #{AARCH64_OUT_PTR_OFFSET}]"),
+                    format!("ldr x3, [sp, #{AARCH64_OUT_LEN_OFFSET}]"),
+                ],
+                Arch::X86_64 => [
+                    format!("mov rdi, QWORD PTR [rbp - {X86_INPUT_PTR_OFFSET}]"),
+                    format!("mov rsi, QWORD PTR [rbp - {X86_INPUT_LEN_OFFSET}]"),
+                    format!("mov rdx, QWORD PTR [rbp - {X86_OUT_PTR_OFFSET}]"),
+                    format!("mov rcx, QWORD PTR [rbp - {X86_OUT_LEN_OFFSET}]"),
+                ],
+            };
+            for restoration in restorations {
+                let restored = asm[lazy_init..].find(&restoration).unwrap() + lazy_init;
+                assert!(
+                    restored < first_output_clear,
+                    "{target:?} used an output address before restoring `{restoration}`:\n{asm}"
+                );
+            }
+        }
     }
 }
