@@ -71,7 +71,7 @@ pub(crate) use arrays::{emit_nan_bool_coercion_probe, nan_bool_coercion_warning_
 pub(crate) use arrays::HashMapResultKind;
 /// The call-stack overflow guard's shared symbol name. Codegen's prologue check and the
 /// runtime emitter must name the same `.comm` word or the guard silently never fires.
-pub(crate) use system::STACK_LIMIT_SYMBOL;
+pub(crate) use system::{STACK_LIMIT_MAIN_SYMBOL, STACK_LIMIT_SYMBOL};
 /// Emit full runtime helpers (orchestrates all runtime sections).
 pub(crate) use fibers::{
     FIBER_CALLABLE_OFFSET, FIBER_PENDING_THROW_OFFSET, FIBER_STACK_BASE_OFFSET,
