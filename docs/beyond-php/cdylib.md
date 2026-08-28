@@ -161,13 +161,13 @@ the process are not contained.
 `exit` and `die` cannot return a status, so the compiler rejects them when they
 are transitively reachable from any export, including through fixed
 constructors/destructors, implicit object conversion and property hooks,
-ArrayAccess, Countable, JsonSerializable, include-variant dispatchers, and
-statically resolved runtime callbacks or closures. It also rejects reachable
-fatal EIR terminators, fatal builtin argument subsets, `eval`, runtime-selected
-constructors, foreign calls, and other opaque invocation paths when it cannot
-prove process termination unreachable. The same validation runs for exported
-code under plain `--check` and `--emit-ir`, not only during final cdylib
-emission.
+ArrayAccess, Countable, JsonSerializable, Iterator/IteratorAggregate,
+include-variant dispatchers, and statically resolved runtime callbacks or
+closures. It also rejects reachable fatal EIR terminators, fatal builtin
+argument subsets, `eval`, runtime-selected constructors, foreign calls, and
+other opaque invocation paths when it cannot prove process termination
+unreachable. The same validation runs for exported code under plain `--check`
+and `--emit-ir`, not only during final cdylib emission.
 
 ## C consumption
 

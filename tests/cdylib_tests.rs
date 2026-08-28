@@ -1109,7 +1109,7 @@ function roundtrip(string $input): string {
 
 /// Traverses user bodies reached by implicit object operations whose EIR does not
 /// carry a method-call target, including string conversion, property access,
-/// ArrayAccess, Countable, and JsonSerializable dispatch.
+/// ArrayAccess, Countable, JsonSerializable, and foreach iterator dispatch.
 #[test]
 fn test_cdylib_export_rejects_exit_in_implicitly_invoked_object_bodies() {
     let cases = [
@@ -1233,6 +1233,44 @@ class Boom implements JsonSerializable {
 function probe(string $input): string {
     $boom = new Boom();
     return (string) json_encode($boom);
+}
+"#,
+        ),
+        (
+            "iterator_rewind",
+            "rewind",
+            r#"<?php
+class Boom implements Iterator {
+    public function rewind(): void { exit(50); }
+    public function valid(): bool { return false; }
+    public function current(): mixed { return null; }
+    public function key(): mixed { return null; }
+    public function next(): void {}
+}
+
+#[Export]
+function probe(string $input): string {
+    $boom = new Boom();
+    foreach ($boom as $value) {}
+    return $input;
+}
+"#,
+        ),
+        (
+            "iterator_aggregate",
+            "getIterator",
+            r#"<?php
+class Boom implements IteratorAggregate {
+    public function getIterator(): Traversable {
+        exit(51);
+    }
+}
+
+#[Export]
+function probe(string $input): string {
+    $boom = new Boom();
+    foreach ($boom as $value) {}
+    return $input;
 }
 "#,
         ),

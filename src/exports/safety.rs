@@ -26,9 +26,9 @@ use super::ExportedFunction;
 /// User bodies that the backend can invoke without emitting an EIR method-call opcode.
 ///
 /// Construction and destruction are tied to object lifetime. The remaining hooks are
-/// dispatched by string conversion, property, ArrayAccess, Countable, or JSON runtime
-/// paths whose EIR instruction does not identify the concrete method body.
-const IMPLICIT_OBJECT_METHODS: [&str; 8] = [
+/// dispatched by string conversion, property, ArrayAccess, Countable, JSON, or iterator
+/// runtime paths whose EIR instruction does not identify the concrete method body.
+const IMPLICIT_OBJECT_METHODS: [&str; 14] = [
     "__construct",
     "__destruct",
     "__toString",
@@ -37,6 +37,12 @@ const IMPLICIT_OBJECT_METHODS: [&str; 8] = [
     "offsetSet",
     "count",
     "jsonSerialize",
+    "getIterator",
+    "rewind",
+    "valid",
+    "next",
+    "key",
+    "current",
 ];
 
 /// Rejects non-recoverable constructs reachable from any public cdylib export.
