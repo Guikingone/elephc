@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function getenv(string $name): mixed
+function getenv(string $name = null, bool $local_only = false): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 0–2 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

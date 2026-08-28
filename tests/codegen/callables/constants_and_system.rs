@@ -2386,6 +2386,74 @@ echo $missing === false ? " unset" : " set";
     );
 }
 
+// Tests `getenv()` with no argument: the whole environment as an array.
+/// Verifies the no-argument form answers an array holding every variable.
+///
+/// Written around `putenv` rather than a variable the test runner happens to
+/// export, so the assertion holds under any environment — and because reading a
+/// variable set AFTER the program started is the case that separates a live
+/// lookup from a snapshot. libc may reallocate the entry vector when a variable
+/// is added, so the `envp` handed to `main` goes stale; `php -n` reports the
+/// addition and so must this.
+#[test]
+fn test_getenv_with_no_argument_is_the_whole_environment() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("ELEPHC_WHOLE_ENV_PROBE=present");
+$all = getenv();
+echo is_array($all) ? "array" : "not-array";
+echo ":", $all["ELEPHC_WHOLE_ENV_PROBE"] ?? "missing";
+echo ":", count($all) > 1 ? "many" : "few";
+// The FIRST `=` separates name from value; a value may hold more of them.
+putenv("ELEPHC_EQUALS_PROBE=a=b=c");
+echo ":", getenv()["ELEPHC_EQUALS_PROBE"] ?? "missing";
+"#,
+    );
+    assert_eq!(out, "array:present:many:a=b=c");
+}
+
+// Tests that `$_ENV` and `$_SERVER` carry what PHP's CLI SAPI puts in them, and
+// that a later `putenv` does NOT reach them.
+/// Verifies a CLI program finds its environment in both superglobals.
+///
+/// Measured against `php -n` on a script file: `$_ENV` equals `getenv()`, and
+/// `$_SERVER` holds the same environment plus nine keys of its own. They were
+/// seeded EMPTY before, which read as "not set" to any program that looked.
+///
+/// The `putenv` half is the asymmetry PHP actually has, and it is easy to get
+/// wrong in either direction: `getenv()` reads the live environment and reports
+/// the addition, while `$_ENV` and `$_SERVER` are SNAPSHOTS taken before the
+/// program ran and do not. Measured, not assumed — `php -n` answers
+/// `absent-de-ENV` and `seen` to the same pair.
+///
+/// `$_SERVER['argv']` is asserted because it has no substitute in a CLI program,
+/// and `DOCUMENT_ROOT` because PHP leaves it EMPTY off-web rather than absent —
+/// those are different answers to `array_key_exists`.
+#[test]
+fn test_cli_superglobals_carry_the_environment() {
+    let out = compile_and_run(
+        r#"<?php
+echo count($_ENV) > 0 ? "env-filled" : "env-empty";
+echo ":", count($_SERVER) > count($_ENV) ? "server-has-more" : "server-not-more";
+putenv("ELEPHC_SUPERGLOBAL_PROBE=seen");
+echo ":", $_ENV["ELEPHC_SUPERGLOBAL_PROBE"] ?? "not-in-env";
+echo ":", $_SERVER["ELEPHC_SUPERGLOBAL_PROBE"] ?? "not-in-server";
+echo ":", getenv("ELEPHC_SUPERGLOBAL_PROBE");
+echo ":", array_key_exists("argv", $_SERVER) ? "argv" : "no-argv";
+echo ":", array_key_exists("argc", $_SERVER) ? "argc" : "no-argc";
+echo ":", array_key_exists("DOCUMENT_ROOT", $_SERVER) ? "root" : "no-root";
+echo ":", $_SERVER["DOCUMENT_ROOT"];
+echo ":", is_int($_SERVER["REQUEST_TIME"]) ? "int-time" : "not-int";
+// The request superglobals stay empty in CLI, as they are in PHP.
+echo ":", count($_GET) + count($_POST) + count($_COOKIE) + count($_FILES);
+"#,
+    );
+    assert_eq!(
+        out,
+        "env-filled:server-has-more:not-in-env:not-in-server:seen:argv:argc:root::int-time:0"
+    );
+}
+
 // Tests `putenv("ELEPHC_TEST_VAR=hello")` followed by `getenv("ELEPHC_TEST_VAR")`
 // returns "hello". Verifies environment variable set/get round-trip.
 /// Verifies that putenv.
