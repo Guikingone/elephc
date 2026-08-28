@@ -219,6 +219,37 @@ echo $total, "\n";
     assert_output_and_clean_heap("elephc_leak_json_encode", source, "35\n");
 }
 
+/// Verifies a function whose local holds an array does not leak when it is
+/// called from inside a loop.
+///
+/// The inliner splices small callees into their caller. A callee's `StoreLocal`
+/// was lowered where its own loop stack was empty, so it carries no
+/// release-of-previous; spliced into a HOST loop, every iteration overwrites the
+/// slot and abandons what it held. `inline.rs` already refused callees with a
+/// by-value container PARAMETER for exactly this reason — an ordinary local is
+/// the same mechanism from a source that guard did not cover.
+///
+/// Measured before the fix, and the shape is what isolates it: five calls
+/// unrolled were clean, the same loop with the array literal written inline was
+/// clean, and only calls INSIDE a loop leaked — `frees=9` of 21 at five
+/// iterations, `frees=54` of 201 at fifty. About three blocks per iteration,
+/// which is a program that grows without bound rather than a fixed cost.
+///
+/// Fifty iterations rather than five: a per-iteration leak and a one-off both
+/// show as "not clean", and only the count separates them.
+#[test]
+fn a_callee_with_an_array_local_does_not_leak_when_called_in_a_loop() {
+    let source = r#"<?php
+function sized(): int { $rows = ["a" => 1, "b" => 2]; return count($rows); }
+$total = 0;
+for ($i = 0; $i < 50; $i++) {
+    $total += sized();
+}
+echo $total, "\n";
+"#;
+    assert_output_and_clean_heap("elephc_leak_inlined_loop_local", source, "100\n");
+}
+
 // ---------------------------------------------------------------------------
 // Controls: already clean before this change, and must stay out of `Fresh`.
 // ---------------------------------------------------------------------------
