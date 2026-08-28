@@ -530,6 +530,33 @@ pub(crate) fn lower_fsync(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 pub(crate) fn lower_fflush(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "fflush", 1)?;
     let stream = expect_operand(inst, 0)?;
+    // php's `fflush()` CLEARS the flush debt, so the close that follows does not flush again:
+    // MEASURED on `php -n` 8.5.6, `write; fflush; close` calls `stream_flush()` ONCE, while
+    // `write; fflush; write; close` calls it twice. The debt lives on the StreamState, which only
+    // the HANDLE reaches — the descriptor loaded below cannot.
+    load_stream_handle_to_result(ctx, stream, "fflush")?;
+    let debt_cleared = ctx.next_label("fflush_debt_cleared");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            ctx.emitter.instruction(&format!("cbz x0, {}", debt_cleared));
+            ctx.emitter.instruction(&format!(
+                "str xzr, [x0, #{}]",
+                crate::codegen_support::runtime::resources::layout::STREAM_WRITTEN_SINCE_FLUSH_OFFSET
+            ));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", debt_cleared));
+            ctx.emitter.instruction(&format!(
+                "mov QWORD PTR [rax + {}], 0",
+                crate::codegen_support::runtime::resources::layout::STREAM_WRITTEN_SINCE_FLUSH_OFFSET
+            ));
+        }
+    }
+    ctx.emitter.label(&debt_cleared);
     load_stream_fd_to_result(ctx, stream, "fflush")?;
     let wrapper_label = ctx.next_label("fflush_user_wrapper");
     let done_label = ctx.next_label("fflush_done");

@@ -79,6 +79,10 @@ pub fn emit_readfile_wrapper(emitter: &mut Emitter) {
 
     emitter.label("__rt_rfw_done");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the synthetic fd
+    // a read owes no flush
+    emitter.instruction("mov x9, #0");
+    abi::emit_symbol_address(emitter, "x10", "_uw_pending_flush");
+    emitter.instruction("str x9, [x10]");
     emitter.instruction("bl __rt_user_wrapper_fclose");                         // run the wrapper's stream_close and free the handle slot
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the byte count for return
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -141,6 +145,9 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_rfw_done_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the synthetic fd
+    // a read owes no flush
+    abi::emit_symbol_address(emitter, "r10", "_uw_pending_flush");
+    emitter.instruction("mov QWORD PTR [r10], 0");
     emitter.instruction("call __rt_user_wrapper_fclose");                       // run the wrapper's stream_close and free the handle slot
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the byte count for return
     emitter.instruction("add rsp, 48");                                         // release the helper frame

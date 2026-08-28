@@ -37,6 +37,15 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             abi::emit_call_label(ctx.emitter, "__rt_stream_unlink_if_owned");
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // resolve the opaque handle while preserving its descriptor
             abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            // Publish the flush debt HERE, where the handle is still reachable: by the userspace
+            // dispatch below, only the descriptor is left in a register.
+            let debt_read = ctx.next_label("fclose_flush_debt");
+            ctx.emitter.instruction("mov x9, #0");                              // no state: nothing is owed
+            ctx.emitter.instruction(&format!("cbz x0, {}", debt_read));
+            ctx.emitter.instruction(&format!("ldr x9, [x0, #{}]", crate::codegen_support::runtime::resources::layout::STREAM_WRITTEN_SINCE_FLUSH_OFFSET));
+            ctx.emitter.label(&debt_read);
+            abi::emit_symbol_address(ctx.emitter, "x10", "_uw_pending_flush");
+            ctx.emitter.instruction("str x9, [x10]");
             // PHP invalidates attached filter resources at fclose(), not when the
             // last reference to the stream goes away, so the chains are closed here
             // as well as from the state destructor.
@@ -74,6 +83,15 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             abi::emit_call_label(ctx.emitter, "__rt_stream_unlink_if_owned");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // resolve the opaque handle while preserving its descriptor
             abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            // See the AArch64 arm: publish the flush debt while the handle is still reachable.
+            let debt_read = ctx.next_label("fclose_flush_debt");
+            ctx.emitter.instruction("xor r9d, r9d");                            // no state: nothing is owed
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", debt_read));
+            ctx.emitter.instruction(&format!("mov r9, QWORD PTR [rax + {}]", crate::codegen_support::runtime::resources::layout::STREAM_WRITTEN_SINCE_FLUSH_OFFSET));
+            ctx.emitter.label(&debt_read);
+            abi::emit_symbol_address(ctx.emitter, "r10", "_uw_pending_flush");
+            ctx.emitter.instruction("mov QWORD PTR [r10], r9");
             // PHP invalidates attached filter resources at fclose(), not when the
             // last reference to the stream goes away, so the chains are closed here
             // as well as from the state destructor.

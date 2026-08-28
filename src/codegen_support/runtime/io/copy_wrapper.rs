@@ -91,14 +91,23 @@ fn emit_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_cpw_done");
     emitter.instruction("ldr x0, [sp, #8]");
-    emitter.instruction("bl __rt_cpw_close_one");                               // close the destination
+    emitter.instruction("mov x9, #1");
+    abi::emit_symbol_address(emitter, "x10", "_uw_pending_flush");
+    emitter.instruction("str x9, [x10]");
+    emitter.instruction("bl __rt_cpw_close_one");                               // close the destination, which was written
     emitter.instruction("ldr x0, [sp, #0]");
-    emitter.instruction("bl __rt_cpw_close_one");                               // then the source
+    emitter.instruction("mov x9, #0");
+    abi::emit_symbol_address(emitter, "x10", "_uw_pending_flush");
+    emitter.instruction("str x9, [x10]");
+    emitter.instruction("bl __rt_cpw_close_one");                               // then the source, which was only read
     emitter.instruction("mov x0, #1");                                          // php answers true
     emitter.instruction("b __rt_cpw_ret");
 
     emitter.label("__rt_cpw_close_src");
     emitter.instruction("ldr x0, [sp, #0]");
+    emitter.instruction("mov x9, #0");
+    abi::emit_symbol_address(emitter, "x10", "_uw_pending_flush");
+    emitter.instruction("str x9, [x10]");
     emitter.instruction("bl __rt_cpw_close_one");                               // the source was opened; do not leak it
     emitter.label("__rt_cpw_fail");
     emitter.instruction("mov x0, #0");                                          // php answers false
@@ -182,14 +191,20 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_cpw_done_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");
-    emitter.instruction("call __rt_cpw_close_one");                             // close the destination
+    abi::emit_symbol_address(emitter, "r10", "_uw_pending_flush");
+    emitter.instruction("mov QWORD PTR [r10], 1");
+    emitter.instruction("call __rt_cpw_close_one");                             // close the destination, which was written
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
-    emitter.instruction("call __rt_cpw_close_one");                             // then the source
+    abi::emit_symbol_address(emitter, "r10", "_uw_pending_flush");
+    emitter.instruction("mov QWORD PTR [r10], 0");
+    emitter.instruction("call __rt_cpw_close_one");                             // then the source, which was only read
     emitter.instruction("mov eax, 1");                                          // php answers true
     emitter.instruction("jmp __rt_cpw_ret_x86");
 
     emitter.label("__rt_cpw_close_src_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+    abi::emit_symbol_address(emitter, "r10", "_uw_pending_flush");
+    emitter.instruction("mov QWORD PTR [r10], 0");
     emitter.instruction("call __rt_cpw_close_one");                             // the source was opened; do not leak it
     emitter.label("__rt_cpw_fail_x86");
     emitter.instruction("xor eax, eax");                                        // php answers false

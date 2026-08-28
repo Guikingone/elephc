@@ -15,6 +15,7 @@
 
 use crate::codegen_support::runtime::resources::layout::{
     STREAM_CHUNK_SIZE_OFFSET, STREAM_PENDING_LEN_OFFSET, STREAM_PENDING_POS_OFFSET,
+    STREAM_WRITTEN_SINCE_FLUSH_OFFSET,
     STREAM_APPEND_SKIP_OFFSET, STREAM_BACKEND_KIND_OFFSET, STREAM_BACKEND_USER_WRAPPER,
     STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,
     STREAM_WRAPPER_ID_OFFSET,
@@ -203,6 +204,14 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // SEEK_SET
     emitter.instruction("bl __rt_user_wrapper_fseek");                          // put the wrapper where the reader is
     emitter.label("__rt_uw_write_resynced");
+
+    // -- this stream now owes a flush, which is what php decides its close on --
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");
+    emitter.instruction("cbz x0, __rt_uw_write_undirtied");
+    emitter.instruction("mov x9, #1");
+    emitter.instruction(&format!("str x9, [x0, #{STREAM_WRITTEN_SINCE_FLUSH_OFFSET}]"));
+    emitter.label("__rt_uw_write_undirtied");
 
     emitter.instruction("ldr x0, [sp, #24]");                                   // the opaque stream handle
     emitter.instruction("bl __rt_stream_state");                                // the size lives on the state
@@ -604,6 +613,16 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // SEEK_SET
     emitter.instruction("call __rt_user_wrapper_fseek");                        // put the wrapper where the reader is
     emitter.label("__rt_uw_write_resynced_x86");
+
+    // -- this stream now owes a flush; see the AArch64 counterpart --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");
+    emitter.instruction("call __rt_stream_state");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_uw_write_undirtied_x86");
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rax + {STREAM_WRITTEN_SINCE_FLUSH_OFFSET}], 1"
+    ));
+    emitter.label("__rt_uw_write_undirtied_x86");
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the opaque stream handle
     emitter.instruction("call __rt_stream_state");                              // the size lives on the state

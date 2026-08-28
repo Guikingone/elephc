@@ -1615,6 +1615,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // rmdir and the whole stream_metadata family, so it cannot know which builtin called it; the
     // lowering publishes the pair before dispatching and the helper reads it only on the
     // missing-method path, which runs no user code, so nothing can overwrite it in between.
+    // Whether the userspace close about to run owes a `stream_flush()`. PUBLISHED rather than
+    // passed, because the one site that must answer it — `fclose()`'s lowering — has the STREAM
+    // HANDLE only high up in its own frame, where several intervening pushes make the offset
+    // unstable and no caller-saved register survives the calls in between.
+    //
+    // It resets to 1 after every read, so a close whose caller forgot to publish flushes — which
+    // is what every close did before this existed. The failure mode is the old behaviour, not
+    // silence.
+    out.push_str(&comm_directive("_uw_pending_flush", 8, target));
     out.push_str(&comm_directive("_uwmh_head", 16, target));
     out.push_str(&comm_directive("_uwmh_tail", 16, target));
     // _user_filter_consumed_scratch: the storage `filter()`'s by-reference `&$consumed` binds to.

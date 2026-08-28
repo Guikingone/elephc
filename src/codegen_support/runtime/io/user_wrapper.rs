@@ -201,6 +201,21 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     // `stream_close()`. MEASURED on `php -n` 8.5.6 against a wrapper that traces its own calls —
     // elephc called `stream_close` alone, and anything the wrapper was still holding was lost.
     // The flush clobbers the object pointer, so the handle is resolved again for the close.
+    // php flushes on close only when the stream owes one — MEASURED on `php -n` 8.5.6, `fclose()`
+    // calls `stream_flush()` after a write and not otherwise, and an explicit `fflush()` clears
+    // the debt so the close does not flush again. It is not the MODE: a `w` stream that was never
+    // written is not flushed either.
+    //
+    // The answer is PUBLISHED in `_uw_pending_flush` rather than passed, because the site that has
+    // to answer it — `fclose()`'s lowering — reaches the stream HANDLE only high up in its own
+    // frame, where intervening pushes make the offset unstable and no caller-saved register
+    // survives the calls in between. The slot resets to 1 on every read, so a close whose caller
+    // forgot to publish flushes, which is what every close did before this existed.
+    abi::emit_symbol_address(emitter, "x9", "_uw_pending_flush");
+    emitter.instruction("ldr x10, [x9]");                                       // does this close owe a flush?
+    emitter.instruction("mov x11, #1");
+    emitter.instruction("str x11, [x9]");                                       // reset: an unpublished close flushes
+    emitter.instruction("cbz x10, __rt_uwfclose_closing");                      // nothing written: php does not flush
     emit_aarch64_handle_lookup(emitter, "__rt_uwfclose_clear");                 // resolve obj into x0, fall through to slot-clear on missing handles
     emit_aarch64_method_lookup(emitter, "__rt_uwfclose_closing", VTABLE_SLOT_FLUSH); // stream_flush is optional
     emitter.instruction("blr x11");                                             // invoke stream_flush on the wrapper object
@@ -237,6 +252,12 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the synthetic file descriptor
 
     // See the AArch64 counterpart: php flushes before it closes.
+    // See the AArch64 counterpart for why the answer is published rather than passed.
+    abi::emit_symbol_address(emitter, "r9", "_uw_pending_flush");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // does this close owe a flush?
+    emitter.instruction("mov QWORD PTR [r9], 1");                               // reset: an unpublished close flushes
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_uwfclose_closing_x86");                        // nothing written: php does not flush
     emit_x86_handle_lookup(emitter, "__rt_uwfclose_clear_x86");                 // resolve obj into rdi, fall through on missing handles
     emit_x86_method_lookup(emitter, "__rt_uwfclose_closing_x86", VTABLE_SLOT_FLUSH); // stream_flush is optional
     emitter.instruction("call r11");                                            // invoke stream_flush on the wrapper object

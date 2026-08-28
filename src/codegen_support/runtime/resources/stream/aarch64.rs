@@ -172,6 +172,10 @@ fn emit_stream_adopt_fd(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x9, #{}", STREAM_BACKEND_USER_WRAPPER));  // does rollback own a userspace stream wrapper?
     emitter.instruction("b.ne __rt_stream_adopt_fd_check_user_dir");            // inspect userspace directory ownership next
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the synthetic wrapper handle
+    // nothing was written before the publication failed
+    emitter.instruction("mov x9, #0");
+    abi::emit_symbol_address(emitter, "x10", "_uw_pending_flush");
+    emitter.instruction("str x9, [x10]");
     emitter.instruction("bl __rt_user_wrapper_fclose");                         // invoke stream_close for failed registry publication
     emitter.instruction("b __rt_stream_adopt_fd_fail");                         // wrapper rollback consumed its backend
     emitter.label("__rt_stream_adopt_fd_check_user_dir");
@@ -542,6 +546,13 @@ fn emit_stream_close_backend(emitter: &mut Emitter) {
     emitter.instruction("b __rt_stream_close_backend_mark");                    // finish lifecycle publication
     emitter.label("__rt_stream_close_backend_user_wrapper");
     emitter.instruction("mov x0, x10");                                         // pass the synthetic wrapper handle to stream_close dispatch
+    emitter.instruction("ldr x9, [sp, #24]");                                   // the StreamState this close is tearing down
+    emitter.instruction(&format!(
+        "ldr x9, [x9, #{}]",
+        crate::codegen_support::runtime::resources::layout::STREAM_WRITTEN_SINCE_FLUSH_OFFSET
+    ));                                                                         // php flushes only what was written
+    abi::emit_symbol_address(emitter, "x11", "_uw_pending_flush");
+    emitter.instruction("str x9, [x11]");
     emitter.instruction("bl __rt_user_wrapper_fclose");                         // invoke the userspace wrapper close callback exactly once
     emitter.instruction("b __rt_stream_close_backend_mark");                    // finish lifecycle publication
     emitter.label("__rt_stream_close_backend_popen");
