@@ -13,6 +13,7 @@
 //! - A payload larger than the 64 KiB scratch is written unfiltered; v1 stream
 //!   filters target the common small-write case.
 
+use crate::codegen_support::runtime::data::WRAPPER_MISSING_HOOK_HEAD_FWRITE;
 use crate::codegen_support::runtime::resources::layout::{
     STREAM_CHUNK_SIZE_OFFSET, STREAM_PENDING_LEN_OFFSET, STREAM_PENDING_POS_OFFSET,
     STREAM_WRITTEN_SINCE_FLUSH_OFFSET,
@@ -203,6 +204,17 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x9");
     emitter.instruction("mov x2, #0");                                          // SEEK_SET
     emitter.instruction("bl __rt_user_wrapper_fseek");                          // put the wrapper where the reader is
+    // php does not stop at the seek: it asks the wrapper where it actually LANDED, because a
+    // wrapper is free to land somewhere else and say so. MEASURED on `php -n` 8.5.6 with a
+    // wrapper that seeks but cannot tell — `seek(3)`, then
+    // `Warning: fwrite(): N::stream_tell is not implemented!`, then the write still happens.
+    // fwrite WARNS and proceeds where fseek refuses, so the reconciliation's answer is ignored
+    // here; the head names `fwrite()` because php names the caller.
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the opaque stream handle
+    emitter.instruction("ldr x1, [sp, #0]");                                    // the synthetic descriptor
+    abi::emit_symbol_address(emitter, "x2", "_uwmh_head_fwrite");
+    emitter.instruction(&format!("mov x3, #{}", WRAPPER_MISSING_HOOK_HEAD_FWRITE.len()));
+    emitter.instruction("bl __rt_user_wrapper_seek_reconcile");                 // ask where it landed
     emitter.label("__rt_uw_write_resynced");
 
     // -- this stream now owes a flush, which is what php decides its close on --
@@ -612,6 +624,12 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the synthetic descriptor
     emitter.instruction("xor edx, edx");                                        // SEEK_SET
     emitter.instruction("call __rt_user_wrapper_fseek");                        // put the wrapper where the reader is
+    // See the AArch64 counterpart: php asks where the wrapper landed, and warns without refusing.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the opaque stream handle
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // the synthetic descriptor
+    abi::emit_symbol_address(emitter, "rdx", "_uwmh_head_fwrite");
+    emitter.instruction(&format!("mov rcx, {}", WRAPPER_MISSING_HOOK_HEAD_FWRITE.len()));
+    emitter.instruction("call __rt_user_wrapper_seek_reconcile");               // ask where it landed
     emitter.label("__rt_uw_write_resynced_x86");
 
     // -- this stream now owes a flush; see the AArch64 counterpart --
