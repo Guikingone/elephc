@@ -502,7 +502,12 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("opt-prop");
     let phase_started = Instant::now();
-    let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new(&ast);
+    let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new_with_type_metadata(
+        &ast,
+        &check_result.functions,
+        &check_result.classes,
+        &check_result.interfaces,
+    );
     // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
     // lowering a concrete type the checker never approved for that name, so the pass is told which
     // names those are and refuses to record a fact for them.
