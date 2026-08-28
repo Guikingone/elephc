@@ -6,8 +6,8 @@
 //! - `crate::pipeline::compile()` after AST-to-EIR lowering for cdylib output.
 //!
 //! Key details:
-//! - Statically reachable functions, methods, constructors, and closures are
-//!   traversed transitively across every user-authored EIR body collection.
+//! - Statically reachable functions, methods, constructors, implicit object hooks,
+//!   and closures are traversed across every user-authored EIR body collection.
 //! - Fatal terminators, fatal runtime subsets, `exit`/`die`, `eval`, and opaque
 //!   invocation surfaces are rejected with a complete static call path.
 
@@ -22,6 +22,22 @@ use crate::ir::{
 use crate::names::php_symbol_key;
 
 use super::ExportedFunction;
+
+/// User bodies that the backend can invoke without emitting an EIR method-call opcode.
+///
+/// Construction and destruction are tied to object lifetime. The remaining hooks are
+/// dispatched by string conversion, property, ArrayAccess, Countable, or JSON runtime
+/// paths whose EIR instruction does not identify the concrete method body.
+const IMPLICIT_OBJECT_METHODS: [&str; 8] = [
+    "__construct",
+    "__destruct",
+    "__toString",
+    "__get",
+    "offsetGet",
+    "offsetSet",
+    "count",
+    "jsonSerialize",
+];
 
 /// Rejects non-recoverable constructs reachable from any public cdylib export.
 pub fn validate_cdylib_call_graph(
@@ -102,7 +118,7 @@ pub fn validate_cdylib_call_graph(
                         );
                     }
                     Op::ObjectNew => {
-                        for method in ["__construct", "__destruct"] {
+                        for method in IMPLICIT_OBJECT_METHODS {
                             if let Some(body) = fixed_object_method(
                                 module,
                                 instruction.immediate.as_ref(),

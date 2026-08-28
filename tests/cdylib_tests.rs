@@ -462,6 +462,54 @@ int main(void) {
 }
 "#;
 
+const STACK_GUARD_EXPORT_PHP: &str = r#"<?php
+function deep(int $depth): int {
+    if ($depth >= 100000) {
+        return $depth;
+    }
+    return deep($depth + 1);
+}
+
+#[Export]
+function deep_probe(string $input): string {
+    return (string) deep(0);
+}
+
+#[Export]
+function after_overflow(string $input): string {
+    return "HOST-ALIVE";
+}
+"#;
+
+const STACK_GUARD_HOST_C: &str = r#"
+#include "libstack_guard.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+    if (elephc_init() != ELEPHC_STATUS_OK) return 1;
+
+    char *output = (char *)(uintptr_t)1;
+    size_t output_len = 99;
+    int32_t status = deep_probe("", 0, &output, &output_len);
+    if (status != ELEPHC_STATUS_RUNTIME_FAILURE ||
+        elephc_last_status() != ELEPHC_STATUS_RUNTIME_FAILURE ||
+        output != NULL || output_len != 0 || elephc_last_error() == NULL) return 2;
+
+    output = NULL;
+    output_len = 0;
+    status = after_overflow("", 0, &output, &output_len);
+    if (status != ELEPHC_STATUS_OK || output == NULL || output_len != 10 ||
+        memcmp(output, "HOST-ALIVE", 10) != 0) return 3;
+
+    puts("HOST-ALIVE");
+    elephc_free(output);
+    elephc_shutdown();
+    return 0;
+}
+"#;
+
 const NAMESPACED_EXPORT_PHP: &str = r#"<?php
 namespace Demo;
 
@@ -598,6 +646,40 @@ fn test_cdylib_owned_string_boundary_is_binary_safe_and_recoverable() {
         linked_run.status.code(),
         String::from_utf8_lossy(&linked_run.stderr)
     );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Arms the stack floor through `elephc_init()`, converts deep-recursion overflow
+/// to runtime-failure status, and proves the same C host can call the library again.
+#[test]
+fn test_cdylib_stack_overflow_returns_runtime_failure_and_keeps_host_alive() {
+    let dir = make_test_dir("elephc_cdylib_stack_guard");
+    fs::write(dir.join("stack_guard.php"), STACK_GUARD_EXPORT_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", "stack_guard.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "stack-guard cdylib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let host =
+        compile_linked_c_host(&dir, STACK_GUARD_HOST_C, "stack-guard-host", "stack_guard");
+    let run = Command::new(&host)
+        .output()
+        .expect("failed to run the stack-guard C host");
+    assert!(
+        run.status.success(),
+        "stack-guard C host failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "HOST-ALIVE\n");
 
     fs::remove_dir_all(&dir).ok();
 }
@@ -1023,6 +1105,148 @@ function roundtrip(string $input): string {
             && stderr.contains("exit/die cannot return through the cdylib error boundary"),
         "expected the destructor call path and exit restriction, got:\n{stderr}"
     );
+}
+
+/// Traverses user bodies reached by implicit object operations whose EIR does not
+/// carry a method-call target, including string conversion, property access,
+/// ArrayAccess, Countable, and JsonSerializable dispatch.
+#[test]
+fn test_cdylib_export_rejects_exit_in_implicitly_invoked_object_bodies() {
+    let cases = [
+        (
+            "tostring_concat",
+            "__toString",
+            r#"<?php
+class Boom {
+    public function __toString(): string {
+        exit(42);
+    }
+}
+
+#[Export]
+function probe(string $input): string {
+    $boom = new Boom();
+    return "x" . $boom;
+}
+"#,
+        ),
+        (
+            "tostring_echo",
+            "__toString",
+            r#"<?php
+class Boom {
+    public function __toString(): string {
+        exit(43);
+    }
+}
+
+#[Export]
+function probe(string $input): string {
+    $boom = new Boom();
+    echo $boom;
+    return $input;
+}
+"#,
+        ),
+        (
+            "offset_get",
+            "offsetGet",
+            r#"<?php
+class Boom implements ArrayAccess {
+    public function offsetExists(mixed $offset): bool { return true; }
+    public function offsetGet(mixed $offset): mixed { exit(45); }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void {}
+}
+
+#[Export]
+function probe(string $input): string {
+    $boom = new Boom();
+    return (string) $boom["k"];
+}
+"#,
+        ),
+        (
+            "offset_set",
+            "offsetSet",
+            r#"<?php
+class Boom implements ArrayAccess {
+    public function offsetExists(mixed $offset): bool { return true; }
+    public function offsetGet(mixed $offset): mixed { return null; }
+    public function offsetSet(mixed $offset, mixed $value): void { exit(48); }
+    public function offsetUnset(mixed $offset): void {}
+}
+
+#[Export]
+function probe(string $input): string {
+    $boom = new Boom();
+    $boom["k"] = 1;
+    return $input;
+}
+"#,
+        ),
+        (
+            "magic_get",
+            "__get",
+            r#"<?php
+class Boom {
+    public function __get(string $name): mixed {
+        exit(46);
+    }
+}
+
+#[Export]
+function probe(string $input): string {
+    $boom = new Boom();
+    return (string) $boom->missing;
+}
+"#,
+        ),
+        (
+            "countable",
+            "count",
+            r#"<?php
+class Boom implements Countable {
+    public function count(): int {
+        exit(49);
+    }
+}
+
+#[Export]
+function probe(string $input): string {
+    $boom = new Boom();
+    return (string) count($boom);
+}
+"#,
+        ),
+        (
+            "json_serialize",
+            "jsonSerialize",
+            r#"<?php
+class Boom implements JsonSerializable {
+    public function jsonSerialize(): mixed {
+        exit(47);
+    }
+}
+
+#[Export]
+function probe(string $input): string {
+    $boom = new Boom();
+    return (string) json_encode($boom);
+}
+"#,
+        ),
+    ];
+
+    for (name, method, source) in cases {
+        let stderr =
+            compile_cdylib_failure(&format!("elephc_cdylib_implicit_{name}"), source);
+        assert!(
+            stderr.contains(method)
+                && stderr.contains("exit/die cannot return through the cdylib error boundary"),
+            "expected the implicit {method} call path and exit restriction, got:\n{stderr}"
+        );
+    }
 }
 
 /// Traverses every body behind an include-variant dispatcher, including an unloaded fatal arm.

@@ -3,10 +3,11 @@
 //! Provides small target-aware helpers for heap debug setup, frame copying, and process exit.
 //!
 //! Called from:
-//! - `crate::codegen::block_emit` and top-level program prologue emission.
+//! - `crate::codegen::block_emit`, top-level prologues, and runtime fatal emitters.
 //!
 //! Key details:
 //! - Register choices must match the platform entry convention before normal PHP frame setup begins.
+//! - Process exits first escape an active cdylib boundary so embedding hosts survive fatal paths.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -90,7 +91,7 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
 }
 
 /// Converts an otherwise process-fatal exit into a runtime boundary escape for cdylibs.
-fn emit_cdylib_exit_escape(emitter: &mut Emitter) {
+pub fn emit_cdylib_exit_escape(emitter: &mut Emitter) {
     if !emitter.cdylib_boundary {
         return;
     }

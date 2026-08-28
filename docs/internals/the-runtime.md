@@ -490,11 +490,11 @@ Unbounded recursion would otherwise run the stack pointer off the end of the map
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_stack_limit_init` | Measure the running stack once and publish the lowest address compiled prologues may reach | — | writes `_stack_limit` and `_stack_limit_main` |
-| `__rt_stack_overflow` | Write `Fatal error: Maximum call stack size reached. Infinite recursion?` to stderr and exit with status 255 | — | does not return |
+| `__rt_stack_overflow` | Write `Fatal error: Maximum call stack size reached. Infinite recursion?` to stderr, then escape an active cdylib boundary or exit a standalone process with status 255 | — | does not return |
 
 `__rt_stack_limit_init` calls `getrlimit(RLIMIT_STACK, …)` — resource number 3 on both Linux and macOS — and publishes `entry_sp - (min(rlim_cur, 64 MiB) - 32 KiB)`. The cap absorbs `RLIM_INFINITY`; the 32 KiB reserve is the headroom a guarded frame may still consume before the next guarded call (outgoing stack arguments, `__rt_*` helper frames, and their libc calls). When `getrlimit` fails, reports an implausibly small limit, or the subtraction would wrap, the routine publishes zero instead, and zero disables the guard for the whole process.
 
-The process-entry prologue calls it once, after argc/argv have been stored to globals (it is an ordinary call and clobbers the argument registers). Under `--web` the call sits in the process-entry stub, before the workers are forked, so every worker inherits a floor that matches its own stack.
+The process-entry prologue calls it once, after argc/argv have been stored to globals (it is an ordinary call and clobbers the argument registers). Under `--web` the call sits in the process-entry stub, before the workers are forked, so every worker inherits a floor that matches its own stack. A cdylib has no process entry, so `elephc_init()` calls the same helper before the host enters exported PHP code; stack exhaustion then unwinds to the export boundary as `ELEPHC_STATUS_RUNTIME_FAILURE` instead of terminating the host.
 
 Two globals hold the state:
 

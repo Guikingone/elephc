@@ -119,7 +119,8 @@ void      elephc_free(void *ptr);
 
 Call `elephc_init()` after loading the library and `elephc_shutdown()` before
 unloading it. `elephc_abi_version()` must match `ELEPHC_ABI_VERSION` from the
-header. `elephc_free(NULL)` is safe.
+header. Initialization also arms the call-stack overflow guard for host-entered
+PHP calls. `elephc_free(NULL)` is safe.
 
 ABI version 3 adds recovery for the pre-existing scalar signatures and the
 `elephc_last_status()` query. A successful scalar or owned-string call records
@@ -148,8 +149,10 @@ error: the function returns a non-NULL pointer to `""`, not `NULL`.
 Every export wrapper installs Elephc's native exception boundary before it
 calls PHP. Escaping supported Throwables are converted to
 `ELEPHC_STATUS_PHP_EXCEPTION`; boundary-reachable allocation failures receive
-their own status. Function-frame cleanup runs before control returns to C, so a
-host can inspect the error and call the library successfully again.
+their own status. A guarded call-stack overflow or a defensive escape from a
+runtime `exit` path becomes `ELEPHC_STATUS_RUNTIME_FAILURE` rather than
+terminating the host. Function-frame cleanup runs before control returns to C,
+so a host can inspect the error and call the library successfully again.
 
 ABI validation failures, supported PHP exceptions, and allocation failures are
 recoverable. Hardware faults, memory corruption, and foreign code that aborts
@@ -157,12 +160,14 @@ the process are not contained.
 
 `exit` and `die` cannot return a status, so the compiler rejects them when they
 are transitively reachable from any export, including through fixed
-constructors/destructors, include-variant dispatchers, and statically resolved
-runtime callbacks or closures. It also rejects reachable fatal EIR terminators,
-fatal builtin argument subsets, `eval`, runtime-selected constructors, foreign
-calls, and other opaque invocation paths when it cannot prove process
-termination unreachable. The same validation runs for exported code under
-plain `--check` and `--emit-ir`, not only during final cdylib emission.
+constructors/destructors, implicit object conversion and property hooks,
+ArrayAccess, Countable, JsonSerializable, include-variant dispatchers, and
+statically resolved runtime callbacks or closures. It also rejects reachable
+fatal EIR terminators, fatal builtin argument subsets, `eval`, runtime-selected
+constructors, foreign calls, and other opaque invocation paths when it cannot
+prove process termination unreachable. The same validation runs for exported
+code under plain `--check` and `--emit-ir`, not only during final cdylib
+emission.
 
 ## C consumption
 

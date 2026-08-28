@@ -192,8 +192,10 @@ The check never writes memory, so it is safe to run when the remaining stack is 
 single page. A zero `_stack_limit` makes it always pass, which is the state
 before `__rt_stack_limit_init` runs and whenever the stack bounds could not be
 determined — the guard is inert rather than wrong. `main` is not guarded: it is
-the root of every call chain and runs before the floor exists. See
-[The runtime](the-runtime.md) for the floor measurement and the fiber handoff.
+the root of every process-entry call chain and runs before the floor exists.
+Cdylibs publish the floor from `elephc_init()` because they have no process
+entry point. See [The runtime](the-runtime.md) for the floor measurement and
+the fiber handoff.
 
 ### Sentinels and null representation
 

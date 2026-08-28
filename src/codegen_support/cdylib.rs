@@ -605,6 +605,7 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
         emit_store_immediate_to_symbol(emitter, BOUNDARY_ACTIVE, 0);
         emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
         if lifecycle == "elephc_init" {
+            crate::codegen::stack_guard::emit_stack_limit_init_call(emitter);
             if heap_debug {
                 abi::emit_enable_heap_debug_flag(emitter);
             }
@@ -708,6 +709,7 @@ mod tests {
         assert!(asm.contains("add x9, x9, #1"));
         assert!(asm.contains("sub x9, x9, #1"));
         assert!(asm.contains("_elephc_abi_version:"));
+        assert!(asm.contains("bl __rt_stack_limit_init"));
         assert!(data.emit(target).contains(LAST_ERROR_BUFFER));
     }
 
@@ -726,5 +728,6 @@ mod tests {
         assert!(asm.contains("add r10, 1"));
         assert!(asm.contains("sub r10, 1"));
         assert!(asm.contains("elephc_free:"));
+        assert!(asm.contains("call __rt_stack_limit_init"));
     }
 }

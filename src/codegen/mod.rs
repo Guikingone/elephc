@@ -35,7 +35,7 @@ mod shared_count_guard;
 mod shared_helper;
 mod shared_mixed_string;
 mod shared_state;
-mod stack_guard;
+pub(crate) mod stack_guard;
 pub mod value_placement;
 mod web;
 use runtime_metadata::*;

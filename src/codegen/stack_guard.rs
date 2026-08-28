@@ -8,6 +8,7 @@
 //!   function, method, closure, and generator body.
 //! - `crate::codegen::frame::emit_main_prologue()` and
 //!   `crate::codegen::frame::emit_web_entry_stub()` for the one-time floor measurement.
+//! - `crate::codegen_support::cdylib` from the host-called `elephc_init()` lifecycle entry.
 //!
 //! Key details:
 //! - The check runs immediately after the frame has been reserved, so the compare already
@@ -35,10 +36,10 @@ const STACK_OVERFLOW_SYMBOL: &str = "__rt_stack_overflow";
 
 /// Emits the one-time call that measures the running stack and publishes the guard floor.
 ///
-/// Must be emitted after the process-entry prologue has already stored argc/argv, because
-/// the helper is an ordinary call and clobbers the C-ABI argument registers. Until it runs,
-/// `_stack_limit` is zero and every prologue check passes.
-pub(super) fn emit_stack_limit_init_call(emitter: &mut Emitter) {
+/// At process entry this must run after argc/argv have been stored; a cdylib calls it from
+/// argument-free `elephc_init()`. The helper is an ordinary call that clobbers C-ABI argument
+/// registers. Until it runs, `_stack_limit` is zero and every prologue check passes.
+pub(crate) fn emit_stack_limit_init_call(emitter: &mut Emitter) {
     emitter.comment("publish the call-stack overflow floor for this process");
     abi::emit_call_label(emitter, STACK_LIMIT_INIT_SYMBOL);
 }
