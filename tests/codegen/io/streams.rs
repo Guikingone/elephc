@@ -19101,3 +19101,172 @@ unlink($path);
         "plain=true|memory=true|temp=true|input=true|output=false|data=true|"
     );
 }
+
+/// Verifies `stream_filter_remove()` takes ONE filter out and leaves the rest of the chain running.
+///
+/// `stream_filter_remove()` unlinks once per chain — read, then write — and a node carries one
+/// prev/next pair, for whichever chain it is actually in. Two things followed from that. The
+/// read-chain call took the "no predecessor, so I am the head" branch and rewrote the READ head
+/// for a WRITE filter; and it then cleared the node's links and owning stream, leaving the
+/// write-chain call nothing to repair, so that chain kept its head pointing at the removed node
+/// and every filter behind it stopped.
+///
+/// Removing the TAIL hid it — the surviving filter is the one the stale `prev->next` repair
+/// already fixed — so the fixture removes the HEAD, where php keeps `toupper` running and elephc
+/// ran nothing:
+///
+/// ```text
+/// php:    NOPABC        elephc: NOPabc
+/// ```
+///
+/// Every expectation measured on `php -n` 8.5.6.
+#[test]
+fn test_stream_filter_remove_keeps_the_rest_of_the_chain() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$p = "fr.txt";
+
+// Remove the PREPENDED filter: the appended one must still run.
+$h = fopen($p, "w");
+$a = stream_filter_append($h, "string.toupper", STREAM_FILTER_WRITE);
+$b = stream_filter_prepend($h, "string.rot13", STREAM_FILTER_WRITE);
+fwrite($h, "abc");
+var_dump(stream_filter_remove($b));
+fwrite($h, "abc");
+fclose($h);
+var_dump(file_get_contents($p));
+
+// Remove the APPENDED one: the prepended one must still run.
+$h = fopen($p, "w");
+$a = stream_filter_append($h, "string.toupper", STREAM_FILTER_WRITE);
+$b = stream_filter_prepend($h, "string.rot13", STREAM_FILTER_WRITE);
+fwrite($h, "abc");
+var_dump(stream_filter_remove($a));
+fwrite($h, "abc");
+fclose($h);
+var_dump(file_get_contents($p));
+
+// Two appended, remove the first.
+$h = fopen($p, "w");
+$a = stream_filter_append($h, "string.rot13", STREAM_FILTER_WRITE);
+$b = stream_filter_append($h, "string.toupper", STREAM_FILTER_WRITE);
+fwrite($h, "abc");
+var_dump(stream_filter_remove($a));
+fwrite($h, "abc");
+fclose($h);
+var_dump(file_get_contents($p));
+
+// The only one: nothing filters afterwards.
+$h = fopen($p, "w");
+$a = stream_filter_append($h, "string.toupper", STREAM_FILTER_WRITE);
+fwrite($h, "ab");
+var_dump(stream_filter_remove($a));
+fwrite($h, "cd");
+fclose($h);
+var_dump(file_get_contents($p));
+
+// The read side splices too.
+file_put_contents($p, "abc");
+$h = fopen($p, "r");
+$a = stream_filter_append($h, "string.toupper", STREAM_FILTER_READ);
+$b = stream_filter_append($h, "string.rot13", STREAM_FILTER_READ);
+var_dump(stream_filter_remove($b));
+var_dump(stream_get_contents($h));
+fclose($h);
+unlink($p);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\nstring(6) \"NOPABC\"\n",
+            "bool(true)\nstring(6) \"NOPnop\"\n",
+            "bool(true)\nstring(6) \"NOPABC\"\n",
+            "bool(true)\nstring(4) \"ABcd\"\n",
+            "bool(true)\nstring(3) \"ABC\"\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a removed filter stays removed: php refuses the second `stream_filter_remove()`.
+///
+/// The isolation that makes a double removal inert used to live inside the per-chain unlink; it
+/// now runs once, after both. This is the property that move must not lose.
+#[test]
+fn test_stream_filter_remove_twice_is_refused() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$p = "ft.txt";
+$h = fopen($p, "w");
+$a = stream_filter_append($h, "string.toupper", STREAM_FILTER_WRITE);
+var_dump(stream_filter_remove($a));
+try { stream_filter_remove($a); }
+catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+fclose($h);
+unlink($p);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nTypeError: stream_filter_remove(): supplied resource is not a valid stream \
+         filter resource\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies removing a filter from ONE chain leaves the OTHER chain's head alone.
+///
+/// `stream_filter_remove()` unlinks once per chain, and the unlink took "no predecessor" to mean
+/// "I am the head of the chain this offset names". A node has one prev/next pair, for whichever
+/// chain it is actually in, so removing a WRITE filter took that branch during the READ-chain call
+/// and pointed the read head at a write filter. With filters on both sides of one stream, the read
+/// filter stopped: php answers `SEED`, elephc answered `seed`, and the surviving write filter was
+/// lost with it.
+///
+/// The sibling test above cannot see this — it filters one side at a time, which is exactly the
+/// shape that leaves the other head empty and the bug invisible. Every expectation measured on
+/// `php -n` 8.5.6.
+#[test]
+fn test_stream_filter_remove_leaves_the_other_chains_head_alone() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$p = "bc.txt";
+file_put_contents($p, "seed");
+
+$h = fopen($p, "r+");
+$r = stream_filter_append($h, "string.toupper", STREAM_FILTER_READ);
+$w = stream_filter_append($h, "string.rot13", STREAM_FILTER_WRITE);
+var_dump(fread($h, 4));
+var_dump(stream_filter_remove($w));
+rewind($h);
+var_dump(fread($h, 4));
+fclose($h);
+
+file_put_contents($p, "seed");
+$h = fopen($p, "r+");
+$r = stream_filter_append($h, "string.toupper", STREAM_FILTER_READ);
+$w = stream_filter_append($h, "string.rot13", STREAM_FILTER_WRITE);
+var_dump(stream_filter_remove($r));
+rewind($h);
+var_dump(fread($h, 4));
+fseek($h, 0);
+fwrite($h, "abcd");
+fclose($h);
+var_dump(file_get_contents($p));
+unlink($p);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(4) \"SEED\"\n",
+            "bool(true)\n",
+            "string(4) \"SEED\"\n",
+            "bool(true)\n",
+            "string(4) \"seed\"\n",
+            "string(4) \"nopq\"\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -38,6 +38,7 @@ pub(crate) fn emit_filter_resources(emitter: &mut Emitter) {
             emit_filter_create_aarch64(emitter);
             emit_filter_link_aarch64(emitter);
             emit_filter_unlink_aarch64(emitter);
+            emit_filter_isolate(emitter);
             emit_filter_apply_chain_aarch64(emitter);
             emit_fwrite_filtered_aarch64(emitter);
             emit_stream_close_filter_chains(emitter);
@@ -49,6 +50,7 @@ pub(crate) fn emit_filter_resources(emitter: &mut Emitter) {
             emit_filter_create_x86_64(emitter);
             emit_filter_link_x86_64(emitter);
             emit_filter_unlink_x86_64(emitter);
+            emit_filter_isolate(emitter);
             emit_filter_apply_chain_x86_64(emitter);
             emit_fwrite_filtered_x86_64(emitter);
             emit_stream_close_filter_chains(emitter);
@@ -248,6 +250,50 @@ fn emit_filter_link_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 }
 
+/// `__rt_stream_filter_isolate(filter_handle)`.
+///
+/// Clears a removed node's links and its owning stream, so a second removal finds nothing to
+/// repair and reports php's refusal instead of walking a chain it has already left.
+///
+/// It is SEPARATE from the unlink because `stream_filter_remove()` unlinks once per chain, and a
+/// node carries ONE prev/next pair, for whichever chain it is actually in. Isolating inside the
+/// unlink meant the first call erased the links and the owning stream the second call needed: the
+/// write chain kept its head pointing at the removed node, and every filter behind it stopped
+/// running. MEASURED on `php -n` 8.5.6 — a rot13 prepended before a toupper, then
+/// `stream_filter_remove($rot13)`, leaves `ABC` in php and left `abc` here.
+fn emit_filter_isolate(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: isolate a removed filter node ---");
+    emitter.label_global("__rt_stream_filter_isolate");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-16]!");                   // this helper calls, so it needs a frame
+            emitter.instruction("mov x29, sp");
+            emitter.instruction("bl __rt_filter_state");                        // resolve the node
+            emitter.instruction("cbz x0, __rt_filter_isolate_done");            // already gone: nothing to clear
+            emitter.instruction(&format!("str xzr, [x0, #{FILTER_NEXT_OFFSET}]"));
+            emitter.instruction(&format!("str xzr, [x0, #{FILTER_PREV_OFFSET}]"));
+            emitter.instruction(&format!("str xzr, [x0, #{FILTER_STREAM_HANDLE_OFFSET}]"));
+            emitter.label("__rt_filter_isolate_done");
+            emitter.instruction("ldp x29, x30, [sp], #16");                     // release the frame
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("call __rt_filter_state");                      // resolve the node
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_filter_isolate_done_x");               // already gone: nothing to clear
+            emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_NEXT_OFFSET}], 0"));
+            emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_PREV_OFFSET}], 0"));
+            emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_STREAM_HANDLE_OFFSET}], 0"));
+            emitter.label("__rt_filter_isolate_done_x");
+            emitter.instruction("leave");                                       // restore rbp + rsp
+            emitter.instruction("ret");
+        }
+    }
+}
+
 /// `__rt_stream_filter_unlink(filter_handle, head_offset)` (AArch64).
 ///
 /// Detaches one node from a chain, repairing both neighbours. The head slot is
@@ -292,6 +338,14 @@ fn emit_filter_unlink_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_filter_unlink_next");                     // the stream is gone: nothing to repair
     emitter.instruction("ldr x11, [sp, #8]");                                   // chain-head offset
     emitter.instruction("add x11, x0, x11");                                    // address of the chain head slot
+    // A node carries ONE prev/next pair, for whichever chain it is in, so `prev == 0` means "head
+    // of MY chain" and not "head of the chain named by this offset". Removing a write filter ran
+    // the read-chain call first, which took that branch and rewrote the READ head. The slot is
+    // therefore only moved when it actually names this node.
+    emitter.instruction("ldr x12, [x11]");                                      // the head this chain currently names
+    emitter.instruction("ldr x13, [sp, #0]");                                   // the node being removed
+    emitter.instruction("cmp x12, x13");
+    emitter.instruction("b.ne __rt_filter_unlink_next");                        // a different chain: leave its head alone
     emitter.instruction("ldr x10, [sp, #24]");                                  // successor handle
     emitter.instruction("str x10, [x11]");                                      // head = next
 
@@ -306,11 +360,10 @@ fn emit_filter_unlink_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x9, [x0, #{FILTER_PREV_OFFSET}]"));       // next->prev = prev
 
     emitter.label("__rt_filter_unlink_ok");
-    // -- isolate the removed node so a double removal is inert --
-    emitter.instruction("ldr x0, [sp, #32]");
-    emitter.instruction(&format!("str xzr, [x0, #{FILTER_NEXT_OFFSET}]"));
-    emitter.instruction(&format!("str xzr, [x0, #{FILTER_PREV_OFFSET}]"));
-    emitter.instruction(&format!("str xzr, [x0, #{FILTER_STREAM_HANDLE_OFFSET}]"));
+    // The node is NOT isolated here. `stream_filter_remove()` calls this once per chain, and
+    // clearing the links and the owning stream on the first call left the second with nothing to
+    // repair: the write chain kept its head pointing at the removed node, so every filter behind
+    // it stopped running. `__rt_stream_filter_isolate` does it once, after both calls.
     emitter.instruction("mov x0, #1");                                          // report success
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the unlink frame
@@ -969,6 +1022,12 @@ fn emit_filter_unlink_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");
     emitter.instruction("jz __rt_filter_unlink_next_x");                        // the stream is gone: nothing to repair
     emitter.instruction("add rax, QWORD PTR [rbp - 16]");                       // address of the chain head slot
+    // See the AArch64 counterpart: `prev == 0` means head of THIS NODE's chain, not of the chain
+    // this offset names, so the slot is only moved when it actually names this node.
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // the head this chain currently names
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // the node being removed
+    emitter.instruction("cmp r10, r11");
+    emitter.instruction("jne __rt_filter_unlink_next_x");                       // a different chain: leave its head alone
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // successor handle
     emitter.instruction("mov QWORD PTR [rax], r11");                            // head = next
 
@@ -985,11 +1044,8 @@ fn emit_filter_unlink_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_PREV_OFFSET}], r10")); // next->prev = prev
 
     emitter.label("__rt_filter_unlink_ok_x");
-    // -- isolate the removed node so a double removal is inert --
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
-    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_NEXT_OFFSET}], 0"));
-    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_PREV_OFFSET}], 0"));
-    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_STREAM_HANDLE_OFFSET}], 0"));
+    // See the AArch64 counterpart: isolation moved to `__rt_stream_filter_isolate`, after BOTH
+    // per-chain calls.
     emitter.instruction("mov eax, 1");                                          // report success
     emitter.instruction("leave");                                               // restore rbp + rsp
     emitter.instruction("ret");                                                 // return to the caller

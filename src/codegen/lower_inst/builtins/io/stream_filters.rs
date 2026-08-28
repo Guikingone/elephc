@@ -1144,6 +1144,10 @@ pub(crate) fn lower_stream_filter_remove(
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
             ctx.emitter.instruction(&format!("mov x1, #{STREAM_WRITE_FILTER_HEAD_OFFSET}"));
             abi::emit_call_label(ctx.emitter, "__rt_stream_filter_unlink");     // detach from the write chain
+            // AFTER both chains: each unlink reads the node's own links and owning stream,
+            // so clearing them inside it left the second call nothing to repair.
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_isolate");
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
             // PHP closes a removed filter, so `onClose()` fires here rather than only
             // when the stream goes: the node is off both chains and the teardown that
@@ -1207,6 +1211,10 @@ pub(crate) fn lower_stream_filter_remove(
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
             ctx.emitter.instruction(&format!("mov rsi, {STREAM_WRITE_FILTER_HEAD_OFFSET}"));
             abi::emit_call_label(ctx.emitter, "__rt_stream_filter_unlink");     // detach from the write chain
+            // AFTER both chains: each unlink reads the node's own links and owning stream,
+            // so clearing them inside it left the second call nothing to repair.
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_isolate");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
             // See the AArch64 counterpart: a removed node is off both chains, so the
             // chain teardown can no longer fire its `onClose()`.
