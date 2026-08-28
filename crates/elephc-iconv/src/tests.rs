@@ -241,6 +241,19 @@ fn malformed_quoted_printable_words_respect_continue_on_error() {
     }
 }
 
+/// Verifies only hexadecimal digits and line endings may follow a soft-break whitespace run.
+#[test]
+fn quoted_printable_soft_break_acceptance_matches_php() {
+    for byte in 0u8..=u8::MAX {
+        let accepted = mime::quoted_printable::decode(&[b'=', b' ', b' ', byte]).is_some();
+        assert_eq!(
+            accepted,
+            byte.is_ascii_hexdigit() || matches!(byte, b'\r' | b'\n'),
+            "unexpected acceptance for byte 0x{byte:02x}"
+        );
+    }
+}
+
 /// Verifies php-src's accepted trailing and linear-whitespace `Q` escape edge cases.
 #[test]
 fn quoted_printable_escape_edges_match_php() {
