@@ -14,7 +14,7 @@
 //!   filters target the common small-write case.
 
 use crate::codegen_support::runtime::resources::layout::{
-    STREAM_CHUNK_SIZE_OFFSET,
+    STREAM_CHUNK_SIZE_OFFSET, STREAM_PENDING_LEN_OFFSET, STREAM_PENDING_POS_OFFSET,
     STREAM_APPEND_SKIP_OFFSET, STREAM_BACKEND_KIND_OFFSET, STREAM_BACKEND_USER_WRAPPER,
     STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,
     STREAM_WRAPPER_ID_OFFSET,
@@ -175,6 +175,35 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     // synthetic descriptor, which cannot. A short write ends the loop: php stops handing over
     // chunks as soon as the wrapper takes fewer bytes than it was given.
     emitter.instruction("str x0, [sp, #0]");                                    // the synthetic descriptor every chunk goes to
+
+    // -- a write that FOLLOWS a read starts where the READER left off, not where the wrapper did --
+    //
+    // elephc reads a wrapper ahead into a buffer, so after `fread($h, 3)` the wrapper's own cursor
+    // is at 10 while the stream's position is 3. A write then landed at 10: MEASURED on
+    // `php -n` 8.5.6, `012ABCDEF` became `0123456789AB` here and `012AB56789` there — the bytes
+    // went to the wrong offset, which no amount of matching call counts would have shown.
+    //
+    // php does the same repositioning, and its trace says so: `stream_seek(5, SEEK_SET)` then
+    // `stream_tell` before the write. The buffered bytes are dropped with it, because they were
+    // read from behind the point the write is about to change.
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");
+    emitter.instruction("cbz x0, __rt_uw_write_resynced");                      // no state: nothing was buffered
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_PENDING_LEN_OFFSET}]")); // bytes held
+    emitter.instruction(&format!("ldr x10, [x0, #{STREAM_PENDING_POS_OFFSET}]")); // bytes already handed out
+    emitter.instruction("subs x9, x9, x10");                                    // what the reader has not consumed
+    emitter.instruction("b.le __rt_uw_write_resynced");                         // nothing held: the cursors agree
+    emitter.instruction(&format!("str xzr, [x0, #{STREAM_PENDING_LEN_OFFSET}]")); // drop the stale read-ahead
+    emitter.instruction(&format!("str xzr, [x0, #{STREAM_PENDING_POS_OFFSET}]"));
+    emitter.instruction("ldr x0, [sp, #24]");
+    emitter.instruction("bl __rt_stream_wrapper_pos");                          // x0 = the position the reader is at
+    emitter.instruction("mov x9, x0");                                          // the offset to seek to
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the synthetic descriptor
+    emitter.instruction("mov x1, x9");
+    emitter.instruction("mov x2, #0");                                          // SEEK_SET
+    emitter.instruction("bl __rt_user_wrapper_fseek");                          // put the wrapper where the reader is
+    emitter.label("__rt_uw_write_resynced");
+
     emitter.instruction("ldr x0, [sp, #24]");                                   // the opaque stream handle
     emitter.instruction("bl __rt_stream_state");                                // the size lives on the state
     emitter.instruction("cbz x0, __rt_uw_chunk_default");
@@ -555,6 +584,27 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     // -- a wrapper's `stream_write()` sees CHUNKS, not the whole payload --
     // See the AArch64 counterpart for the rule and its measurements.
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // the synthetic descriptor every chunk goes to
+
+    // See the AArch64 counterpart: a write that follows a read starts where the READER left off,
+    // not where elephc's read-ahead left the wrapper's own cursor.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the opaque stream handle
+    emitter.instruction("call __rt_stream_state");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_uw_write_resynced_x86");                       // no state: nothing was buffered
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {STREAM_PENDING_LEN_OFFSET}]")); // bytes held
+    emitter.instruction(&format!("mov r11, QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}]")); // already handed out
+    emitter.instruction("sub r10, r11");                                        // what the reader has not consumed
+    emitter.instruction("jle __rt_uw_write_resynced_x86");                      // nothing held: the cursors agree
+    emitter.instruction(&format!("mov QWORD PTR [rax + {STREAM_PENDING_LEN_OFFSET}], 0")); // drop the stale read-ahead
+    emitter.instruction(&format!("mov QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}], 0"));
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");
+    emitter.instruction("call __rt_stream_wrapper_pos");                        // rax = the position the reader is at
+    emitter.instruction("mov rsi, rax");                                        // the offset to seek to
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the synthetic descriptor
+    emitter.instruction("xor edx, edx");                                        // SEEK_SET
+    emitter.instruction("call __rt_user_wrapper_fseek");                        // put the wrapper where the reader is
+    emitter.label("__rt_uw_write_resynced_x86");
+
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the opaque stream handle
     emitter.instruction("call __rt_stream_state");                              // the size lives on the state
     emitter.instruction("test rax, rax");

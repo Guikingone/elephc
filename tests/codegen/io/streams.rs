@@ -19461,3 +19461,63 @@ file_get_contents("kk://a");
         out.diagnostics
     );
 }
+
+/// Verifies a write that FOLLOWS a read lands where the reader is, not where the wrapper is.
+///
+/// elephc reads a userspace wrapper AHEAD into a buffer, so after `fread($h, 3)` the wrapper's own
+/// cursor sits at 10 while the stream's position is 3. The write went to 10:
+///
+/// ```text
+/// php:    write at 3   ->  "012AB56789"
+/// elephc: write at 10  ->  "0123456789AB"
+/// ```
+///
+/// The bytes went to the wrong offset — a wrong ANSWER, and the reason a call-count difference is
+/// worth chasing rather than dismissing: php's trace shows `stream_seek(5, SEEK_SET)` then
+/// `stream_tell` before its write, and that repositioning is the whole point. The buffered bytes
+/// are dropped with it, because they were read from behind the point the write is about to change.
+///
+/// Measured on `php -n` 8.5.6.
+#[test]
+fn test_a_write_after_a_read_lands_where_the_reader_is() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class P {
+    public $pos = 0;
+    public $data = "0123456789";
+    public function stream_open($p, $m, $o, &$x) { return true; }
+    public function stream_read($n) {
+        $r = substr($this->data, $this->pos, $n);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_write($d) {
+        $this->data = substr($this->data, 0, $this->pos) . $d
+                    . substr($this->data, $this->pos + strlen($d));
+        $this->pos += strlen($d);
+        return strlen($d);
+    }
+    public function stream_tell() { return $this->pos; }
+    public function stream_seek($off, $whence) {
+        $this->pos = $whence === SEEK_END ? strlen($this->data) + $off
+                   : ($whence === SEEK_CUR ? $this->pos + $off : $off);
+        return true;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->data); }
+    public function stream_stat() { return ["size" => strlen($this->data)]; }
+    public function stream_close() { echo $this->data, "\n"; }
+}
+stream_wrapper_register("pp", "P");
+$h = fopen("pp://x", "r+");
+var_dump(fread($h, 3));
+var_dump(ftell($h));
+var_dump(fwrite($h, "AB"));
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!("string(3) \"012\"\n", "int(3)\n", "int(2)\n", "012AB56789\n"),
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
