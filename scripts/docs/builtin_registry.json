@@ -30746,7 +30746,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "shared",
+      "result_type": "checked",
       "runtime_functions": [
         "getenv"
       ],
