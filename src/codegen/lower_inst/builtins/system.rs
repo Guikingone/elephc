@@ -441,9 +441,9 @@ fn emit_store_result_to_scratch(ctx: &mut FunctionContext<'_>, offset: usize) {
     let result = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // stage the resolved integer in scratch
                 &format!("str {}, [sp, #{}]", result, offset)
-            );                                                                  // stage the resolved integer in scratch
+            );
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -814,6 +814,7 @@ fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
 
 /// Emits a process-exit sequence using the already-loaded integer result register.
 fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
+    abi::emit_cdylib_exit_escape(ctx.emitter);
     match (ctx.emitter.target.platform, ctx.emitter.target.arch) {
         (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
             ctx.emitter.instruction("mov x19, x0");                             // stash the exit code in a callee-saved register (this path never returns)
