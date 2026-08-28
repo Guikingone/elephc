@@ -510,6 +510,85 @@ int main(void) {
 }
 "#;
 
+const STACK_GUARD_SKIP_INIT_HOST_C: &str = r#"
+#include "libstack_guard.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+    char *output = (char *)(uintptr_t)1;
+    size_t output_len = 99;
+    int32_t status = deep_probe("", 0, &output, &output_len);
+    if (status != ELEPHC_STATUS_RUNTIME_FAILURE ||
+        elephc_last_status() != ELEPHC_STATUS_RUNTIME_FAILURE ||
+        output != NULL || output_len != 0 || elephc_last_error() == NULL) return 1;
+
+    output = NULL;
+    output_len = 0;
+    status = after_overflow("", 0, &output, &output_len);
+    if (status != ELEPHC_STATUS_OK || output == NULL || output_len != 10 ||
+        memcmp(output, "HOST-ALIVE", 10) != 0) return 2;
+
+    puts("HOST-ALIVE");
+    elephc_free(output);
+    elephc_shutdown();
+    return 0;
+}
+"#;
+
+const BUFFER_FAILURE_EXPORT_PHP: &str = r#"<?php
+#[Export]
+function buffer_uaf(int $value): int {
+    buffer<int> $buffer = buffer_new<int>(1);
+    buffer_free($buffer);
+    $buffer[0] = $value;
+    return 99;
+}
+
+#[Export]
+function buffer_oob(int $value): int {
+    buffer<int> $buffer = buffer_new<int>(1);
+    $buffer[5] = $value;
+    return 99;
+}
+
+#[Export]
+function after_buffer_failure(int $value): int {
+    return $value + 1;
+}
+"#;
+
+const BUFFER_FAILURE_HOST_C: &str = r#"
+#include "libbuffer_failures.h"
+#include <stdint.h>
+#include <stdio.h>
+
+int main(void) {
+    if (after_buffer_failure(41) != 42 ||
+        elephc_last_status() != ELEPHC_STATUS_OK ||
+        elephc_last_error() != NULL) return 1;
+
+    if (buffer_uaf(7) != 0 ||
+        elephc_last_status() != ELEPHC_STATUS_RUNTIME_FAILURE ||
+        elephc_last_error() == NULL) return 2;
+    if (after_buffer_failure(41) != 42 ||
+        elephc_last_status() != ELEPHC_STATUS_OK ||
+        elephc_last_error() != NULL) return 3;
+
+    if (buffer_oob(7) != 0 ||
+        elephc_last_status() != ELEPHC_STATUS_RUNTIME_FAILURE ||
+        elephc_last_error() == NULL) return 4;
+    if (after_buffer_failure(41) != 42 ||
+        elephc_last_status() != ELEPHC_STATUS_OK ||
+        elephc_last_error() != NULL) return 5;
+
+    puts("HOST-ALIVE");
+    elephc_shutdown();
+    return 0;
+}
+"#;
+
 const NAMESPACED_EXPORT_PHP: &str = r#"<?php
 namespace Demo;
 
@@ -675,6 +754,86 @@ fn test_cdylib_stack_overflow_returns_runtime_failure_and_keeps_host_alive() {
     assert!(
         run.status.success(),
         "stack-guard C host failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "HOST-ALIVE\n");
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Lazily arms the stack floor on the first export call when the C host omits
+/// `elephc_init()`, then recovers from deep recursion without killing the host.
+#[test]
+fn test_cdylib_stack_overflow_without_init_keeps_host_alive() {
+    let dir = make_test_dir("elephc_cdylib_stack_guard_lazy");
+    fs::write(dir.join("stack_guard.php"), STACK_GUARD_EXPORT_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", "stack_guard.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "lazy stack-guard cdylib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let host = compile_linked_c_host(
+        &dir,
+        STACK_GUARD_SKIP_INIT_HOST_C,
+        "stack-guard-lazy-host",
+        "stack_guard",
+    );
+    let run = Command::new(&host)
+        .output()
+        .expect("failed to run the skip-init stack-guard C host");
+    assert!(
+        run.status.success(),
+        "skip-init stack-guard C host failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "HOST-ALIVE\n");
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Lazily initializes through a scalar export, converts buffer use-after-free and
+/// bounds fatals into runtime-failure status, and keeps the same C host reusable.
+#[test]
+fn test_cdylib_buffer_fatals_keep_host_alive() {
+    let dir = make_test_dir("elephc_cdylib_buffer_failures");
+    fs::write(
+        dir.join("buffer_failures.php"),
+        BUFFER_FAILURE_EXPORT_PHP,
+    )
+    .unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", "buffer_failures.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "buffer-failure cdylib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let host = compile_linked_c_host(
+        &dir,
+        BUFFER_FAILURE_HOST_C,
+        "buffer-failure-host",
+        "buffer_failures",
+    );
+    let run = Command::new(&host)
+        .output()
+        .expect("failed to run the buffer-failure C host");
+    assert!(
+        run.status.success(),
+        "buffer-failure C host failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
         run.status.code(),
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
@@ -1181,6 +1340,46 @@ class Boom implements ArrayAccess {
 function probe(string $input): string {
     $boom = new Boom();
     $boom["k"] = 1;
+    return $input;
+}
+"#,
+        ),
+        (
+            "offset_exists",
+            "offsetExists",
+            r#"<?php
+class Boom implements ArrayAccess {
+    public function offsetExists(mixed $offset): bool { exit(52); }
+    public function offsetGet(mixed $offset): mixed { return null; }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void {}
+}
+
+#[Export]
+function probe(string $input): string {
+    $boom = new Boom();
+    if (isset($boom["k"])) {
+        return $input;
+    }
+    return $input;
+}
+"#,
+        ),
+        (
+            "offset_unset",
+            "offsetUnset",
+            r#"<?php
+class Boom implements ArrayAccess {
+    public function offsetExists(mixed $offset): bool { return true; }
+    public function offsetGet(mixed $offset): mixed { return null; }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void { exit(53); }
+}
+
+#[Export]
+function probe(string $input): string {
+    $boom = new Boom();
+    unset($boom["k"]);
     return $input;
 }
 "#,

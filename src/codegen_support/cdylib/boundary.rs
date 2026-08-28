@@ -408,6 +408,10 @@ fn emit_scalar_export_aarch64(
 ) {
     abi::emit_frame_prologue(emitter, layout.frame_size);
     emit_save_scalar_c_inputs(emitter, export, layout);
+    crate::codegen::stack_guard::emit_lazy_stack_limit_init(
+        emitter,
+        &format!("L_cdylib_{suffix}_stack_limit_ready"),
+    );
     emit_clear_error_inline(emitter);
     emit_validate_scalar_string_inputs(emitter, export, layout, invalid, suffix);
     emit_enter_boundary(emitter, layout.concat_offset, suffix);
@@ -483,6 +487,10 @@ fn emit_scalar_export_x86_64(
 ) {
     abi::emit_frame_prologue(emitter, layout.frame_size);
     emit_save_scalar_c_inputs(emitter, export, layout);
+    crate::codegen::stack_guard::emit_lazy_stack_limit_init(
+        emitter,
+        &format!("L_cdylib_{suffix}_stack_limit_ready"),
+    );
     emit_clear_error_inline(emitter);
     emit_validate_scalar_string_inputs(emitter, export, layout, invalid, suffix);
     emit_enter_boundary(emitter, layout.concat_offset, suffix);

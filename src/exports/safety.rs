@@ -20,6 +20,7 @@ use crate::ir::{
     Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId, Terminator, ValueDef, ValueId,
 };
 use crate::names::php_symbol_key;
+use crate::types::PhpType;
 
 use super::ExportedFunction;
 
@@ -28,13 +29,15 @@ use super::ExportedFunction;
 /// Construction and destruction are tied to object lifetime. The remaining hooks are
 /// dispatched by string conversion, property, ArrayAccess, Countable, JSON, or iterator
 /// runtime paths whose EIR instruction does not identify the concrete method body.
-const IMPLICIT_OBJECT_METHODS: [&str; 14] = [
+const IMPLICIT_OBJECT_METHODS: [&str; 16] = [
     "__construct",
     "__destruct",
     "__toString",
     "__get",
     "offsetGet",
     "offsetSet",
+    "offsetExists",
+    "offsetUnset",
     "count",
     "jsonSerialize",
     "getIterator",
@@ -98,6 +101,19 @@ pub fn validate_cdylib_call_graph(
                             ),
                         ));
                     }
+                }
+
+                if instruction.op == Op::MethodCall
+                    && enqueue_fixed_array_access_method(
+                        module,
+                        function,
+                        instruction,
+                        &functions,
+                        &mut queue,
+                        &path,
+                    )
+                {
+                    continue;
                 }
 
                 if opaque_dynamic_dispatch(instruction.op) {
@@ -433,6 +449,37 @@ fn enqueue_user_body<'a>(
     true
 }
 
+/// Resolves the synthetic ArrayAccess existence/removal calls that lowering emits as
+/// `MethodCall`, while leaving every other virtual method call on the opaque-reject path.
+fn enqueue_fixed_array_access_method<'a>(
+    module: &'a Module,
+    function: &Function,
+    instruction: &crate::ir::Instruction,
+    functions: &HashMap<String, &'a Function>,
+    queue: &mut VecDeque<(String, Vec<String>)>,
+    path: &[String],
+) -> bool {
+    let Some(method) = immediate_string(module, instruction.immediate.as_ref()) else {
+        return false;
+    };
+    if !matches!(php_symbol_key(method).as_str(), "offsetexists" | "offsetunset") {
+        return false;
+    }
+    let Some(receiver) = instruction.operands.first().copied() else {
+        return false;
+    };
+    let Some(PhpType::Object(class_name)) = function
+        .value(receiver)
+        .map(|value| value.php_type.codegen_repr())
+    else {
+        return false;
+    };
+    let Some(body) = fixed_class_method(module, &class_name, method) else {
+        return false;
+    };
+    enqueue_user_body(functions, queue, path, &body.name)
+}
+
 /// Resolves a fixed-class allocation to one emitted lifecycle method implementation body.
 fn fixed_object_method<'a>(
     module: &'a Module,
@@ -440,6 +487,15 @@ fn fixed_object_method<'a>(
     method: &str,
 ) -> Option<&'a Function> {
     let class_name = immediate_class_name(module, immediate)?;
+    fixed_class_method(module, class_name, method)
+}
+
+/// Resolves one method implementation inherited or declared by a statically known class.
+fn fixed_class_method<'a>(
+    module: &'a Module,
+    class_name: &str,
+    method: &str,
+) -> Option<&'a Function> {
     let class_info = module.class_infos.get(class_name)?;
     let method_key = php_symbol_key(method);
     class_info.methods.get(&method_key)?;
@@ -457,6 +513,21 @@ fn fixed_object_method<'a>(
                     && php_symbol_key(candidate_method) == method_key
             })
     })
+}
+
+/// Resolves a string-pool reference carried by a method-call instruction.
+fn immediate_string<'a>(
+    module: &'a Module,
+    immediate: Option<&Immediate>,
+) -> Option<&'a str> {
+    let Immediate::Data(data) = immediate? else {
+        return None;
+    };
+    module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
 }
 
 /// Resolves a function-name data-pool reference carried by one EIR instruction.

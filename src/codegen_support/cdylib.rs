@@ -185,6 +185,10 @@ fn emit_string_export_aarch64(
     emitter.instruction(&format!("str x1, [sp, #{AARCH64_INPUT_LEN_OFFSET}]")); // save the authoritative host input length
     emitter.instruction(&format!("str x2, [sp, #{AARCH64_OUT_PTR_OFFSET}]"));   // save the caller output-pointer address
     emitter.instruction(&format!("str x3, [sp, #{AARCH64_OUT_LEN_OFFSET}]"));   // save the caller output-length address
+    crate::codegen::stack_guard::emit_lazy_stack_limit_init(
+        emitter,
+        &format!("L_cdylib_{suffix}_stack_limit_ready"),
+    );
     emitter.instruction(&format!("str xzr, [sp, #{AARCH64_RESULT_PTR_OFFSET}]")); // clear the borrowed PHP result pointer slot
     emitter.instruction(&format!("str xzr, [sp, #{AARCH64_OWNED_PTR_OFFSET}]")); // clear the caller-owned output pointer slot
     emit_clear_error_inline(emitter);
@@ -324,6 +328,10 @@ fn emit_string_export_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_INPUT_LEN_OFFSET}], rsi")); // save the authoritative host input length
     emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_OUT_PTR_OFFSET}], rdx")); // save the caller output-pointer address
     emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_OUT_LEN_OFFSET}], rcx")); // save the caller output-length address
+    crate::codegen::stack_guard::emit_lazy_stack_limit_init(
+        emitter,
+        &format!("L_cdylib_{suffix}_stack_limit_ready"),
+    );
     emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_RESULT_PTR_OFFSET}], 0")); // clear the borrowed PHP result pointer slot
     emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_OWNED_PTR_OFFSET}], 0")); // clear the caller-owned output pointer slot
     emit_clear_error_inline(emitter);
@@ -710,6 +718,15 @@ mod tests {
         assert!(asm.contains("sub x9, x9, #1"));
         assert!(asm.contains("_elephc_abi_version:"));
         assert!(asm.contains("bl __rt_stack_limit_init"));
+        let saved_host_args = asm.find(&format!(
+            "str x3, [sp, #{AARCH64_OUT_LEN_OFFSET}]"
+        )).unwrap();
+        let lazy_init = asm.find("bl __rt_stack_limit_init").unwrap();
+        let boundary_push = asm.find("bl _setjmp").unwrap();
+        assert!(
+            saved_host_args < lazy_init && lazy_init < boundary_push,
+            "lazy stack init must follow host-argument preservation and precede boundary entry:\n{asm}"
+        );
         assert!(data.emit(target).contains(LAST_ERROR_BUFFER));
     }
 
@@ -729,5 +746,14 @@ mod tests {
         assert!(asm.contains("sub r10, 1"));
         assert!(asm.contains("elephc_free:"));
         assert!(asm.contains("call __rt_stack_limit_init"));
+        let saved_host_args = asm.find(&format!(
+            "mov QWORD PTR [rbp - {X86_OUT_LEN_OFFSET}], rcx"
+        )).unwrap();
+        let lazy_init = asm.find("call __rt_stack_limit_init").unwrap();
+        let boundary_push = asm.find("call setjmp").unwrap();
+        assert!(
+            saved_host_args < lazy_init && lazy_init < boundary_push,
+            "lazy stack init must follow host-argument preservation and precede boundary entry:\n{asm}"
+        );
     }
 }
