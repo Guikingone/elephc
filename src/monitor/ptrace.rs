@@ -315,13 +315,19 @@ pub(crate) fn sample_thread(pid: u32, tid: u32) -> Option<Vec<u64>> {
 /// for the same reason.
 const SAMPLE_HZ: u64 = 99;
 
-/// Attaches to every thread of a process, samples them for a window, and
-/// detaches — returning the folded display stacks the rest of `monitor` renders.
+/// Attaches to every thread of every process given, samples them for a window,
+/// and detaches — returning the folded display stacks the rest of `monitor`
+/// renders.
+///
+/// A tree, not one process, because `--attach` is documented to measure a
+/// prefork server across all its workers and the macOS path does. The threads
+/// of every process are read on every tick so each contributes samples in
+/// proportion to the time it actually spent running.
 ///
 /// The seizes happen once for the window rather than per sample: seizing is the
 /// expensive half and the threads keep running between samples either way.
-/// Threads that appear mid-window are missed until the next one, which is the
-/// price of not re-reading `/proc` at 99 Hz.
+/// Threads and workers that appear mid-window are missed until the next one,
+/// which is the price of not re-reading `/proc` at 99 Hz.
 ///
 /// Failure is silence, not an error. A thread that exits mid-window, a stack
 /// that cannot be walked, a program that ends early — none of them are worth
@@ -329,27 +335,43 @@ const SAMPLE_HZ: u64 = 99;
 /// The caller learns the target is gone the same way it always has: an empty
 /// window.
 pub(crate) fn attach_window(
-    pid: u32,
+    pids: &[u32],
     duration_secs: u32,
-    symbols: &[super::elf::FuncSymbol],
-    bias: u64,
+    image: &super::attach::Image,
 ) -> Vec<(Vec<(String, super::Kind)>, u64)> {
-    let tids = thread_ids(pid);
-    let seized: Vec<u32> = tids.into_iter().filter(|tid| seize(*tid).is_ok()).collect();
-    if seized.is_empty() {
+    // Each process brings its own bias and its own threads; they share the
+    // symbol table, because a prefork server's workers are forks of one image.
+    // A process whose bias cannot be read is dropped rather than resolved
+    // against a neighbour's, which would not fail — it would name the wrong
+    // functions, and a table that is confidently wrong is worse than a short one.
+    let mut targets: Vec<(u32, u64, Vec<u32>)> = Vec::new();
+    for pid in pids {
+        let Some(bias) = super::attach::bias_of(image, *pid) else { continue };
+        let seized: Vec<u32> = thread_ids(*pid).into_iter().filter(|tid| seize(*tid).is_ok()).collect();
+        if !seized.is_empty() {
+            targets.push((*pid, bias, seized));
+        }
+    }
+    if targets.is_empty() {
         return Vec::new();
     }
     let interval = std::time::Duration::from_nanos(1_000_000_000 / SAMPLE_HZ);
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_secs(u64::from(duration_secs.max(1)));
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(u64::from(duration_secs.max(1)));
     let mut stacks = Vec::new();
     while std::time::Instant::now() < deadline {
         let started = std::time::Instant::now();
-        for tid in &seized {
-            let Some(chain) = sample_thread(pid, *tid) else { continue };
-            let stack = super::attach::display_stack(&chain, symbols, bias);
-            if !stack.is_empty() {
-                stacks.push(stack);
+        // Every process every tick, rather than one process for the whole
+        // window each: a worker sampled for a third of the window contributes a
+        // third of the samples, and its share of the table would be a third of
+        // the truth.
+        for (pid, bias, seized) in &targets {
+            for tid in seized {
+                let Some(chain) = sample_thread(*pid, *tid) else { continue };
+                let stack = super::attach::display_stack(&chain, &image.symbols, *bias);
+                if !stack.is_empty() {
+                    stacks.push(stack);
+                }
             }
         }
         // Sleep the remainder of the interval, not the whole of it: the samples
@@ -359,8 +381,10 @@ pub(crate) fn attach_window(
             std::thread::sleep(rest);
         }
     }
-    for tid in &seized {
-        detach(*tid);
+    for (_, _, seized) in &targets {
+        for tid in seized {
+            detach(*tid);
+        }
     }
     super::attach::fold(stacks)
 }

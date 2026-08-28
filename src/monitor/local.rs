@@ -302,10 +302,7 @@ fn capture_display(
 ) -> Option<Window> {
     #[cfg(target_os = "linux")]
     if let Some(image) = image {
-        // One pid, not the tree: `ptrace` reaches threads, and a child process
-        // is a separate address space with its own image and its own bias.
-        let display =
-            super::ptrace::attach_window(*pids.first()?, duration_secs, &image.symbols, image.bias);
+        let display = super::ptrace::attach_window(pids, duration_secs, image);
         return (!display.is_empty()).then_some(Window { display, source: None });
     }
     // Bound so the macOS build does not warn on an argument only Linux reads.

@@ -109,7 +109,15 @@ pub(crate) fn fold(stacks: Vec<Vec<(String, Kind)>>) -> Vec<(Vec<(String, Kind)>
 /// nothing.
 pub(crate) struct Image {
     pub(crate) symbols: Vec<FuncSymbol>,
-    pub(crate) bias: u64,
+    /// The executable's path as the kernel reports it, and the first address its
+    /// own headers ask to be loaded at.
+    ///
+    /// Kept because the symbols are shared by a whole process tree but the BIAS
+    /// is not: a prefork server's workers run the same image, so they resolve
+    /// against the same table, and each is mapped where its own `/proc` says.
+    /// Deriving a worker's bias needs these two and not the file again.
+    pub(crate) exe: String,
+    pub(crate) first_vaddr: u64,
 }
 
 /// Reads the image behind a running pid, or says which part was not readable.
@@ -131,7 +139,11 @@ pub(crate) fn image_for(pid: u32) -> Result<Image, String> {
         .ok_or_else(|| format!("{} is not an ELF64 image this can read", exe.display()))?;
     let maps = ptrace::memory_maps(pid)
         .map_err(|error| format!("cannot read /proc/{pid}/maps: {error}"))?;
-    let bias = elf::load_bias(&maps, &exe.to_string_lossy(), first_vaddr).ok_or_else(|| {
+    // Read and discarded: what it answers for the ROOT is not reused, because
+    // every process of the tree derives its own. It is read anyway because
+    // failing HERE is the difference between one clear sentence and a window
+    // that silently comes back empty.
+    elf::load_bias(&maps, &exe.to_string_lossy(), first_vaddr).ok_or_else(|| {
         format!("{} is running but is not mapped in /proc/{pid}/maps", exe.display())
     })?;
     let symbols = elf::function_symbols(&bytes);
@@ -145,7 +157,20 @@ pub(crate) fn image_for(pid: u32) -> Result<Image, String> {
             exe.display()
         ));
     }
-    Ok(Image { symbols, bias })
+    Ok(Image { symbols, exe: exe.to_string_lossy().into_owned(), first_vaddr })
+}
+
+/// Where one process of the tree is mapped, for a tree that shares this image.
+///
+/// A prefork server's workers are forks: same executable, same symbol table,
+/// their own mappings. Reusing the root's bias for a worker would resolve every
+/// one of its addresses against the wrong offset — which does not fail, it
+/// names the wrong functions, and a table that is confidently wrong is worse
+/// than one that is short.
+#[cfg(target_os = "linux")]
+pub(crate) fn bias_of(image: &Image, pid: u32) -> Option<u64> {
+    let maps = super::ptrace::memory_maps(pid).ok()?;
+    super::elf::load_bias(&maps, &image.exe, image.first_vaddr)
 }
 
 #[cfg(test)]
