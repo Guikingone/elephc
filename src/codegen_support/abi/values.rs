@@ -193,13 +193,16 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 
 /// Branches to `label` when the integer result register is zero (coerced truthiness).
 ///
-/// AArch64: `cbz` (compare and branch if zero). x86_64: `test` + `je` (set cc + conditional jump).
+/// AArch64: inverse `cbnz` over an unconditional `b`; x86_64: `test` + `je`.
+/// The two-instruction AArch64 sequence gives the destination `b` its +/-128 MiB range instead
+/// of `cbz`'s +/-1 MiB range, which large generated PDO/class functions can exceed.
 /// The integer result represents a coerced PHP truthiness value used in conditional contexts.
 pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbz {}, {}", int_result_reg(emitter), label));
-            // branch when the coerced integer truthiness result is zero
+            emitter.instruction(&format!("cbnz {}, 1f", int_result_reg(emitter))); // skip the long branch when the coerced truthiness result is nonzero
+            emitter.instruction(&format!("b {}", label));                       // branch with the wider unconditional range when the result is zero
+            emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
             emitter.instruction(&format!(
@@ -214,13 +217,16 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
 
 /// Branches to `label` when the integer result register is non-zero (coerced truthiness).
 ///
-/// AArch64: `cbnz` (compare and branch if non-zero). x86_64: `test` + `jne` (set cc + conditional jump).
+/// AArch64: inverse `cbz` over an unconditional `b`; x86_64: `test` + `jne`.
+/// The two-instruction AArch64 sequence gives the destination `b` its +/-128 MiB range instead
+/// of `cbnz`'s +/-1 MiB range, which large generated PDO/class functions can exceed.
 /// The integer result represents a coerced PHP truthiness value used in conditional contexts.
 pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbnz {}, {}", int_result_reg(emitter), label));
-            // branch when the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!("cbz {}, 1f", int_result_reg(emitter))); // skip the long branch when the coerced truthiness result is zero
+            emitter.instruction(&format!("b {}", label));                       // branch with the wider unconditional range when the result is nonzero
+            emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
             emitter.instruction(&format!(
@@ -272,29 +278,39 @@ pub fn emit_int_result_to_float_result(emitter: &mut Emitter) {
     }
 }
 
-/// Truncates the floating-point result register value to the integer result register.
+/// Converts the double in the float result register to a PHP `int` in `int_reg`.
 ///
-/// AArch64: `fcvtzs` (floating-point convert to signed fixed-point). x86_64: `cvttsd2si` (convert with truncation).
-/// Used when a PHP float must be coerced to int in mixed arithmetic contexts.
-pub fn emit_float_result_to_int_result(emitter: &mut Emitter) {
-    match emitter.target.arch {
-        crate::codegen_support::platform::Arch::AArch64 => {
-            let inst = format!(
-                "fcvtzs {}, {}",
-                int_result_reg(emitter),
-                float_result_reg(emitter)
-            );
-            emitter.instruction(&inst);                                         // truncate the floating-point result into the integer result register
-        }
-        crate::codegen_support::platform::Arch::X86_64 => {
-            let inst = format!(
-                "cvttsd2si {}, {}",
-                int_result_reg(emitter),
-                float_result_reg(emitter)
-            );
-            emitter.instruction(&inst);                                         // truncate the floating-point result into the integer result register
-        }
+/// This is the single shared PHP `float`→`int` conversion. Every `(int)` cast, `intval()`,
+/// float array key, Mixed unboxing, and numeric-argument coercion must go through it so the
+/// supported targets can never diverge again.
+///
+/// Raw hardware truncation is *not* PHP-equivalent and is not even consistent across the
+/// supported matrix: AArch64 `fcvtzs` saturates (NaN → 0, out of range → `INT64_MIN`/`INT64_MAX`)
+/// while x86_64 `cvttsd2si` returns `INT64_MIN` for every invalid input. Reference PHP 8.4
+/// (`zend_dval_to_lval`) maps NaN and ±INF to `0` and reduces any other out-of-range finite
+/// double modulo 2^64. `__rt_php_float_to_int` implements exactly that with integer instructions
+/// on both targets.
+///
+/// The helper returns its value in the symbol scratch register (`x9` / `r11`) and preserves
+/// every other register — including the int result register and the floating-point file — so
+/// call sites that still hold live values can request any destination register.
+pub fn emit_php_float_to_int(emitter: &mut Emitter, int_reg: &str) {
+    emit_call_label(emitter, "__rt_php_float_to_int");
+    let helper_result_reg = match emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r11",
+    };
+    if int_reg != helper_result_reg {
+        emitter.instruction(&format!("mov {}, {}", int_reg, helper_result_reg)); // move the PHP integer conversion result into the requested register
     }
+}
+
+/// Converts the float result register to a PHP `int` in the integer result register.
+///
+/// Thin wrapper over [`emit_php_float_to_int`] for the common "result register to result
+/// register" coercion; see that function for the PHP semantics and the register contract.
+pub fn emit_float_result_to_int_result(emitter: &mut Emitter) {
+    emit_php_float_to_int(emitter, int_result_reg(emitter));
 }
 
 /// Loads a 64-bit immediate integer `value` into `reg`.

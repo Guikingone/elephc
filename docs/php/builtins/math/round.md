@@ -2,13 +2,13 @@
 title: "round()"
 description: "Rounds a float."
 sidebar:
-  order: 284
+  order: 312
 ---
 
 ## round()
 
 ```php
-function round(float $num, int $precision = 0): float
+function round(float $num, int $precision = 0, int $mode = 1): float
 ```
 
 Rounds a float.
@@ -16,6 +16,7 @@ Rounds a float.
 **Parameters**:
 - `$num` (`float`)
 - `$precision` (`int`), default `0`, optional
+- `$mode` (`int`), default `1`, optional
 
 **Returns**: `float`
 
@@ -25,12 +26,6 @@ Rounds a float.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/round.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/round.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

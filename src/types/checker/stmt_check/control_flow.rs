@@ -62,13 +62,18 @@ fn stabilize_loop_storage(
                     | ExprKind::ClosureCall { .. }
                     | ExprKind::ExprCall { .. }
             );
-            if is_call {
+            // The memo is keyed by span, so it may only answer for a span that names one call.
+            // Under `Span::dummy()` every method / static / closure call in a prelude loop body
+            // shared a single entry and the FIRST call's inferred type was handed to all of
+            // them — 42 times while checking one `new PDO("sqlite::memory:")` program.
+            let memoizable = is_call && expr.span.identifies_a_node();
+            if memoizable {
                 if let Some(cached) = call_types.get(&expr.span) {
                     return Some(cached.clone());
                 }
             }
             let inferred = checker.infer_type(expr, analysis_env).ok()?;
-            if is_call {
+            if memoizable {
                 call_types.insert(expr.span, inferred.clone());
             }
             Some(inferred)
@@ -145,6 +150,30 @@ impl Checker {
                 value_by_ref,
                 body,
             } => {
+                // `foreach ($arr as &$v)` takes a reference into each element, so BOTH names it
+                // touches are reference-aliased for the rest of the body and neither binding can
+                // be killed or re-bound — releasing or abandoning that storage would strand the
+                // element references.
+                //
+                // The ITERABLE is aliased because the loop holds references into its elements.
+                // `$v` is aliased because it IS one of those references: PHP leaves it bound to
+                // the last element after the loop ends, so a post-loop `$v = "changed"` writes
+                // through into `$arr`. The conditional-depth rule does NOT cover it — a `$v`
+                // already assigned at depth 0 ABOVE the loop keeps that depth-0 binding, so
+                // `local_binding_is_killable` answered true and the permissive path re-bound a
+                // name lowering had ref-bound (`mark_ref_bound_local` in
+                // `crate::ir_lower::stmt::typed_foreach`). Lowering then refuses the re-bind and
+                // degrades to a store through the ref cell at the CELL's type, which for
+                // `int` cell + `string` value has no coercion at all: a program the strict
+                // checker rejects became one that miscompiles. Marking `$v` here is the same
+                // permanent marking a `=&` target receives, and restores the hard error.
+                //
+                // Recorded before the iterable is inferred so an iterable that fails to type is
+                // still treated as aliased.
+                if *value_by_ref {
+                    self.record_reference_alias_root(array);
+                    self.ref_aliased_locals.insert(value_var.clone());
+                }
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
                 if let PhpType::Array(elem_ty) = &arr_ty {
                     if let Some(k) = key_var {
@@ -311,6 +340,12 @@ impl Checker {
                 // so each one can be restored after the construct.
                 let mut saved_vars: Vec<(String, Option<PhpType>)> = Vec::new();
                 let mut applied_any_guard = false;
+                // Single-clause join state: the guarded key and the type it has where the
+                // then-branch falls out of the construct. `None` means "no usable fact" (the
+                // branch diverged, or a call inside it purged the narrowing).
+                let mut join_key: Option<String> = None;
+                let mut then_exit_ty: Option<PhpType> = None;
+                let single_clause = clauses.len() == 1;
 
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
@@ -330,6 +365,20 @@ impl Checker {
                                 errors.extend(error.flatten());
                             }
                         }
+                        // Join only when the then-branch WROTE the guarded place, i.e. when the
+                        // fact at branch exit is no longer the guard's own `then` type. That is
+                        // exactly the lazy-initialization shape; joining unconditionally would
+                        // instead publish a guard's narrowing (e.g. `instanceof`) to the code
+                        // after the `if`, where it does not hold.
+                        let branch_exit = env.get(&guard.var);
+                        if single_clause
+                            && Self::narrowed_place_key_is_property(&guard.var)
+                            && !self.body_cannot_fall_through(body)
+                            && branch_exit.is_some_and(|ty| *ty != guard.then_ty)
+                        {
+                            join_key = Some(guard.var.clone());
+                            then_exit_ty = branch_exit.cloned();
+                        }
                         restore_narrowed_var(env, &guard.var, &saved);
 
                         // The fallthrough env for the rest of the chain (next elseif or else)
@@ -346,11 +395,22 @@ impl Checker {
                 }
 
                 // Final else body (if present) is checked with the accumulated complement.
+                // `None` = the else path cannot reach the code after the `if`. `Some(None)` = it
+                // can, but the guarded fact was lost there. `Some(Some(ty))` = it can and the
+                // fact is `ty`.
+                let mut else_exit_ty: Option<Option<PhpType>> = None;
+                let mut else_falls_through = else_body.is_none();
                 if let Some(body) = else_body {
                     for s in body {
                         if let Err(error) = self.check_stmt(s, env) {
                             errors.extend(error.flatten());
                         }
+                    }
+                    else_falls_through = !self.body_cannot_fall_through(body);
+                }
+                if let Some(key) = &join_key {
+                    if else_falls_through {
+                        else_exit_ty = Some(env.get(key).cloned());
                     }
                 }
 
@@ -363,9 +423,27 @@ impl Checker {
                     && clauses
                         .iter()
                         .all(|(_, body)| self.body_cannot_fall_through(body));
+                // A single guarded clause whose then-branch also falls through joins the two
+                // exit facts instead of discarding both. `if (X === null) { X = new S(); }`
+                // leaves `S` on the then path (the write recorded it) and `S` on the else path
+                // (the guard complement), so the union is `S` — the singleton pattern.
+                let joined = join_key.as_ref().and_then(|key| {
+                    let then_ty = then_exit_ty.clone()?;
+                    let joined = match &else_exit_ty {
+                        None => then_ty,
+                        Some(Some(else_ty)) => {
+                            self.normalize_union_type(vec![then_ty, else_ty.clone()])
+                        }
+                        Some(None) => return None,
+                    };
+                    Some((key.clone(), joined))
+                });
                 if !keep_complement_after_if {
                     for (var, original) in &saved_vars {
                         restore_narrowed_var(env, var, original);
+                    }
+                    if let Some((key, joined)) = joined {
+                        env.insert(key, joined);
                     }
                 }
 
@@ -388,7 +466,28 @@ impl Checker {
             StmtKind::While { condition, body } => {
                 stabilize_loop_storage(self, stmt.span, body, None, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
+                // The condition is re-evaluated before every iteration, so a guard on it
+                // holds on entry to each one: `while (($row = fgetcsv($h)) !== false)`
+                // leaves `$row` an array inside the body. The narrowing is dropped again
+                // afterwards, because the loop exits precisely when the guard is false.
+                let guard = self.guard_narrowing(condition, env)?;
+                let saved = guard
+                    .as_ref()
+                    .map(|g| (g.var.clone(), env.get(&g.var).cloned()));
+                if let Some(g) = &guard {
+                    env.insert(g.var.clone(), g.then_ty.clone());
+                }
                 let errors = self.check_break_continue_target_body(body, env);
+                if let Some((var, previous)) = saved {
+                    match previous {
+                        Some(ty) => {
+                            env.insert(var, ty);
+                        }
+                        None => {
+                            env.remove(&var);
+                        }
+                    }
+                }
                 if errors.is_empty() {
                     Ok(())
                 } else {

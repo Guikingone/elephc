@@ -19,7 +19,8 @@ use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
 use super::super::validation::{
-    declared_return_type_compatible, late_static_return_compatible,
+    declared_return_type_compatible, is_pdo_exception_get_code_contract,
+    late_static_return_compatible,
     validate_signature_compatibility,
 };
 use super::state::ClassBuildState;
@@ -321,7 +322,16 @@ fn validate_static_interface_method(
             .map(|method| method.span)
             .unwrap_or_else(crate::span::Span::dummy),
     )?;
-    let return_compatible = late_static_compatible.unwrap_or_else(|| {
+    let contract_owner = state
+        .method_declaring_classes
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(&class.name);
+    let return_compatible = is_pdo_exception_get_code_contract(
+        contract_owner,
+        method_name,
+        &actual_sig.return_type,
+    ) || late_static_compatible.unwrap_or_else(|| {
         interface_self_return_conforms(
             checker,
             class,
@@ -534,7 +544,20 @@ fn validate_interface_method(
             .map(|method| method.span)
             .unwrap_or_else(crate::span::Span::dummy),
     )?;
-    let return_compatible = late_static_compatible.unwrap_or_else(|| {
+    let contract_owner = state
+        .method_declaring_classes
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(&class.name);
+    let return_compatible = (is_pdo_exception_get_code_contract(
+        contract_owner,
+        method_name,
+        &actual_sig.return_type,
+    ) || is_pdo_exception_get_code_contract(
+        &class.name,
+        method_name,
+        &actual_sig.return_type,
+    )) || late_static_compatible.unwrap_or_else(|| {
         interface_self_return_conforms(
             checker,
             class,

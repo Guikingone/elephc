@@ -441,7 +441,9 @@ fn emit_store_result_to_scratch(ctx: &mut FunctionContext<'_>, offset: usize) {
     let result = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("str {}, [sp, #{}]", result, offset)); // stage the resolved integer in scratch
+            ctx.emitter.instruction(                                            // stage the resolved integer in scratch
+                &format!("str {}, [sp, #{}]", result, offset)
+            );
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -460,7 +462,7 @@ fn emit_load_scratch_to_arg_reg(ctx: &mut FunctionContext<'_>, index: usize, off
 fn emit_load_scratch_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, offset: usize) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset)); // load the staged integer into the target register
+            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));// load the staged integer into the target register
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -549,6 +551,51 @@ pub(crate) fn lower_elephc_strtotime_raw(
     store_if_result(ctx, inst)
 }
 
+/// Tests whether a dynamically named AOT class exposes an inherited or declared constructor.
+pub(crate) fn lower_elephc_class_has_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_class_has_constructor", 1)?;
+    super::super::objects::lower_dynamic_class_has_constructor(ctx, inst)
+}
+
+/// Classifies a dynamically named class for PDO's custom statement construction rules.
+pub(crate) fn lower_elephc_pdo_statement_class_status(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_pdo_statement_class_status", 1)?;
+    super::super::objects::lower_dynamic_pdo_statement_class_status(ctx, inst)
+}
+
+/// Classifies the late-static called class for `PDO::connect()` driver validation.
+pub(crate) fn lower_elephc_pdo_called_class_status(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_pdo_called_class_status", 1)?;
+    super::super::objects::lower_dynamic_pdo_called_class_status(ctx, inst)
+}
+
+/// Invokes a selected PDOStatement subclass constructor after its native state is initialized.
+pub(crate) fn lower_elephc_invoke_pdo_statement_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_invoke_pdo_statement_constructor", 3)?;
+    super::super::objects::lower_dynamic_pdo_statement_constructor_call(ctx, inst)
+}
+
+/// Initializes the private PDOStatement base fields on a dynamically allocated subclass.
+pub(crate) fn lower_elephc_initialize_pdo_statement(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_initialize_pdo_statement", 5)?;
+    super::super::objects::lower_dynamic_pdo_statement_initialize(ctx, inst)
+}
+
 /// Marshals the shared `__rt_strtotime` ABI for `strtotime` / `__elephc_strtotime_raw`.
 ///
 /// Loads the datetime string (`x1`/`x2` on ARM64, `rdi`/`rsi` on x86_64), the optional base
@@ -633,6 +680,12 @@ pub(crate) fn lower_usleep(
 pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "exit", 0, 1)?;
     let Some(status) = inst.operands.first().copied() else {
+        if ctx.shared.instrument.is_on() {
+            // Shutdown output handlers are PHP calls and must finish inside the
+            // still-open exact stack before the termination hook closes it.
+            abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+            crate::codegen::frame::emit_instr_terminate(ctx);
+        }
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
@@ -761,10 +814,12 @@ fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
 
 /// Emits a process-exit sequence using the already-loaded integer result register.
 fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
+    abi::emit_cdylib_exit_escape(ctx.emitter);
     match (ctx.emitter.target.platform, ctx.emitter.target.arch) {
         (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
             ctx.emitter.instruction("mov x19, x0");                             // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain still-active output buffers to stdout before terminating
+            crate::codegen::frame::emit_instr_terminate(ctx);
             ctx.emitter.instruction("mov x0, x19");                             // restore the exit code into the syscall argument register
             ctx.emitter.syscall(1);
         }
@@ -772,6 +827,7 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rbx, rax");                            // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("and rsp, -16");                            // realign the stack for the flush call (this path never returns)
             ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain still-active output buffers to stdout before terminating
+            crate::codegen::frame::emit_instr_terminate(ctx);
             ctx.emitter.instruction("mov rdi, rbx");                            // move the computed exit code into the SysV first-argument register
             ctx.emitter.instruction("mov eax, 60");                             // Linux x86_64 syscall 60 = exit
             ctx.emitter.instruction("syscall");                                 // terminate the process through the Linux x86_64 syscall ABI

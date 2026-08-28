@@ -27,12 +27,109 @@ pub(super) fn lower(
         RuntimeCallTarget::ArrayFetchForWrite => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
+        RuntimeCallTarget::MixedCellPromoteToHash(sort)
+        | RuntimeCallTarget::MixedCellPromoteAttachedToHash(sort) => {
+            lower_mixed_cell_promote_to_hash(ctx, inst, sort)
+        }
+        RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
         RuntimeCallTarget::Function(target) => super::runtime_functions::lower(ctx, inst, target),
         RuntimeCallTarget::ProfiledFunction { target, .. } => {
             super::runtime_functions::lower(ctx, inst, target)
         }
     }
+}
+
+/// Clones a stored Mixed cell before a nested mutation publishes a new payload.
+///
+/// A shallow COW clone of an array or hash keeps its boxed Mixed slots shared. This operation
+/// preserves scalar tags exactly and delegates tag-4/tag-5 payload retention to
+/// `__rt_mixed_from_value`, so the returned cell may be safely promoted and installed only in the
+/// mutating parent. A null cell remains null for the caller's existing TypeError guard.
+fn lower_mixed_cell_clone(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime array.mixed_cell_clone expected 1 operand, got {}",
+            inst.operands.len(),
+        )));
+    }
+    let cell = expect_operand(inst, 0)?;
+    let actual = ctx.load_value_to_result(cell)?.codegen_repr();
+    if actual != PhpType::Mixed {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime array.mixed_cell_clone expected Mixed, got {:?}",
+            actual,
+        )));
+    }
+    let done = ctx.next_label("mixed_cell_clone_done");
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", done));              // absent cells stay absent so the following promotion raises the normal TypeError
+            ctx.emitter.instruction("ldr x2, [x0, #16]");                       // load the copied Mixed high payload before reusing x0 for the tag
+            ctx.emitter.instruction("ldr x1, [x0, #8]");                        // load the copied Mixed low payload for the retaining box helper
+            ctx.emitter.instruction("ldr x0, [x0]");                            // pass the original runtime tag to the retaining box helper
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // absent cells stay absent so the following promotion raises the normal TypeError
+            ctx.emitter.instruction(&format!("jz {}", done));                   // bypass payload loads when no boxed cell was stored
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rax + 16]");           // load the copied Mixed high payload before reusing rax for the tag
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // load the copied Mixed low payload for the retaining box helper
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // pass the original runtime tag to the retaining box helper
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Promotes or borrows the array payload of a boxed Mixed cell for a nested key sort.
+///
+/// The helper mutates tag-4 cells in place, borrows tag-5 payloads unchanged, and returns zero
+/// for a null/scalar/missing cell. Its valid hash result remains borrowed from the cell, so EIR
+/// ownership stays with the parent storage rather than treating it as freshly owned.
+fn lower_mixed_cell_promote_to_hash(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    sort: crate::ir::ArrayKeySort,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime array.mixed_cell_promote_to_hash expected 1 operand, got {}",
+            inst.operands.len(),
+        )));
+    }
+    let cell = expect_operand(inst, 0)?;
+    let actual = ctx.load_value_to_result(cell)?.codegen_repr();
+    if actual != PhpType::Mixed {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime array.mixed_cell_promote_to_hash expected Mixed, got {:?}",
+            actual,
+        )));
+    }
+    if ctx.emitter.target.arch == crate::codegen::platform::Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the boxed Mixed cell in the SysV first-argument register
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
+    let valid = ctx.next_label("mixed_cell_promote_to_hash_valid");
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", valid));            // nonzero helper results are valid borrowed hash payloads
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // distinguish an invalid Mixed receiver from a hash payload
+            ctx.emitter.instruction(&format!("jnz {}", valid));                 // nonzero helper results are valid borrowed hash payloads
+        }
+    }
+    super::exceptions::emit_type_error(
+        ctx,
+        &format!(
+            "{}(): Argument #1 ($array) must be of type array, non-array value given",
+            sort.php_name()
+        ),
+    );
+    ctx.emitter.label(&valid);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers a typed `Str -> Str` transform using the internal string result register pair.
@@ -65,12 +162,13 @@ fn lower_unary_string(
 fn unary_string_symbol(runtime: UnaryStringRuntime) -> &'static str {
     match runtime {
         UnaryStringRuntime::AddSlashes => "__rt_addslashes",
-        UnaryStringRuntime::Base64Decode => "__rt_base64_decode",
         UnaryStringRuntime::Base64Encode => "__rt_base64_encode",
         UnaryStringRuntime::BinToHex => "__rt_bin2hex",
         UnaryStringRuntime::HexToBin => "__rt_hex2bin",
         UnaryStringRuntime::HtmlEntityDecode => "__rt_html_entity_decode",
         UnaryStringRuntime::NlToBr => "__rt_nl2br",
+        UnaryStringRuntime::QuoteMeta => "__rt_quotemeta",
+        UnaryStringRuntime::QuotedPrintableEncode => "__rt_quoted_printable_encode",
         UnaryStringRuntime::RawUrlDecode => "__rt_urldecode",
         UnaryStringRuntime::RawUrlEncode => "__rt_rawurlencode",
         UnaryStringRuntime::StripSlashes => "__rt_stripslashes",

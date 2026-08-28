@@ -8,9 +8,8 @@
 //! - Returns the same temporary directory literal as the native static builtin.
 
 eval_builtin! {
-    name: "sys_get_temp_dir",
+    contract: "sys_get_temp_dir",
     area: Filesystem,
-    params: [],
     direct: Filesystem,
     values: Filesystem,
 }

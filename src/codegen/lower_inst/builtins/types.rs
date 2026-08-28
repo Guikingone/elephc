@@ -10,6 +10,7 @@
 //!   emitted for codegen, preserving concrete subclasses.
 
 use crate::codegen::abi;
+use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
@@ -20,6 +21,82 @@ use crate::types::{ClassInfo, PhpType};
 use super::super::super::context::FunctionContext;
 use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
+
+/// Lowers `intval($value, $base)`, PHP's two-argument integer conversion.
+///
+/// Reference PHP honors `$base` only when `$value` is a string, so the subject's checker type
+/// picks the path: a known string goes straight to `__rt_str_to_int_base`, a boxed `Mixed`
+/// goes to `__rt_mixed_intval_base` (which repeats that test at run time against the cell's
+/// tag), and every other scalar keeps the ordinary integer cast with the base discarded —
+/// `intval(42.9, 8) === 42`, not `34`.
+pub(crate) fn lower_intval_base(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "intval", 2)?;
+    let value = expect_operand(inst, 0)?;
+    let base = expect_operand(inst, 1)?;
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Str => lower_intval_base_from_string(ctx, value, base)?,
+        PhpType::Mixed => lower_intval_base_from_mixed(ctx, value, base)?,
+        _ => super::strings::load_as_int(ctx, value, "intval")?,
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Materializes a known-string `intval()` subject and parses it in the requested base.
+///
+/// The subject is staged first because materializing `$base` may itself need the result
+/// register, and the string pair is restored only after the base has reached its own
+/// argument register.
+fn lower_intval_base_from_string(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    base: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            super::strings::load_value_as_string_to_regs(ctx, value, "intval", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the subject string while the base is materialized
+            super::strings::load_as_int(ctx, base, "intval base")?;
+            ctx.emitter.instruction("mov x3, x0");                              // pass the requested base as the parser's third argument
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the subject into the parser's string argument pair
+        }
+        Arch::X86_64 => {
+            super::strings::load_value_as_string_to_regs(ctx, value, "intval", "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            super::strings::load_as_int(ctx, base, "intval base")?;
+            ctx.emitter.instruction("mov r8, rax");                             // park the requested base while the subject is restored
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                  // restore the subject into the parser's SysV string arguments
+            ctx.emitter.instruction("mov rdx, r8");                             // pass the requested base as the parser's third argument
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_int_base");
+    Ok(())
+}
+
+/// Materializes a boxed `Mixed` `intval()` subject and defers the string test to run time.
+///
+/// The cell pointer stays in the canonical integer result register, which is exactly where
+/// `__rt_mixed_intval_base` and the `__rt_mixed_cast_int` it falls back to expect it.
+fn lower_intval_base_from_mixed(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    base: ValueId,
+) -> Result<()> {
+    let cell_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_result(value)?;
+    abi::emit_push_reg(ctx.emitter, cell_reg);
+    super::strings::load_as_int(ctx, base, "intval base")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass the requested base as the helper's second argument
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the requested base as the helper's second argument
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, cell_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_intval_base");
+    Ok(())
+}
 
 /// Lowers `settype($local, "type")` by mutating the resolved local slot and returning true.
 pub(crate) fn lower_settype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -45,12 +122,31 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Rejects `unset()` calls that were not converted into direct EIR unbind operations.
+///
+/// Reaching this lowering means `crate::ir_lower::expr` could not turn the target
+/// into a slot clear, a hash/array removal, an `offsetUnset()` call, a `__unset()`
+/// call or a dynamic-property removal, so the message lists the shapes that do lower
+/// directly and then names the one shape users hit most.
+///
+/// THE UNTYPED FIXED SLOT is that shape. `unset($obj->untypedProp)` on a property
+/// declared without a type (`public $foo = 1;`) truly REMOVES it in PHP: a later read
+/// warns `Undefined property` and answers `null`, and a later write recreates it.
+/// elephc gives each declared property a fixed, monomorphically typed slot, so a
+/// property the checker typed `Int` has no encoding for "removed and reading as null"
+/// — every candidate encoding answers `int(0)` or a raw marker word instead. A loud
+/// error beats a wrong value, so the shape is refused here. Untyped properties whose
+/// storage is a DYNAMIC hash (`stdClass`, undeclared names on
+/// `#[AllowDynamicProperties]` classes) are genuinely removable and lower fine.
 pub(super) fn lower_unset_builtin(
     _ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     Err(CodegenIrError::unsupported(format!(
-        "unset target shape with {} lowered operands",
+        "unset target shape with {} lowered operands (supported: variables, \
+         array/hash elements, ArrayAccess offsets, __unset()-backed properties, \
+         declared typed object properties, and dynamic object properties). \
+         An UNTYPED declared property (`public $p = 1;`) is not supported: its fixed \
+         slot has no representation for PHP's removed-then-null read",
         inst.operands.len()
     )))
 }
@@ -370,6 +466,121 @@ pub(crate) fn lower_class_name_lookup(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `get_object_vars()` to a fresh public-property hash projection.
+pub(crate) fn lower_get_object_vars(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "get_object_vars", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let scope_class_id = lexical_object_vars_scope_class_id(ctx);
+    emit_object_hash_projection(ctx, value, false, scope_class_id)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers an explicit object-to-array cast to a fresh all-property hash projection.
+pub(crate) fn lower_object_array_cast(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    emit_object_hash_projection(ctx, value, true, -1)?;
+    store_if_result(ctx, inst)
+}
+
+/// Materializes an object pointer and invokes the shared target-aware projection helper.
+fn emit_object_hash_projection(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    cast_mode: bool,
+    scope_class_id: i64,
+) -> Result<()> {
+    let source_ty = ctx.raw_value_php_type(value)?.codegen_repr();
+    ctx.load_value_to_result(value)?;
+    match source_ty {
+        PhpType::Object(_) => {}
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    let object_label = ctx.next_label("object_hash_mixed_object");
+                    ctx.emitter.instruction("cmp x0, #6");                      // require the boxed Mixed object tag
+                    ctx.emitter
+                        .instruction(&format!("b.eq {}", object_label));         // branch to the object payload extraction path
+                    emit_dynamic_non_object_projection_fatal(ctx, cast_mode);
+                    ctx.emitter.label(&object_label);
+                    ctx.emitter.instruction("mov x0, x1");                      // move the unboxed object pointer into the helper input
+                }
+                Arch::X86_64 => {
+                    let object_label = ctx.next_label("object_hash_mixed_object_x");
+                    ctx.emitter.instruction("cmp rax, 6");                      // require the boxed Mixed object tag
+                    ctx.emitter
+                        .instruction(&format!("je {}", object_label));           // branch to the object payload extraction path
+                    emit_dynamic_non_object_projection_fatal(ctx, cast_mode);
+                    ctx.emitter.label(&object_label);
+                    ctx.emitter.instruction("mov rax, rdi");                    // move the unboxed object pointer into the helper input
+                }
+            }
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "object property projection from PHP type {:?}",
+                other
+            )))
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x1", i64::from(cast_mode));
+            abi::emit_load_int_immediate(ctx.emitter, "x2", scope_class_id);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", i64::from(cast_mode));
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", scope_class_id);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_object_to_hash");
+    Ok(())
+}
+
+/// Resolves the EIR function's lexical class id, using `-1` for global scopes.
+fn lexical_object_vars_scope_class_id(ctx: &FunctionContext<'_>) -> i64 {
+    let Some(class_name) = ctx.function.lexical_class.as_deref() else {
+        return -1;
+    };
+    ctx.module
+        .class_infos
+        .get(class_name)
+        .map_or(-1, |class| class.class_id as i64)
+}
+
+/// Emits an explicit fatal instead of silently projecting a runtime non-object as empty.
+fn emit_dynamic_non_object_projection_fatal(ctx: &mut FunctionContext<'_>, cast_mode: bool) {
+    let message = if cast_mode {
+        b"Fatal error: elephc cannot cast this runtime-typed non-object value to array\n".as_slice()
+    } else {
+        b"Fatal error: get_object_vars(): Argument #1 ($object) must be of type object\n".as_slice()
+    };
+    let (label, len) = ctx.data.add_string(message);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the dynamic projection fatal diagnostic
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);       // pass the exact dynamic projection diagnostic byte length
+            ctx.emitter.syscall(4);
+            abi::emit_exit(ctx.emitter, 1);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the dynamic projection fatal diagnostic
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);      // pass the exact dynamic projection diagnostic byte length
+            ctx.emitter.instruction("mov eax, 1");                              // select the Linux write syscall for the diagnostic
+            ctx.emitter.instruction("syscall");                                 // write the dynamic projection diagnostic before exiting
+            abi::emit_exit(ctx.emitter, 1);
+        }
+    }
+}
+
 /// Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
 pub(crate) fn lower_is_a_relation(
     ctx: &mut FunctionContext<'_>,
@@ -552,6 +763,19 @@ pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers `get_resource_type(resource)` to elephc's current resource type label.
+///
+/// The label is resolved at RUNTIME through `__rt_resource_type_name`, not baked in as
+/// a literal: PHP 8.5.6 renames a closed resource to `"Unknown"` — measured identical
+/// for `fclose`, `pclose` and `closedir` — and the close state is carried by the sign
+/// bit of the native payload (see `crate::codegen_support::runtime::resource_type_name`).
+///
+/// The operand is deliberately NOT routed through `super::io::load_stream_fd_to_result`.
+/// That helper refuses a statically non-resource argument with
+/// `CodegenIrError::unsupported`, which would turn `get_resource_type(5)` — a program
+/// elephc compiles today — into a compile refusal. elephc over-accepting that call is a
+/// real but SEPARATE debt (PHP throws a `TypeError`); closing it here would silently
+/// change the accepted language. The `other` arm below therefore keeps answering
+/// exactly what it answers today.
 pub(crate) fn lower_get_resource_type(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -559,8 +783,104 @@ pub(crate) fn lower_get_resource_type(
     super::ensure_arg_count(inst, "get_resource_type", 1)?;
     let value = expect_operand(inst, 0)?;
     ctx.load_value_to_result(value)?;
-    emit_string_result(ctx, b"stream");
+    match resource_type_name_shape(&ctx.raw_value_php_type(value)?) {
+        ResourceTypeNameShape::Boxed => emit_boxed_resource_type_name(ctx),
+        ResourceTypeNameShape::Unboxed => {
+            abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
+        }
+        ResourceTypeNameShape::Constant => emit_string_result(ctx, b"stream"),
+    }
     store_if_result(ctx, inst)
+}
+
+/// How `get_resource_type()` must reach its operand's payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResourceTypeNameShape {
+    /// The operand is a Mixed/Union box: unbox, gate on the resource tag, then resolve.
+    Boxed,
+    /// The operand is an unboxed `Resource`: its payload is already in the result register.
+    Unboxed,
+    /// The operand cannot be a resource: keep the constant this builtin always answered.
+    Constant,
+}
+
+/// Maps a `get_resource_type()` operand's static PHP type to its lowering shape.
+///
+/// Split out of the lowering so the DECISION is testable without a `FunctionContext`.
+/// The `Constant` arm is what preserves today's acceptance: elephc compiles
+/// `get_resource_type(5)` where PHP throws a `TypeError`, and turning that into a compile
+/// refusal — which routing through `super::io::load_stream_fd_to_result` would do — would
+/// change the accepted language in a change nobody reviewed for it.
+fn resource_type_name_shape(raw_ty: &PhpType) -> ResourceTypeNameShape {
+    match raw_ty {
+        PhpType::Mixed | PhpType::Union(_) => ResourceTypeNameShape::Boxed,
+        PhpType::Resource(_) => ResourceTypeNameShape::Unboxed,
+        _ => ResourceTypeNameShape::Constant,
+    }
+}
+
+/// Resolves the type name of a BOXED `get_resource_type()` operand.
+///
+/// Unboxes, and consults `__rt_resource_type_name` only when the runtime tag is 9
+/// (resource). Every other tag keeps answering the constant `"stream"` this builtin has
+/// always answered, which matters for two reasons: elephc accepts
+/// `get_resource_type(5)` today where PHP throws a `TypeError` (a separate,
+/// deliberately untouched debt), and a boxed float's payload word IS its sign-carrying
+/// IEEE bit pattern — `get_resource_type(-1.5)` would otherwise start reporting
+/// `"Unknown"` because bit 63 of `-1.5` is set. The tag gate makes the sign test apply
+/// to genuine resource payloads only.
+fn emit_boxed_resource_type_name(ctx: &mut FunctionContext<'_>) {
+    let (fallback_label, fallback_len) = ctx.data.add_string(b"stream");
+    let resource_label = ctx.next_label("get_resource_type_resource");
+    let done_label = ctx.next_label("get_resource_type_done");
+    emit_boxed_resource_type_name_asm(
+        ctx.emitter,
+        &fallback_label,
+        fallback_len,
+        &resource_label,
+        &done_label,
+    );
+}
+
+/// Emits the assembly body of `emit_boxed_resource_type_name`, split out so both target
+/// variants can be pinned without a `FunctionContext` (the precedent is
+/// `emit_resource_release_sentinel` in `crate::codegen::lower_inst::builtins::io`).
+///
+/// `fallback_label`/`fallback_len` name the `.data` literal answered for every non-resource
+/// tag; `resource_label` and `done_label` are the two locally unique branch targets.
+fn emit_boxed_resource_type_name_asm(
+    emitter: &mut Emitter,
+    fallback_label: &str,
+    fallback_len: usize,
+    resource_label: &str,
+    done_label: &str,
+) {
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #9");                                  // check whether the boxed operand carries the resource tag
+            emitter.instruction(&format!("b.eq {}", resource_label));           // only a genuine resource payload gets a computed type name
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 9");                                  // check whether the boxed operand carries the resource tag
+            emitter.instruction(&format!("je {}", resource_label));             // only a genuine resource payload gets a computed type name
+        }
+    }
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    abi::emit_symbol_address(emitter, ptr_reg, fallback_label);
+    abi::emit_load_int_immediate(emitter, len_reg, fallback_len as i64);        // every non-resource tag keeps the constant this builtin always answered
+    abi::emit_jump(emitter, done_label);
+    emitter.label(resource_label);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, x1");                                  // move the unboxed Mixed low payload into the integer result register
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, rdi");                                // move the unboxed Mixed low payload into the integer result register
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_resource_type_name");                   // stream while the handle is open, Unknown once it is closed
+    emitter.label(done_label);
 }
 
 /// Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based.
@@ -634,6 +954,26 @@ fn emit_dynamic_object_class_name_aarch64(
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.emitter.instruction(&format!("cbz x0, {}", empty_label));               // null object pointers produce an empty class name
     ctx.emitter.instruction("ldr x9, [x0]");                                    // load the object's concrete runtime class id
+    if name == "get_class" {
+        let incomplete_label = ctx.next_label("get_class_incomplete");
+        ctx.emitter.instruction("cmn x9, #2");                                  // reserved id -2 denotes an incomplete unserialized object
+        ctx.emitter.instruction(&format!("b.eq {}", incomplete_label));         // expose PHP's required incomplete-class name
+        // The ordinary class lookup below remains the only path for real ids.
+        abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_count");
+        ctx.emitter.instruction("ldr x10, [x10]");                              // load dense class-name lookup bound
+        ctx.emitter.instruction("cmp x9, x10");                                 // validate the object class id before indexing metadata
+        ctx.emitter.instruction(&format!("b.hs {}", empty_label));              // invalid ids produce an empty class name
+        abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
+        ctx.emitter.instruction("lsl x12, x9, #4");                             // scale class id by the 16-byte metadata row
+        ctx.emitter.instruction("add x11, x11, x12");                           // select the class-name metadata row
+        ctx.emitter.instruction(&format!("ldr {}, [x11]", ptr_reg));            // load the real class-name pointer
+        ctx.emitter.instruction(&format!("ldr {}, [x11, #8]", len_reg));        // load the real class-name length
+        ctx.emitter.instruction(&format!("b {}", done_label));                  // skip empty fallback after successful lookup
+        ctx.emitter.label(&incomplete_label);
+        abi::emit_symbol_address(ctx.emitter, ptr_reg, "_incomplete_class_name");
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, 22);
+        ctx.emitter.instruction(&format!("b {}", done_label));                  // incomplete class name is final
+    }
     abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_count");
     ctx.emitter.instruction("ldr x10, [x10]");                                  // load the number of dense class-name lookup rows
     if name == "get_parent_class" {
@@ -672,6 +1012,23 @@ fn emit_dynamic_object_class_name_x86_64(
     ctx.emitter.instruction("test rax, rax");                                   // test whether the object pointer is null
     ctx.emitter.instruction(&format!("je {}", empty_label));                    // null object pointers produce an empty class name
     ctx.emitter.instruction("mov r8, QWORD PTR [rax]");                         // load the object's concrete runtime class id
+    if name == "get_class" {
+        let incomplete_label = ctx.next_label("get_class_incomplete_x");
+        ctx.emitter.instruction("cmp r8, -2");                                  // reserved id -2 denotes an incomplete unserialized object
+        ctx.emitter.instruction(&format!("je {}", incomplete_label));           // expose PHP's required incomplete-class name
+        ctx.emitter.instruction("mov r9, QWORD PTR [rip + _class_name_count]"); // load dense class-name lookup bound
+        ctx.emitter.instruction("cmp r8, r9");                                  // validate the object class id before indexing metadata
+        ctx.emitter.instruction(&format!("jae {}", empty_label));               // invalid ids produce an empty class name
+        ctx.emitter.instruction("lea r10, [rip + _class_name_entries]");        // materialize class-name metadata table base
+        ctx.emitter.instruction("shl r8, 4");                                   // scale class id by 16-byte row size
+        ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r8]");               // load the real class-name pointer
+        ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + r8 + 8]");           // load the real class-name length
+        ctx.emitter.instruction(&format!("jmp {}", done_label));                // skip empty fallback after successful lookup
+        ctx.emitter.label(&incomplete_label);
+        ctx.emitter.instruction("lea rax, [rip + _incomplete_class_name]");     // return PHP incomplete-class name
+        ctx.emitter.instruction("mov rdx, 22");                                 // byte length of __PHP_Incomplete_Class
+        ctx.emitter.instruction(&format!("jmp {}", done_label));                // incomplete class name is final
+    }
     ctx.emitter.instruction("mov r9, QWORD PTR [rip + _class_name_count]");     // load the number of dense class-name lookup rows
     if name == "get_parent_class" {
         ctx.emitter.instruction("cmp r8, r9");                                  // validate the object class id before reading its parent id
@@ -933,4 +1290,138 @@ fn optional_const_string_operand(
         .get(data.as_raw() as usize)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?))
+}
+
+#[cfg(test)]
+mod get_resource_type_asm_tests {
+    use super::emit_boxed_resource_type_name_asm;
+    use crate::codegen::emit::Emitter;
+    use crate::codegen::platform::{Arch, Platform, Target};
+
+    /// Emits the boxed `get_resource_type` body for one target and returns the assembly.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_boxed_resource_type_name_asm(
+            &mut emitter,
+            "_str_stream",
+            6,
+            "_gt_resource",
+            "_gt_done",
+        );
+        emitter.output()
+    }
+
+    /// Pins the whole AArch64 body as an ordered, exact-line block.
+    ///
+    /// The load-bearing line is `bl __rt_resource_type_name`: before it the builtin
+    /// answered the literal `"stream"` unconditionally, so `fclose($r);
+    /// get_resource_type($r)` reported `"stream"` where PHP 8.5.6 reports `"Unknown"`.
+    #[test]
+    fn aarch64_consults_the_runtime_type_name_for_resource_tags() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        let expected = concat!(
+            "    bl __rt_mixed_unbox\n",
+            "    cmp x0, #9\n",
+            "    b.eq _gt_resource\n",
+            "    adrp x1, _str_stream@PAGE\n",
+            "    add x1, x1, _str_stream@PAGEOFF\n",
+            "    mov x2, #6\n",
+            "    b _gt_done\n",
+            "_gt_resource:\n",
+            "    mov x0, x1\n",
+            "    bl __rt_resource_type_name\n",
+            "_gt_done:\n",
+        );
+        assert!(asm.contains(expected), "expected block missing:\n{asm}");
+    }
+
+    /// Pins the whole x86_64 body, so the two targets cannot drift: the payload move is
+    /// `mov rax, rdi` here and `mov x0, x1` there, and an aarch64-only pin has already let
+    /// an x86 fix be deleted silently on this branch.
+    #[test]
+    fn x86_64_consults_the_runtime_type_name_for_resource_tags() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        let expected = concat!(
+            "    call __rt_mixed_unbox\n",
+            "    cmp rax, 9\n",
+            "    je _gt_resource\n",
+            "    lea rax, [rip + _str_stream]\n",
+            "    mov rdx, 6\n",
+            "    jmp _gt_done\n",
+            "_gt_resource:\n",
+            "    mov rax, rdi\n",
+            "    call __rt_resource_type_name\n",
+            "_gt_done:\n",
+        );
+        assert!(asm.contains(expected), "expected block missing:\n{asm}");
+    }
+
+    /// Pins the operand-shape decision, which the lowering can no longer make inline.
+    ///
+    /// `Mixed`/`Union` is the shape every real program takes (`fopen()` types as
+    /// `Union([Resource(Some("stream")), Bool])`); a bare `Resource` is unreachable today
+    /// but handled uniformly anyway, because a sign test on an already-loaded payload
+    /// costs two instructions and cannot mis-fire. Everything else must stay `Constant`:
+    /// that is the arm that keeps `get_resource_type(5)` compiling, which is a separate
+    /// debt this change deliberately does not close.
+    #[test]
+    fn the_operand_shape_decides_how_the_payload_is_reached() {
+        use super::{resource_type_name_shape, ResourceTypeNameShape};
+        use crate::types::PhpType;
+
+        assert_eq!(
+            resource_type_name_shape(&PhpType::Mixed),
+            ResourceTypeNameShape::Boxed
+        );
+        assert_eq!(
+            resource_type_name_shape(&PhpType::Union(vec![
+                PhpType::Resource(Some("stream".to_string())),
+                PhpType::Bool,
+            ])),
+            ResourceTypeNameShape::Boxed
+        );
+        assert_eq!(
+            resource_type_name_shape(&PhpType::Resource(Some("stream".to_string()))),
+            ResourceTypeNameShape::Unboxed
+        );
+        for other in [PhpType::Int, PhpType::Float, PhpType::Str, PhpType::Bool] {
+            assert_eq!(
+                resource_type_name_shape(&other),
+                ResourceTypeNameShape::Constant,
+                "acceptance must not change for {other:?}"
+            );
+        }
+    }
+
+    /// The non-resource tag must keep answering the constant, on both targets.
+    ///
+    /// elephc accepts `get_resource_type(5)` today where PHP throws a `TypeError`; that
+    /// over-acceptance is a separate debt, and routing every tag through the sign test
+    /// would ALSO make `get_resource_type(-1.5)` report `"Unknown"`, because bit 63 of a
+    /// negative double is set. The tag gate is what keeps both cases at today's answer.
+    #[test]
+    fn a_non_resource_tag_keeps_the_constant_answer_on_both_targets() {
+        for (target, gate) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), "    b.eq _gt_resource\n"),
+            (Target::new(Platform::Linux, Arch::X86_64), "    je _gt_resource\n"),
+        ] {
+            let asm = emit_for(target);
+            let fallthrough = asm
+                .split(gate)
+                .nth(1)
+                .unwrap_or_else(|| panic!("missing resource-tag gate for {target:?}:\n{asm}"))
+                .split("_gt_resource:\n")
+                .next()
+                .expect("the fallthrough arm precedes the resource arm")
+                .to_string();
+            assert!(
+                fallthrough.contains("_str_stream"),
+                "the non-resource arm must answer the constant ({target:?}):\n{fallthrough}"
+            );
+            assert!(
+                !fallthrough.contains("__rt_resource_type_name"),
+                "the non-resource arm must not reach the runtime resolver ({target:?}):\n{fallthrough}"
+            );
+        }
+    }
 }

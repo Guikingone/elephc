@@ -16,11 +16,7 @@ use crate::types::PhpType;
 /// Uses thread-local `ACTIVE_FUNCTION_EFFECTS` for user-defined functions. Falls back to
 /// Registry builtins consume their shared descriptor; unknown calls remain conservative.
 pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Effect {
-    ACTIVE_FUNCTION_EFFECTS.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .and_then(|effects| effects.get(name).copied())
-    })
+    with_active_function_effects(|effects| effects.and_then(|effects| effects.get(name).copied()))
     .unwrap_or_else(|| {
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let semantics = def.spec.semantics;
@@ -199,10 +195,8 @@ pub(in crate::optimize) fn static_method_call_effect(
         return Effect::PURE.with_side_effects().with_may_throw().with_writes_globals();
     };
 
-    ACTIVE_STATIC_METHOD_EFFECTS.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .and_then(|effects| effects.get(&method_effect_key(&class_name, method_name)).copied())
+    with_active_static_method_effects(|effects| {
+        effects.and_then(|effects| effects.get(&method_effect_key(&class_name, method_name)).copied())
     })
     .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw().with_writes_globals())
 }
@@ -223,9 +217,8 @@ pub(in crate::optimize) fn instance_method_call_effect(
         return conservative_call_effect();
     };
 
-    ACTIVE_INSTANCE_METHOD_EFFECTS.with(|slot| {
-        let effects = slot.borrow();
-        let Some(effects) = effects.as_ref() else {
+    with_active_instance_method_effects(|effects| {
+        let Some(effects) = effects else {
             return conservative_call_effect();
         };
         targets
@@ -258,9 +251,8 @@ pub(in crate::optimize) fn instance_property_read_effect(
     let mut hooked = false;
     let mut needs_magic_get = false;
     let mut warns_missing = false;
-    let resolved = ACTIVE_INSTANCE_DISPATCH_METADATA.with(|slot| {
-        let metadata = slot.borrow();
-        let metadata = metadata.as_ref()?;
+    let resolved = with_active_instance_dispatch_metadata(|metadata| {
+        let metadata = metadata?;
         for runtime_class in &runtime_classes {
             if !class_hierarchy_is_complete(metadata, runtime_class) {
                 return None;
@@ -317,9 +309,8 @@ fn resolve_property_receiver(object: &Expr) -> Option<InstanceEffectReceiver> {
         ExprKind::This => {
             let class_name = ACTIVE_CLASS_EFFECT_CONTEXT
                 .with(|slot| slot.borrow().as_ref().map(|context| context.class_name.clone()))?;
-            let exact = ACTIVE_INSTANCE_DISPATCH_METADATA.with(|slot| {
-                slot.borrow()
-                    .as_ref()
+            let exact = with_active_instance_dispatch_metadata(|metadata| {
+                metadata
                     .and_then(|metadata| metadata.classes.get(&class_name))
                     .is_some_and(|class| class.is_final)
             });
@@ -358,9 +349,8 @@ fn resolve_property_receiver(object: &Expr) -> Option<InstanceEffectReceiver> {
 fn property_receiver_runtime_classes(
     receiver: &InstanceEffectReceiver,
 ) -> Option<Vec<String>> {
-    ACTIVE_INSTANCE_DISPATCH_METADATA.with(|slot| {
-        let metadata = slot.borrow();
-        let metadata = metadata.as_ref()?;
+    with_active_instance_dispatch_metadata(|metadata| {
+        let metadata = metadata?;
         if receiver.exact {
             return metadata
                 .classes
@@ -477,9 +467,8 @@ fn resolve_instance_receiver(
 /// Returns whether class/method modifiers make `$this` or `new static` dispatch exact.
 fn instance_member_is_statically_bound(class_name: &str, method_name: &str) -> bool {
     let method_key = php_symbol_key(method_name);
-    ACTIVE_INSTANCE_DISPATCH_METADATA.with(|slot| {
-        let metadata = slot.borrow();
-        let Some(metadata) = metadata.as_ref() else {
+    with_active_instance_dispatch_metadata(|metadata| {
+        let Some(metadata) = metadata else {
             return false;
         };
         let Some(class) = metadata.classes.get(class_name) else {
@@ -497,9 +486,8 @@ fn instance_dispatch_targets(
     method_name: &str,
 ) -> Option<Vec<String>> {
     let method_key = php_symbol_key(method_name);
-    ACTIVE_INSTANCE_DISPATCH_METADATA.with(|slot| {
-        let metadata = slot.borrow();
-        let metadata = metadata.as_ref()?;
+    with_active_instance_dispatch_metadata(|metadata| {
+        let metadata = metadata?;
         if !receiver.exact && metadata.has_dynamic_class_barrier {
             return None;
         }
@@ -606,10 +594,8 @@ fn resolve_instance_method_implementation(
     let mut current = Some(runtime_class);
     while let Some(class_name) = current {
         let key = method_effect_key(class_name, method_key);
-        let has_body = ACTIVE_INSTANCE_METHOD_EFFECTS.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .is_some_and(|effects| effects.contains_key(&key))
+        let has_body = with_active_instance_method_effects(|effects| {
+            effects.is_some_and(|effects| effects.contains_key(&key))
         });
         if has_body {
             return Some(key);

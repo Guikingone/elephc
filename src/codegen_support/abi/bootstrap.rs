@@ -3,10 +3,11 @@
 //! Provides small target-aware helpers for heap debug setup, frame copying, and process exit.
 //!
 //! Called from:
-//! - `crate::codegen::block_emit` and top-level program prologue emission.
+//! - `crate::codegen::block_emit`, top-level prologues, and runtime fatal emitters.
 //!
 //! Key details:
 //! - Register choices must match the platform entry convention before normal PHP frame setup begins.
+//! - Process exits first escape an active cdylib boundary so embedding hosts survive fatal paths.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -28,28 +29,44 @@ pub fn emit_enable_heap_debug_flag(emitter: &mut Emitter) {
     emit_store_reg_to_symbol(emitter, scratch, "_heap_debug_enabled", 0);
 }
 
+/// Set the web heap-guard flag to 1 in global symbol storage.
+///
+/// Enables the cheap small-bin double-free detection in `--web` builds without the
+/// expensive per-allocation free-list validation that `--heap-debug` also turns on.
+/// A detected double free routes to `__rt_heap_debug_fail`, which writes the diagnostic
+/// and `_exit(1)`s the worker so the prefork master respawns it, containing the
+/// corruption to a single request rather than aborting the whole server.
+pub fn emit_enable_web_heap_guard_flag(emitter: &mut Emitter) {
+    let scratch = temp_int_reg(emitter.target);
+    emit_load_int_immediate(emitter, scratch, 1);
+    emit_store_reg_to_symbol(emitter, scratch, "_web_heap_guard_enabled", 0);
+}
+
 /// Copy the current frame pointer into the destination scratch register.
 #[cfg(test)]
 pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // copy the current frame pointer into the requested scratch register
         "mov {}, {}",
         dest,
         super::registers::frame_pointer_reg(emitter)
-    )); // copy the current frame pointer into the requested scratch register
+    ));
 }
 
-/// Emit a process-exit sequence for the current target, then return control to the OS.
+/// Emit a process-exit sequence, or escape through an active cdylib boundary.
 ///
 /// # Arguments
 /// - `code`: the exit code visible to the OS; must fit in the target's exit register.
 ///
 /// # Platform behavior
-/// - **macOS ARM64 / Linux ARM64**: loads `code` into `x0` and invokes syscall 1 (`sys_exit`).
-/// - **Linux x86_64**: loads `code` into `edi` (SysV first-argument register) and invokes syscall 60 (`exit`).
+/// - **macOS ARM64**: loads `code` into `x0` and invokes syscall 1 (`sys_exit`).
+/// - **Linux ARM64**: loads `code` into `x0` and invokes syscall 94 (`exit_group`).
+/// - **Linux x86_64**: loads `code` into `edi` and invokes syscall 231 (`exit_group`).
 /// - **macOS x86_64**: panics — not yet implemented.
 ///
-/// This routine never returns to the calling code. The syscall consumes the current execution context.
+/// Executable mode never returns. An active cdylib boundary records
+/// `ELEPHC_STATUS_RUNTIME_FAILURE` and unwinds through `__rt_throw_current` instead.
 pub fn emit_exit(emitter: &mut Emitter, code: u32) {
+    emit_cdylib_exit_escape(emitter);
     match (emitter.target.platform, emitter.target.arch) {
         (super::super::platform::Platform::MacOS, Arch::AArch64)
         | (super::super::platform::Platform::Linux, Arch::AArch64) => {
@@ -61,7 +78,7 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
             emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
             emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
             emitter.instruction(&format!("mov edi, {}", code));                 // load the requested process exit code into the SysV first-argument register
-            emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
+            emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
             emitter.instruction("syscall");                                     // terminate the process through the Linux x86_64 syscall ABI
         }
         (super::super::platform::Platform::MacOS, Arch::X86_64) => {
@@ -69,6 +86,52 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
         }
         (super::super::platform::Platform::Windows, _) => {
             panic!("Windows target is not yet supported (see issue #379)");
+        }
+    }
+}
+
+/// Converts an otherwise process-fatal exit into a runtime boundary escape for cdylibs.
+pub fn emit_cdylib_exit_escape(emitter: &mut Emitter) {
+    if !emitter.cdylib_boundary {
+        return;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            super::emit_load_symbol_to_reg(
+                emitter,
+                "x9",
+                crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
+                0,
+            );
+            emitter.instruction("cbz x9, 991f");                                // preserve process exit when no host boundary is active
+            super::emit_store_imm_to_symbol(
+                emitter,
+                crate::codegen_support::cdylib::BOUNDARY_STATUS,
+                0,
+                crate::codegen_support::cdylib::STATUS_RUNTIME_FAILURE as i64,
+            );
+            super::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+            emitter.instruction("b __rt_throw_current");                        // unwind the fatal path into the active host boundary
+            emitter.label("991");
+        }
+        Arch::X86_64 => {
+            super::emit_load_symbol_to_reg(
+                emitter,
+                "r10",
+                crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
+                0,
+            );
+            emitter.instruction("test r10, r10");                               // distinguish an active host boundary from executable mode
+            emitter.instruction("jz 991f");                                     // preserve process exit when no host boundary is active
+            super::emit_store_imm_to_symbol(
+                emitter,
+                crate::codegen_support::cdylib::BOUNDARY_STATUS,
+                0,
+                crate::codegen_support::cdylib::STATUS_RUNTIME_FAILURE as i64,
+            );
+            super::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+            emitter.instruction("jmp __rt_throw_current");                      // unwind the fatal path into the active host boundary
+            emitter.label("991");
         }
     }
 }
@@ -81,10 +144,10 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
 /// return value as the process exit code.
 ///
 /// # Platform behavior
-/// - **macOS ARM64 / Linux ARM64**: the return value already sits in `x0`, which
-///   is `sys_exit`'s argument register, so it invokes syscall 1 directly.
+/// - **macOS ARM64 / Linux ARM64**: the return value already sits in `x0`; the
+///   target invokes `sys_exit` on macOS or `exit_group` on Linux.
 /// - **Linux x86_64**: moves `eax` (the C return value) into `edi` (the SysV exit
-///   argument) and invokes syscall 60 (`exit`).
+///   argument) and invokes syscall 231 (`exit_group`).
 /// - **macOS x86_64**: panics — not in the supported target matrix.
 ///
 /// This routine never returns to the calling code.
@@ -102,7 +165,7 @@ pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
             emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
             emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
             emitter.instruction("mov edi, ebx");                                // move the stashed return value into the SysV exit argument register
-            emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
+            emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
             emitter.instruction("syscall");                                     // terminate the process with the bridge return code
         }
         (super::super::platform::Platform::MacOS, Arch::X86_64) => {

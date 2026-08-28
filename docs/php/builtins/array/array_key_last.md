@@ -2,7 +2,7 @@
 title: "array_key_last()"
 description: "Gets the last key of an array."
 sidebar:
-  order: 20
+  order: 21
 ---
 
 ## array_key_last()
@@ -24,12 +24,6 @@ Gets the last key of an array.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

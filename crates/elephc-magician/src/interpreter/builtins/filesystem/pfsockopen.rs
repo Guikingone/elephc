@@ -8,19 +8,9 @@
 //! Key details:
 //! - Eval has no persistent socket table, so runtime behavior delegates to `fsockopen`.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "pfsockopen",
+    contract: "pfsockopen",
     area: Filesystem,
-    params: [
-        hostname,
-        port,
-        error_code: by_ref = EvalBuiltinDefaultValue::Null,
-        error_message: by_ref = EvalBuiltinDefaultValue::Null,
-        timeout = EvalBuiltinDefaultValue::Null
-    ],
-    by_ref: [error_code, error_message],
     direct: none,
     values: Filesystem,
 }

@@ -10,6 +10,7 @@
 //!   source order and emitting high-level EIR operations.
 //! - EIR is the only production backend; unsupported lowering must fail explicitly.
 
+mod array_pointer_scan;
 mod builtin_datetime;
 mod context;
 mod effect_refinement;
@@ -17,6 +18,8 @@ mod effects_lookup;
 mod expr;
 mod fibers;
 mod function;
+/// The padding-thunk symbol codegen calls for a dynamic `new` that omits defaulted arguments.
+pub(crate) use function::dynamic_constructor_thunk_name;
 mod ownership;
 mod program;
 mod reflection;

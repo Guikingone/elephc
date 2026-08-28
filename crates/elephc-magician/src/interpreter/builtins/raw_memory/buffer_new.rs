@@ -15,9 +15,8 @@ use super::super::super::*;
 
 
 eval_builtin! {
-    name: "buffer_new",
+    contract: "buffer_new",
     area: RawMemory,
-    params: [length],
     direct: BufferNew,
     values: BufferNew,
 }

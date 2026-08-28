@@ -80,6 +80,17 @@ pub(super) struct FakeOps {
     pub(super) resource_ids: HashMap<i64, i64>,
     /// Next never-used PHP resource id, lazily initialized to `FAKE_FIRST_RESOURCE_ID`.
     pub(super) resource_id_next: i64,
+    /// Resource payloads that must NEVER receive a PHP resource id.
+    ///
+    /// Fake mirror of resource KIND 5, the eval-owned inert hash context. PHP 8's
+    /// `hash_init()` returns a `HashContext` OBJECT, so it draws from the object-handle
+    /// space and consumes nothing from the resource counter; the real runtime models
+    /// this by having `__rt_mixed_from_value` skip `__rt_resource_id_of` for kind 5.
+    /// Without this set the fake would bind an id for every hash context — `alloc`
+    /// binds one for EVERY `FakeValue::Resource` — and every magician test would stay
+    /// structurally unable to observe the very bug this models, because the fake's
+    /// counter would keep advancing exactly as the buggy runtime's did.
+    pub(super) inert_resources: std::collections::HashSet<i64>,
     pub(super) object_classes: HashMap<usize, String>,
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
@@ -118,12 +129,25 @@ impl FakeOps {
         RuntimeCellHandle::from_raw(id as *mut RuntimeCell)
     }
 
+    /// Records a payload as inert, so no PHP resource id is ever bound to it.
+    ///
+    /// The fake counterpart of boxing with resource kind 5. Must be called BEFORE the
+    /// `alloc` that creates the cell, because `alloc` is where binding happens.
+    pub(super) fn mark_resource_inert(&mut self, payload: i64) {
+        self.inert_resources.insert(payload);
+    }
+
     /// Binds a fresh PHP resource id to a native payload that does not have one.
     ///
     /// Mirrors `__rt_resource_id_of`: the standard stream descriptors answer
     /// `payload + 1` without consuming the counter, every other payload takes the
-    /// next never-used id, and ids are never reused.
+    /// next never-used id, and ids are never reused. Inert payloads (kind 5, the eval
+    /// hash context) are skipped entirely, which is what keeps `hash_init()` from
+    /// shifting the ids of resources created after it.
     fn bind_resource_id(&mut self, payload: i64) {
+        if self.inert_resources.contains(&payload) {
+            return;
+        }
         if payload <= FAKE_STD_STREAM_MAX_PAYLOAD || self.resource_ids.contains_key(&payload) {
             return;
         }
@@ -140,7 +164,33 @@ impl FakeOps {
     /// payload means a resource cell reached a display path without going through
     /// `alloc`, and a silent fallback here is precisely the drift that made the
     /// old `payload + 1` model look correct.
+    ///
+    /// AN INERT PAYLOAD PANICS TOO, and deliberately with a different message. The
+    /// real runtime does NOT panic there: `__rt_resource_id_of` still mints lazily for
+    /// a kind-5 cell that reaches a display path, which is what guarantees no path can
+    /// ever print a raw address. The fake cannot do that because this method — and all
+    /// three of its callers in `super::conversions` — take `&self`. Widening them to
+    /// `&mut self` is the honest fix if a test ever needs it; a silent fallback here
+    /// would re-introduce exactly the blindness this fake was rewritten to remove.
+    ///
+    /// A NEGATIVE PAYLOAD IS A CLOSED HANDLE AND ANSWERS `-payload`, mirroring the
+    /// `tbnz x0, #63` / `js` arm the real helper grew (`resource_ids.rs`) when `fclose`,
+    /// `pclose` and `closedir` started stamping `-id` into the box. Without this arm the
+    /// fake fell straight into the standard-stream shortcut below, because every negative
+    /// value is `<= 2`: a `FakeValue::Resource(-5)` cell answered `-4`, so a unit test for
+    /// the closed-resource display path would have asserted
+    /// `resource(-4) of type (Unknown)` and passed.
     pub(super) fn fake_resource_id(&self, payload: i64) -> i64 {
+        if self.inert_resources.contains(&payload) {
+            panic!(
+                "inert resource payload {payload} reached a display path; the runtime \
+                 mints lazily here, so make `fake_resource_id` take `&mut self` and \
+                 bind on demand rather than adding a fallback"
+            );
+        }
+        if payload < 0 {
+            return -payload;
+        }
         if payload <= FAKE_STD_STREAM_MAX_PAYLOAD {
             return payload + 1;
         }

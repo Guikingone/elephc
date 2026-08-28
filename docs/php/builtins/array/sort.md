@@ -2,7 +2,7 @@
 title: "sort()"
 description: "Sorts an array in ascending order."
 sidebar:
-  order: 60
+  order: 67
 ---
 
 ## sort()
@@ -24,12 +24,6 @@ Sorts an array in ascending order.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/sort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/sort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

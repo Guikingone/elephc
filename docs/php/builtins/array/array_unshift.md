@@ -2,7 +2,7 @@
 title: "array_unshift()"
 description: "Prepends one or more elements to the beginning of an array."
 sidebar:
-  order: 43
+  order: 44
 ---
 
 ## array_unshift()
@@ -25,12 +25,6 @@ Prepends one or more elements to the beginning of an array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_unshift.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_unshift.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

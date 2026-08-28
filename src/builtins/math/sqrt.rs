@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "sqrt",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "sqrt",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Sqrt,
     ),
-    summary: "Returns the square root of a number.",
-    php_manual: "https://www.php.net/manual/en/function.sqrt.php",
 }

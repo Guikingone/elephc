@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing Base64 encode hook.
 
 eval_builtin! {
-    name: "base64_encode",
+    contract: "base64_encode",
     area: String,
-    params: [string],
     direct: Base64Encode,
     values: Base64Encode,
 }
@@ -37,6 +36,12 @@ pub(in crate::interpreter) fn eval_base64_encode_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let bytes = values.string_bytes(value)?;
+    let output = eval_base64_encode_bytes(&bytes);
+    values.string(&output)
+}
+
+/// Encodes raw bytes with PHP's standard padded Base64 alphabet.
+pub(in crate::interpreter) fn eval_base64_encode_bytes(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(((bytes.len() + 2) / 3) * 4);
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     for chunk in bytes.chunks(3) {
@@ -56,5 +61,5 @@ pub(in crate::interpreter) fn eval_base64_encode_result(
             output.push('=');
         }
     }
-    values.string(&output)
+    output
 }

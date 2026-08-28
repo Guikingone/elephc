@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "is_executable",
-    area: Io,
-    params: [filename: Str],
-    returns: Bool,
+    contract: "is_executable",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IsExecutable,
     ),
-    summary: "Tells whether the filename is executable.",
-    php_manual: "function.is-executable",
 }

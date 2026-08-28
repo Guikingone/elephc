@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the stat-array helper.
 
 eval_builtin! {
-    name: "lstat",
+    contract: "lstat",
     area: Filesystem,
-    params: [filename],
     direct: Filesystem,
     values: Filesystem,
 }

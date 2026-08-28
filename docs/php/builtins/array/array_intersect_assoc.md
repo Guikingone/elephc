@@ -2,7 +2,7 @@
 title: "array_intersect_assoc()"
 description: "Computes the intersection of arrays with additional index check."
 sidebar:
-  order: 15
+  order: 16
 ---
 
 ## array_intersect_assoc()
@@ -25,12 +25,6 @@ Computes the intersection of arrays with additional index check.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -7,16 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the timestamp mutation helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "touch",
+    contract: "touch",
     area: Filesystem,
-    params: [
-        filename,
-        mtime = EvalBuiltinDefaultValue::Null,
-        atime = EvalBuiltinDefaultValue::Null
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

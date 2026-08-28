@@ -10,6 +10,10 @@
 
 use super::*;
 
+// Shadows the glob-imported `crate::optimize::binding_decisions` (the thread-local decision SETS)
+// with the control-flow walker that answers "does this subtree carry one of those decisions?".
+// Both DCE tail-sinking and the single-case switch rewrite clone AST nodes, so both ask it.
+mod binding_decisions;
 mod common;
 mod cfg;
 mod dce;
@@ -19,6 +23,9 @@ mod path;
 mod prune;
 mod switch;
 
+pub(crate) use binding_decisions::{
+    expr_carries_local_binding_decision, stmts_carry_local_binding_decision,
+};
 pub(crate) use common::*;
 pub(crate) use cfg::*;
 pub(crate) use dce::*;

@@ -141,6 +141,39 @@ fn test_error_phpversion_wrong_args() {
     );
 }
 
+/// Verifies `get_loaded_extensions()` rejects more than its optional flag argument.
+#[test]
+fn test_error_get_loaded_extensions_wrong_args() {
+    expect_error(
+        "<?php get_loaded_extensions(false, true);",
+        "get_loaded_extensions() takes at most 1 argument",
+    );
+}
+
+/// Verifies `hrtime()` rejects more than its optional numeric-format flag.
+#[test]
+fn test_error_hrtime_wrong_args() {
+    expect_error(
+        "<?php hrtime(false, true);",
+        "hrtime() takes at most 1 argument",
+    );
+}
+
+/// Verifies `header()` requires between one and three arguments.
+#[test]
+fn test_error_header_wrong_args() {
+    expect_error("<?php header();", "header() takes 1 to 3 arguments");
+}
+
+/// Verifies `http_response_code()` rejects more than one optional status code.
+#[test]
+fn test_error_http_response_code_wrong_args() {
+    expect_error(
+        "<?php http_response_code(200, 201);",
+        "http_response_code() takes 0 or 1 arguments",
+    );
+}
+
 /// Verifies that `php_uname()` with two arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_php_uname_wrong_args() {
@@ -423,7 +456,7 @@ fn test_error_preg_match_one_arg() {
 fn test_error_preg_match_matches_must_be_variable() {
     expect_error(
         r#"<?php preg_match("/test/", "test", []);"#,
-        "preg_match() parameter $matches must be passed a variable",
+        "preg_match(): Argument #3 ($matches) could not be passed by reference",
     );
 }
 
@@ -504,5 +537,47 @@ fn test_error_unserialize_non_string_data() {
     expect_error(
         "<?php unserialize([1, 2]);",
         "unserialize() data argument must be string-compatible",
+    );
+}
+
+/// Verifies `constant()` rejects an unknown constant at compile time.
+///
+/// Reference PHP raises `Error: Undefined constant "NOPE"` at runtime; an AOT binary has no
+/// constant table to look the name up in, so the diagnostic moves to compile time.
+#[test]
+fn test_error_constant_undefined_name() {
+    expect_error("<?php echo constant(\"NOPE\");", "Undefined constant: NOPE");
+}
+
+/// Verifies `constant()` rejects a runtime-computed name in AOT mode.
+#[test]
+fn test_error_constant_dynamic_name() {
+    expect_error(
+        "<?php define(\"FOO\", 1); $n = \"FOO\"; echo constant($n);",
+        "constant() first argument must be a string literal in AOT mode",
+    );
+}
+
+/// Verifies `constant()` rejects a class-constant name.
+#[test]
+fn test_error_constant_class_constant_name() {
+    expect_error(
+        "<?php class K { const A = 1; } echo constant(\"K::A\");",
+        "constant() class constants are not supported",
+    );
+}
+
+/// Verifies `constant()` rejects a missing argument.
+#[test]
+fn test_error_constant_wrong_args() {
+    expect_error("<?php echo constant();", "constant() takes exactly 1 argument");
+}
+
+/// Verifies `constant()` rejects excess positional arguments.
+#[test]
+fn test_error_constant_too_many_args() {
+    expect_error(
+        "<?php echo constant(\"PHP_EOL\", \"x\");",
+        "constant() takes exactly 1 argument",
     );
 }

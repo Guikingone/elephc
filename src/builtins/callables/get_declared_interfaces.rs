@@ -9,14 +9,9 @@
 
 
 builtin! {
-    name: "get_declared_interfaces",
-    area: Callables,
-    params: [],
-    returns: Mixed,
+    contract: "get_declared_interfaces",
     check: crate::builtins::callables::support::check_declared_names,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::GetDeclaredInterfaces,
     ),
-    summary: "Returns an array of all declared interfaces.",
-    php_manual: "function.get-declared-interfaces",
 }

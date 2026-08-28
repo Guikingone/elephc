@@ -1338,6 +1338,41 @@ else { echo "other"; }
     assert_eq!(out, "four");
 }
 
+/// Verifies an `elseif` branch's ASSIGNMENT survives when the first condition folds to false.
+///
+/// The constant propagator selected the else environment for a statically false condition,
+/// which is only right when nothing sits between it and the else. With `elseif` clauses in
+/// between, the branch that actually runs had its assignments discarded: the store was still
+/// emitted, and the later READ had already been rewritten to the pre-`if` constant. So
+/// `$r` printed `?`, and with no `else` at all nothing appeared to have run.
+///
+/// `test_multiple_elseif` above could not see this: its branches `echo`, and branch SELECTION
+/// was never wrong — only the environment merged after it. An assignment read after the `if` is
+/// what exposes it, which is why this fixture assigns and then echoes. `else if` spelled as two
+/// words is a nested `If` in the else body and was always correct, which made the defect look
+/// like an `elseif` parsing problem instead of a merge one.
+#[test]
+fn test_elseif_assignment_survives_a_statically_false_first_condition() {
+    let out = compile_and_run(
+        r#"<?php
+$n = 5;
+$a = "?";
+if ($n >= 10) { $a = "A"; } elseif ($n >= 3) { $a = "B"; }
+echo $a, "|";
+$b = "?";
+if ($n >= 10) { $b = "A"; } elseif ($n >= 8) { $b = "B"; } elseif ($n >= 3) { $b = "C"; } else { $b = "F"; }
+echo $b, "|";
+$c = 0;
+if ($n >= 10) { $c = 1; } elseif ($n >= 3) { $c = 2; }
+echo $c, "|";
+$d = "?";
+if ($n >= 3) { $d = "A"; } elseif ($n >= 1) { $d = "B"; }
+echo $d;
+"#,
+    );
+    assert_eq!(out, "B|C|2|A");
+}
+
 /// Regression: `in_array()` with a string needle must work over an indexed `array<Mixed>`. A
 /// function whose container return is built from an untyped parameter is lowered to `array<Mixed>`
 /// (each element a boxed Mixed cell), as is a `foreach`-value collected into a fresh array. Before
@@ -1578,4 +1613,53 @@ fn test_in_array_strict_distinguishes_bool_int_membership() {
         "<?php echo in_array(true, [2]) ? '1' : '0'; echo in_array(true, [2], true) ? '1' : '0'; echo in_array(false, [0]) ? '1' : '0'; echo in_array(false, [0], true) ? '1' : '0'; echo in_array(2, [true]) ? '1' : '0'; echo in_array(2, [true], true) ? '1' : '0';",
     );
     assert_eq!(out, "101010");
+}
+
+/// Verifies `unset()` on a never-declared variable is accepted and is a silent no-op, the way
+/// PHP treats it — `unset()` exists to name storage that may not be there.
+#[test]
+fn test_unset_never_declared_variable_is_a_noop() {
+    let out = compile_and_run(
+        r#"<?php
+unset($neverDeclared);
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies every null probe answers for a never-declared variable the way PHP does, instead of
+/// rejecting the program: `isset()` is `false`, `empty()` is `true`, `??` yields the default and
+/// `??=` installs it. Output matches `php 8.4`.
+#[test]
+fn test_null_probes_on_never_declared_variable_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(isset($neverA));
+var_dump(empty($neverB));
+var_dump($neverC ?? "dflt");
+$neverD ??= 5;
+var_dump($neverD);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)
+bool(true)
+string(4) \"dflt\"
+int(5)
+"
+    );
+}
+
+/// Verifies `isset()` reaches through a never-declared variable's index without faulting, the
+/// way PHP does — the whole chain simply answers `false`.
+#[test]
+fn test_isset_index_of_never_declared_variable_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(isset($neverIndexed["k"]));
+"#,
+    );
+    assert_eq!(out, "bool(false)\n");
 }

@@ -14,15 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "system",
-    area: System,
-    params: [command: Str],
-    returns: Str,
+    contract: "system",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::System,
     ),
-    summary: "Executes an external program and displays the output.",
 }
 
 /// Refuses the call on targets whose sandbox forbids spawning a process; the

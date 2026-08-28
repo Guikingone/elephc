@@ -172,6 +172,7 @@ fn consumes_operands_by_value(op: Op) -> bool {
             | StrictNotEq
             | LooseEq
             | LooseNotEq
+            | PhpRelCmp
             | Spaceship
             | IsNull
             | IsTruthy

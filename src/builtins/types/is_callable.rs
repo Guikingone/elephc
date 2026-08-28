@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "is_callable",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_callable",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IsCallable,
     ),
-    summary: "Checks whether a variable can be called as a function.",
-    php_manual: "function.is-callable",
 }

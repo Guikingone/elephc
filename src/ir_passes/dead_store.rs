@@ -67,9 +67,9 @@ impl IrPass for DeadStore {
 /// lifetime tracking (so no `acquire`/`release` ownership ops surround its
 /// stores), and every instruction naming the slot is a plain `load_local` or
 /// `store_local`. Any other slot-naming op (ref-cell promote/alias/release,
-/// `unset_local`, static-local or global access, list unpack, …) makes the slot
-/// ineligible because it could read or alias the slot in a way this pass does not
-/// model.
+/// `unset_local`, `zero_local_slot`, static-local or global access, list unpack, …)
+/// makes the slot ineligible because it could read or alias the slot in a way this
+/// pass does not model.
 fn eligible_slots(function: &Function, data: &DataPool) -> HashSet<LocalSlotId> {
     let mut eligible: HashSet<LocalSlotId> = function
         .locals
@@ -204,11 +204,13 @@ fn op_is_value_only_consumer(op: Op) -> bool {
     matches!(
         op,
         // Integer/float arithmetic and bitwise operators.
-        IAdd | ISub | IMul | ICheckedAdd | ICheckedSub | ICheckedMul | IDiv | ISDiv | ISMod | IPow | INeg | IBitAnd | IBitOr | IBitXor
+        IAdd | ISub | IMul | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt
+            | ICheckedSubToInt | ICheckedMulToInt | ICheckedPow | IDiv | ISDiv | ISMod
+            | IPow | INeg | IBitAnd | IBitOr | IBitXor
             | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | MixedNumericBinop
             // Comparisons.
             | ICmp | FCmp | StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | LooseEq
-            | LooseNotEq | Spaceship
+            | LooseNotEq | PhpRelCmp | Spaceship
             // Scalar predicates and type queries.
             | IsNull | IsTruthy | IsEmpty | MixedTagOf
             // Numeric/string/mixed conversions.
@@ -263,6 +265,47 @@ fn instruction_slot(
 /// walk over a block then gens a slot at each `load_local` and kills it at each
 /// `store_local`. The CFG is small, so repeated full sweeps converge without an
 /// explicit worklist.
+/// Whether an instruction can transfer control to a catch handler in THIS
+/// function, which makes every eligible slot observable at that point.
+///
+/// The CFG this pass walks has no exception edges: `successors` is built from
+/// terminators, and a `may_throw` instruction is not a terminator. So a block
+/// that throws out of the middle of a `try` appears to reach only the block its
+/// `br` names, and the liveness that follows is the liveness of the path where
+/// nothing threw.
+///
+/// ```text
+/// $t = 0;
+/// try { $t = 5; boom(); $t = 9; }   // boom() throws
+/// catch (RuntimeException $e) { }
+/// return $t;                        // PHP says 5
+/// ```
+///
+/// `$t = 9` looked like it overwrote `$t = 5` on the only path there was, so
+/// both earlier stores were neutralized — and the catch fell through to a
+/// `load_local` of a slot nothing had written. It returned a different value on
+/// every run, being whatever the frame's stack held: not 0, not 5, not 9.
+///
+/// Everything eligible goes live rather than a computed subset, because what a
+/// handler observes is decided by the code after it, in blocks this walk has
+/// already passed. A throw with no handler in this function cannot make any of
+/// them observable — the frame is gone, and a slot whose address escapes was
+/// already ruled out of `eligible` — so the whole rule is skipped in a function
+/// that pushes no handler, which is nearly all of them.
+fn instruction_may_reach_a_handler(function: &Function, inst_id: InstId) -> bool {
+    function
+        .instruction(inst_id)
+        .is_some_and(|inst| inst.effects.contains(crate::ir::Effects::MAY_THROW))
+}
+
+/// Whether this function installs a catch handler at all.
+fn function_has_handler(function: &Function) -> bool {
+    function
+        .instructions
+        .iter()
+        .any(|inst| inst.op == Op::TryPushHandler)
+}
+
 fn compute_slot_live_in(
     function: &Function,
     eligible: &HashSet<LocalSlotId>,
@@ -273,12 +316,17 @@ fn compute_slot_live_in(
         .map(|block| (block.id, HashSet::new()))
         .collect();
 
+    let handled = function_has_handler(function);
     let mut changed = true;
     while changed {
         changed = false;
         for block in function.blocks.iter().rev() {
-            let mut live = block_live_out(block, &live_in);
+            let mut live = block_live_out(block, &live_in, eligible, handled);
             for &inst_id in block.instructions.iter().rev() {
+                if handled && instruction_may_reach_a_handler(function, inst_id) {
+                    live.extend(eligible.iter().copied());
+                    continue;
+                }
                 match instruction_slot(function, inst_id, eligible) {
                     Some((Op::StoreLocal, slot)) => {
                         live.remove(&slot);
@@ -300,12 +348,34 @@ fn compute_slot_live_in(
 
 /// Returns the slots live on exit from a block: the union of every successor's
 /// live-in set. Terminators carry no slot uses, so only successors contribute.
+///
+/// Except one. `Throw` is listed with `Return` and `Unreachable` as having no
+/// successors, and inside a `try` that is wrong: it goes to the handler, which
+/// can read anything the block wrote. Left as an exit, a block ending in a
+/// literal `throw` had NOTHING live on the way out, so every store before it was
+/// dead by construction:
+///
+/// ```text
+/// $t = 0;
+/// try { $t = 5; throw new RuntimeException('x'); }
+/// catch (RuntimeException $e) { }
+/// return $t;                        // PHP says 5
+/// ```
+///
+/// This is the terminator half of what `instruction_may_reach_a_handler` covers
+/// for a throwing CALL; the same program is wrong in a different way depending
+/// on which of the two raised, which is what said one rule could not be enough.
 fn block_live_out(
     block: &crate::ir::BasicBlock,
     live_in: &HashMap<crate::ir::BlockId, HashSet<LocalSlotId>>,
+    eligible: &HashSet<LocalSlotId>,
+    handled: bool,
 ) -> HashSet<LocalSlotId> {
     let mut live = HashSet::new();
     if let Some(term) = block.terminator.as_ref() {
+        if handled && matches!(term, crate::ir::Terminator::Throw { .. }) {
+            live.extend(eligible.iter().copied());
+        }
         for succ in successors(term) {
             if let Some(succ_live) = live_in.get(&succ) {
                 live.extend(succ_live.iter().copied());
@@ -320,10 +390,17 @@ fn block_live_out(
 /// exits before any read.
 fn collect_dead_stores(function: &Function, eligible: &HashSet<LocalSlotId>) -> Vec<InstId> {
     let live_in = compute_slot_live_in(function, eligible);
+    let handled = function_has_handler(function);
     let mut dead = Vec::new();
     for block in &function.blocks {
-        let mut live = block_live_out(block, &live_in);
+        let mut live = block_live_out(block, &live_in, eligible, handled);
         for &inst_id in block.instructions.iter().rev() {
+            // The same rule the live-in fixpoint used. Applying it in only one
+            // of the two walks would leave them describing different programs.
+            if handled && instruction_may_reach_a_handler(function, inst_id) {
+                live.extend(eligible.iter().copied());
+                continue;
+            }
             match instruction_slot(function, inst_id, eligible) {
                 Some((Op::StoreLocal, slot)) => {
                     if !live.contains(&slot) && store_value_is_non_heap(function, inst_id) {

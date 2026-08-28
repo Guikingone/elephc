@@ -64,6 +64,62 @@ fn compile_web_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) 
     dir.join(stem)
 }
 
+
+/// A spawned web server, stopped completely when it is killed OR dropped.
+///
+/// # Why this exists
+///
+/// `Child::kill` sends SIGKILL. The `--web` binary is a PREFORK server, so the parent dies
+/// instantly without reaping anything and its worker is orphaned, still holding the port. A
+/// test that looked perfectly green therefore leaked one process per server it started, and a
+/// full run of this file starts dozens.
+///
+/// The teardown here asks the parent to terminate first (SIGTERM, which it can act on), then
+/// sweeps anything still listening on this server's address. The address comes from
+/// `free_port`, so it is unique to this server and the sweep can never reach another test's —
+/// or another session's — process.
+///
+/// [`Drop`] runs the same teardown, which is the half an explicit call cannot cover: a failing
+/// assertion panics straight past every `child.kill()` below, and that is exactly the path on
+/// which a leak goes unnoticed.
+struct ServerHandle {
+    /// The spawned parent process.
+    child: std::process::Child,
+    /// The `host:port` this server listens on, used to sweep its workers.
+    addr: String,
+}
+
+impl ServerHandle {
+    /// Stops the server and every worker it forked. Idempotent.
+    fn shutdown(&mut self) {
+        let _ = Command::new("kill").arg(self.child.id().to_string()).status();
+        std::thread::sleep(Duration::from_millis(100));
+        let _ = Command::new("pkill")
+            .arg("-f")
+            .arg(format!("[-]-listen {}", self.addr))
+            .status();
+        let _ = self.child.kill();
+    }
+
+    /// Stops the server. Named `kill` so every call site below reads unchanged.
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.shutdown();
+        Ok(())
+    }
+
+    /// Reaps the parent process.
+    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.child.wait()
+    }
+}
+
+impl Drop for ServerHandle {
+    /// Guarantees teardown even when a test panics before reaching its `kill()`.
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 /// Picks an ephemeral localhost port by binding :0 and releasing it.
 fn free_port() -> u16 {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -83,7 +139,7 @@ fn wait_until_ready(addr: &str) {
 }
 
 /// Spawns the server binary on `addr`, waits until it accepts connections.
-fn spawn_server(bin: &Path, addr: &str, workers: &str) -> std::process::Child {
+fn spawn_server(bin: &Path, addr: &str, workers: &str) -> ServerHandle {
     let child = Command::new(bin)
         .arg("--listen")
         .arg(addr)
@@ -92,7 +148,10 @@ fn spawn_server(bin: &Path, addr: &str, workers: &str) -> std::process::Child {
         .spawn()
         .expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Spawns the server binary with extra environment variables set on the server
@@ -103,7 +162,7 @@ fn spawn_server_with_env(
     addr: &str,
     workers: &str,
     env: &[(&str, &str)],
-) -> std::process::Child {
+) -> ServerHandle {
     let mut cmd = Command::new(bin);
     cmd.arg("--listen").arg(addr).arg("--workers").arg(workers);
     for (k, v) in env {
@@ -111,11 +170,14 @@ fn spawn_server_with_env(
     }
     let child = cmd.spawn().expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Spawns the server with stderr redirected to a file for diagnostic assertions.
-fn spawn_server_with_stderr(bin: &Path, addr: &str, stderr_path: &Path) -> std::process::Child {
+fn spawn_server_with_stderr(bin: &Path, addr: &str, stderr_path: &Path) -> ServerHandle {
     let stderr = fs::File::create(stderr_path).expect("failed to create server stderr capture");
     let child = Command::new(bin)
         .arg("--listen")
@@ -126,7 +188,10 @@ fn spawn_server_with_stderr(bin: &Path, addr: &str, stderr_path: &Path) -> std::
         .spawn()
         .expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Sends one HTTP/1.1 GET and returns the full raw response text.
@@ -190,7 +255,54 @@ fn read_response(s: &mut TcpStream) -> String {
             Err(e) => panic!("read error: {e}"),
         }
     }
-    String::from_utf8_lossy(&buf).into_owned()
+    normalize_chunked_response(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Replaces HTTP/1.1 chunk framing with the decoded body while preserving response headers.
+///
+/// Session assertions inspect semantic body suffixes and cookie headers, not transport chunks.
+/// Returning the decoded body keeps those assertions valid after web responses became streamed.
+fn normalize_chunked_response(response: String) -> String {
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return response;
+    };
+    if !headers.lines().any(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.starts_with("transfer-encoding:") && lower.contains("chunked")
+    }) {
+        return response;
+    }
+
+    let mut remaining = body.as_bytes();
+    let mut decoded = Vec::new();
+    loop {
+        let Some(line_end) = remaining.windows(2).position(|window| window == b"\r\n") else {
+            return response;
+        };
+        let size_text = match std::str::from_utf8(&remaining[..line_end]) {
+            Ok(value) => value,
+            Err(_) => return response,
+        };
+        let size_text = size_text.split(';').next().unwrap_or(size_text).trim();
+        let size = match usize::from_str_radix(size_text, 16) {
+            Ok(value) => value,
+            Err(_) => return response,
+        };
+        remaining = &remaining[line_end + 2..];
+        if size == 0 {
+            break;
+        }
+        let Some(chunk_end) = size.checked_add(2) else {
+            return response;
+        };
+        if remaining.len() < chunk_end || &remaining[size..chunk_end] != b"\r\n" {
+            return response;
+        }
+        decoded.extend_from_slice(&remaining[..size]);
+        remaining = &remaining[chunk_end..];
+    }
+
+    format!("{headers}\r\n\r\n{}", String::from_utf8_lossy(&decoded))
 }
 
 /// Returns true once the HTTP response in `buf` is complete: headers + body
@@ -260,6 +372,39 @@ fn extract_session_id(resp: &str, name: &str) -> Option<String> {
 /// Extracts the default `PHPSESSID=...` value from a raw response.
 fn extract_phpsessid(resp: &str) -> Option<String> {
     extract_session_id(resp, "PHPSESSID")
+}
+
+/// Verifies a session handler that cannot produce a non-empty identifier makes
+/// `session_start()` fail closed without entering the ACTIVE state.
+#[test]
+fn session_start_rejects_empty_generated_identifier() {
+    let dir = make_test_dir("session_empty_generated_id");
+    let source = r#"<?php
+class EmptyIdHandler implements SessionHandlerInterface, SessionIdInterface {
+    public function open(string $path, string $name): bool { return true; }
+    public function close(): bool { return true; }
+    public function read(string $id): string|false { return ''; }
+    public function write(string $id, string $data): bool { return true; }
+    public function destroy(string $id): bool { return true; }
+    public function gc(int $max_lifetime): int|false { return 0; }
+    public function create_sid(): string { return ''; }
+}
+session_set_save_handler(new EmptyIdHandler());
+$started = session_start();
+echo ($started ? 'started' : 'failed'), ':', session_status();
+"#;
+    let bin = compile_web(&dir, source, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = server.kill();
+    let _ = server.wait();
+
+    assert!(
+        response.ends_with("failed:1"),
+        "empty session identifiers must leave PHP_SESSION_NONE: {response:?}"
+    );
 }
 
 /// Verifies that `session_start()` activates a session and `session_status()`
@@ -591,6 +736,41 @@ fn session_counter_persists() {
     );
 }
 
+/// Verifies file-backed sessions persist across the process boundary in both
+/// broker-backed isolation models.
+#[test]
+fn session_counter_persists_in_isolated_modes() {
+    let src = "<?php session_start(); if (!isset($_SESSION['hits'])) { $_SESSION['hits'] = 0; } $_SESSION['hits'] = $_SESSION['hits'] + 1; echo $_SESSION['hits'];";
+    for mode in ["pool", "request"] {
+        let dir = make_test_dir(&format!("sess_persist_{mode}"));
+        let isolation_flag = format!("--web-isolation={mode}");
+        let bin = compile_web_with_flags(&dir, src, "app", &[&isolation_flag]);
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut child = spawn_server(&bin, &addr, "1");
+        let first = http_get(&addr, "/");
+        let cookie = extract_phpsessid(&first)
+            .expect("first isolated response should set a PHPSESSID cookie");
+        let second = http_request(
+            &addr,
+            "GET",
+            "/",
+            &[("Cookie", &format!("PHPSESSID={cookie}"))],
+            "",
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            first.ends_with('1'),
+            "first {mode} request counter should be 1: {first:?}"
+        );
+        assert!(
+            second.ends_with('2'),
+            "second {mode} request counter should be 2: {second:?}"
+        );
+    }
+}
+
 /// Verifies `session.use_strict_mode=1` rejects a client-supplied session ID
 /// that has no backing session (session-fixation defense): the forged cookie
 /// ID is discarded, a fresh random ID is minted and reissued via `Set-Cookie`,
@@ -920,8 +1100,8 @@ fn session_custom_save_handler_round_trip() {
         }}\n\
         session_set_save_handler(new FileHandler());\n\
         header('Content-Type: text/plain');\n\
-        echo session_module_name() . ':';\n\
         session_start();\n\
+        echo session_module_name() . ':';\n\
         if (!isset($_SESSION['hits'])) {{ $_SESSION['hits'] = 0; }}\n\
         $_SESSION['hits'] = $_SESSION['hits'] + 1;\n\
         echo $_SESSION['hits'];\n",
@@ -993,8 +1173,8 @@ fn session_callable_save_handler_round_trip() {
         function h_gc(int $m): int {{ return 0; }}\n\
         session_set_save_handler('h_open', 'h_close', 'h_read', 'h_write', 'h_destroy', 'h_gc');\n\
         header('Content-Type: text/plain');\n\
-        echo session_module_name() . ':';\n\
         session_start();\n\
+        echo session_module_name() . ':';\n\
         if (!isset($_SESSION['hits'])) {{ $_SESSION['hits'] = 0; }}\n\
         $_SESSION['hits'] = $_SESSION['hits'] + 1;\n\
         echo $_SESSION['hits'];\n",
@@ -1223,7 +1403,7 @@ fn spawn_server_stderr_to_file(
     addr: &str,
     workers: &str,
     stderr_file: &Path,
-) -> std::process::Child {
+) -> ServerHandle {
     let f = fs::File::create(stderr_file).unwrap();
     let child = Command::new(bin)
         .arg("--listen")
@@ -1234,7 +1414,10 @@ fn spawn_server_stderr_to_file(
         .spawn()
         .expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Verifies `error_log($msg, 3, $file)` appends each message verbatim to the
@@ -1735,7 +1918,7 @@ fn session_restart_clears_stale_keys() {
 #[test]
 fn session_ini_surface_and_partitioned_cookie() {
     let dir = make_test_dir("sess_ini_partitioned");
-    let src = "<?php if (isset($_GET['bad'])) { if (!session_start(['save_path' => '/elephc/definitely/missing/session/path'])) { echo 'read-failed'; } } elseif (isset($_GET['insecure'])) { if (session_set_cookie_params(['partitioned' => true])) { echo 'set-ok:'; } if (!session_start()) { echo 'start-failed'; } } else { $access = -1; foreach (ini_get_all('session') as $key => $entry) { if ($key === 'session.auto_start') { foreach ($entry as $field => $value) { if ($field === 'access') { $access = $value; } } } } echo ini_get('session.save_handler') . ':' . ini_get('session.use_cookies') . ':' . ini_get('session.lazy_write') . ':' . $access . '|'; session_start(['name' => 'bad name', 'cookie_lifetime' => -1, 'cookie_secure' => true, 'cookie_partitioned' => true, 'cookie_samesite' => 'Bogus', 'serialize_handler' => 'bogus', 'gc_probability' => -1, 'gc_divisor' => 0]); echo ini_get('session.name') . ':' . ini_get('session.serialize_handler') . ':' . ini_get('session.gc_probability') . ':' . ini_get('session.gc_divisor'); }";
+    let src = "<?php if (isset($_GET['bad'])) { if (!session_start(['save_path' => '/elephc/definitely/missing/session/path'])) { echo 'read-failed'; } } elseif (isset($_GET['insecure'])) { if (session_set_cookie_params(['partitioned' => true])) { echo 'set-ok:'; } if (!session_start()) { echo 'start-failed'; } } else { $access = -1; foreach (ini_get_all('session') as $key => $entry) { if ($key === 'session.auto_start') { foreach ($entry as $field => $value) { if ($field === 'access') { $access = $value; } } } } $prefix = ini_get('session.save_handler') . ':' . ini_get('session.use_cookies') . ':' . ini_get('session.lazy_write') . ':' . $access . '|'; session_start(['name' => 'bad name', 'cookie_lifetime' => -1, 'cookie_secure' => true, 'cookie_partitioned' => true, 'cookie_samesite' => 'Bogus', 'serialize_handler' => 'bogus', 'gc_probability' => -1, 'gc_divisor' => 0]); echo $prefix, ini_get('session.name') . ':' . ini_get('session.serialize_handler') . ':' . ini_get('session.gc_probability') . ':' . ini_get('session.gc_divisor'); }";
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);

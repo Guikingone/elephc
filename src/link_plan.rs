@@ -10,8 +10,15 @@
 //! - Exact managed archives remain compatible with Elephc's preferred static Linux link.
 //! - Named libraries and bridge archives conservatively select dynamic Linux linking.
 //! - Item order is preserved because static archive order affects symbol resolution.
+//! - Embedded Rust bridge dependencies replace duplicate standalone archive inputs.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
+
+const EMBEDDED_BRIDGE_RELATIONSHIPS: &[(&str, &[&str])] = &[(
+    "elephc_magician",
+    &["elephc_crypto", "elephc_iconv", "elephc_phar"],
+)];
 
 /// Identifies which compiler surface contributed a linker input.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,6 +224,50 @@ impl LinkPlan {
         })
     }
 
+    /// Removes standalone bridge inputs whose object members are already carried by another
+    /// requested Rust staticlib, preventing duplicate exported C symbols at final link time.
+    pub fn without_redundant_embedded_bridges(&self) -> Self {
+        let requested: HashSet<&str> = self
+            .ordered
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::NamedLibrary { name, .. }
+                | LinkItem::StaticArchive {
+                    origin: LinkOrigin::Bridge { name },
+                    ..
+                } => Some(name.as_str()),
+                LinkItem::StaticArchive { .. }
+                | LinkItem::SearchPath(_)
+                | LinkItem::Framework(_) => None,
+            })
+            .collect();
+        let embedded: HashSet<&str> = EMBEDDED_BRIDGE_RELATIONSHIPS
+            .iter()
+            .filter(|(container, _)| requested.contains(container))
+            .flat_map(|(_, dependencies)| dependencies.iter().copied())
+            .collect();
+        if embedded.is_empty() {
+            return self.clone();
+        }
+
+        Self::from_items(
+            self.ordered
+                .iter()
+                .filter(|item| match item {
+                    LinkItem::NamedLibrary { name, .. }
+                    | LinkItem::StaticArchive {
+                        origin: LinkOrigin::Bridge { name },
+                        ..
+                    } => !embedded.contains(name.as_str()),
+                    LinkItem::StaticArchive { .. }
+                    | LinkItem::SearchPath(_)
+                    | LinkItem::Framework(_) => true,
+                })
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Recomputes Linux mode and diagnostic provenance from ordered typed items.
     fn derive_linux_mode(items: &[LinkItem]) -> LinuxLinkMode {
         let reasons: Vec<String> = items
@@ -305,5 +356,45 @@ mod tests {
             "pcre2",
         )])
         .needs_default_macos_library_paths());
+    }
+
+    /// Verifies Magician's embedded Rust dependencies replace duplicate standalone bridge inputs.
+    #[test]
+    fn magician_suppresses_embedded_crypto_and_phar_archives() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::named_runtime("elephc_crypto"),
+            LinkItem::bridge_archive("libelephc_phar.a", "elephc_phar", false),
+            LinkItem::named_runtime("elephc_magician"),
+            LinkItem::named_user("sqlite3"),
+        ]);
+
+        let normalized = plan.without_redundant_embedded_bridges();
+        let names: Vec<&str> = normalized
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::NamedLibrary { name, .. } => Some(name.as_str()),
+                LinkItem::StaticArchive {
+                    origin: LinkOrigin::Bridge { name },
+                    ..
+                } => Some(name.as_str()),
+                LinkItem::StaticArchive { .. }
+                | LinkItem::SearchPath(_)
+                | LinkItem::Framework(_) => None,
+            })
+            .collect();
+
+        assert_eq!(names, vec!["elephc_magician", "sqlite3"]);
+    }
+
+    /// Verifies standalone crypto and Phar bridges remain when Magician is not requested.
+    #[test]
+    fn embedded_dependencies_remain_without_their_container() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::named_runtime("elephc_crypto"),
+            LinkItem::named_runtime("elephc_phar"),
+        ]);
+
+        assert_eq!(plan.without_redundant_embedded_bridges(), plan);
     }
 }

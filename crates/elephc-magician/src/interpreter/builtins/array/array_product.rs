@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_product",
+    contract: "array_product",
     area: Array,
-    params: [array],
     direct: ArrayAggregate,
     values: ArrayAggregate,
 }

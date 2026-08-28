@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the HTML entity hook.
 
 eval_builtin! {
-    name: "html_entity_decode",
+    contract: "html_entity_decode",
     area: String,
-    params: [string],
     direct: HtmlEntity,
     values: HtmlEntity,
 }

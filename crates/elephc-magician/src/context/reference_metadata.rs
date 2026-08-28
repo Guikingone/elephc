@@ -1,5 +1,6 @@
 //! Purpose:
-//! Defines callable ABI aliases, execution-scope snapshots, and reference target shapes.
+//! Defines callable ABI aliases, execution-scope snapshots, reference target
+//! shapes, and PHP internal array pointer state.
 //!
 //! Called from:
 //! - Argument binding, reference writeback, object properties, and native invokers.
@@ -70,6 +71,20 @@ pub enum EvalReferenceTarget {
 pub enum EvalArrayReferenceKey {
     Int(i64),
     String(Vec<u8>),
+}
+
+/// PHP internal array pointer state tracked per runtime array cell.
+///
+/// Runtime cells do not carry PHP's `zend_array` internal position, so eval
+/// models it as a cursor over the array's iteration order. PHP has exactly one
+/// invalid state: once the cursor runs off either end, only `reset()`/`end()`
+/// bring it back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EvalArrayCursor {
+    /// The pointer addresses one zero-based iteration position.
+    Position(usize),
+    /// The pointer ran off an end and no longer addresses an element.
+    Invalid,
 }
 
 /// Late-static dispatch metadata attached to eval-created static callable arrays.

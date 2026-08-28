@@ -8,7 +8,7 @@
 //! Key details:
 //! - The pass must remain conservative around throws, finally blocks, switch fallthrough, method calls, and variable writes.
 
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, TypeExpr};
 
 #[derive(Clone, Copy)]
 /// Indicates where a dead-code tail should sink: either into the next statement
@@ -27,6 +27,11 @@ pub(super) enum TailSinkTarget {
 /// `excluded_guards` — variable = literal constraints ruled out at this point.
 /// `condition_guards` — complex expression conditions mapped to a known boolean value
 /// and the set of variables they constrain.
+/// `integer_domain_vars` — variables proven to hold integers in the current scope/path.
+/// `range_guards` — integer interval facts from relational int-literal branches.
+/// `relational_guards` — cross-variable (or var/int) relational and strict-equality atoms.
+/// `reference_volatile_vars` — iterable roots exposed through surviving by-ref aliases;
+/// facts mentioning them remain disabled for the rest of the current guard scope.
 pub(super) struct GuardState {
     pub(super) truthy_vars: Vec<String>,
     pub(super) falsy_vars: Vec<String>,
@@ -35,11 +40,63 @@ pub(super) struct GuardState {
     pub(super) exact_guards: Vec<ExactGuard>,
     pub(super) excluded_guards: Vec<ExactGuard>,
     pub(super) condition_guards: Vec<ConditionGuard>,
+    pub(super) integer_domain_vars: Vec<String>,
+    pub(super) range_guards: Vec<RangeGuard>,
+    pub(super) relational_guards: Vec<RelationalGuard>,
+    pub(super) reference_volatile_vars: Vec<String>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+impl GuardState {
+    /// Creates an empty guard state seeded with parameters declared as exact PHP `int` values.
+    pub(super) fn for_params(
+        params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    ) -> Self {
+        let integer_domain_vars = params
+            .iter()
+            .filter_map(|(name, type_expr, _, _)| {
+                matches!(type_expr, Some(TypeExpr::Int)).then(|| name.clone())
+            })
+            .collect();
+        Self {
+            integer_domain_vars,
+            ..Self::default()
+        }
+    }
+
+    /// Returns whether the current path proves that `name` holds an integer value.
+    pub(super) fn has_integer_domain(&self, name: &str) -> bool {
+        self.integer_domain_vars
+            .iter()
+            .any(|known| known == name)
+    }
+
+    /// Records that `name` holds an integer value without duplicating the domain fact.
+    pub(super) fn record_integer_domain(&mut self, name: &str) {
+        if !self.is_reference_volatile(name) && !self.has_integer_domain(name) {
+            self.integer_domain_vars.push(name.to_string());
+        }
+    }
+
+    /// Returns whether writes may reach `name` through a surviving reference alias.
+    pub(super) fn is_reference_volatile(&self, name: &str) -> bool {
+        self.reference_volatile_vars
+            .iter()
+            .any(|known| known == name)
+    }
+
+    /// Permanently disables guard facts for a name exposed through a reference alias.
+    pub(super) fn mark_reference_volatile(&mut self, name: &str) {
+        if !self.is_reference_volatile(name) {
+            self.reference_volatile_vars.push(name.to_string());
+        }
+    }
+}
+
+#[derive(Clone, PartialEq)]
 /// Records an exact constraint that a variable holds a specific literal value.
 /// `name` is the variable name; `value` is the known literal.
+///
+/// Not `Eq`: `GuardLiteral` equality is PHP's `===`, which is not reflexive for NAN.
 pub(super) struct ExactGuard {
     pub(super) name: String,
     pub(super) value: GuardLiteral,
@@ -55,13 +112,120 @@ pub(super) struct ConditionGuard {
     pub(super) names: Vec<String>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 /// The set of literal values a guard can constrain a variable to.
 /// Used in `ExactGuard` to record variable = value constraints.
+///
+/// Guards are only ever produced by `===` / `!==` conditions, so equality on this type is
+/// PHP's `===`: floats compare by IEEE value, which makes `0.0` and `-0.0` the same guard
+/// (PHP agrees: `0.0 === -0.0` is `true`) and makes NAN equal to nothing, not even itself.
+/// A bit-pattern comparison would get both of those backwards and let DCE prune a live branch.
 pub(super) enum GuardLiteral {
     Bool(bool),
     Null,
     Int(i64),
-    Float(u64),
+    Float(f64),
     String(String),
+}
+
+impl PartialEq for GuardLiteral {
+    /// Compares two guard literals with PHP's `===` semantics.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (GuardLiteral::Bool(left), GuardLiteral::Bool(right)) => left == right,
+            (GuardLiteral::Null, GuardLiteral::Null) => true,
+            (GuardLiteral::Int(left), GuardLiteral::Int(right)) => left == right,
+            (GuardLiteral::Float(left), GuardLiteral::Float(right)) => left == right,
+            (GuardLiteral::String(left), GuardLiteral::String(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// Inclusive integer bounds; `None` means ±∞ on that side.
+pub(super) struct IntInterval {
+    pub(super) lo: Option<i64>,
+    pub(super) hi: Option<i64>,
+}
+
+impl IntInterval {
+    /// Returns a degenerate point interval `[n, n]`.
+    pub(super) fn point(n: i64) -> Self {
+        Self {
+            lo: Some(n),
+            hi: Some(n),
+        }
+    }
+
+    /// Returns whether `n` lies inside this inclusive interval.
+    pub(super) fn contains(self, n: i64) -> bool {
+        if let Some(lo) = self.lo {
+            if n < lo {
+                return false;
+            }
+        }
+        if let Some(hi) = self.hi {
+            if n > hi {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Intersects two intervals. Returns `None` when the result is empty.
+    pub(super) fn intersect(self, other: Self) -> Option<Self> {
+        let lo = match (self.lo, other.lo) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        let hi = match (self.hi, other.hi) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        if let (Some(lo), Some(hi)) = (lo, hi) {
+            if lo > hi {
+                return None;
+            }
+        }
+        Some(Self { lo, hi })
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+/// Integer range fact for a single variable under the current path.
+pub(super) struct RangeGuard {
+    pub(super) name: String,
+    pub(super) interval: IntInterval,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+/// One side of a relational / strict-equality atom: a variable or an int literal.
+pub(super) enum RelSide {
+    Var(String),
+    Int(i64),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// Relational and strict-equality operators tracked as first-class guard atoms.
+pub(super) enum RelOp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    StrictEq,
+    StrictNotEq,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+/// Cross-variable (or var/int) relational fact with recorded polarity.
+pub(super) struct RelationalGuard {
+    pub(super) left: RelSide,
+    pub(super) op: RelOp,
+    pub(super) right: RelSide,
+    pub(super) holds: bool,
 }

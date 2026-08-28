@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "min",
+    contract: "min",
     area: Math,
-    params: [value],
-    variadic: values,
     direct: Min,
     values: Min,
 }

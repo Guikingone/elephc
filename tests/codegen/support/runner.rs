@@ -20,6 +20,46 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+/// Reports whether codegen fixtures should build the official CUBRID CCI profile.
+fn pdo_cubrid_enabled() -> bool {
+    cfg!(feature = "pdo-cubrid") || std::env::var_os("ELEPHC_PDO_CUBRID").is_some()
+}
+
+/// Reports whether codegen fixtures should build and link the FreeTDS PDO profile.
+fn pdo_dblib_enabled() -> bool {
+    cfg!(feature = "pdo-dblib") || std::env::var_os("ELEPHC_PDO_DBLIB").is_some()
+}
+
+/// Reports whether codegen fixtures should build the pure-Rust Firebird PDO profile.
+fn pdo_firebird_enabled() -> bool {
+    cfg!(feature = "pdo-firebird") || std::env::var_os("ELEPHC_PDO_FIREBIRD").is_some()
+}
+
+/// Reports whether codegen fixtures should build and link the system ODBC profile.
+fn pdo_odbc_enabled() -> bool {
+    cfg!(feature = "pdo-odbc") || std::env::var_os("ELEPHC_PDO_ODBC").is_some()
+}
+
+/// Reports whether codegen fixtures should build the Informix CLI/ODBC profile.
+fn pdo_informix_enabled() -> bool {
+    cfg!(feature = "pdo-informix") || std::env::var_os("ELEPHC_PDO_INFORMIX").is_some()
+}
+
+/// Reports whether codegen fixtures should build the IBM Db2 CLI/ODBC profile.
+fn pdo_ibm_enabled() -> bool {
+    cfg!(feature = "pdo-ibm") || std::env::var_os("ELEPHC_PDO_IBM").is_some()
+}
+
+/// Reports whether codegen fixtures should build Microsoft PDO_SQLSRV.
+fn pdo_sqlsrv_enabled() -> bool {
+    cfg!(feature = "pdo-sqlsrv") || std::env::var_os("ELEPHC_PDO_SQLSRV").is_some()
+}
+
+/// Reports whether codegen fixtures should build the Oracle Instant Client profile.
+fn pdo_oci_enabled() -> bool {
+    cfg!(feature = "pdo-oci") || std::env::var_os("ELEPHC_PDO_OCI").is_some()
+}
+
 /// Describes a Rust bridge staticlib needed by codegen integration fixtures.
 struct TestBridgeStaticlib {
     /// Linker library name requested by the compiled program.
@@ -41,6 +81,14 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_crypto",
         package: "elephc-crypto",
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_bcmath",
+        package: "elephc-bcmath",
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_iconv",
+        package: "elephc-iconv",
     },
     TestBridgeStaticlib {
         lib_name: "elephc_phar",
@@ -213,12 +261,74 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
         .expect("bridge staticlib build lock poisoned");
     for bridge in requested_bridge_staticlibs(actual_link_libs) {
         let archive_path = bridge_staticlib_dir.join(format!("lib{}.a", bridge.lib_name));
-        if !bridge_staticlib_needs_build(&archive_path, bridge.package) {
+        let requires_libpq_profile = bridge.lib_name == "elephc_pdo"
+            && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
+            && LIBPQ_BRIDGE_BUILT.get().is_none();
+        let requires_dblib_profile = bridge.lib_name == "elephc_pdo"
+            && pdo_dblib_enabled()
+            && DBLIB_BRIDGE_BUILT.get().is_none();
+        let requires_firebird_profile = bridge.lib_name == "elephc_pdo"
+            && pdo_firebird_enabled()
+            && FIREBIRD_BRIDGE_BUILT.get().is_none();
+        let requires_odbc_profile = bridge.lib_name == "elephc_pdo"
+            && (pdo_odbc_enabled()
+                || pdo_informix_enabled()
+                || pdo_ibm_enabled()
+                || pdo_sqlsrv_enabled())
+            && ODBC_BRIDGE_BUILT.get().is_none();
+        let requires_oci_profile = bridge.lib_name == "elephc_pdo"
+            && pdo_oci_enabled()
+            && OCI_BRIDGE_BUILT.get().is_none();
+        let requires_cubrid_profile = bridge.lib_name == "elephc_pdo"
+            && pdo_cubrid_enabled()
+            && CUBRID_BRIDGE_BUILT.get().is_none();
+        if !requires_libpq_profile
+            && !requires_dblib_profile
+            && !requires_firebird_profile
+            && !requires_odbc_profile
+            && !requires_oci_profile
+            && !requires_cubrid_profile
+            && !bridge_staticlib_needs_build(&archive_path, bridge.package)
+        {
             continue;
         }
 
-        let status = Command::new("cargo")
-            .args(["build", "-p", bridge.package])
+        let mut command = Command::new("cargo");
+        command.args(["build", "-p", bridge.package]);
+        if bridge.lib_name == "elephc_pdo" {
+            let mut features = Vec::new();
+            if std::env::var_os("ELEPHC_PDO_LIBPQ").is_some() {
+                features.push("libpq-gss");
+            }
+            if pdo_dblib_enabled() {
+                features.push("dblib");
+            }
+            if pdo_firebird_enabled() {
+                features.push("firebird");
+            }
+            if pdo_odbc_enabled() {
+                features.push("odbc");
+            }
+            if pdo_informix_enabled() {
+                features.push("informix");
+            }
+            if pdo_ibm_enabled() {
+                features.push("ibm");
+            }
+            if pdo_sqlsrv_enabled() {
+                features.push("sqlsrv");
+            }
+            if pdo_oci_enabled() {
+                features.push("oci");
+            }
+            if pdo_cubrid_enabled() {
+                features.push("cubrid");
+            }
+            if !features.is_empty() {
+                command.args(["--features", &features.join(",")]);
+            }
+        }
+        let status = command
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .status()
             .unwrap_or_else(|err| {
@@ -238,6 +348,24 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
             bridge.package,
             archive_path.display()
         );
+        if requires_libpq_profile {
+            let _ = LIBPQ_BRIDGE_BUILT.set(());
+        }
+        if requires_dblib_profile {
+            let _ = DBLIB_BRIDGE_BUILT.set(());
+        }
+        if requires_firebird_profile {
+            let _ = FIREBIRD_BRIDGE_BUILT.set(());
+        }
+        if requires_odbc_profile {
+            let _ = ODBC_BRIDGE_BUILT.set(());
+        }
+        if requires_oci_profile {
+            let _ = OCI_BRIDGE_BUILT.set(());
+        }
+        if requires_cubrid_profile {
+            let _ = CUBRID_BRIDGE_BUILT.set(());
+        }
     }
 }
 
@@ -399,7 +527,8 @@ fn source_tree_newer_than(dir: &Path, archive_mtime: std::time::SystemTime) -> b
 
 /// Links a user object file and a runtime object into a final native binary.
 /// On macOS uses `ld` with SDK/platform_version flags; on Linux uses `gcc` with
-/// static linking when no extra libs are needed. Adds `-lm -lpthread` on Linux.
+/// static linking when no extra libs are needed. Linux links each selected PDO
+/// system client after the bridge archive, followed by the common runtime libs.
 pub(crate) fn link_binary(
     obj_path: &Path,
     runtime_obj: &Path,
@@ -422,6 +551,12 @@ pub(crate) fn link_binary(
     if needs_bridge_staticlib {
         ensure_bridge_staticlibs(&actual_link_libs, &bridge_staticlib_dir);
     }
+    let needs_libpq = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
+        && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some();
+    let needs_dblib = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
+        && pdo_dblib_enabled();
+    let needs_odbc = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
+        && (pdo_odbc_enabled() || pdo_informix_enabled() || pdo_ibm_enabled() || pdo_sqlsrv_enabled());
 
     match target().platform {
         Platform::MacOS => {
@@ -430,6 +565,23 @@ pub(crate) fn link_binary(
             ld_cmd.arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
+            // Link FreeTDS with the other native dependencies before libSystem.
+            if needs_dblib {
+                for path in ["/opt/homebrew/opt/freetds/lib", "/usr/local/opt/freetds/lib"] {
+                    if Path::new(path).exists() {
+                        ld_cmd.arg(format!("-L{path}"));
+                    }
+                }
+                ld_cmd.arg("-lsybdb");
+            }
+            if needs_odbc {
+                for path in ["/opt/homebrew/opt/unixodbc/lib", "/usr/local/opt/unixodbc/lib"] {
+                    if Path::new(path).exists() {
+                        ld_cmd.arg(format!("-L{path}"));
+                    }
+                }
+                ld_cmd.arg("-lodbc");
+            }
             ld_cmd.args(["-lSystem", "-syslibroot"]);
             ld_cmd.arg(get_sdk_path());
             ld_cmd.args([
@@ -443,6 +595,9 @@ pub(crate) fn link_binary(
             }
             append_test_search_paths(&mut ld_cmd, &plan);
             append_test_link_inputs(&mut ld_cmd, &plan, Platform::MacOS);
+            if needs_libpq {
+                ld_cmd.arg("-lpq");
+            }
             append_test_frameworks(&mut ld_cmd, &plan);
             // The PostgreSQL driver in the PDO bridge pulls in `whoami`, which
             // references CoreFoundation / SystemConfiguration on macOS.
@@ -473,6 +628,15 @@ pub(crate) fn link_binary(
             }
             append_test_search_paths(&mut ld_cmd, &plan);
             append_test_link_inputs(&mut ld_cmd, &plan, Platform::Linux);
+            if needs_libpq {
+                ld_cmd.arg("-lpq");
+            }
+            if needs_dblib {
+                ld_cmd.arg("-lsybdb");
+            }
+            if needs_odbc {
+                ld_cmd.arg("-lodbc");
+            }
             if !actual_link_libs.is_empty() {
                 ld_cmd.arg("-Wl,--as-needed");
             }
@@ -565,7 +729,7 @@ fn test_link_plan(
     for framework in extra_frameworks {
         plan.push(LinkItem::Framework(framework.clone()));
     }
-    plan
+    plan.without_redundant_embedded_bridges()
 }
 
 /// Appends every typed search path before archive and named-library inputs.
@@ -637,6 +801,16 @@ fn append_test_frameworks(command: &mut Command, plan: &elephc::link_plan::LinkP
 /// On other platform/arch combinations, execs the binary natively.
 /// Used for post-link execution of already-assembled test binaries.
 pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
+    run_binary_with_env(bin_path, dir, &[])
+}
+
+/// Runs a compiled binary with isolated environment overrides, using qemu for
+/// cross-architecture Linux AArch64 fixtures when required.
+pub(crate) fn run_binary_with_env(
+    bin_path: &Path,
+    dir: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> Output {
     if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")
@@ -645,11 +819,11 @@ pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
         if let Some(sysroot) = qemu_sysroot() {
             cmd.args(["-L", sysroot]);
         }
-        cmd.arg(bin_path).current_dir(dir);
+        cmd.arg(bin_path).current_dir(dir).envs(env.iter().copied());
         run_command_with_timeout(cmd)
     } else {
         let mut cmd = Command::new(bin_path);
-        cmd.current_dir(dir);
+        cmd.current_dir(dir).envs(env.iter().copied());
         run_command_with_timeout(cmd)
     }
 }
@@ -748,10 +922,44 @@ pub(crate) fn assemble_and_run(
     let output = run_binary(&bin_path, dir);
     assert!(
         output.status.success(),
-        "binary exited with error: {}",
+        "binary exited with status {}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// Assembles, links, and runs a happy-path fixture with per-process environment
+/// overrides, returning its UTF-8 stdout.
+pub(crate) fn assemble_and_run_with_env(
+    user_asm: &str,
+    runtime_obj: &Path,
+    dir: &Path,
+    requirements: &TestLinkRequirements,
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+    env: &[(&str, &std::ffi::OsStr)],
+) -> String {
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    assemble_from_stdin(user_asm, &obj_path);
+    link_binary(
+        &obj_path,
+        runtime_obj,
+        &bin_path,
+        requirements,
+        extra_link_paths,
+        extra_frameworks,
+    );
+    let output = run_binary_with_env(&bin_path, dir, env);
+    assert!(
+        output.status.success(),
+        "binary exited with error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8(output.stdout).unwrap()
 }
 
@@ -827,5 +1035,11 @@ pub(crate) fn assemble_and_run_expect_failure(
     let output = run_binary(&bin_path, dir);
     assert!(!output.status.success(), "binary unexpectedly succeeded");
 
-    String::from_utf8(output.stderr).unwrap()
+    // BOTH streams. PHP writes its uncaught-exception report to STDOUT — measured against 8.5 with
+    // the two streams captured to separate files — and elephc now does the same, so a helper that
+    // read only stderr would hand every failure assertion an empty string. Compiler diagnostics
+    // still arrive on stderr, so both are returned rather than either one.
+    let mut combined = String::from_utf8(output.stdout).unwrap();
+    combined.push_str(&String::from_utf8(output.stderr).unwrap());
+    combined
 }

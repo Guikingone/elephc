@@ -23,7 +23,7 @@ thread_local! {
 }
 
 /// Per-program by-ref parameter summaries feeding targeted call invalidation.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ByRefSignatures {
     /// User `FunctionDecl` signatures: name → `(param name, is_by_ref)` list.
     functions: HashMap<String, Vec<(String, bool)>>,

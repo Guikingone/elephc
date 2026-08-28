@@ -2,7 +2,7 @@
 title: "array_diff_key()"
 description: "Computes the difference of arrays using keys for comparison."
 sidebar:
-  order: 8
+  order: 9
 ---
 
 ## array_diff_key()
@@ -25,12 +25,6 @@ Computes the difference of arrays using keys for comparison.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_diff_key.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_diff_key.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

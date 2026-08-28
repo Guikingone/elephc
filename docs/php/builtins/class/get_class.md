@@ -2,7 +2,7 @@
 title: "get_class()"
 description: "Returns the name of the class of an object."
 sidebar:
-  order: 77
+  order: 84
 ---
 
 ## get_class()
@@ -24,12 +24,6 @@ Returns the name of the class of an object.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_class.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_class.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

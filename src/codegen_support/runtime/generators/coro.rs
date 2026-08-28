@@ -1,6 +1,6 @@
 //! Purpose:
 //! Fiber-backed generator coroutine runtime. A PHP `Generator` is a coroutine
-//! object that reuses the Fiber 232-byte layout (so it can reuse
+//! object that reuses the Fiber 240-byte layout (so it can reuse
 //! `__rt_fiber_switch`/`suspend`/`resume`/`throw`/`start`) plus a small block of
 //! generator-specific fields in the otherwise-unused reserved region. This file
 //! owns those field offsets and the `yield` suspension primitive
@@ -17,6 +17,12 @@
 //!   suspend boundary re-raises a scheduled `pending_throw` *inside* the
 //!   coroutine's own stack, `Generator::throw()` lands in an in-generator
 //!   `try/catch` — the core of issue #329.
+//! - `__rt_gen_suspend` owns PHP's auto-key bookkeeping: an explicit *integer*
+//!   key greater than every integer key yielded so far pushes the counter to
+//!   `key + 1`, so the next bare `yield` continues the numbering (PHP's
+//!   `largest_used_integer_key`). `__rt_gen_suspend_delegated` is the same
+//!   primitive minus that bookkeeping; `yield from` enters there because PHP
+//!   forwards delegated keys verbatim without renumbering.
 //! - Generator fields live at offsets 184..224, inside the Fiber `reserved`
 //!   region that `__rt_fiber_construct` already zero-initialises.
 
@@ -46,15 +52,55 @@ pub(crate) const GEN_AUTO_KEY_OFFSET: i32 = 208;
 /// Byte offset of `gen_delegated_iter`: inner iterator for `yield from`.
 pub(crate) const GEN_DELEGATED_ITER_OFFSET: i32 = 216;
 
-/// Emits `__rt_gen_suspend`, the `yield` suspension primitive shared by every
-/// generated generator body.
+/// Emits the ARM64 auto-key bookkeeping that fronts `__rt_gen_suspend`.
 ///
-/// Records the yielded key/value into the current generator's persistent slots
-/// (refcount-replacing the previous occupants), then suspends via
-/// `__rt_fiber_suspend`. On resume it returns the value delivered by the next
-/// `send()`/`next()` (owned by the caller), or — when `Generator::throw()`
-/// scheduled a `pending_throw` — the fiber suspend boundary re-raises that
-/// exception inside this generator's stack so a local `try/catch` can handle it.
+/// PHP tracks a generator's implicit numbering with `largest_used_integer_key`:
+/// an explicit *integer* key greater than every integer key yielded so far
+/// becomes the new largest, so the next bare `yield` continues at `key + 1`.
+/// Keys that are not integers (string, float, bool, null) and integer keys at or
+/// below the largest one leave the counter untouched. `gen_auto_key` stores
+/// `largest_used_integer_key + 1`, so the comparison is against `counter - 1`
+/// and all arithmetic wraps exactly like PHP's (`PHP_INT_MAX` then a bare
+/// `yield` produces `PHP_INT_MIN`).
+///
+/// Runs before any prologue, so it may only use caller-saved scratch and must
+/// preserve `x0`/`x1`. Conditional branches target a file-local label because
+/// Mach-O rejects `cbz`/`b.cond` to a `.globl` symbol; the shared body is then
+/// reached with an unconditional tail branch to `__rt_gen_suspend_delegated`
+/// (a separate `.text` section on Linux, so fall-through is not an option).
+fn emit_gen_auto_key_bookkeeping_arm64(emitter: &mut Emitter) {
+    emitter.instruction("cbz x0, __rt_gen_suspend_key_noted");                  // a bare `yield` is numbered by the auto-key path instead
+    emitter.instruction("ldr x10, [x0]");                                       // x10 = runtime tag of the explicit key cell
+    emitter.instruction(&format!("cmp x10, #{}", INT_TAG));                     // only integer keys participate in PHP's auto-numbering
+    emitter.instruction("b.ne __rt_gen_suspend_key_noted");                     // string, float, bool, and null keys leave the counter alone
+    emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = the explicit integer key payload
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_fiber_current", 0); // x11 = the generator coroutine currently running
+    emitter.instruction(&format!("ldr x12, [x11, #{}]", GEN_AUTO_KEY_OFFSET));  // x12 = next auto key = largest used integer key + 1
+    emitter.instruction("sub x12, x12, #1");                                    // x12 = largest integer key used so far (wraps like PHP)
+    emitter.instruction("cmp x10, x12");                                        // does this key exceed every integer key yielded so far?
+    emitter.instruction("b.le __rt_gen_suspend_key_noted");                     // keys at or below the largest never rewind the counter
+    emitter.instruction("add x10, x10, #1");                                    // PHP resumes implicit numbering one past the explicit key
+    emitter.instruction(&format!("str x10, [x11, #{}]", GEN_AUTO_KEY_OFFSET));  // persist the advanced counter for the next bare yield
+    emitter.label("__rt_gen_suspend_key_noted");
+    emitter.instruction("b __rt_gen_suspend_delegated");                        // continue in the shared suspend body with the key untouched
+}
+
+/// Emits `__rt_gen_suspend`, the `yield` suspension primitive shared by every
+/// generated generator body, plus its `__rt_gen_suspend_delegated` entry point.
+///
+/// `__rt_gen_suspend` first applies PHP's auto-key bookkeeping (see
+/// `emit_gen_auto_key_bookkeeping_arm64`) and then tail-branches into
+/// `__rt_gen_suspend_delegated`, which records the yielded key/value into the
+/// current generator's persistent slots (refcount-replacing the previous
+/// occupants) and suspends via `__rt_fiber_suspend`. On resume it returns the
+/// value delivered by the next `send()`/`next()` (owned by the caller), or —
+/// when `Generator::throw()` scheduled a `pending_throw` — the fiber suspend
+/// boundary re-raises that exception inside this generator's stack so a local
+/// `try/catch` can handle it.
+///
+/// `yield from` calls `__rt_gen_suspend_delegated` directly so a forwarded key
+/// never advances the outer generator's counter, matching PHP (which does not
+/// renumber delegated keys and can therefore produce duplicates).
 ///
 /// Input:  `x0`/`rdi` = boxed key cell (NULL → auto-increment integer key);
 ///         `x1`/`rsi` = boxed value cell (ownership moves into the generator).
@@ -68,6 +114,11 @@ pub(crate) fn emit_gen_suspend(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_suspend ---");
     emitter.label_global("__rt_gen_suspend");
+    emit_gen_auto_key_bookkeeping_arm64(emitter);
+
+    emitter.blank();
+    emitter.comment("--- runtime: __rt_gen_suspend_delegated ---");
+    emitter.label_global("__rt_gen_suspend_delegated");
 
     // -- prologue: park the boxed key/value and cache the generator object --
     emitter.instruction("sub sp, sp, #48");                                     // reserve frame plus saved callee registers
@@ -119,7 +170,32 @@ pub(crate) fn emit_gen_suspend(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the sent value to the generator body
 }
 
-/// x86_64 implementation of `__rt_gen_suspend`.
+/// x86_64 counterpart of `emit_gen_auto_key_bookkeeping_arm64` (see that
+/// function for the PHP rule it implements).
+///
+/// Runs before any prologue, so it may only use caller-saved scratch, must
+/// preserve `rdi`/`rsi`, and must avoid `r11` (borrowed by the PIC symbol
+/// loader). Reaches the shared body with an unconditional tail jump, mirroring
+/// the ARM64 path.
+fn emit_gen_auto_key_bookkeeping_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("test rdi, rdi");                                       // was an explicit key supplied?
+    emitter.instruction("jz __rt_gen_suspend_key_noted");                       // a bare `yield` is numbered by the auto-key path instead
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // r10 = runtime tag of the explicit key cell
+    emitter.instruction(&format!("cmp r10, {}", INT_TAG));                      // only integer keys participate in PHP's auto-numbering
+    emitter.instruction("jne __rt_gen_suspend_key_noted");                      // string, float, bool, and null keys leave the counter alone
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = the explicit integer key payload
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r8", "_fiber_current", 0); // r8 = the generator coroutine currently running
+    emitter.instruction(&format!("mov r9, QWORD PTR [r8 + {}]", GEN_AUTO_KEY_OFFSET)); // r9 = next auto key = largest used integer key + 1
+    emitter.instruction("sub r9, 1");                                           // r9 = largest integer key used so far (wraps like PHP)
+    emitter.instruction("cmp r10, r9");                                         // does this key exceed every integer key yielded so far?
+    emitter.instruction("jle __rt_gen_suspend_key_noted");                      // keys at or below the largest never rewind the counter
+    emitter.instruction("add r10, 1");                                          // PHP resumes implicit numbering one past the explicit key
+    emitter.instruction(&format!("mov QWORD PTR [r8 + {}], r10", GEN_AUTO_KEY_OFFSET)); // persist the advanced counter for the next bare yield
+    emitter.label("__rt_gen_suspend_key_noted");
+    emitter.instruction("jmp __rt_gen_suspend_delegated");                      // continue in the shared suspend body with the key untouched
+}
+
+/// x86_64 implementation of `__rt_gen_suspend` and `__rt_gen_suspend_delegated`.
 ///
 /// Mirrors the ARM64 version using the System V ABI: generator object cached in
 /// `r12`, parked key/value in `r13`/`r14`, Mixed boxing via `rax`=tag,
@@ -128,6 +204,11 @@ fn emit_gen_suspend_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_suspend ---");
     emitter.label_global("__rt_gen_suspend");
+    emit_gen_auto_key_bookkeeping_x86_64(emitter);
+
+    emitter.blank();
+    emitter.comment("--- runtime: __rt_gen_suspend_delegated ---");
+    emitter.label_global("__rt_gen_suspend_delegated");
 
     // -- prologue: park the boxed key/value and cache the generator object --
     emitter.instruction("push rbp");                                            // save caller frame pointer
@@ -636,7 +717,7 @@ fn emit_gen_delegate_arm64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_incref");                                      // own a value reference for the outer suspend (it consumes one)
     emitter.instruction("mov x1, x0");                                          // value -> suspend argument 1
     emitter.instruction("mov x0, x20");                                         // key -> suspend argument 0
-    emitter.instruction("bl __rt_gen_suspend");                                 // suspend the outer generator; x0 = sent value (owned) on resume
+    emitter.instruction("bl __rt_gen_suspend_delegated");                       // suspend the outer generator; delegated keys never renumber
     emitter.instruction("mov x20, x0");                                         // stash the sent value for forwarding
     // -- forward the sent value into the inner generator, advancing it --
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // reload the inner state before resuming
@@ -691,7 +772,7 @@ fn emit_gen_delegate_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_incref");                                    // own a value reference for the outer suspend
     emitter.instruction("mov rsi, rax");                                        // value -> suspend argument 1
     emitter.instruction("mov rdi, r13");                                        // key -> suspend argument 0
-    emitter.instruction("call __rt_gen_suspend");                               // suspend the outer generator; rax = sent value on resume
+    emitter.instruction("call __rt_gen_suspend_delegated");                     // suspend the outer generator; delegated keys never renumber
     emitter.instruction("mov r13, rax");                                        // stash the sent value for forwarding
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // reload the inner state before resuming
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_SUSPENDED));        // can the inner generator accept the sent value?

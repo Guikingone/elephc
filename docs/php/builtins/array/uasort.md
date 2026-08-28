@@ -2,7 +2,7 @@
 title: "uasort()"
 description: "Sorts an array with a user-defined comparison function and maintains index association."
 sidebar:
-  order: 61
+  order: 68
 ---
 
 ## uasort()
@@ -25,12 +25,6 @@ Sorts an array with a user-defined comparison function and maintains index assoc
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/uasort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/uasort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

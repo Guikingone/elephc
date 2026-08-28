@@ -2,7 +2,7 @@
 title: "stream_socket_sendto()"
 description: "Sends a message to a socket, whether it is connected or not."
 sidebar:
-  order: 241
+  order: 248
 ---
 
 ## stream_socket_sendto()
@@ -27,12 +27,6 @@ Sends a message to a socket, whether it is connected or not.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_sendto.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_sendto.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -2,7 +2,7 @@
 title: "array_push()"
 description: "Pushes one or more elements onto the end of array."
 sidebar:
-  order: 29
+  order: 30
 ---
 
 ## array_push()
@@ -25,12 +25,6 @@ Pushes one or more elements onto the end of array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_push.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_push.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

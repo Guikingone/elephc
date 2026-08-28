@@ -2,15 +2,15 @@
 title: "empty() — internals"
 description: "Compiler internals for empty(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 293
+  order: 321
 ---
 
 ## `empty()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1519](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1519) (`lower_empty`)
+- **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/count_empty.rs`:284](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/count_empty.rs#L284) (`lower_empty`)
 - **Function symbol**: `lower_empty()`
 
 
@@ -20,7 +20,7 @@ sidebar:
 
 ## Semantic descriptor
 
-_Compiler-resident construct; this name is intentionally outside the builtin registry._
+Shared contract with a dedicated compiler language-construct implementation.
 
 ## EIR and runtime boundary
 
@@ -40,6 +40,8 @@ function empty(mixed $value): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/empty.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/empty.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-language-surface`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

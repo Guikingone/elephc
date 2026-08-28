@@ -18,16 +18,11 @@ use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "extension_loaded",
-    area: System,
-    params: [extension: Str],
-    returns: Bool,
+    contract: "extension_loaded",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ExtensionLoaded,
     ),
-    summary: "Checks whether a named PHP extension is loaded.",
-    php_manual: "function.extension-loaded",
 }
 
 /// Validates that the argument is a string (literal or dynamic).

@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "ob_get_flush",
+    contract: "ob_get_flush",
     area: Core,
-    params: [],
     direct: Core,
     values: Core,
 }

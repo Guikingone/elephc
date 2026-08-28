@@ -10,24 +10,16 @@
 //! - Arguments are pre-inferred by the registry before the hook runs; the hook does NOT
 //!   re-infer them.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_context_create",
-    area: Io,
-    params: [
-        options: Mixed = DefaultSpec::Null,
-        params: Mixed = DefaultSpec::Null
-    ],
-    returns: Mixed,
+    contract: "stream_context_create",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamContextCreate,
     ),
-    summary: "Creates a stream context.",
-    php_manual: "function.stream-context-create",
 }
 
 /// Returns `stream_resource()` as the precise return type for `stream_context_create`.

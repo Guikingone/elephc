@@ -2,7 +2,7 @@
 title: "array_udiff()"
 description: "Computes the difference of arrays using a callback comparator."
 sidebar:
-  order: 40
+  order: 41
 ---
 
 ## array_udiff()
@@ -26,12 +26,6 @@ Computes the difference of arrays using a callback comparator.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

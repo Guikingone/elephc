@@ -2,7 +2,7 @@
 title: "array_rand()"
 description: "Pick one or more random keys out of an array."
 sidebar:
-  order: 30
+  order: 31
 ---
 
 ## array_rand()
@@ -24,12 +24,6 @@ Pick one or more random keys out of an array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_rand.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_rand.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -10,12 +10,8 @@
 
 
 builtin! {
-    name: "preg_replace",
-    area: System,
-    params: [pattern: Str, replacement: Str, subject: Str],
-    returns: Str,
+    contract: "preg_replace",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PregReplace,
     ),
-    summary: "Performs a regular expression search and replace.",
 }

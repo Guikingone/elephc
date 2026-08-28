@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "is_resource",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_resource",
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Resource,
     ),
-    summary: "Checks whether a variable is a resource.",
-    php_manual: "function.is-resource",
 }

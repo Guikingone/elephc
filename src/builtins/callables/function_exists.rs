@@ -16,17 +16,12 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "function_exists",
-    area: Callables,
-    params: [function: Str],
-    returns: Bool,
+    contract: "function_exists",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::FunctionExists,
     ),
-    summary: "Returns true if the given function has been defined.",
-    php_manual: "function.function-exists",
 }
 
 /// Delegates to `check_function_exists` which lives in the checker's callables module.

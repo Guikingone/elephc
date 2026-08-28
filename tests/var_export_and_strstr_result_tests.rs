@@ -545,3 +545,224 @@ fn strstr_siblings_are_rejected_rather_than_silently_wrong() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// BUG 3 (issue B17) — `var_export()` of an OBJECT returned the empty string.
+//
+// The prelude's renderer had arms for int/float/bool/null/string/array and a
+// bare `return '';` for everything else, so `var_export(new Foo)` printed
+// NOTHING while PHP prints a parsable `\Foo::__set_state(array( … ))`.
+//
+// PHP's object layout is NOT the array layout, which is the whole reason this
+// needed its own branch rather than a reuse of the array one: an ENTRY KEY sits
+// at `indent + 3` (arrays use `indent + 2`) while the value and the closing line
+// keep the array indents. Every expectation below is reference PHP 8.4.20's
+// output for the same program, taken with `php -d xdebug.mode=off`.
+// ---------------------------------------------------------------------------
+
+/// The headline repro: a plain class renders `\Class::__set_state(array( … ))`
+/// with three-space entry keys, a trailing comma on every entry, and `))`.
+#[test]
+fn var_export_of_a_plain_object_renders_set_state() {
+    let dir = make_test_dir("var_export_object");
+    let src = "<?php class Foo { public $a = 1; public $b = 'x'; public $c = 1.5; public $d = true; } \
+        var_export(new Foo); echo \"\\n\";";
+    let bin = compile(&dir, src, "object_set_state");
+    assert_eq!(
+        run_binary(&bin),
+        "\\Foo::__set_state(array(\n   'a' => 1,\n   'b' => 'x',\n   'c' => 1.5,\n   'd' => true,\n))\n"
+    );
+}
+
+/// `stdClass` is the ONE class PHP exports as a cast instead of `__set_state`,
+/// because it has no such method. An empty one still writes both lines.
+#[test]
+fn var_export_of_stdclass_renders_an_object_cast() {
+    let dir = make_test_dir("var_export_stdclass");
+    let src = "<?php echo var_export(new stdClass, true), \"\\n\";";
+    let bin = compile(&dir, src, "stdclass_cast");
+    assert_eq!(run_binary(&bin), "(object) array(\n)\n");
+}
+
+/// A NESTED object and a NESTED array inside an object. Both are preceded by a
+/// newline and the `indent + 2` pad, and both close at `indent + 2` — the layout
+/// PHP produces and the reason the object branch cannot share the array padding.
+#[test]
+fn var_export_of_nested_containers_matches_php_indentation() {
+    let dir = make_test_dir("var_export_object_nested");
+    let src = "<?php \
+        class Foo { public $a = 1; } \
+        class Bar { public ?Foo $o = null; public $arr = [1, 2]; \
+            function __construct() { $this->o = new Foo; } } \
+        var_export(new Bar); echo \"\\n\";";
+    let bin = compile(&dir, src, "object_nested");
+    assert_eq!(
+        run_binary(&bin),
+        concat!(
+            "\\Bar::__set_state(array(\n",
+            "   'o' => \n",
+            "  \\Foo::__set_state(array(\n",
+            "     'a' => 1,\n",
+            "  )),\n",
+            "   'arr' => \n",
+            "  array (\n",
+            "    0 => 1,\n",
+            "    1 => 2,\n",
+            "  ),\n",
+            "))\n",
+        )
+    );
+}
+
+/// An object inside an ARRAY: the array branch must give an object value the same
+/// `\n` + pad prefix it already gave a nested array, or the `\Foo::` would land on
+/// the key line.
+#[test]
+fn var_export_of_objects_inside_an_array() {
+    let dir = make_test_dir("var_export_object_in_array");
+    let src = "<?php class Foo { public $a = 1; } \
+        var_export([new Foo, 'k' => new stdClass]); echo \"\\n\";";
+    let bin = compile(&dir, src, "object_in_array");
+    assert_eq!(
+        run_binary(&bin),
+        concat!(
+            "array (\n",
+            "  0 => \n",
+            "  \\Foo::__set_state(array(\n",
+            "     'a' => 1,\n",
+            "  )),\n",
+            "  'k' => \n",
+            "  (object) array(\n",
+            "  ),\n",
+            ")\n",
+        )
+    );
+}
+
+/// An ENUM case exports as the parsable constant expression `\Enum::Case`, with
+/// no body at all, for pure and backed enums alike.
+#[test]
+fn var_export_of_enum_cases_renders_the_case_constant() {
+    let dir = make_test_dir("var_export_enum");
+    let src = "<?php \
+        enum Status { case Active; } \
+        enum Suit: string { case Hearts = 'H'; } \
+        enum Lvl: int { case Low = 3; } \
+        echo var_export(Status::Active, true), '|', var_export(Suit::Hearts, true), \
+            '|', var_export(Lvl::Low, true), \"\\n\"; \
+        var_export(['e' => Status::Active]); echo \"\\n\";";
+    let bin = compile(&dir, src, "enum_cases");
+    assert_eq!(
+        run_binary(&bin),
+        concat!(
+            "\\Status::Active|\\Suit::Hearts|\\Lvl::Low\n",
+            "array (\n",
+            "  'e' => \n",
+            "  \\Status::Active,\n",
+            ")\n",
+        )
+    );
+}
+
+/// `var_export` prints the BARE property name for a protected/private property —
+/// no `:protected` / `:C:private` annotation, unlike `print_r` — and OMITS an
+/// uninitialized typed property entirely.
+#[test]
+fn var_export_prints_bare_property_names_and_skips_uninitialized_ones() {
+    let dir = make_test_dir("var_export_visibility");
+    let src = "<?php \
+        class P { public $a = 1; protected $b = 2; private $c = 3; } \
+        class U { public int $t; public $d = 1; } \
+        var_export(new P); echo \"\\n\"; \
+        var_export(new U); echo \"\\n\";";
+    let bin = compile(&dir, src, "object_visibility");
+    assert_eq!(
+        run_binary(&bin),
+        concat!(
+            "\\P::__set_state(array(\n",
+            "   'a' => 1,\n",
+            "   'b' => 2,\n",
+            "   'c' => 3,\n",
+            "))\n",
+            "\\U::__set_state(array(\n",
+            "   'd' => 1,\n",
+            "))\n",
+        )
+    );
+}
+
+/// Return mode over an object: the same bytes handed back as a `string`, with the
+/// length pinned so a truncated or over-copied render could not pass on the text
+/// alone. Reference PHP 8.4.20 reports 64.
+#[test]
+fn var_export_object_return_mode_is_a_string_of_the_same_bytes() {
+    let dir = make_test_dir("var_export_object_return");
+    let src = "<?php class P { public $a = 1; protected $b = 2; private $c = 3; } \
+        $s = var_export(new P, true); echo strlen($s), \"\\n\", $s, \"\\n\";";
+    let bin = compile(&dir, src, "object_return_mode");
+    assert_eq!(
+        run_binary(&bin),
+        concat!(
+            "64\n",
+            "\\P::__set_state(array(\n",
+            "   'a' => 1,\n",
+            "   'b' => 2,\n",
+            "   'c' => 3,\n",
+            "))\n",
+        )
+    );
+}
+
+/// LEAK GUARD for the object branch: `__elephc_object_prop_value` hands back a
+/// FRESHLY boxed Mixed cell for every property, so exporting objects in a loop
+/// must end with nothing live. Handing back the property's own cell instead would
+/// alias object storage into a caller-released temporary; boxing without the
+/// `Fresh` ownership declaration would leak one cell per property per call.
+#[test]
+fn var_export_object_loop_leaves_no_live_heap_blocks() {
+    let dir = make_test_dir("var_export_object_heap");
+    let src = "<?php \
+        class Foo { public $a = 1; public $b = 'xyz'; public $arr = [1, 2]; } \
+        class Bar { public ?Foo $o = null; function __construct() { $this->o = new Foo; } } \
+        $total = 0; \
+        for ($i = 0; $i < 8; $i++) { $total += strlen(var_export(new Bar, true)); } \
+        echo $total, \"\\n\";";
+    let bin = compile_with_flags(&dir, src, "object_heap", &["--heap-debug"]);
+    let (stdout, heap) = run_binary_with_heap_report(&bin);
+    // Reference PHP 8.4.20 renders 167 bytes for one `var_export(new Bar, true)`.
+    assert_eq!(stdout, format!("{}\n", 8 * 167));
+    assert!(
+        heap.contains("leak summary: clean"),
+        "var_export of objects leaked heap blocks:\n{heap}"
+    );
+}
+
+/// LEAK GUARD for the STRING paths, which leaked long before objects existed.
+///
+/// `__elephc_var_export_escape` used to take `mixed $s` and cast it inside. Passing a `string`
+/// value to a `mixed` parameter BOXES it into a fresh Mixed cell that nothing releases, so every
+/// exported string value and every exported string KEY leaked one heap block — in every program
+/// that called `var_export` on anything containing a string. The helper now takes `string` and
+/// each caller casts into a `string` local first, so no box is created at the call boundary.
+///
+/// This is deliberately separate from the object leak guard: it fails on a plain array and does
+/// not need an object at all.
+#[test]
+fn var_export_string_loop_leaves_no_live_heap_blocks() {
+    let dir = make_test_dir("var_export_string_heap");
+    let src = "<?php \
+        $total = 0; \
+        for ($i = 0; $i < 8; $i++) { \
+            $total += strlen(var_export('zz', true)); \
+            $total += strlen(var_export(['k' => 'zz'], true)); \
+        } \
+        echo $total, \"\\n\";";
+    let bin = compile_with_flags(&dir, src, "string_heap", &["--heap-debug"]);
+    let (stdout, heap) = run_binary_with_heap_report(&bin);
+    // Reference PHP 8.4.20: `'zz'` is 4 bytes, `array (\n  'k' => 'zz',\n)` is 24.
+    assert_eq!(stdout, format!("{}\n", 8 * (4 + 24)));
+    assert!(
+        heap.contains("leak summary: clean"),
+        "var_export of strings leaked heap blocks:\n{heap}"
+    );
+}

@@ -508,8 +508,7 @@ fn spill_user_arg(emitter: &mut Emitter, param_idx: usize, ty: &PhpType, slot_of
             emitter.instruction(&format!("str d0, [sp, #{}]", slot_offset));    // spill the normalized float argument for the final call
         }
         PhpType::Str => {
-            emitter.instruction(&format!("stp x1, x2, [sp, #{}]", slot_offset));
-            // spill the unboxed string pointer and length for the final call
+            emitter.instruction(&format!("stp x1, x2, [sp, #{}]", slot_offset)); // spill the unboxed string pointer and length for the final call
         }
         PhpType::Void | PhpType::Never => {}
         _ => {

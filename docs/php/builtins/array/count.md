@@ -2,7 +2,7 @@
 title: "count()"
 description: "Counts all elements in an array or Countable object."
 sidebar:
-  order: 51
+  order: 52
 ---
 
 ## count()
@@ -25,12 +25,6 @@ Counts all elements in an array or Countable object.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/count.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/count.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

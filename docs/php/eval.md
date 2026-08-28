@@ -76,8 +76,31 @@ elephc example.php
 See [`examples/eval/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval)
 for the broad feature showcase and
 [`examples/eval-globals/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval-globals)
-for global-scope synchronization. The implementation boundary is documented in
+for global-scope synchronization. Dynamic regex opt-in is shown in
+[`examples/eval_regex/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval_regex).
+The implementation boundary is documented in
 [Eval Runtime Architecture](../internals/eval-runtime.md).
+
+## Optional regex capability
+
+Dynamic eval source is opaque to compile-time feature detection. Merely linking
+Magician therefore does not link PCRE2 or expose `preg_*` inside evaluated code.
+A program without the capability still compiles; `function_exists("preg_match")`
+returns `false` inside dynamic eval and a call fails at runtime.
+
+If evaluated source may use regex, declare the managed package and explicitly
+enable the capability:
+
+```bash
+elephc native add pcre2
+elephc --with-regex example.php
+```
+
+The compiler prints a post-compilation reminder when a binary contains dynamic
+eval without regex support. Static source that visibly uses `preg_*`,
+`mb_ereg_match()`, `RegexIterator`, or `RecursiveRegexIterator` continues to
+auto-detect regex and makes the same provider available to dynamic eval. Merely
+declaring PCRE2 in `elephc.toml` never forces it into a binary.
 
 ## Scope behavior
 
@@ -94,6 +117,13 @@ representation, so the eval interpreter does not introduce a second PHP value
 ABI. AOT literals without writes skip scope materialization when they need no
 caller values or can receive read-only values as direct EIR parameters. Known
 writes use the same core scope cells from an internal EIR function.
+
+Because a scope cell is always boxed `Mixed`, a local read or written inside
+`eval()` may change type freely — `eval('$a = 1; $a = "ciao"; echo $a;')`
+compiles and runs the same in every mode. This is unrelated to
+[`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode), which
+only tightens the AOT checker's monomorphic-local rule for ordinary compiled
+locals outside `eval()`; it has no effect on eval'd code.
 
 Inside closures, `use ($x)` captures synchronize only the closure's captured
 copy. `use (&$x)` captures write through the shared source variable, so eval
@@ -869,17 +899,22 @@ as AOT `define()`.
 
 Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`,
 `PHP_INT_MAX`, `INF`, `NAN`, the `PHP_VERSION*` / `PHP_SAPI` version surface,
-`PATHINFO_*`, `FNM_*`, `ARRAY_FILTER_USE_*`, `COUNT_*`, and the supported
+`PATHINFO_*`, `PHP_URL_*`, `FNM_*`, `ARRAY_FILTER_USE_*`, `COUNT_*`, and the supported
 `PREG_*` / `JSON_*` constants. `defined()` sees these names, including an
 optional leading `\`, and `define()` cannot replace them.
 
-The eval interpreter is a separate crate with no access to `--php-version` or
-`--web`, so the version surface reports the DEFAULT profile: `PHP_VERSION`
-`"8.5.0"`, `PHP_VERSION_ID` `80500`, `PHP_SAPI` `"cli"`, `phpversion()`
-`"8.5.0"`. On a default-profile CLI binary that is identical to the compiled
-surface; a binary compiled `--php-version 8.2` or `--web` reports its own
-profile natively while `eval()` still reports the default. This is the same
-documented divergence `opcache_reset()` has in eval.
+The eval interpreter is a separate crate that cannot read `--php-version`
+itself, so the compiler forwards the profile to it: generated code sets it
+before every eval dispatch, exactly as it forwards `--strict-php`. A binary
+compiled `--php-version 8.2` therefore reports `PHP_VERSION` `"8.2.0"`,
+`PHP_VERSION_ID` `80200` and `phpversion()` `"8.2.0"` from inside `eval()`, the
+same values it reports natively. `PHP_MAJOR_VERSION`, `PHP_RELEASE_VERSION` and
+`PHP_EXTRA_VERSION` are invariant across the maintained profiles (`8`, `0` and
+the empty string), so they need no forwarding.
+
+`PHP_SAPI` is the one part of the surface that still diverges: it moves with
+`--web` rather than with the version, and eval reports `"cli"` inside a `--web`
+binary whose native `PHP_SAPI` is `"cli-server"`.
 
 ## Builtins available through eval
 
@@ -904,7 +939,7 @@ where listed below unless a note says otherwise.
 | File and directory streams | `fopen()`, `fclose()`, `feof()`, `fflush()`, `fgetc()`, `fgets()`, `fgetcsv()`, `fpassthru()`, `fprintf()`, `fputcsv()`, `fread()`, `fscanf()`, `flock()`, `fseek()`, `fstat()`, `fsync()`, `fdatasync()`, `ftell()`, `ftruncate()`, `fwrite()`, `rewind()`, `vfprintf()`, `opendir()`, `readdir()`, `closedir()`, `rewinddir()` |
 | Streams and stream contexts | `stream_get_filters()`, `stream_get_transports()`, `stream_get_wrappers()`, `stream_isatty()`, `stream_is_local()`, `stream_supports_lock()`, `stream_get_contents()`, `stream_get_line()`, `stream_get_meta_data()`, `stream_copy_to_stream()`, `stream_resolve_include_path()`, `stream_select()`, `stream_set_blocking()`, `stream_set_chunk_size()`, `stream_set_read_buffer()`, `stream_set_timeout()`, `stream_set_write_buffer()`, `stream_context_create()`, `stream_context_get_default()`, `stream_context_get_options()`, `stream_context_get_params()`, `stream_context_set_default()`, `stream_context_set_option()`, `stream_context_set_params()`, `stream_wrapper_register()`, `stream_wrapper_unregister()`, `stream_wrapper_restore()`, `stream_filter_register()`, `stream_filter_append()`, `stream_filter_prepend()`, `stream_filter_remove()`, `stream_bucket_new()`, `stream_bucket_make_writeable()`, `stream_bucket_append()`, `stream_bucket_prepend()` |
 | Stream sockets and network databases | `stream_socket_server()`, `stream_socket_client()`, `stream_socket_accept()`, `stream_socket_enable_crypto()`, `stream_socket_get_name()`, `stream_socket_pair()`, `stream_socket_recvfrom()`, `stream_socket_sendto()`, `stream_socket_shutdown()`, `fsockopen()`, `pfsockopen()`, `gethostname()`, `gethostbyname()`, `gethostbyaddr()`, `getprotobyname()`, `getprotobynumber()`, `getservbyname()`, `getservbyport()`, `long2ip()`, `ip2long()`, `inet_pton()`, `inet_ntop()` |
-| Strings, bytes, and formatting | `strlen()`, `ord()`, `chr()`, `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `trim()`, `ltrim()`, `rtrim()`, `chop()`, `strrev()`, `grapheme_strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `wordwrap()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, `base64_decode()`, `gzcompress()`, `gzdeflate()`, `gzinflate()`, `gzuncompress()`, `number_format()`, `sprintf()`, `printf()`, `vsprintf()`, `vprintf()`, `sscanf()` |
+| Strings, bytes, and formatting | `strlen()`, `ord()`, `chr()`, `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `trim()`, `ltrim()`, `rtrim()`, `chop()`, `strrev()`, `grapheme_strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `wordwrap()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `parse_url()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, `base64_decode()`, `gzcompress()`, `gzdeflate()`, `gzinflate()`, `gzuncompress()`, `number_format()`, `sprintf()`, `printf()`, `vsprintf()`, `vprintf()`, `sscanf()` |
 | Hashing | `crc32()`, `hash()`, `hash_file()`, `hash_hmac()`, `md5()`, `sha1()`, `hash_equals()`, `hash_algos()`, `hash_init()`, `hash_update()`, `hash_final()`, `hash_copy()` |
 | JSON | `json_encode()`, `json_decode()`, `json_validate()`, `json_last_error()`, `json_last_error_msg()` |
 | Regex | `preg_match()`, `preg_match_all()`, `preg_replace()`, `preg_replace_callback()`, `preg_split()`, `mb_ereg_match()` |
@@ -956,10 +991,11 @@ PHP's by-value callback behavior: the return value is computed from the
 supplied array, a by-reference warning is emitted where PHP would emit one, and
 the caller's original array is not mutated.
 
-Eval regex dispatch uses PCRE2 through the POSIX wrapper for common PCRE-style
-delimited patterns. It strips PHP delimiters, supports the `i`, `m`, `s`, `u`,
-and `U` modifiers, supports common capture array shapes and replacement
-references, and supports `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_DELIM_CAPTURE`, and
+When the optional regex capability is enabled, eval dispatch uses PCRE2 through
+the managed POSIX-wrapper shim for common PCRE-style delimited patterns. It
+strips PHP delimiters, supports the `i`, `m`, `s`, `u`, and `U` modifiers,
+supports common capture array shapes and replacement references, and supports
+`PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_DELIM_CAPTURE`, and
 `PREG_SPLIT_OFFSET_CAPTURE`. Patterns, delimiters, modifiers, or subject bytes
 that the eval bridge cannot pass through this wrapper fail as eval runtime
 fatals. Native non-eval regex codegen remains PCRE2-backed as documented in

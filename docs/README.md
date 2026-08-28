@@ -9,7 +9,7 @@ elephc compiles PHP to standalone native binaries for the supported targets — 
 
 ## Getting Started
 
-- [Installation](getting-started/installation.md) — install elephc via Homebrew or from source
+- [Installation](getting-started/installation.md) — install and manage elephc versions with elvm, or use Homebrew, a source build, or a release download
 - [Your First Program](getting-started/your-first-program.md) — write, compile, and run your first PHP binary
 - [Benchmark Suite](https://github.com/illegalstudio/elephc/blob/main/benchmarks/README.md) — compare elephc against PHP and equivalent C fixtures
 
@@ -35,9 +35,11 @@ Everything about driving the compiler: the command-line flags and the full path 
 
 ## PHP Syntax
 
-Standard PHP features supported by elephc. Implemented PHP syntax is intended to match PHP behavior; known compatibility gaps are documented on the relevant reference pages and tracked in the roadmap.
+Standard PHP features supported by elephc. Implemented PHP syntax is intended to match PHP behavior; known compatibility gaps are documented on the relevant reference pages and tracked in the [roadmap](../ROADMAP.md).
 
 - [Types](php/types.md) — int, float, string, bool, array, null, mixed, callable, enum, union types, extension types, type casting
+- [Built-in functions](php/builtins.md) — the generated index of every built-in: signature, availability (AOT / `eval()`), and implementation links
+- [PHP compatibility](php/compatibility.md) — the generated builtin-coverage report against the pinned reference PHP version
 - [Operators](php/operators.md) — arithmetic, comparison, `instanceof`, logical, bitwise, string, assignment, ternary, null coalescing, error control
 - [Control Structures](php/control-structures.md) — if/else, while, for, foreach, switch, match, multi-level break/continue, try/catch/finally
 - [Functions](php/functions.md) — declarations, closures, arrow functions, named arguments, variadic, spread, pass-by-reference, first-class callables, static variables
@@ -46,6 +48,8 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Regex](php/regex.md) — PCRE2-backed `preg_*` functions, SPL regex iterators, and the managed `pcre2` package
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 50+ built-in array functions
 - [Math](php/math.md) — abs, floor, ceil, round, trigonometry, logarithms, random, constants
+- [BCMath](php/bcmath.md) — exact arbitrary-precision decimal arithmetic, scale, rounding, and errors
+- [iconv](php/iconv.md) — character-set conversion, `//TRANSLIT`/`//IGNORE`, character-oriented string functions, RFC 2047 MIME headers, and the encoding trio
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers
 - [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals
@@ -55,8 +59,9 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [OPcache](php/opcache.md) — the observable Zend OPcache API over elephc's compile-time script manifest: `opcache_get_status()`/`opcache_get_configuration()`, the `opcache.*` directive matrix, `ini_get`/`ini_get_all`, `extension_loaded()`
 - [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError
-- [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, state-machine codegen
+- [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, stackful coroutine codegen
 - [PDO (Databases)](php/pdo.md) — PDO connections, prepared statements, fetch modes, transactions, and PDOException for SQLite, PostgreSQL, and MySQL/MariaDB drivers
+- [mysqli (MySQL / MariaDB)](php/mysqli.md) — the mysqli subset over the same pure-Rust MySQL client: buffered results, prepared statements, multi_query, and mysqli_report error handling
 - [Date and Time](php/datetime.md) — `DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`: construct, format, setters, `add`/`sub`, `diff`
 - [Calendar](php/calendar.md) — `ext/calendar`: Julian Day conversions for the Gregorian, Julian, French Republican and Jewish calendars, Easter, day/month names, `cal_*` dispatch
 - [Images](php/image.md) — GD image creation, I/O, color, drawing, text, transforms/filters, Exif/IPTC metadata, the Imagick (`Imagick`/`ImagickDraw`/`ImagickPixel`/`ImagickPixelIterator`/`ImagickKernel`) and Gmagick (`Gmagick`/`GmagickDraw`/`GmagickPixel`) object APIs, and Cairo 2D vector drawing (`CairoImageSurface`/`CairoContext`/`CairoMatrix`/patterns/gradients), plus `getimagesize`/`image_type_to_*`, backed by a pure-Rust codec/raster bridge (no system GD/ImageMagick/GraphicsMagick/cairo/libpng/libjpeg/libexif)
@@ -72,8 +77,9 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [FFI & Extern](beyond-php/extern.md) — calling C libraries, extern functions/globals/classes, callbacks
 - [Conditional Compilation](beyond-php/ifdef.md) — ifdef blocks, compile-time feature flags, CLI flags
 - [Shared Libraries (cdylib)](beyond-php/cdylib.md) — --emit cdylib, #[Export] C-ABI functions, dlopen lifecycle
-- [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone prefork HTTP server binary
+- [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone HTTP server with worker, pool, or per-request process isolation
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
+- [Profiling](beyond-php/profiling.md) — PHP-level profiling with one command in every environment: a launched program reports exact wall time, allocations, retained objects, database wait, SQL queries and calls; a running service is sampled by default and exact only for a requested completed request. Includes per-`--web`-route tags, `.elephc` performance budgets, W3C distributed traces, and a self-contained interactive call-graph page
 
 ## Compiler Internals
 

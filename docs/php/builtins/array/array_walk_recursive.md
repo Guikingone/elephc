@@ -2,7 +2,7 @@
 title: "array_walk_recursive()"
 description: "Applies a user function recursively to every member of an array."
 sidebar:
-  order: 46
+  order: 47
 ---
 
 ## array_walk_recursive()
@@ -25,12 +25,6 @@ Applies a user function recursively to every member of an array.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

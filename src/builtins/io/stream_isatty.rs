@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_isatty",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Bool,
+    contract: "stream_isatty",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamIsatty,
     ),
-    summary: "Checks if a stream is a TTY.",
-    php_manual: "function.stream-isatty",
 }
 
 /// Validates the stream resource argument and returns `Bool`.

@@ -14,15 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "passthru",
-    area: System,
-    params: [command: Str],
-    returns: Void,
+    contract: "passthru",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Passthru,
     ),
-    summary: "Executes an external program and passes its output directly.",
 }
 
 /// Refuses the call on targets whose sandbox forbids spawning a process; the

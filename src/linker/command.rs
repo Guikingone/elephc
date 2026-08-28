@@ -17,6 +17,25 @@ use crate::codegen::platform::{AppleVariant, Platform, Target};
 use crate::codegen::Emit;
 use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan, LinuxLinkMode};
 
+/// ELF hardening options applied to every Linux output, in driver (`-Wl,`) form
+/// so they reach `ld` verbatim for both the GCC and Clang drivers.
+///
+/// - `noexecstack`: elephc assembles its objects with `as`, which never emits a
+///   `.note.GNU-stack` section, so GNU ld infers an **executable** stack
+///   (`PT_GNU_STACK` `RWE`) and warns that the inference is deprecated. Nothing
+///   elephc produces needs it: there is no JIT, and fiber stacks are `mmap`ed
+///   `PROT_READ|PROT_WRITE` with a `PROT_NONE` guard page
+///   (`codegen_support::runtime::fibers::alloc`).
+/// - `relro` + `now`: resolve relocations eagerly and remap the relocated head
+///   of the data segment read-only. This also covers the `-static-pie` output
+///   that default-PIE drivers already produce from `-static`, where the RELRO
+///   segment holds the self-relocated GOT.
+///
+/// None of the three can fail a link: `ld` accepts all of them for static,
+/// dynamic, and `-shared` outputs, and silently ignores the ones that do not
+/// apply to a given output kind.
+const LINUX_HARDENING_FLAGS: [&str; 3] = ["-Wl,-z,noexecstack", "-Wl,-z,relro", "-Wl,-z,now"];
+
 /// Paths for the final output and its two required input objects.
 pub(super) struct LinkPaths<'a> {
     /// Final executable or shared-library path.
@@ -148,6 +167,12 @@ fn render_macos_command(
                 OsString::from("-dylib"),
                 OsString::from("-install_name"),
                 OsString::from(install_name),
+                // Collectable for the same reason as the Linux shared library: every symbol
+                // outside the export allowlist is `.private_extern`, so it is no longer an export
+                // and no longer a root. Mach-O needed the marking more than ELF did — there every
+                // `.globl` is an export by definition, so an unmarked dylib has no dead code at
+                // all from the linker's point of view.
+                OsString::from("-dead_strip"),
             ]);
         }
     }
@@ -156,7 +181,6 @@ fn render_macos_command(
         paths.bin.as_os_str().to_owned(),
         paths.object.as_os_str().to_owned(),
         paths.runtime.as_os_str().to_owned(),
-        OsString::from("-lSystem"),
         OsString::from("-syslibroot"),
         OsString::from(sdk.path),
         OsString::from("-platform_version"),
@@ -172,6 +196,8 @@ fn render_macos_command(
         }
     }
     append_link_inputs(&mut args, plan, Platform::MacOS);
+    // Keep native dependencies before the platform runtime in the final link order.
+    args.push(OsString::from("-lSystem"));
     append_frameworks(&mut args, plan);
 
     RenderedCommand {
@@ -191,9 +217,22 @@ fn render_linux_command(
     let mut args = Vec::new();
     match emit {
         Emit::Executable => args.push(OsString::from("-Wl,--gc-sections")),
-        Emit::Cdylib => args.push(OsString::from("-shared")),
         Emit::Staticlib => unreachable!("a static library is archived with ar, never linked"),
+        Emit::Cdylib => {
+            args.push(OsString::from("-shared"));
+            // A shared library collects the same unreachable helpers an executable does. The
+            // prerequisite is already in place and was the reason this was withheld: every symbol
+            // outside the export allowlist is marked `.hidden`, so it is not a dynsym root and is
+            // collectable. Without that marking `--gc-sections` would be inert here, since every
+            // `.globl __rt_*` would be an export and therefore a root.
+            //
+            // A helper reached only through a data pointer — the runtime `.data` holds vtables of
+            // `.quad __rt_*` — stays alive: that is a relocation from a retained section, which
+            // the collector follows like any other reference.
+            args.push(OsString::from("-Wl,--gc-sections"));
+        }
     }
+    args.extend(LINUX_HARDENING_FLAGS.iter().copied().map(OsString::from));
     args.extend([
         OsString::from("-o"),
         paths.bin.as_os_str().to_owned(),
@@ -212,7 +251,7 @@ fn render_linux_command(
         args.push(OsString::from("-ldl"));
     }
     append_search_paths(&mut args, plan);
-    if whole_bridge_count(plan) >= 2 {
+    if bridge_archive_count(plan) >= 2 {
         args.push(OsString::from("-Wl,--allow-multiple-definition"));
     }
     append_link_inputs(&mut args, plan, Platform::Linux);
@@ -290,15 +329,23 @@ fn has_link_inputs(plan: &LinkPlan) -> bool {
     })
 }
 
-/// Counts whole-archived bridge items that can duplicate Rust runtime members.
-fn whole_bridge_count(plan: &LinkPlan) -> usize {
+/// Counts bridge staticlib archives that can duplicate Rust runtime members.
+///
+/// Every Rust `staticlib` bundles the allocator shims, std rcgu objects, and any
+/// shared dependency (e.g. rustls in both `elephc_pdo` and `elephc_tls`), so as
+/// soon as TWO bridge archives each contribute at least one member, GNU ld sees
+/// multiple definitions — with or without `--whole-archive`. A program that
+/// auto-detects several bridges (PDO's prelude alone plans pdo+tls+phar+crypto)
+/// therefore needs `--allow-multiple-definition` exactly like a forced
+/// whole-archive pair; the duplicates are identical objects from one workspace
+/// build, so first-definition-wins is sound.
+fn bridge_archive_count(plan: &LinkPlan) -> usize {
     plan.items()
         .iter()
         .filter(|item| {
             matches!(
                 item,
                 LinkItem::StaticArchive {
-                    whole_archive: true,
                     origin: LinkOrigin::Bridge { .. },
                     ..
                 }
@@ -311,7 +358,7 @@ fn whole_bridge_count(plan: &LinkPlan) -> usize {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::codegen::platform::{Arch, Platform};
+    use crate::codegen::platform::{AppleVariant, Arch, Platform};
 
     use super::*;
 
@@ -338,6 +385,44 @@ mod tests {
         .arguments_lossy()
     }
 
+    /// Renders one Linux shared-library command with no host probes.
+    fn render_linux_cdylib(plan: &LinkPlan) -> Vec<String> {
+        render_link_command(
+            Target::new(Platform::Linux, Arch::X86_64),
+            Emit::Cdylib,
+            paths(),
+            plan,
+            false,
+            None,
+            &[],
+        )
+        .arguments_lossy()
+    }
+
+    /// Verifies a Linux shared library is section-collected like an executable.
+    ///
+    /// The flag is only meaningful because every symbol outside the export allowlist is already
+    /// marked `.hidden`: without that, each `.globl __rt_*` would be an export, therefore a
+    /// dynsym root, and the collector would have nothing to drop. A regression removing either
+    /// half leaves a shared library carrying the whole runtime while still linking and passing
+    /// its behaviour tests, which is why the flag is asserted rather than left to review.
+    #[test]
+    fn linux_shared_library_collects_unreachable_sections() {
+        let args = render_linux_cdylib(&LinkPlan::new());
+        assert!(args.iter().any(|arg| arg == "-shared"));
+        assert!(
+            args.iter().any(|arg| arg == "-Wl,--gc-sections"),
+            "a shared library must collect unreachable sections: {args:?}"
+        );
+    }
+
+    /// Verifies the executable path did not lose its collection flag while the cdylib gained one.
+    #[test]
+    fn linux_executable_still_collects_unreachable_sections() {
+        let args = render_linux(&LinkPlan::new());
+        assert!(args.iter().any(|arg| arg == "-Wl,--gc-sections"));
+    }
+
     /// Renders one macOS executable command with injected SDK and Homebrew paths.
     fn render_macos(plan: &LinkPlan) -> Vec<String> {
         render_link_command(
@@ -353,6 +438,37 @@ mod tests {
             &["/brew/lib"],
         )
         .arguments_lossy()
+    }
+
+    /// Verifies iOS device and simulator links carry distinct platform tokens
+    /// while sharing the compiler's fixed deployment floor.
+    #[test]
+    fn ios_link_commands_record_variant_and_deployment_floor() {
+        for (variant, platform_name) in [
+            (AppleVariant::IOS, "ios"),
+            (AppleVariant::IOSSimulator, "ios-simulator"),
+        ] {
+            let args = render_link_command(
+                Target::new_apple(Arch::AArch64, variant),
+                Emit::Executable,
+                paths(),
+                &LinkPlan::new(),
+                false,
+                Some(MacSdk {
+                    path: "/SDK",
+                    version: "18.2",
+                }),
+                &[],
+            )
+            .arguments_lossy();
+            let flag = args
+                .iter()
+                .position(|argument| argument == "-platform_version")
+                .expect("Apple link must carry -platform_version");
+            assert_eq!(args[flag + 1], platform_name);
+            assert_eq!(args[flag + 2], crate::codegen::platform::APPLE_IOS_MIN_OS);
+            assert_eq!(args[flag + 3], "18.2");
+        }
     }
 
     /// Verifies exact managed archives keep static mode and catalog order on both Linux architectures.
@@ -421,6 +537,32 @@ mod tests {
         assert!(close < managed);
     }
 
+    /// Verifies two bridge archives enable `--allow-multiple-definition` even
+    /// without whole-archiving: every Rust staticlib duplicates the allocator
+    /// shims and shared dependency rcgu objects, so an auto-detected
+    /// multi-bridge link (e.g. PDO's pdo+tls+phar+crypto plan) collides on GNU
+    /// ld exactly like a forced whole-archive pair.
+    #[test]
+    fn linux_two_bridge_archives_allow_multiple_definition() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::bridge_archive("pdo.a", "elephc_pdo", false),
+            LinkItem::bridge_archive("tls.a", "elephc_tls", false),
+        ]);
+        let args = render_linux(&plan);
+        assert!(args.iter().any(|argument| argument == "-Wl,--allow-multiple-definition"));
+    }
+
+    /// Verifies a single bridge archive does not relax linker duplicate checks.
+    #[test]
+    fn linux_single_bridge_archive_keeps_strict_definitions() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::bridge_archive("pdo.a", "elephc_pdo", false),
+            LinkItem::managed_archive("pcre2.a", "pcre2"),
+        ]);
+        let args = render_linux(&plan);
+        assert!(!args.iter().any(|argument| argument == "-Wl,--allow-multiple-definition"));
+    }
+
     /// Verifies exact macOS archives do not trigger implicit Homebrew search paths.
     #[test]
     fn macos_exact_archive_does_not_add_homebrew_paths() {
@@ -453,6 +595,59 @@ mod tests {
         )]));
         assert!(args.contains(&"-L/brew/lib".to_string()));
         assert!(args.contains(&"/cache/libelephc_pdo.a".to_string()));
+    }
+
+    /// Verifies every Linux output carries the ELF hardening options, on both
+    /// supported architectures, in static and dynamic mode, and for shared
+    /// libraries. Without `-z noexecstack` the assembler objects (which have no
+    /// `.note.GNU-stack`) make GNU ld mark the stack `RWE`.
+    #[test]
+    fn linux_outputs_carry_elf_hardening_flags() {
+        let static_plan = LinkPlan::from_items(vec![LinkItem::managed_archive("pcre2.a", "pcre2")]);
+        let dynamic_plan = LinkPlan::from_items(vec![LinkItem::named_user("sqlite3")]);
+        let aarch64 = render_link_command(
+            Target::new(Platform::Linux, Arch::AArch64),
+            Emit::Executable,
+            paths(),
+            &static_plan,
+            false,
+            None,
+            &[],
+        )
+        .arguments_lossy();
+
+        let commands = [
+            render_linux(&static_plan),
+            render_linux(&dynamic_plan),
+            render_linux_cdylib(&dynamic_plan),
+            aarch64,
+        ];
+        for args in commands {
+            for flag in LINUX_HARDENING_FLAGS {
+                assert!(
+                    args.contains(&flag.to_string()),
+                    "missing {flag} in Linux link command: {args:?}"
+                );
+            }
+        }
+    }
+
+    /// Verifies macOS link commands stay free of the ELF-only hardening options:
+    /// `ld64` rejects `-z` entirely, and macOS binaries are already PIE with a
+    /// platform-enforced non-executable stack.
+    #[test]
+    fn macos_command_omits_elf_hardening_flags() {
+        let args = render_macos(&LinkPlan::from_items(vec![LinkItem::named_extern("pcre2-8")]));
+        for flag in LINUX_HARDENING_FLAGS {
+            assert!(
+                !args.contains(&flag.to_string()),
+                "macOS link command must not carry {flag}: {args:?}"
+            );
+        }
+        assert!(
+            !args.iter().any(|argument| argument.contains("-z")),
+            "macOS link command must not carry any -z option: {args:?}"
+        );
     }
 
     /// Verifies the test fixture uses ordinary path values accepted by all hosts.

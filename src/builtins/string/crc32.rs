@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "crc32",
-    area: String,
-    params: [string: Str],
-    returns: Int,
+    contract: "crc32",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Crc32,
     ),
-    summary: "Calculates the CRC32 polynomial of a string.",
-    php_manual: "https://www.php.net/manual/en/function.crc32.php",
 }

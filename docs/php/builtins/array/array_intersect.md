@@ -2,7 +2,7 @@
 title: "array_intersect()"
 description: "Computes the intersection of arrays."
 sidebar:
-  order: 14
+  order: 15
 ---
 
 ## array_intersect()
@@ -25,12 +25,6 @@ Computes the intersection of arrays.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_intersect.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_intersect.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -71,6 +71,18 @@ impl Checker {
                 &format!("Undefined class: {}", class_name),
             ));
         }
+        if crate::types::checker::builtin_types::RESERVED_FOR_INTERNAL_USE
+            .iter()
+            .any(|reserved| *reserved == class_name)
+        {
+            return Err(CompileError::new(
+                expr.span,
+                &format!(
+                    "The \"{}\" class is reserved for internal use and cannot be manually instantiated",
+                    class_name
+                ),
+            ));
+        }
         if class_name == "Fiber" {
             self.validate_fiber_constructor_args(args, expr, env)?;
         }
@@ -102,8 +114,8 @@ impl Checker {
                         .map(String::as_str)
                         .unwrap_or(class_name.as_str());
                     if !self.can_access_member(declaring_class, visibility)
-                        && !self
-                            .can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
+                        && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
+                        && !self.can_construct_pdo_row_from_prelude_fetch(&class_name)
                     {
                         return Err(CompileError::new(
                             expr.span,
@@ -138,12 +150,13 @@ impl Checker {
                 } else {
                     effective_sig
                 };
-                self.check_known_callable_call(
+                self.check_user_declared_call(
                     &effective_sig,
                     &normalized_args,
                     expr.span,
                     env,
                     &format!("Constructor '{}::__construct'", class_name),
+                    class_name.as_str(),
                 )?;
                 for (i, arg) in normalized_args.iter().enumerate() {
                     let arg_ty = self.infer_type(arg, env)?;
@@ -220,6 +233,13 @@ impl Checker {
             && self.current_method.as_deref() == Some(get_iterator_key.as_str())
     }
 
+    /// Allows PDOStatement::fetch() to allocate the private internal PDORow view.
+    fn can_construct_pdo_row_from_prelude_fetch(&self, class_name: &str) -> bool {
+        class_name == "PDORow"
+            && self.current_class.as_deref() == Some("PDOStatement")
+            && self.current_method.as_deref() == Some(php_symbol_key("fetch").as_str())
+    }
+
     /// Validates constructor arguments for reflection owner classes.
     ///
     /// Extracts the reflected class/member metadata from literal arguments and
@@ -248,12 +268,13 @@ impl Checker {
             &format!("Constructor '{}::__construct'", class_name),
             env,
         )?;
-        self.check_known_callable_call(
+        self.check_user_declared_call(
             &sig,
             &normalized_args,
             expr.span,
             env,
             &format!("Constructor '{}::__construct'", class_name),
+            class_name,
         )?;
 
         if class_name == "ReflectionParameter" {

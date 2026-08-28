@@ -8,21 +8,16 @@
 //! - `check` validates that the first argument is a stream resource before returning `Bool`.
 //! - `microseconds` is optional (defaults to 0). Arguments are pre-inferred by the registry.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_set_timeout",
-    area: Io,
-    params: [stream: Mixed, seconds: Int, microseconds: Int = DefaultSpec::Int(0)],
-    returns: Bool,
+    contract: "stream_set_timeout",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSetTimeout,
     ),
-    summary: "Sets timeout period on a stream.",
-    php_manual: "function.stream-set-timeout",
 }
 
 /// Validates the stream resource argument and returns `Bool`.

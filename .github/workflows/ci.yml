@@ -14,15 +14,23 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Deep parser/lowering fixtures overflow Rust's small default worker stack on
+  # ARM64 runners. Keep one value for every archived nextest process so shard
+  # placement cannot change whether a test has enough stack.
+  RUST_MIN_STACK: "33554432"
   BRIDGE_CRATES: >-
     -p elephc-tls
     -p elephc-pdo
     -p elephc-crypto
+    -p elephc-bcmath
+    -p elephc-iconv
     -p elephc-phar
     -p elephc-tz
     -p elephc-image
     -p elephc-magician
     -p elephc-web
+    -p elephc-instr
+    -p elephc-probe
 
 jobs:
   # Compile each platform once, then let that platform's tests start as soon as
@@ -34,9 +42,6 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-
-      - name: Test magician benchmark harness
-        run: python3 -m unittest scripts/tests/test_benchmark_magician.py
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -55,8 +60,8 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Install test-only native providers
-        run: brew install pcre2
+      - name: Install native test dependencies
+        run: brew install freetds pcre2 unixodbc
 
       - name: Check (no warnings)
         shell: bash
@@ -65,10 +70,17 @@ jobs:
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
 
+      - name: Build combined optional PDO driver profile
+        run: |
+          cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
+          cargo clean -p elephc-pdo
+
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
-        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build
@@ -129,10 +141,17 @@ jobs:
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
 
+      - name: Build combined optional PDO driver profile
+        run: |
+          cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
+          cargo clean -p elephc-pdo
+
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
-        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build
@@ -188,10 +207,17 @@ jobs:
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
 
+      - name: Build combined optional PDO driver profile
+        run: |
+          cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
+          cargo clean -p elephc-pdo
+
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
-        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build
@@ -432,7 +458,7 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests) and not test(~codegen::eval)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -468,7 +494,7 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests) and not test(~codegen::eval)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -504,10 +530,137 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests) and not test(~codegen::eval)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
+
+  # PDO fixtures all inject the same large standard-library prelude. Running a
+  # deterministic shard in one libtest process lets parser/runtime/bridge caches
+  # survive between cases while preserving the full three-target test surface.
+  pdo-codegen-tests-macos-aarch64:
+    name: PDO Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
+    needs: build-archive-macos-aarch64
+    runs-on: macos-14
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install test-only native providers
+        run: brew install pcre2
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run PDO codegen shard in one process
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+          pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$pdo_test_binary"
+          bash scripts/ci/run_pdo_codegen_shard.sh \
+            "$pdo_test_binary" "${{ matrix.shard }}" 4
+
+  pdo-codegen-tests-linux-x86_64:
+    name: PDO Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Run PDO codegen shard in one process
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+          pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$pdo_test_binary"
+          bash scripts/ci/run_pdo_codegen_shard.sh \
+            "$pdo_test_binary" "${{ matrix.shard }}" 4
+
+  pdo-codegen-tests-linux-aarch64:
+    name: PDO Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
+    needs: build-archive-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run PDO codegen shard in one process
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+          pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$pdo_test_binary"
+          bash scripts/ci/run_pdo_codegen_shard.sh \
+            "$pdo_test_binary" "${{ matrix.shard }}" 4
 
   # Eval integration tests compile, link, and run full programs while exercising
   # eval/magician paths, so keep them out of the ordinary codegen shards. Two
@@ -664,11 +817,16 @@ jobs:
             rust-builtins-docs-
 
       - name: Build the builtin docs exporter
-        # The docs generator reads the single-source `builtin!` registry plus the
-        # eval interpreter's `eval_builtin!` registry via the `gen_builtins`
-        # example (`extract.py` prefers the prebuilt binary at
-        # target/debug/examples/gen_builtins), so it must be built first.
+        # The exporter joins the shared contract to the AOT `builtin!` and
+        # Magician `eval_builtin!` bindings. `extract.py` prefers this prebuilt
+        # debug binary, so compile it before any documentation checks.
         run: cargo build --example gen_builtins
+
+      - name: Enforce builtin target architecture
+        run: python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture
+
+      - name: Test builtin contract documentation pipeline
+        run: python3 -m unittest discover -s scripts/docs/elephc_builtins -p 'test_*.py'
 
       - name: Regenerate builtins documentation
         # Re-run the generator; the committed Markdown pages and JSON registry
@@ -682,12 +840,23 @@ jobs:
       - name: Validate generated docs for site compatibility
         run: python3 scripts/docs/elephc_builtins/validate_site_compat.py
 
+      - name: Run PHP comparison generator tests
+        run: python3 -m unittest discover -s scripts/docs -p "test_*.py" -v
+
+      - name: Regenerate the PHP comparison page
+        # Joins the freshly regenerated builtin registry with the vendored
+        # php_baseline.json snapshot and the curated comparison_catalog.toml.
+        # Validates catalog evidence and baseline consistency; the committed
+        # page must come back byte-identical.
+        run: python3 scripts/docs/gen_php_comparison.py
+
       - name: Fail if generated docs are out of sync
         run: |
-          changes=$(git status --porcelain -- docs/php/builtins.md docs/php/builtins docs/internals/builtins scripts/docs/builtin_registry.json)
+          changes=$(git status --porcelain -- docs/php/builtins.md docs/php/builtins docs/internals/builtins scripts/docs/builtin_registry.json docs/php/compatibility.md)
           if [ -n "$changes" ]; then
-            echo "Generated builtins docs are out of sync."
-            echo "Run 'python3 scripts/docs/extract_builtins.py --render --force' and commit the result."
+            echo "Generated docs are out of sync."
+            echo "Run 'python3 scripts/docs/extract_builtins.py --render --force' and"
+            echo "'python3 scripts/docs/gen_php_comparison.py', then commit the result."
             echo "$changes"
             exit 1
           fi
@@ -802,6 +971,9 @@ jobs:
       - codegen-tests-macos-aarch64
       - codegen-tests-linux-x86_64
       - codegen-tests-linux-aarch64
+      - pdo-codegen-tests-macos-aarch64
+      - pdo-codegen-tests-linux-x86_64
+      - pdo-codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
       - managed-native-smoke
@@ -821,6 +993,9 @@ jobs:
           test "${{ needs.codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.pdo-codegen-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.pdo-codegen-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.pdo-codegen-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
           test "${{ needs.managed-native-smoke.result }}" = "success"
@@ -833,10 +1008,6 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
-
-      - name: Configure isolated native cache
-        shell: bash
-        run: echo "ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/elephc-benchmark-native-cache" >> "$GITHUB_ENV"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

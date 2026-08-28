@@ -76,3 +76,29 @@ log_message($log_count, "Starting up");
 log_message($log_count, "Processing");
 log_message($log_count, "Done");
 echo "Logged " . $log_count . " messages\n";
+
+// --- Argument introspection ---
+// PHP lets a function be called with more positional arguments than it declares.
+// The surplus is reachable only through func_num_args(), func_get_args() and
+// func_get_arg().
+
+function describe_call() {
+    $parts = [];
+    foreach (func_get_args() as $arg) {
+        $parts[] = var_export($arg, true);
+    }
+    return func_num_args() . " arg(s): " . implode(", ", $parts);
+}
+
+echo describe_call() . "\n";
+echo describe_call(1, "two", 3.0) . "\n";
+
+// Declared parameters are part of the argument list too, and func_get_arg()
+// reads any position by index.
+function tag($label) {
+    $extra = func_num_args() > 1 ? func_get_arg(1) : "(none)";
+    return $label . " -> " . $extra;
+}
+
+echo tag("first") . "\n";
+echo tag("first", "second") . "\n";

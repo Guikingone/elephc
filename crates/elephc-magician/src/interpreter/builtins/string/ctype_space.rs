@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing ASCII ctype hook.
 
 eval_builtin! {
-    name: "ctype_space",
+    contract: "ctype_space",
     area: String,
-    params: [text],
     direct: Ctype,
     values: Ctype,
 }

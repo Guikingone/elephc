@@ -60,7 +60,16 @@ fn validate_macos_sdk_path(sdk: &str, resolved: &str) -> Result<String, String> 
 
 /// Returns common existing Homebrew library directories in stable preference order.
 pub(super) fn default_macos_library_paths() -> Vec<&'static str> {
-    ["/opt/homebrew/lib", "/usr/local/lib"]
+    [
+        "/opt/homebrew/lib",
+        "/usr/local/lib",
+        "/opt/homebrew/opt/libpq/lib",
+        "/usr/local/opt/libpq/lib",
+        "/opt/homebrew/opt/freetds/lib",
+        "/usr/local/opt/freetds/lib",
+        "/opt/homebrew/opt/unixodbc/lib",
+        "/usr/local/opt/unixodbc/lib",
+    ]
         .into_iter()
         .filter(|path| Path::new(path).exists())
         .collect()

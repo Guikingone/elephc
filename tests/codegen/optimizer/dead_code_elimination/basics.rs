@@ -107,7 +107,7 @@ echo "!";
     );
 
     assert!(
-        !user_asm.contains("shadowed"),
+        !asm_without_embedded_script_path(&user_asm).contains("shadowed"),
         "shadowed match arm should not remain in user assembly:\n{}",
         user_asm
     );

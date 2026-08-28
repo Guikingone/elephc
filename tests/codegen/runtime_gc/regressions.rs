@@ -9,6 +9,56 @@
 
 use crate::support::*;
 
+/// Verifies fresh disk-space results do not retain owned temporary directory arguments.
+/// Each result is a newly boxed float-or-false cell and therefore cannot alias the `getcwd()`
+/// string passed to the builtin; the old may-alias classification leaked one path per call.
+#[test]
+fn test_disk_space_fresh_results_release_temporary_paths() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$hits = 0;
+for ($i = 0; $i < 5; $i++) {
+    $hits += is_float(disk_free_space(getcwd())) ? 1 : 0;
+    $hits += is_float(disk_total_space(getcwd())) ? 1 : 0;
+}
+echo $hits;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "10");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected temporary disk paths to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies runtime-tagged ordering releases the temporary boxes created for concrete operands.
+#[test]
+fn test_float_or_false_runtime_ordering_releases_comparison_boxes() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe_fraction(bool $ok): float|false {
+    return $ok ? 0.5 : false;
+}
+
+for ($i = 0; $i < 50; $i++) {
+    $value = maybe_fraction($i % 2 === 0);
+    $ordered = $value > -1;
+    $spaceship = $value <=> -1;
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected runtime ordering boxes to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test: associative array values accessed inside a function after the
 /// array is passed as an argument. Verifies that reading multiple keys (`done`,
 /// `title`, `priority`) from a passed assoc array produces correct output.
@@ -155,6 +205,25 @@ echo "\n";
 "#,
     );
     assert!(out.success, "program crashed (double free?): {}", out.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Regression: sprintf must release each owned `__toString()` result after copying it.
+#[test]
+fn test_sprintf_tostring_result_released_after_copy() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class SprintfGreeter {
+    public int $id = 7;
+    public function __toString(): string { return "hi:" . $this->id; }
+}
+$greeter = new SprintfGreeter();
+for ($i = 0; $i < 100; $i++) { $text = sprintf("[%8s]", $greeter); }
+echo $text;
+"#,
+    );
+    assert_eq!(out.stdout, "[    hi:7]");
     let (allocs, frees) = parse_gc_stats(&out.stderr);
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
@@ -3021,6 +3090,84 @@ echo $bag->items[0];
     );
 }
 
+/// Ensures widening a typed array into a generic `array` property preserves the
+/// caller's source owner while transferring the unique converted clone to the property.
+#[test]
+fn test_property_array_widening_preserves_source_and_cow_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ArrayWideningBag {
+    public array $items = [];
+}
+
+$source = [11, 22];
+$bag = new ArrayWideningBag();
+$bag->items = $source;
+echo $source[0], ",", $source[1];
+echo "|", $bag->items[0], ",", $bag->items[1];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "11,22|11,22");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected property widening ownership to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Ensures associative-array widening follows the same non-consuming property
+/// store contract while converting typed values to boxed `Mixed` entries.
+#[test]
+fn test_property_assoc_array_widening_preserves_source_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class AssocArrayWideningBag {
+    public array $items = [];
+}
+
+$source = ["left" => 11, "right" => 22];
+$bag = new AssocArrayWideningBag();
+$bag->items = $source;
+echo $source["left"], ",", $source["right"];
+echo "|", $bag->items["left"], ",", $bag->items["right"];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "11,22|11,22");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected associative property widening ownership to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Ensures releasing a temporary zero-property aggregate from a reused larger
+/// heap block cannot invalidate a `Mixed` foreach key that is still live.
+#[test]
+fn test_iterator_aggregate_array_keys_survive_source_release() {
+    let out = compile_and_run(
+        r#"<?php
+$first = new ArrayObject(["left" => "L"]);
+foreach ($first as $key => $value) {
+    echo $key, "=", $value, ";";
+}
+
+class RetainedKeyAggregate implements IteratorAggregate {
+    public function getIterator(): Traversable {
+        return new ArrayIterator(["base" => "B"]);
+    }
+}
+
+$iterator = new IteratorIterator(new RetainedKeyAggregate());
+foreach ($iterator as $key => $value) {
+    echo $key, "=", $value;
+}
+"#,
+    );
+    assert_eq!(out, "left=L;base=B");
+}
+
 /// Verifies a nullsafe property read releases an owning nullable call result on
 /// both branches. In particular, a boxed null receiver must not leak when `?->`
 /// short-circuits before the property read.
@@ -4204,6 +4351,85 @@ echo $sum, "\n";
     );
 }
 
+// --- Issue #619: runtime alias disambiguation for suppressed argument releases ---
+//
+// `ReturnArgAlias::Parameters` is a MAY summary — a union over branches — so a callee that
+// returns its parameter only conditionally still reports that parameter as possibly returned.
+// The caller therefore suppresses the argument release on *every* path, which is correct on
+// the branch that hands the box back (issue #604) and leaks one block per call on the branches
+// that do not. The suppression site now emits a conditional release instead: after the call,
+// compare the returned payload against the argument payload and release the argument when they
+// differ. These tests pin both directions — the alias path must not double-release, and the
+// non-alias path must not leak.
+
+/// Regression test for issue #619: a conditional-return callee taking the NON-aliasing branch
+/// must release the suppressed argument box. Before the fix this leaked one boxed `$i + 1` per
+/// call (20 blocks / 800 bytes) while still printing the right answer.
+#[test]
+fn test_conditional_return_callee_non_alias_path_releases_arg() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe($x, $c) { if ($c) { return $x; } return 7; }
+$sum = 0;
+for ($i = 0; $i < 20; $i++) { $r = maybe($i + 1, 0); $sum = $sum + $r; }
+echo $sum, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "140\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the non-aliasing return path to release the suppressed argument box, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a fresh container passed by value is released when the callee returns a non-alias.
+///
+/// User-code callees privatize by-value containers before execution, so their result cannot
+/// retain the caller's original temporary. The caller may therefore release that temporary
+/// without the payload-level alias guard required for builtin and extern calls.
+#[test]
+fn test_conditional_return_callee_container_arg_releases_on_non_alias_path() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe($x, $c) { if ($c) { return $x; } return 7; }
+$n = 0;
+for ($i = 0; $i < 20; $i++) { $r = maybe([$i], 0); $n = $n + 1; }
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the container argument to be released on the non-alias path, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #619: both branches exercised in one program. The conditional
+/// release must fire per call on the runtime path actually taken — releasing on the aliasing
+/// iterations would double-free (the #604 crash), skipping it on the others leaks.
+#[test]
+fn test_conditional_return_callee_mixed_paths_stay_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe($x, $c) { if ($c) { return $x; } return 7; }
+$sum = 0;
+for ($i = 0; $i < 20; $i++) { $r = maybe($i + 1, $i % 2); $sum = $sum + $r; }
+echo $sum, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "180\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected alternating alias/non-alias paths to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for #601: `implode()` over an indexed array held in a boxed
 /// `mixed` cell must release the persisted string produced when each boxed element
 /// is cast to a string. The ternary widens the two literal arms to a boxed mixed
@@ -4331,6 +4557,36 @@ echo implode("", $r), "\n";
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected empty-separator implode to still release its cast string elements, got: {}",
+        out.stderr
+    );
+}
+
+/// Ownership regression for the newly added bounded-scratch string producers.
+///
+/// `chunk_split()`, `quotemeta()`, and `base_convert()` all write into a reservation taken
+/// from `__rt_concat_reserve`, so none of them can alias an argument. Leaving `chunk_split`
+/// in the default `MayAliasArguments` bucket suppressed the release of its owned subject
+/// temporary and leaked one block per call; `Independent`/`Fresh` ownership keeps the loop
+/// below clean.
+#[test]
+fn test_scratch_string_builtins_release_owned_argument_temporaries() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function build(): string { return str_repeat("a.b(", 30) . "c"; }
+$total = 0;
+for ($i = 0; $i < 20; $i++) {
+    $total += strlen(chunk_split(build(), 7, "=="));
+    $total += strlen(quotemeta(build()));
+    $total += strlen(base_convert("ff", 16, 2));
+}
+echo $total, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "6920\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected scratch string builtins to release their argument temporaries, got: {}",
         out.stderr
     );
 }

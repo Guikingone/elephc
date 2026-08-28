@@ -2,7 +2,7 @@
 title: "array_fill_keys()"
 description: "Fill an array with values, specifying keys."
 sidebar:
-  order: 10
+  order: 11
 ---
 
 ## array_fill_keys()
@@ -25,12 +25,6 @@ Fill an array with values, specifying keys.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_fill_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_fill_keys.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -2,7 +2,7 @@
 title: "array_keys()"
 description: "Returns all the keys of an array."
 sidebar:
-  order: 21
+  order: 22
 ---
 
 ## array_keys()
@@ -24,12 +24,6 @@ Returns all the keys of an array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_keys.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -14,11 +14,14 @@ mod plan;
 mod planner;
 mod static_spread;
 
-pub(crate) use matching::{named_param_index, regular_param_count};
+pub(crate) use matching::{
+    named_param_index, positional_param_type, regular_param_count, variadic_element_type,
+};
 pub(crate) use plan::{
     CallArgPlan, CallArgPlanError, PlannedRegularArg, PlannedSourceValue, SpreadBoundsCheck,
 };
 pub(crate) use planner::{
     plan_call_args, plan_call_args_with_regular_param_count_and_assoc_spreads,
+    validate_no_spread_after_named,
 };
 pub(crate) use static_spread::{expand_static_assoc_spread_args, has_named_args};

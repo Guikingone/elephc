@@ -13,8 +13,9 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
+use super::super::super::null_probe;
 use super::super::super::Checker;
-use super::merge_null_coalesce_result_type;
+use super::{merge_match_arm_result_type, merge_null_coalesce_result_type};
 
 impl Checker {
     /// Infers the type of an expression while tracking assignment effects through the environment.
@@ -81,7 +82,9 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                if matches!(old_ty, Some(PhpType::Int)) {
+                // `int` can overflow to float and `string` can become int/float
+                // (`"9"++` is `int(10)`), so the local is dynamically typed afterwards.
+                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
                     env.insert(name.clone(), PhpType::Mixed);
                 }
                 Ok(result_ty)
@@ -89,7 +92,9 @@ impl Checker {
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                if matches!(old_ty, Some(PhpType::Int)) {
+                // Same retype as the pre-form: only the RESULT differs, and it was already
+                // computed above against the type the local held before the update.
+                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
                     env.insert(name.clone(), PhpType::Mixed);
                 }
                 Ok(result_ty)
@@ -99,6 +104,7 @@ impl Checker {
                 if matches!(op, BinOp::And | BinOp::Or) {
                     let mut right_env = env.clone();
                     self.infer_type_with_assignment_effects(right, &mut right_env)?;
+                    merge_array_storage_effects(env, &right_env);
                     Ok(PhpType::Bool)
                 } else {
                     self.infer_type_with_assignment_effects(right, env)?;
@@ -106,12 +112,20 @@ impl Checker {
                 }
             }
             ExprKind::NullCoalesce { value, default } => {
-                let value_ty = self.infer_type_with_assignment_effects(value, env)?;
+                // `$neverDefined ?? $d` is a null probe: PHP answers `$d` without an
+                // undefined-variable warning, so the left chain root reads as `null`.
+                let probe = null_probe::begin_null_probe_root(self, value, env);
+                let value_ty = self.infer_null_probe_operand_with_effects(value, env);
+                null_probe::end_null_probe_root(probe, env);
+                let value_ty = value_ty?;
                 let default_ty = if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
                     let mut default_env = env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?
+                    let default_ty =
+                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
+                    default_ty
                 };
                 let non_null_value = if Self::union_contains_void(&value_ty) {
                     self.strip_void_from_union(&value_ty)
@@ -130,6 +144,7 @@ impl Checker {
                 } else {
                     let mut default_env = env.clone();
                     self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
                 }
                 // Result type comes from the Mixed-aware short-ternary merge in `infer_type`.
                 self.infer_type(expr, env)
@@ -150,10 +165,12 @@ impl Checker {
                     then_env.insert(guard.var.clone(), guard.then_ty);
                     else_env.insert(guard.var, guard.else_ty);
                 }
-                self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
-                self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
-                // Result type comes from the Mixed-aware ternary merge in `infer_type`.
-                self.infer_type(expr, env)
+                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                merge_array_storage_effects(env, &then_env);
+                merge_array_storage_effects(&mut else_env, &then_env);
+                let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                merge_array_storage_effects(env, &else_env);
+                Ok(merge_match_arm_result_type(self, then_ty, else_ty))
             }
             ExprKind::ArrayLiteral(elems) => {
                 for elem in elems {
@@ -180,10 +197,12 @@ impl Checker {
                         self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
                     }
                     self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                    merge_array_storage_effects(env, &arm_env);
                 }
                 if let Some(default) = default {
                     let mut default_env = env.clone();
                     self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
                 }
                 // Result type comes from the Mixed-aware match merge in `infer_type`
                 // (assignment effects must not reintroduce the Str-absorbing syntactic join).
@@ -219,27 +238,44 @@ impl Checker {
                     php_symbol_key(builtin_name).as_str(),
                     "isset" | "unset"
                 ) {
+                    // `isset($never)` / `unset($never)` are exactly the constructs PHP provides
+                    // for probing storage that may never have been declared, so a never-declared
+                    // chain root reads as `null` for the operand.
                     for arg in &expanded_args {
-                        self.infer_non_reading_arg_assignment_effects(arg, env)?;
+                        let probe = null_probe::begin_null_probe_root(self, arg, env);
+                        let effects = self.infer_non_reading_arg_assignment_effects(arg, env);
+                        null_probe::end_null_probe_root(probe, env);
+                        effects?;
                     }
-                } else if !builtin_name.eq_ignore_ascii_case("unset") {
+                } else if !crate::types::checker::is_unset_call(builtin_name) {
+                    // `empty()` shares that tolerance, but its operand is still read (PHP
+                    // consults `__isset` then `__get`), so it stays on the eager path with only
+                    // the probe binding added.
+                    let is_empty = php_symbol_key(builtin_name) == "empty";
+                    // An array-callback builtin types its callback's unannotated parameters
+                    // from the array element/key inside `check_builtin`. Skip that argument
+                    // here: the eager pass would otherwise check the closure body against the
+                    // unhinted parameter fallback and reject valid PHP such as
+                    // `array_filter($strings, fn($v) => strlen($v) > 5)`.
+                    let contextual_callbacks =
+                        crate::types::checker::builtins::contextual_callback_arg_positions(
+                            builtin_name,
+                        );
                     for (idx, arg) in expanded_args.iter().enumerate() {
-                        if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
+                        if contextual_callbacks.contains(&idx) {
                             continue;
                         }
-                        if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
-                            continue;
-                        }
-                        // The user-sort comparator is type-checked by `check_builtin`
-                        // with its parameters typed from the array element (so an
-                        // unannotated object comparator type-checks). Skip the eager
-                        // pass here, which would otherwise check the comparator body
-                        // with default `Int` parameters and reject object access.
-                        if idx == 1
-                            && (builtin_name.eq_ignore_ascii_case("usort")
-                                || builtin_name.eq_ignore_ascii_case("uasort")
-                                || builtin_name.eq_ignore_ascii_case("uksort"))
+                        if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
+                            || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
+                                && is_openssl_encrypt_tag_arg(arg, idx))
                         {
+                            continue;
+                        }
+                        if is_empty {
+                            let probe = null_probe::begin_null_probe_root(self, arg, env);
+                            let effects = self.infer_type_with_assignment_effects(arg, env);
+                            null_probe::end_null_probe_root(probe, env);
+                            effects?;
                             continue;
                         }
                         self.infer_type_with_assignment_effects(arg, env)?;
@@ -251,14 +287,101 @@ impl Checker {
                 Self::purge_property_narrowings(env);
                 if builtin_name.eq_ignore_ascii_case("preg_match") {
                     if let Some(arg) = expanded_args.get(2) {
-                        if let Some(name) = preg_match_output_var(arg) {
+                        if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
                         }
                     }
                 }
-                if builtin_name.eq_ignore_ascii_case("unset") {
+                if builtin_name.eq_ignore_ascii_case("openssl_encrypt") {
+                    if let Some(arg) = openssl_encrypt_tag_arg(&expanded_args) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), PhpType::Str);
+                        }
+                    }
+                }
+                if crate::types::checker::is_unset_call(builtin_name) {
                     for arg in &expanded_args {
                         promote_indexed_local_for_element_unset(arg, env);
+                    }
+                    // `unset($a)` on an eligible local KILLS the binding, which is what PHP
+                    // does: a later read is "Undefined variable" and a later assignment binds
+                    // fresh, at whatever type it likes. Ineligible names (conditional depth,
+                    // reference-aliased, `global`, `static`, declared-typed) keep today's
+                    // typing no-op. Iterating the SOURCE args keeps the recorded span on a node
+                    // EIR lowering actually visits.
+                    //
+                    // ONLY from statement position. `unset` is a statement in PHP's grammar, but
+                    // elephc's parser also accepts it as an expression, so this arm is reachable
+                    // from a `?:`/`??`/`&&` operand — a position whose `TypeEnv` clone is
+                    // DISCARDED when the branch loses. Everything the kill does below lives on
+                    // the checker instead (the recorded kill site, the per-name metadata clear,
+                    // the dropped binding depth), so it would escape that discard: measured as a
+                    // kill recorded for a never-executed ternary arm (the program then printed
+                    // nothing where the local was still live) and as a callable-argument
+                    // diagnostic lost with the metadata. Outside statement position this whole
+                    // block is a no-op — including the re-decision below, which must not disarm
+                    // a kill a statement-position visit legitimately recorded.
+                    if self.expr_is_in_statement_position(expr) {
+                        for arg in args {
+                            let ExprKind::Variable(var) = &arg.kind else {
+                                continue;
+                            };
+                            // A top-level name some other body declares `global` is NOT killable
+                            // however eligible it otherwise looks: `global $a;` in a function binds
+                            // the very cell this slot holds, so dropping the name here leaves the
+                            // rest of the program reaching storage the environment no longer knows.
+                            // Lowering refuses to abandon the same slots, from the same collected
+                            // set — see `Checker::top_level_binding_is_program_global`.
+                            if env.contains_key(var)
+                                && self.local_binding_is_killable(var)
+                                && !self.top_level_binding_is_program_global(var)
+                            {
+                                env.remove(var);
+                                self.local_binding_depth.remove(var);
+                                self.clear_local_binding_metadata(var);
+                                // A span that names no node must never enter a map lowering keys
+                                // BY span. `Span::dummy()` is shared by every compiler-generated
+                                // node (`Span::identifies_a_node`), so one prelude `unset` filed
+                                // under it would make lowering abandon the binding at EVERY other
+                                // dummy-span `unset` argument in the program. The env kill above
+                                // still happens — only the lowering instruction is withheld, which
+                                // leaves such a site on the plain null-store path it had before
+                                // kills were lowered at all.
+                                //
+                                // Inserted into the span's SET of killed names rather than over
+                                // it: two DIFFERENT locals killed at one (line, column) in two
+                                // files are two decisions, and one used to evict the other.
+                                if arg.span.identifies_a_node() {
+                                    self.local_bind_kill_sites
+                                        .entry(arg.span)
+                                        .or_default()
+                                        .insert(var.clone());
+                                }
+                            } else {
+                                // This visit RE-DECIDES the site. The checker walks a body more
+                                // than once (top level twice, method bodies to stability, a
+                                // function body once per call-site re-specialization), and only
+                                // the LAST walk's decisions may reach EIR lowering — the same
+                                // rule `loop_storage_types` follows by clearing its scope before
+                                // each re-walk. A kill recorded by a superseded walk whose
+                                // successor refuses (a callee's by-reference parameter that only
+                                // became visible later, say) would otherwise make lowering
+                                // abandon a slot the final check kept alive.
+                                //
+                                // Qualified by NAME for the same reason the insert above is: a
+                                // `Span` has no file identity, so an `unset($other)` at the same
+                                // (line, column) of another file must not disarm this one. Exactly
+                                // ONE name leaves the span's set, and the key itself goes only
+                                // when the set is empty.
+                                if let Some(killed) = self.local_bind_kill_sites.get_mut(&arg.span)
+                                {
+                                    killed.remove(var.as_str());
+                                    if killed.is_empty() {
+                                        self.local_bind_kill_sites.remove(&arg.span);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 if builtin_name.eq_ignore_ascii_case("eval") {
@@ -319,10 +442,19 @@ impl Checker {
                 self.infer_type_with_assignment_effects(property, env)?;
                 self.infer_type(expr, env)
             }
-            ExprKind::MethodCall { object, args, .. }
-            | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+            }
+            | ExprKind::NullsafeMethodCall {
+                object,
+                method,
+                args,
+            } => {
                 self.infer_type_with_assignment_effects(object, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                self.promote_pdo_binding_ref_storage(object, method, &expanded_args, env)?;
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
@@ -411,6 +543,40 @@ impl Checker {
             .is_some_and(callable_target_is_preg_replace_callback)
     }
 
+    /// Widens PDO binding destinations before by-reference signature validation.
+    fn promote_pdo_binding_ref_storage(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[Expr],
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        let object_ty = self.infer_type(object, env)?;
+        if !type_may_be_pdo_statement(&object_ty) {
+            return Ok(());
+        }
+        let parameter_name = match crate::names::php_symbol_key(method).as_str() {
+            "bindparam" => "variable",
+            "bindcolumn" => "var",
+            _ => return Ok(()),
+        };
+        let argument = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
+            ExprKind::NamedArg { name, value } if name == parameter_name => Some(value.as_ref()),
+            ExprKind::NamedArg { .. } => None,
+            _ if index == 1 => Some(arg),
+            _ => None,
+        });
+        let Some(Expr {
+            kind: ExprKind::Variable(name),
+            ..
+        }) = argument
+        else {
+            return Ok(());
+        };
+        env.insert(name.clone(), PhpType::Mixed);
+        Ok(())
+    }
+
     /// Marks the active statement stream as having crossed eval and widens local facts.
     fn mark_eval_barrier(&mut self, env: &mut TypeEnv) {
         self.eval_barrier_active = true;
@@ -425,6 +591,29 @@ impl Checker {
             self.callable_array_targets.remove(&name);
             self.first_class_callable_targets.remove(&name);
         }
+    }
+}
+
+/// Returns whether a receiver type may contain a PDOStatement instance.
+fn type_may_be_pdo_statement(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(class) => class.trim_start_matches('\\') == "PDOStatement",
+        PhpType::Union(members) => members.iter().any(type_may_be_pdo_statement),
+        _ => false,
+    }
+}
+
+/// Merges array layout conversions from a conditional expression arm into its outer environment.
+fn merge_array_storage_effects(env: &mut TypeEnv, branch_env: &TypeEnv) {
+    let converted = branch_env
+        .iter()
+        .filter_map(|(name, branch_ty)| {
+            let converted = crate::types::array_storage_conversion(env.get(name), branch_ty)?;
+            Some((name.clone(), converted))
+        })
+        .collect::<Vec<_>>();
+    for (name, converted) in converted {
+        env.insert(name, converted);
     }
 }
 
@@ -447,13 +636,36 @@ fn assignment_may_write_property(target: &Expr) -> bool {
     }
 }
 
-/// Returns the variable name used as `preg_match()`'s output `$matches` argument.
-fn preg_match_output_var(arg: &Expr) -> Option<&String> {
+/// Returns the variable name used by a builtin output argument.
+fn output_variable(arg: &Expr) -> Option<&String> {
     match &arg.kind {
         ExprKind::Variable(name) => Some(name),
-        ExprKind::NamedArg { value, .. } => preg_match_output_var(value),
+        ExprKind::NamedArg { value, .. } => output_variable(value),
         _ => None,
     }
+}
+
+/// Returns true when one source-order argument is OpenSSL encrypt's by-reference tag.
+fn is_openssl_encrypt_tag_arg(arg: &Expr, index: usize) -> bool {
+    match &arg.kind {
+        ExprKind::NamedArg { name, .. } => php_symbol_key(name) == "tag",
+        _ => index == 5,
+    }
+}
+
+/// Finds OpenSSL encrypt's tag argument across positional and reordered named calls.
+fn openssl_encrypt_tag_arg(args: &[Expr]) -> Option<&Expr> {
+    args.iter()
+        .find(|arg| {
+            matches!(
+                &arg.kind,
+                ExprKind::NamedArg { name, .. } if php_symbol_key(name) == "tag"
+            )
+        })
+        .or_else(|| {
+            args.get(5)
+                .filter(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. }))
+        })
 }
 
 /// Promotes a packed indexed-array local to an associative array when one of its elements is

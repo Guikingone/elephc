@@ -1,20 +1,21 @@
 ---
 title: "intval()"
-description: "Returns the integer value of a variable."
+description: "Returns the integer value of a variable, optionally using a given base."
 sidebar:
-  order: 441
+  order: 497
 ---
 
 ## intval()
 
 ```php
-function intval(mixed $value): int
+function intval(mixed $value, int $base = 10): int
 ```
 
-Returns the integer value of a variable.
+Returns the integer value of a variable, optionally using a given base.
 
 **Parameters**:
 - `$value` (`mixed`)
+- `$base` (`int`), default `10`, optional
 
 **Returns**: `int`
 
@@ -24,12 +25,6 @@ Returns the integer value of a variable.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/intval.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/intval.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

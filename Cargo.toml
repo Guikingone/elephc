@@ -1,6 +1,6 @@
 [package]
 name = "elephc"
-version = "0.26.2"
+version = "0.26.5"
 edition = "2021"
 default-run = "elephc"
 description = "A PHP-to-native AOT compiler"
@@ -14,15 +14,17 @@ categories = ["compilers", "command-line-utilities"]
 # The bridge staticlibs are default workspace members so plain `cargo build` /
 # `cargo test` materialize libelephc_tls.a (https:// wrapper),
 # libelephc_pdo.a (PDO: SQLite + PostgreSQL), libelephc_crypto.a
-# (hash/HMAC family), libelephc_phar.a (runtime phar:// archive reads),
+# (hash/HMAC family), libelephc_bcmath.a (arbitrary-precision decimal math),
+# libelephc_iconv.a (character-set conversion and RFC 2047 MIME headers),
+# libelephc_phar.a (runtime phar:// archive reads),
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
 # listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo), and
 # libelephc_web.a (--web prefork HTTP server), and libelephc_magician.a
 # (optional eval runtime) into target/<profile>/, where linker.rs locates them
 # for programs that use those features.
 [workspace]
-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
-default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
 resolver = "2"
 
 [[bin]]
@@ -37,7 +39,9 @@ name = "gen_builtins"
 path = "tools/gen_builtins.rs"
 
 [dependencies]
+elephc-builtin-contract = { path = "crates/elephc-builtin-contract" }
 inventory = "0.3"
+libc = "0.2"
 # Grows the stack on demand inside the recursive-descent parser so deeply
 # nested expressions never overflow small (2 MiB test-thread) stacks.
 stacker = "0.1"
@@ -45,6 +49,11 @@ bitflags = "2"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
+# `elephc monitor https://…` verifies the certificate before speaking the probe
+# protocol. Same rustls/ring pair the TLS bridge already pins, so the workspace
+# keeps one TLS stack and stays musl-friendly for the Docker test images.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "0.26"
 toml = "0.9"
 toml_edit = "0.25"
 tar = "0.4"
@@ -57,6 +66,7 @@ flate2 = "1"
 # the compiler to decompress bzip2 phar:// entries at compile time. Decompress-only.
 bzip2-rs = "0.1"
 elephc-phar = { path = "crates/elephc-phar" }
+elephc-probe = { path = "crates/elephc-probe" }
 # indicatif drives the live per-phase spinner and cargo-style "Linking" event
 # lines shown while compiling; console (indicatif's own transitive color/TTY
 # crate) is added directly too since errors/report.rs and timings.rs style text
@@ -74,6 +84,7 @@ console = "0.15"
 elephc-tls = { path = "crates/elephc-tls" }
 elephc-pdo = { path = "crates/elephc-pdo" }
 elephc-crypto = { path = "crates/elephc-crypto" }
+elephc-bcmath = { path = "crates/elephc-bcmath" }
 elephc-phar = { path = "crates/elephc-phar" }
 elephc-tz = { path = "crates/elephc-tz" }
 elephc-image = { path = "crates/elephc-image" }
@@ -83,10 +94,41 @@ elephc-magician = { path = "crates/elephc-magician" }
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.
 flate2 = "1"
+# serde_json lets the `elephc monitor` CLI test validate the emitted Speedscope
+# document structurally instead of substring-matching raw JSON.
+serde_json = "1"
 # The streams codegen tests host a local HTTPS fixture so https:// wrapper
 # success coverage does not depend on outbound network access.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
+
+[features]
+# Keeps the codegen test package and its PDO dev-dependency on the same libpq
+# backend profile. Without this relay, a later `cargo test` can rebuild and
+# replace the feature-built staticlib with the pure-Rust default archive.
+pdo-libpq-gss = ["elephc-pdo/libpq-gss"]
+# Keeps codegen fixtures and the PDO archive on the FreeTDS-backed PDO_DBLIB profile.
+pdo-dblib = ["elephc-pdo/dblib"]
+# Keeps codegen fixtures and the PDO archive on the pure-Rust PDO_FIREBIRD profile.
+pdo-firebird = ["elephc-pdo/firebird"]
+# Keeps codegen fixtures and the PDO archive on the system ODBC-manager profile.
+pdo-odbc = ["elephc-pdo/odbc"]
+# Keeps codegen fixtures and the PDO archive on the Informix CLI/ODBC profile.
+pdo-informix = ["elephc-pdo/informix"]
+# Keeps codegen fixtures and the PDO archive on the IBM Db2 CLI profile.
+pdo-ibm = ["elephc-pdo/ibm"]
+# Keeps codegen fixtures and the PDO archive on Microsoft PDO_SQLSRV 5.13.
+pdo-sqlsrv = ["elephc-pdo/sqlsrv"]
+# Keeps codegen fixtures and the PDO archive on the Oracle Instant Client profile.
+pdo-oci = ["elephc-pdo/oci"]
+# Keeps codegen fixtures and the PDO archive on the official CUBRID CCI profile.
+pdo-cubrid = ["elephc-pdo/cubrid"]
+
+# PDO needs two mysql client controls that upstream 28.0.0 does not expose:
+# caller-supplied authentication RSA keys and rustls cipher-suite selection.
+# Keep the small audited patch in-tree until those options land upstream.
+[patch.crates-io]
+mysql = { path = "vendor/mysql-28.0.0" }
 
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of

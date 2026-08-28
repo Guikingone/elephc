@@ -8,6 +8,8 @@
 //! Key details:
 //! - Parser output preserves spans and PHP syntax shape for later passes to rewrite safely.
 
+/// PHP alternative control-structure syntax (`:` … `endif;`) body parsing helpers.
+mod alt_syntax;
 /// Defines AST node types representing the PHP syntax tree produced by the parser.
 pub mod ast;
 mod attributes;
@@ -29,6 +31,10 @@ use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::Stmt;
 use crate::span::Span;
+
+/// Caps syntactic delimiter nesting before recursive expression parsing can
+/// consume the compiler process stack.
+const MAX_COMPILER_NESTING: usize = 1024;
 
 thread_local! {
     /// Anonymous-class declarations (`new class {}`) hoisted out of expression position during
@@ -68,6 +74,13 @@ pub fn parse(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
 }
 
 /// Parses compiler-generated tagged source without exposing it to user strict-PHP rules.
+///
+/// No compilation path calls this any more: the synthetic preludes it existed for are BUILT
+/// rather than parsed, so the only callers left are the oracles that check those builders
+/// against the PHP they replaced. The lib keeps it as public API; the bin compiles the same
+/// sources through its own module tree, where nothing reaches it — hence the allow, exactly as
+/// `parse` above carries it.
+#[allow(dead_code)]
 pub fn parse_internal(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
     parse_with_mode(tokens, crate::source::SourceMode::Internal)
 }
@@ -97,11 +110,14 @@ pub fn parse_with_recovery_in_mode(
     tokens: &[SpannedToken],
     mode: crate::source::SourceMode,
 ) -> Result<Program, Vec<CompileError>> {
-    crate::source::with_parse_mode(mode, || parse_with_recovery_inner(tokens))
+    crate::source::with_parse_mode(crate::source::SourceProfile::new(mode), || {
+        parse_with_recovery_inner(tokens)
+    })
 }
 
 /// Implements recovery parsing after the source-mode scope has been installed.
 fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
+    reject_excessive_nesting(tokens)?;
     let mut pos = 0;
     let mut stmts = Vec::new();
     let mut errors = Vec::new();
@@ -156,4 +172,28 @@ fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<Com
     } else {
         Err(errors)
     }
+}
+
+/// Rejects syntactically nested delimiters before recursive parser routines
+/// can overflow the compiler stack on hostile source input.
+fn reject_excessive_nesting(tokens: &[SpannedToken]) -> Result<(), Vec<CompileError>> {
+    let mut depth = 0usize;
+    for (token, location) in tokens {
+        match token {
+            Token::LParen | Token::LBrace | Token::LBracket => {
+                depth += 1;
+                if depth > MAX_COMPILER_NESTING {
+                    return Err(vec![CompileError::new(
+                        location.span,
+                        "maximum compiler nesting depth exceeded",
+                    )]);
+                }
+            }
+            Token::RParen | Token::RBrace | Token::RBracket => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }

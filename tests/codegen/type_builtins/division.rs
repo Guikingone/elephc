@@ -58,11 +58,27 @@ fn test_intdiv_negative() {
     assert_eq!(out, "-3");
 }
 
-/// Verifies float division by zero produces `INF`.
+/// Verifies float division by zero raises PHP 8's `DivisionByZeroError`.
+///
+/// This test previously asserted `INF`, which is pre-PHP-8 behaviour: PHP 5/7 warned and
+/// yielded `INF`, but PHP 8 made **every** `/` by zero throw, floats included. Verified
+/// against reference PHP 8.4:
+///
+/// ```text
+/// $ php -r 'echo 1.0 / 0.0;'
+/// PHP Fatal error:  Uncaught DivisionByZeroError: Division by zero
+/// ```
+///
+/// `fdiv(1.0, 0.0)` is the function that still returns `INF`, and it is covered separately —
+/// it is the reason the old expectation looked plausible.
 #[test]
-fn test_division_by_zero_inf() {
-    let out = compile_and_run("<?php echo 1.0 / 0.0;");
-    assert_eq!(out, "INF");
+fn test_division_by_zero_throws_division_by_zero_error() {
+    let err = compile_and_run_expect_failure("<?php echo 1.0 / 0.0;");
+    assert!(
+        err.contains("Uncaught DivisionByZeroError: Division by zero"),
+        "{}",
+        err
+    );
 }
 
 /// Regression: `intdiv()` must unbox a `Mixed` operand before dividing.

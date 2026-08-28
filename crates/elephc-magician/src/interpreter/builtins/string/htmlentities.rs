@@ -8,20 +8,13 @@
 //! - Runtime dispatch is declared here and implemented through the HTML entity hook.
 
 eval_builtin! {
-    name: "htmlentities",
+    contract: "htmlentities",
     area: String,
-    params: [
-        string,
-        flags = EvalBuiltinDefaultValue::Int(11),
-        encoding = EvalBuiltinDefaultValue::String("UTF-8"),
-    ],
     direct: HtmlEntity,
     values: HtmlEntity,
 }
 
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
-
 /// Evaluates PHP `htmlentities(...)` over one eval string expression.
 pub(in crate::interpreter) fn eval_builtin_htmlentities(
     args: &[EvalExpr],

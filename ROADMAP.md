@@ -933,6 +933,8 @@ runtime helpers are reused and driven through EIR lowering.
 Optimization work should now be driven by benchmarks, generated assembly size,
 and 0.x validation rather than by speculative pass work.
 
+- [x] Whole-program declaration reachability — drop unreachable functions, unused classes, and unused methods (including compiler preludes such as PDO) after AST DCE, with conservative keep-all behavior for `eval`, dynamic calls, `unserialize`, and Reflection, and `--with-<crate>` force-keep for forced prelude groups
+
 - [x] Curated native dependencies v1 — `elephc native add/install/update/remove/list/doctor/prune`, exact comment-preserving manifests and deterministic locks, content-addressed target/ABI/toolchain cache, transactional verified source builds, explicit cache cleanup, and read-only compile-time resolution. PCRE2 10.47 links through an opaque Elephc shim with no production system-library fallback; zlib 1.3.2 proves the catalog/recipe path is generic. This remains separate from Composer packages, Rust bridge crates, user `extern` linking, and toolchain installation.
 
 - [x] Generators reimplemented on stackful coroutines (issue #329) — a generator body is compiled by the normal EIR backend and runs on its own coroutine stack (reusing the Fiber runtime), replacing the v1 state-machine lowering on the EIR path. `Generator::throw()` now raises the exception at the suspended `yield`, so a `try`/`catch` inside the generator body handles it and resumes instead of always terminating the generator and propagating to the caller; in-generator method calls, arbitrary control flow, and `try`/`finally` around `yield` work like ordinary functions. `yield from` over generators delegates through `__rt_gen_delegate` (forwarding sent values and returning the inner `getReturn()`) and over arrays desugars into an iterator loop; `send()`/`getReturn()`/closure captures preserved; Generator GC frees the coroutine stack and boxed key/value/return cells.
@@ -953,8 +955,8 @@ and 0.x validation rather than by speculative pass work.
 - [x] `mb_strlen()` — nullable optional `$encoding` argument, UTF-8 malformed-sequence handling, byte-count aliases, iconv-backed multibyte encodings, callable dispatch, catchable `ValueError` for unknown encodings
 - [x] `static $x;` function-static declarations without an initializer — desugar to `= null` in both the native and Magician `eval()` parsers, matching PHP
 - [x] Purity / may-throw v2 — closed-world instance dispatch now unions concrete override summaries (with exact fixed-construction/final/private targets), named and dynamic property reads distinguish declared untyped slots, typed-slot throws, missing-property warnings, hooks, and `__get`, known array offsets separate silent reads from undefined-key warnings, and registry/runtime builtin effects use shared argument-sensitive contracts instead of the previous blanket barrier. A final whole-module fixed point writes these summaries onto refinable EIR call/property instructions before validation, while unresolved/eval/external targets retain conservative defaults
-- [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards
-- [ ] Exception-aware DCE v2 — exact thrown-type / handler reachability, nested try rethrow modeling, and less conservative finally-path invalidation
+- [x] Guard reasoning v2 for dead-code elimination — integer interval facts from `$x <op> int` relational branches when `$x` has a proven integer domain from an exact `int` parameter, typed local, or literal guard (intersected across nested paths and discharged for transitive relational / strict-int contradictions and impossible `switch` int cases); cross-variable relational / strict-equality atoms with safe complements, full exact coupling after strict substitution, and pure non-throwing `while` / `for` body-entry strengthening, still under the path-local AST `GuardState` protocol with write invalidation, float/string-domain refusal, NaN-safe false-branch policy, and no general CFG join
+- [x] Exception-aware DCE v2 — exact and constrained thrown-type domains now route source-order handlers through the checker-provided class/interface hierarchy; fixed-point direct-call summaries, exact explicit/operator failures, nested caught-variable rethrows, and type-specific catch guard invalidation remove disjoint paths without closing dynamic dispatch unsafely. Finally invalidation now follows only paths that execute it, excluding unconditional `exit`/`die` branches while retaining conservative fallbacks for unresolved calls, open receivers, external or trait-provided constructors, and complex control flow.
 - [ ] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes
 - [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
 - [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
@@ -968,10 +970,10 @@ and 0.x validation rather than by speculative pass work.
 - [x] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
 - [x] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
 - [x] Rename `src/codegen_ir/` to `src/codegen/`
-- [x] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
+- [x] Move historical codegen doc to `docs/internals/legacy-codegen.md` (later retired together with the legacy backend); refresh `docs/internals/the-codegen.md` to describe the IR pipeline
 - [x] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
-- [ ] Installation / packaging documentation for the supported host platforms
+- [x] Installation / packaging documentation for the supported host platforms — macOS Homebrew, source builds, release artifacts, native toolchain requirements, and managed native dependency prerequisites are covered in `docs/getting-started/installation.md`
 
 ## Later 0.x product tracks
 
@@ -1010,6 +1012,13 @@ statics, and static class properties all reset between requests). Run it with
   graceful `SIGINT`/`SIGTERM` shutdown (forward to workers, reap, exit 0), worker
   respawn on unexpected death, and a 30s header-read timeout bounding slow/idle
   keep-alive connections. Out of v1 scope: cookies, sessions, TLS, HTTP/2–3, multipart.
+- [x] **Phase 4.1** — compile-time handler isolation: plain `--web` preserves the
+  original in-process `worker` path and performance; `--web-isolation=pool`
+  selects persistent supervised handler children; `request` selects a tracked,
+  disposable child per request. Isolated modes add configurable handler
+  concurrency, body/response deadlines, streaming output, exact dispatch-ID
+  cancellation, PID reaping/replacement, pool-child quotas, and descendant-safe
+  shutdown without adding request-time branching or IPC to the default mode.
 - [x] **Phase 5** — session support: `session_start()`, `$_SESSION` superglobal,
   `session_id()`, `session_name()`, `session_status()`, `session_save_path()`,
   `session_write_close()` (auto-called at handler end via a finally block),
@@ -1065,10 +1074,11 @@ statics, and static class properties all reset between requests). Run it with
 - [x] `.dylib` / `.so` output on all supported targets (macOS aarch64, Linux aarch64, Linux x86_64)
 - [ ] `.a` static library output
 - [ ] Multi-file library compilation
-- [x] Symbol visibility control — ELF cdylibs hide every internal global; the dynamic symbol table exposes only `#[Export]` trampolines and the `elephc_init`/`elephc_shutdown`/`elephc_last_error`/`elephc_free` lifecycle entry points
-- [ ] String return values from exported functions (host frees via `elephc_free`)
-- [ ] Auto-generated C header file
-- [ ] Null-terminated string convention for C interop
+- [x] Symbol visibility control — ELF hidden and Mach-O private-extern directives keep every compiler/runtime/CRT implementation symbol private; the public table contains only `#[Export]` trampolines plus `elephc_abi_version`, `elephc_init`, `elephc_shutdown`, `elephc_last_status`, `elephc_last_error`, and `elephc_free`
+- [x] Binary-safe string return values for the exact `string -> string` export ABI — status/out-parameters, independent caller ownership through `elephc_free`, and recoverable PHP-exception/allocation failures
+- [x] Deterministic auto-generated C header beside each cdylib, including ABI/status constants, resolved prototypes, C++ guards, and ownership/lifetime comments
+- [x] Recoverable scalar export boundary without changing scalar C signatures — zero sentinel plus `elephc_last_status`, stable diagnostics, frame cleanup, and nested boundary-depth/concat restoration
+- [ ] Null-terminated string convention for C interop (owned string results currently include a convenience trailing NUL, but pointer/length remains the authoritative binary-safe ABI)
 - [x] Stateful FFI callback trampolines — generate C-ABI-compatible trampoline symbols for descriptor-backed callables passed to extern `callable` parameters, retaining descriptor/capture/receiver environments for supported scalar/ptr signatures and documenting constraints for C APIs without userdata/context slots
 - [ ] `pkg-config` generation
 - [ ] FFI documentation for C, Rust, Python, Go
@@ -1100,7 +1110,7 @@ future use cases.
 |---|---|---|
 | Buffer ergonomics v2 | Medium | Consider dynamic resize/push/pop, `foreach`, array conversion, and automatic cleanup for `buffer<T>` while keeping the hot-path POD contract explicit. |
 | String-capable FFI callbacks | Medium | Allow C callback signatures that pass or return strings once ownership and temporary C-string lifetimes are modeled safely across callback boundaries. |
-| Generator parity v2 | Medium | MVP delivered in v0.21.x for ARM64 and Linux x86_64. Remaining parity work: `yield` inside `try`/`catch`/`finally`, dynamic `yield from` arrays beyond the compile-time literal form, broader dynamic `yield from` Iterator targets, exception propagation through `Generator::throw` to caller-visible finally paths, and PHP-exact `Generator` interface inheritance with `Iterator`. See `docs/php/generators.md`. |
+| Generator parity v2 | Medium | MVP delivered in v0.21.x for ARM64 and Linux x86_64; `yield` inside `try`/`catch`/`finally` and exception propagation through `Generator::throw` landed with the v0.26.x closure work. Remaining parity work: dynamic `yield from` arrays beyond the compile-time literal form, broader dynamic `yield from` Iterator targets, and PHP-exact `Generator` interface inheritance with `Iterator`. See `docs/php/generators.md`. |
 | Fiber parity v2 | Medium | MVP delivered in v0.20.x for ARM64 and Linux x86_64. Remaining parity work: arithmetic auto-unboxing on `mixed` payloads received from `suspend()`, true variadic `start(...$args)` beyond seven args, dynamic callback targets, by-reference callback start parameters, configurable stack sizing, and PHP-exact `FiberError` hierarchy. See `docs/php/fibers.md`. |
 | Conditional include class-like variants | High | Keep class/interface/trait/enum duplicate detection strict for now. Supporting branch-selected class-like declarations would require runtime class metadata/layout dispatch, while modern PHP can avoid the ambiguity with namespaces. |
 

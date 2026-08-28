@@ -10,6 +10,8 @@
 
 use super::super::*;
 use super::super::state::{GuardLiteral, GuardState};
+use super::range::known_from_range;
+use super::relational::known_from_relational;
 
 /// Extracts a variable name and its expected truthiness from a simple guard condition.
 ///
@@ -36,7 +38,7 @@ pub(in crate::optimize::control::dce) fn scalar_guard_value(expr: &Expr) -> Opti
         ExprKind::BoolLiteral(value) => Some(GuardLiteral::Bool(*value)),
         ExprKind::Null => Some(GuardLiteral::Null),
         ExprKind::IntLiteral(value) => Some(GuardLiteral::Int(*value)),
-        ExprKind::FloatLiteral(value) => Some(GuardLiteral::Float(value.to_bits())),
+        ExprKind::FloatLiteral(value) => Some(GuardLiteral::Float(*value)),
         ExprKind::StringLiteral(value) => Some(GuardLiteral::String(value.clone())),
         _ => None,
     }
@@ -77,7 +79,7 @@ pub(in crate::optimize::control::dce) fn guard_literal_truthy(value: &GuardLiter
         GuardLiteral::Bool(value) => *value,
         GuardLiteral::Null => false,
         GuardLiteral::Int(value) => *value != 0,
-        GuardLiteral::Float(bits) => f64::from_bits(*bits) != 0.0,
+        GuardLiteral::Float(value) => *value != 0.0,
         GuardLiteral::String(value) => !value.is_empty() && value != "0",
     }
 }
@@ -148,6 +150,8 @@ pub(in crate::optimize::control::dce) fn known_condition_value_inner(
 /// 3. `And`/`Or` — short-circuit evaluation using recursive `known_condition_value_inner`
 /// 4. Variable truthiness via `guard_variable_name` against `truthy_vars`/`falsy_vars`
 /// 5. Strict equality guards via `strict_scalar_guard` against `exact_guards`/`excluded_guards`
+/// 6. Integer range facts (`range_guards`) for relational / strict-int contradictions
+/// 7. Cross-variable relational atoms (`relational_guards`) with exact/range substitution
 ///
 /// Returns `Some(true)`, `Some(false)`, or `None` if the value cannot be determined.
 pub(in crate::optimize::control::dce) fn known_condition_value_base(
@@ -213,6 +217,14 @@ pub(in crate::optimize::control::dce) fn known_condition_value_base(
         if has_excluded_guard(guards, name, &compared_value) {
             return Some(!expects_equal);
         }
+    }
+
+    if let Some(value) = known_from_range(guards, condition) {
+        return Some(value);
+    }
+
+    if let Some(value) = known_from_relational(guards, condition) {
+        return Some(value);
     }
 
     None

@@ -2,7 +2,7 @@
 title: "array_filter()"
 description: "Filters elements of an array using a callback function."
 sidebar:
-  order: 11
+  order: 12
 ---
 
 ## array_filter()
@@ -26,12 +26,6 @@ Filters elements of an array using a callback function.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_filter.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_filter.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

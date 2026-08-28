@@ -12,12 +12,80 @@
 
 use std::ffi::c_void;
 
+use elephc_builtin_contract::RuntimeBuiltinId;
+
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
 use crate::value::RuntimeCellHandle;
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Calls a typed boxed-cell runtime builtin when this implementation supports it.
+    ///
+    /// Test and embedding implementations inherit this adapter over the existing
+    /// value-operation contract. The generated-runtime adapter overrides it with
+    /// the versioned C ABI, so Magician does not select production helpers by name.
+    fn runtime_builtin_call(
+        &mut self,
+        id: RuntimeBuiltinId,
+        args: &[RuntimeCellHandle],
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let result = match (id, args) {
+            (RuntimeBuiltinId::Boolval, [value]) => self.cast_bool(*value)?,
+            (RuntimeBuiltinId::Floatval, [value]) => self.cast_float(*value)?,
+            (RuntimeBuiltinId::Intval, [value]) => self.cast_int(*value)?,
+            (RuntimeBuiltinId::IsArray, [value]) => {
+                let is_array = matches!(self.type_tag(*value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
+                self.bool_value(is_array)?
+            }
+            (RuntimeBuiltinId::IsNull, [value]) => {
+                let is_null = self.is_null(*value)?;
+                self.bool_value(is_null)?
+            }
+            (RuntimeBuiltinId::Abs, [value]) => self.abs(*value)?,
+            (RuntimeBuiltinId::Ceil, [value]) => self.ceil(*value)?,
+            (RuntimeBuiltinId::Floor, [value]) => self.floor(*value)?,
+            (RuntimeBuiltinId::Sqrt, [value]) => self.sqrt(*value)?,
+            (RuntimeBuiltinId::Fdiv, [left, right]) => self.fdiv(*left, *right)?,
+            (RuntimeBuiltinId::Fmod, [left, right]) => self.fmod(*left, *right)?,
+            (RuntimeBuiltinId::Pow, [left, right]) => self.pow(*left, *right)?,
+            (RuntimeBuiltinId::Round, [value]) => self.round(*value, None)?,
+            (RuntimeBuiltinId::Round, [value, precision]) => {
+                self.round(*value, Some(*precision))?
+            }
+            (RuntimeBuiltinId::Strrev, [value]) => self.strrev(*value)?,
+            (RuntimeBuiltinId::ArrayKeyExists, [key, array]) => {
+                self.array_key_exists(*key, *array)?
+            }
+            (RuntimeBuiltinId::ObGetLevel, []) => {
+                let level = self.ob_level()?;
+                self.int(level)?
+            }
+            (RuntimeBuiltinId::ObGetLength, []) => match self.ob_length()? {
+                Some(length) => self.int(length)?,
+                None => self.bool_value(false)?,
+            },
+            (RuntimeBuiltinId::ObClean, []) => {
+                let cleaned = self.ob_clean()?;
+                self.bool_value(cleaned)?
+            }
+            (RuntimeBuiltinId::ObFlush, []) => {
+                let flushed = self.ob_flush()?;
+                self.bool_value(flushed)?
+            }
+            (RuntimeBuiltinId::ObEndClean, []) => {
+                let ended = self.ob_end(false)?;
+                self.bool_value(ended)?
+            }
+            (RuntimeBuiltinId::ObEndFlush, []) => {
+                let ended = self.ob_end(true)?;
+                self.bool_value(ended)?
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(result))
+    }
+
     /// Creates a runtime indexed-array cell with room for at least `capacity` elements.
     fn array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -443,6 +511,24 @@ pub trait RuntimeValueOps {
     /// Creates a runtime resource cell with a zero-based native resource payload.
     fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Creates a runtime cell for an eval-owned incremental hash context.
+    ///
+    /// SEPARATE FROM `resource()` ON PURPOSE. PHP 8's `hash_init()` returns a
+    /// `HashContext` OBJECT, which draws from the object-handle space and consumes
+    /// nothing from the per-request RESOURCE counter that `get_resource_id()` and
+    /// `var_dump()` report. Routing hash contexts through `resource()` made
+    /// `eval('hash_init("md5"); $x = fopen(...);')` report an id one higher than PHP
+    /// for `$x`, and shifted the host program's later `fopen()`s too, because eval and
+    /// the compiled program share one id counter.
+    ///
+    /// The cell still carries runtime tag 9, because that is the shape
+    /// `eval_resource_payload` reads the table key back out of; what changes is the
+    /// resource KIND word, which becomes 5 = eval-owned inert handle: no PHP id is
+    /// bound and no destructor runs. `value` is a key into `EvalStreamResources`, which
+    /// owns the real `elephc_crypto` handle and frees it in its own `Drop` — this cell
+    /// must never free anything.
+    fn hash_context(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Creates a runtime float cell.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -574,6 +660,13 @@ pub trait RuntimeValueOps {
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Compares two normalized PHP array keys with native `SORT_REGULAR` semantics.
+    fn regular_key_compare(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<i64, EvalStatus>;
 
     /// Emits one runtime cell to stdout using PHP echo semantics.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;

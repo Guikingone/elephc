@@ -2,7 +2,7 @@
 title: "array_sum()"
 description: "Calculate the sum of values in an array."
 sidebar:
-  order: 39
+  order: 40
 ---
 
 ## array_sum()
@@ -24,12 +24,6 @@ Calculate the sum of values in an array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_sum.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_sum.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

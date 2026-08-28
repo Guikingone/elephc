@@ -9,6 +9,9 @@
 //! Key details:
 //! - Phase 04 stores every SSA value in a stack slot and reloads result registers at use sites.
 //! - The context delegates target-specific movement to `crate::codegen::abi`.
+//! - Local labels carry a module-unique trailing id from `SharedCodegenState::next_label_id()`.
+//!   The readable part is `crate::names::label_fragment()`, which is intentionally lossy, so the
+//!   id — not the fragment — is what keeps two similarly named functions from colliding.
 
 use std::collections::{HashMap, HashSet};
 
@@ -18,9 +21,10 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::{
     BlockId, DataId, Function, Immediate, InstId, LocalKind, LocalSlotId, Module, Op, Ownership,
-    ValueDef, ValueId,
+    RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId,
 };
 use crate::ir_passes::Allocation;
+use crate::names::label_fragment;
 use crate::types::PhpType;
 
 use super::callable_reachability::CallableReachabilityAnalysis;
@@ -57,13 +61,17 @@ pub(crate) struct FunctionContext<'a> {
     try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
+    pub(super) exception_activation_offset: Option<usize>,
     pub(super) epilogue_emitted: bool,
+    /// `--instrument` id assigned to this function in its prologue, consumed by
+    /// its epilogue's `elephc_instr_exit(id)`. `None` outside `--instrument`.
+    pub(super) instr_id: Option<usize>,
     pub(super) is_main: bool,
     pub(super) web: bool,
     pub(super) gc_stats: bool,
     pub(super) heap_debug: bool,
     pub(super) epilogue_label: Option<String>,
-    label_counter: usize,
+    block_labels: Vec<String>,
 }
 
 impl<'a> FunctionContext<'a> {
@@ -81,6 +89,25 @@ impl<'a> FunctionContext<'a> {
         epilogue_label: Option<String>,
     ) -> Self {
         let callable_reachability = CallableReachabilityAnalysis::new(module, function);
+        let function_fragment = label_fragment(&function.name);
+        // Indexed by raw block id, matching `Function::block()`'s positional lookup.
+        // The platform-local prefix keeps every intra-function label out of the object's
+        // symbol table: without it, profilers name frames after the nearest block label
+        // (`_eir_hot_leaf_for_body_2`) instead of the PHP function DWARF describes.
+        let local_prefix = emitter.target.platform.local_label_prefix();
+        let block_labels = function
+            .blocks
+            .iter()
+            .map(|block| {
+                format!(
+                    "{}_eir_{}_{}_{}",
+                    local_prefix,
+                    function_fragment,
+                    label_fragment(&block.name),
+                    shared.next_label_id()
+                )
+            })
+            .collect();
         Self {
             module,
             function,
@@ -99,26 +126,45 @@ impl<'a> FunctionContext<'a> {
             try_handler_offsets: layout.try_handler_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
+            exception_activation_offset: layout.exception_activation_offset,
             epilogue_emitted: false,
+            instr_id: None,
             is_main,
             web: false,
             gc_stats,
             heap_debug,
             epilogue_label,
-            label_counter: 0,
+            block_labels,
         }
     }
 
-    /// Returns a unique local label with a readable prefix.
+    /// Returns a module-unique local label carrying a readable but lossy prefix.
+    ///
+    /// Uniqueness comes solely from the module-wide trailing id: `label_fragment()` collapses
+    /// every non-alphanumeric byte, so `a_b` and `aéb` share a readable prefix and only the id
+    /// keeps their labels apart.
     pub(super) fn next_label(&mut self, prefix: &str) -> String {
-        let label = format!(
+        format!(
+            "{}_eir_{}_{}_{}",
+            self.emitter.target.platform.local_label_prefix(),
+            label_fragment(&self.function.name),
+            label_fragment(prefix),
+            self.shared.next_label_id()
+        )
+    }
+
+    /// Returns a module-unique label for an emitted entry point that must stay a real
+    /// symbol: invokers and wrappers that are `.globl`-exported, cached across functions,
+    /// or referenced from callable descriptors. `next_label()`'s assembler-local prefix
+    /// would make `.globl` invalid ("non-local symbol required") and the cross-function
+    /// reference dangling.
+    pub(super) fn next_global_label(&mut self, prefix: &str) -> String {
+        format!(
             "_eir_{}_{}_{}",
             label_fragment(&self.function.name),
             label_fragment(prefix),
-            self.label_counter
-        );
-        self.label_counter += 1;
-        label
+            self.shared.next_label_id()
+        )
     }
 
     /// Emits an unconditional target-aware branch to one local assembly label.
@@ -162,10 +208,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select the aliased storage address after runtime promotion
+                        self.emitter.instruction(
+                            &format!("cbnz {}, {}", state_reg, ref_cell)
+                        );                                                      // select the aliased storage address after runtime promotion
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter.instruction(
+                            &format!("test {}, {}", state_reg, state_reg)
+                        );                                                      // test the slot's runtime representation flag
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select the aliased storage address after runtime promotion
                     }
@@ -180,18 +230,16 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
-    /// Returns the assembly label for a non-entry EIR block.
-    pub(super) fn block_label(&self, block_name: &str, raw: u32) -> String {
-        format!("_eir_{}_{}_{}", label_fragment(&self.function.name), label_fragment(block_name), raw)
-    }
-
-    /// Returns the assembly label for a block id.
+    /// Returns the assembly label reserved for one EIR block.
+    ///
+    /// Block labels are minted once per block in `new()` from the module-wide label counter
+    /// rather than derived from the block name, which is not unique across functions. Lookup is
+    /// positional on the raw block id, exactly like `crate::ir::Function::block()`.
     pub(super) fn block_label_for_id(&self, block: BlockId) -> Result<String> {
-        let block = self
-            .function
-            .block(block)
-            .ok_or_else(|| CodegenIrError::missing_entry("block", block.as_raw()))?;
-        Ok(self.block_label(&block.name, block.id.as_raw()))
+        self.block_labels
+            .get(block.as_raw() as usize)
+            .cloned()
+            .ok_or_else(|| CodegenIrError::missing_entry("block", block.as_raw()))
     }
 
     /// Returns a module function by PHP name using PHP's case-insensitive lookup.
@@ -242,6 +290,19 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
     }
 
+    /// Returns a function value's IR storage type.
+    ///
+    /// This is the ONLY reliable way to tell whether a value is a genuinely boxed `Mixed` CELL.
+    /// The PHP type lies here: `Op::IChecked*` (which is what `$i++` lowers to) reports a PHP type
+    /// of `Mixed` while its runtime value is a RAW INTEGER, not a heap cell. Unboxing that as a
+    /// pointer reads garbage.
+    pub(super) fn value_ir_type(&self, value: ValueId) -> Result<crate::ir::IrType> {
+        self.function
+            .value(value)
+            .map(|metadata| metadata.ir_type)
+            .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
+    }
+
     /// Returns a function value's source PHP metadata before codegen representation erasure.
     pub(super) fn raw_value_php_type(&self, value: ValueId) -> Result<PhpType> {
         self.function
@@ -285,9 +346,47 @@ impl<'a> FunctionContext<'a> {
             .map(|local| local.id)
     }
 
-    /// Returns whether this slot receives at least one ordinary EIR local store.
+    /// Returns whether this slot receives an EIR store or a typed runtime writeback.
     pub(super) fn local_slot_has_store(&self, slot: LocalSlotId) -> bool {
-        self.local_analysis.has_store(slot)
+        self.local_analysis.has_store(slot) || self.openssl_encrypt_writes_local(slot)
+    }
+
+    /// Returns whether an `openssl_encrypt()` call writes its GCM tag into this local.
+    fn openssl_encrypt_writes_local(&self, slot: LocalSlotId) -> bool {
+        self.function.instructions.iter().any(|inst| {
+            let is_encrypt = matches!(
+                inst.immediate,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::OpensslEncrypt
+                )))
+                    | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                        target: RuntimeFnId::OpensslEncrypt,
+                        ..
+                    }))
+            );
+            is_encrypt
+                && inst
+                    .operands
+                    .get(5)
+                    .and_then(|value| self.loaded_local_slot(*value))
+                    == Some(slot)
+        })
+    }
+
+    /// Resolves a value produced by `LoadLocal` to its source slot.
+    fn loaded_local_slot(&self, value: ValueId) -> Option<LocalSlotId> {
+        let value_ref = self.function.value(value)?;
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return None;
+        };
+        let inst = self.function.instruction(inst)?;
+        if !matches!(inst.op, Op::LoadLocal | Op::LoadRefCell) {
+            return None;
+        }
+        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+            return None;
+        };
+        Some(slot)
     }
 
     /// Returns whether this slot is represented as a ref-cell pointer anywhere in the function.
@@ -458,10 +557,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell loading after a runtime promotion
+                        self.emitter.instruction(
+                            &format!("cbnz {}, {}", state_reg, ref_cell)
+                        );                                                      // select ref-cell loading after a runtime promotion
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter.instruction(
+                            &format!("test {}, {}", state_reg, state_reg)
+                        );                                                      // test the slot's runtime representation flag
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell loading after a runtime promotion
                     }
@@ -567,10 +670,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell storage after a runtime promotion
+                        self.emitter.instruction(
+                            &format!("cbnz {}, {}", state_reg, ref_cell)
+                        );                                                      // select ref-cell storage after a runtime promotion
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter.instruction(
+                            &format!("test {}, {}", state_reg, state_reg)
+                        );                                                      // test the slot's runtime representation flag
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }
@@ -677,10 +784,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell storage after a runtime promotion
+                        self.emitter.instruction(
+                            &format!("cbnz {}, {}", state_reg, ref_cell)
+                        );                                                      // select ref-cell storage after a runtime promotion
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter.instruction(
+                            &format!("test {}, {}", state_reg, state_reg)
+                        );                                                      // test the slot's runtime representation flag
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }
@@ -694,6 +805,68 @@ impl<'a> FunctionContext<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// Releases the value held by a string-producing by-reference output before overwriting it.
+    pub(super) fn release_local_before_string_writeback(
+        &mut self,
+        slot: LocalSlotId,
+    ) -> Result<()> {
+        let ty = self.local_php_type(slot)?.codegen_repr();
+        if !matches!(ty, PhpType::Str | PhpType::Mixed) {
+            return Err(CodegenIrError::unsupported(format!(
+                "string writeback into PHP type {:?}",
+                ty
+            )));
+        }
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => {
+                let offset = self.local_offset(slot)?;
+                super::frame::emit_owned_local_cleanup(self, slot, offset, &ty);
+            }
+            LocalSlotRepresentation::RefCell => self.release_ref_cell_value(slot, &ty)?,
+            LocalSlotRepresentation::Dynamic => {
+                let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
+                let ref_cell = self.next_label("string_writeback_release_ref_cell");
+                let done = self.next_label("string_writeback_release_done");
+                let state_reg = abi::secondary_scratch_reg(self.emitter);
+                abi::load_at_offset(self.emitter, state_reg, state_offset);
+                match self.emitter.target.arch {
+                    Arch::AArch64 => {
+                        self.emitter
+                            .instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // release through the promoted ref-cell when active
+                    }
+                    Arch::X86_64 => {
+                        self.emitter
+                            .instruction(&format!("test {}, {}", state_reg, state_reg)); // inspect the local's runtime representation
+                        self.emitter
+                            .instruction(&format!("jne {}", ref_cell));                  // release through the promoted ref-cell when active
+                    }
+                }
+                let offset = self.local_offset(slot)?;
+                super::frame::emit_owned_local_cleanup(self, slot, offset, &ty);
+                self.emit_branch(&done);
+                self.emitter.label(&ref_cell);
+                self.release_ref_cell_value(slot, &ty)?;
+                self.emitter.label(&done);
+            }
+        }
+        Ok(())
+    }
+
+    /// Releases a string or Mixed payload stored through a local ref-cell pointer.
+    fn release_ref_cell_value(&mut self, slot: LocalSlotId, ty: &PhpType) -> Result<()> {
+        let offset = self.local_offset(slot)?;
+        let cell_reg = abi::symbol_scratch_reg(self.emitter);
+        let result_reg = abi::int_result_reg(self.emitter);
+        abi::load_at_offset(self.emitter, cell_reg, offset);
+        abi::emit_load_from_address(self.emitter, result_reg, cell_reg, 0);
+        if *ty == PhpType::Str {
+            abi::emit_call_label(self.emitter, "__rt_heap_free_safe");
+        } else {
+            abi::emit_decref_if_refcounted(self.emitter, ty);
+        }
+        Ok(())
     }
 
     /// After an in-place hash/array mutation whose runtime helper returns the
@@ -1070,12 +1243,4 @@ fn emit_mixed_result_as_tagged_scalar(emitter: &mut Emitter) {
             emitter.instruction("mov rdx, r10");                                // place the unboxed Mixed tag into the tagged-scalar tag register
         }
     }
-}
-
-/// Converts arbitrary names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
 }

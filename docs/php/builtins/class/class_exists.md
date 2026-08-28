@@ -2,7 +2,7 @@
 title: "class_exists()"
 description: "Checks whether the given class has been defined."
 sidebar:
-  order: 69
+  order: 76
 ---
 
 ## class_exists()
@@ -25,12 +25,6 @@ Checks whether the given class has been defined.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/class_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_exists.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

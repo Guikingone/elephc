@@ -34,17 +34,21 @@ pub(super) fn op_is_volatile_safe(op: Op) -> bool {
         op,
         // Constants materialized directly into the result register.
         ConstI64 | ConstBool | ConstNull | ConstF64
-        // Integer arithmetic, bitwise, and shift: result + secondary/tertiary
-        // scratch only (see `lower_inst::arithmetic`).
+        // Integer arithmetic and bitwise: result + secondary/tertiary scratch only
+        // (see `lower_inst::arithmetic`). `IShl`, `IShrA`, `ISMod`, and `IDiv` are
+        // deliberately absent: their PHP guards (negative shift count, zero divisor,
+        // `PHP_INT_MIN % -1`) branch into `lower_inst::exceptions`, which allocates a
+        // throwable and calls into the runtime unwinder. `FToI` is absent for the same
+        // reason — every PHP float->int now routes through `__rt_php_float_to_int`.
         | IAdd | ISub | IMul | INeg
         | IBitAnd | IBitOr | IBitXor | IBitNot
-        | IShl | IShrA | ISMod | IDiv
         // Floating-point arithmetic: d0/d1 or xmm0/xmm1 only (`lower_inst::floats`).
-        | FAdd | FSub | FMul | FDiv | FNeg
+        // `FDiv` is excluded: its zero-divisor guard branches into an exception throw.
+        | FAdd | FSub | FMul | FNeg
         // Integer/float comparisons: result + secondary scratch only.
         | ICmp | FCmp
-        // Scalar int<->float conversions: inline scvtf/fcvtzs / cvtsi2sd/cvttsd2si.
-        | IToF | FToI
+        // Int-to-float promotion is still a single inline scvtf / cvtsi2sd.
+        | IToF
         | Nop
     )
 }

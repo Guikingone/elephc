@@ -1,0 +1,267 @@
+# Hand-curated side of docs/php/compatibility.md (language constructs,
+# extension-level subsystems, known limitations). Builtin-function coverage is
+# NOT listed here — it is computed automatically from builtin_registry.json
+# vs php_baseline.json.
+#
+# Rules enforced by gen_php_comparison.py:
+# - status is one of: supported | partial | planned | unsupported
+# - status supported/partial requires `evidence`: a repo path (file or
+#   directory) or a test function name found as `fn <name>` under tests/.
+# - `docs`, when present, must be an existing repo path.
+# Entries render in file order.
+
+[[language]]
+feature  = "Classes & objects"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.oop5.php"
+docs     = "docs/php/classes.md"
+evidence = "tests/codegen/objects/classes.rs"
+
+[[language]]
+feature  = "Inheritance, interfaces, abstract classes"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.oop5.inheritance.php"
+docs     = "docs/php/classes.md"
+evidence = "tests/codegen/oop/inheritance.rs"
+
+[[language]]
+feature  = "Traits"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.oop5.traits.php"
+docs     = "docs/php/classes.md"
+evidence = "tests/codegen/oop/traits.rs"
+
+[[language]]
+feature  = "Enums"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.enumerations.php"
+docs     = "docs/php/classes.md"
+evidence = "tests/codegen/types/enums.rs"
+
+[[language]]
+feature  = "Anonymous classes"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.oop5.anonymous.php"
+docs     = "docs/php/classes.md"
+evidence = "tests/codegen/oop/anonymous_classes.rs"
+
+[[language]]
+feature  = "Constructor property promotion"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.oop5.decon.php"
+docs     = "docs/php/classes.md"
+evidence = "tests/codegen/objects/constructor_promotion.rs"
+
+[[language]]
+feature  = "Property hooks"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.oop5.property-hooks.php"
+docs     = "docs/php/classes.md"
+evidence = "tests/codegen/oop/property_hooks.rs"
+
+[[language]]
+feature  = "Attributes"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.attributes.php"
+docs     = "docs/php/classes.md"
+evidence = "tests/codegen/oop/attributes.rs"
+
+[[language]]
+feature  = "Magic methods"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.oop5.magic.php"
+docs     = "docs/php/classes.md"
+evidence = "tests/codegen/objects/magic_methods.rs"
+notes    = "See the classes page for the supported set"
+
+[[language]]
+feature  = "Static properties, methods, late static binding"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.oop5.static.php"
+docs     = "docs/php/classes.md"
+evidence = "tests/codegen/static_class_features.rs"
+
+[[language]]
+feature  = "Union & intersection types"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.types.type-system.php"
+docs     = "docs/php/types.md"
+evidence = "tests/codegen/oop/union_types.rs"
+
+[[language]]
+feature  = "Closures & arrow functions"
+status   = "supported"
+php      = "https://www.php.net/manual/en/functions.anonymous.php"
+docs     = "docs/php/functions.md"
+evidence = "tests/codegen/callables"
+
+[[language]]
+feature  = "First-class callable syntax"
+status   = "supported"
+php      = "https://www.php.net/manual/en/functions.first_class_callable_syntax.php"
+docs     = "docs/php/functions.md"
+evidence = "tests/codegen/callables"
+
+[[language]]
+feature  = "Generators"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.generators.php"
+docs     = "docs/php/generators.md"
+evidence = "tests/codegen/generators"
+notes    = "Lowered onto stackful coroutines"
+
+[[language]]
+feature  = "Fibers"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.fibers.php"
+docs     = "docs/php/fibers.md"
+evidence = "tests/codegen/fibers"
+
+[[language]]
+feature  = "Exceptions (try / catch / finally)"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.exceptions.php"
+docs     = "docs/php/control-structures.md"
+evidence = "tests/codegen/exceptions.rs"
+
+[[language]]
+feature  = "match expressions"
+status   = "supported"
+php      = "https://www.php.net/manual/en/control-structures.match.php"
+docs     = "docs/php/control-structures.md"
+evidence = "tests/codegen/control_flow/match_expressions.rs"
+
+[[language]]
+feature  = "References (&)"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.references.php"
+evidence = "tests/codegen/references.rs"
+
+[[language]]
+feature  = "Namespaces"
+status   = "supported"
+php      = "https://www.php.net/manual/en/language.namespaces.php"
+docs     = "docs/php/namespaces.md"
+evidence = "tests/codegen/namespaces.rs"
+
+[[language]]
+feature  = "include / require"
+status   = "supported"
+php      = "https://www.php.net/manual/en/function.include.php"
+evidence = "tests/codegen/include_paths.rs"
+notes    = "Static, compile-time resolved paths"
+
+[[language]]
+feature  = "eval()"
+status   = "partial"
+php      = "https://www.php.net/manual/en/function.eval.php"
+docs     = "docs/php/eval.md"
+evidence = "tests/codegen/eval.rs"
+notes    = "Experimental; embeds an optional interpreter bridge when runtime parsing is required"
+
+[[extensions]]
+feature  = "PDO"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.pdo.php"
+docs     = "docs/php/pdo.md"
+evidence = "tests/codegen/pdo.rs"
+notes    = "Driver matrix documented on the PDO page"
+modules  = ["pdo"]
+
+[[extensions]]
+feature  = "mysqli"
+status   = "partial"
+php      = "https://www.php.net/manual/en/book.mysqli.php"
+docs     = "docs/php/mysqli.md"
+evidence = "tests/codegen/mysqli.rs"
+notes    = "Locked v1 subset over the elephc-pdo bridge; divergences on the mysqli page"
+modules  = ["mysqli"]
+
+[[extensions]]
+feature  = "Sessions"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.session.php"
+docs     = "docs/php/sessions.md"
+evidence = "tests/web_session_tests.rs"
+notes    = "In --web binaries"
+modules  = ["session"]
+
+[[extensions]]
+feature  = "Streams"
+status   = "partial"
+php      = "https://www.php.net/manual/en/book.stream.php"
+docs     = "docs/php/streams.md"
+evidence = "tests/codegen/io/streams.rs"
+
+[[extensions]]
+feature  = "SPL"
+status   = "partial"
+php      = "https://www.php.net/manual/en/book.spl.php"
+docs     = "docs/php/spl.md"
+evidence = "tests/codegen/spl"
+
+[[extensions]]
+feature  = "Reflection"
+status   = "partial"
+php      = "https://www.php.net/manual/en/book.reflection.php"
+docs     = "docs/php/classes.md"
+evidence = "tests/codegen/oop/reflection_functions.rs"
+
+[[extensions]]
+feature  = "DateTime"
+status   = "partial"
+php      = "https://www.php.net/manual/en/book.datetime.php"
+docs     = "docs/php/datetime.md"
+evidence = "tests/codegen/oop/datetime.rs"
+modules  = ["date"]
+
+[[extensions]]
+feature  = "Calendar"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.calendar.php"
+docs     = "docs/php/calendar.md"
+evidence = "tests/codegen/calendar.rs"
+modules  = ["calendar"]
+
+[[extensions]]
+feature  = "iconv"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.iconv.php"
+docs     = "docs/php/iconv.md"
+evidence = "tests/codegen/strings/iconv.rs"
+modules  = ["iconv"]
+
+[[extensions]]
+feature  = "GD / image"
+status   = "partial"
+php      = "https://www.php.net/manual/en/book.image.php"
+docs     = "docs/php/image.md"
+evidence = "tests/codegen/image"
+notes    = "Enabled with --with-image"
+
+[[extensions]]
+feature  = "OpenSSL"
+status   = "partial"
+php      = "https://www.php.net/manual/en/book.openssl.php"
+evidence = "tests/codegen/strings/openssl.rs"
+notes    = "Encrypt/decrypt subset"
+
+[[extensions]]
+feature  = "OPcache"
+status   = "partial"
+php      = "https://www.php.net/manual/en/book.opcache.php"
+docs     = "docs/php/opcache.md"
+evidence = "tests/opcache_ini_tests.rs"
+notes    = "Compatibility surface; programs are AOT-compiled, there is no opcode cache"
+
+[[limitations]]
+title = "Static subset, AOT only"
+notes = "Ordinary source is compiled ahead of time with no opcode fallback; runtime code loading exists only through the experimental eval() interpreter bridge."
+
+[[limitations]]
+title = "Coverage measured against a pinned baseline"
+notes = "Builtin percentages are computed against the vendored PHP CLI snapshot (version and extension set recorded in the page header). PHP modules outside that snapshot are not counted."
+
+[[limitations]]
+title = "Three native targets"
+notes = "Binaries target macOS ARM64, Linux ARM64, and Linux x86_64; PHP itself runs on many more platforms."

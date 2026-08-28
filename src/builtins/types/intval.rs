@@ -5,8 +5,14 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - Lowering reuses the general EIR integer cast instead of defining a builtin-specific opcode.
-//! - Declared with exactly one parameter `value` (no `base` param) matching the legacy golden signature.
+//! - The one-argument form lowers to the general EIR integer cast instead of a
+//!   builtin-specific opcode; only the two-argument form needs a runtime target.
+//! - The declared signature is PHP's own `intval(mixed $value, int $base = 10)`. PHP applies
+//!   `$base` only when `$value` is a string and otherwise ignores it, which is why the
+//!   two-argument form lowers to `RuntimeFnId::IntvalBase` rather than a string-only helper:
+//!   the backend keeps the plain cast for non-string subjects.
+//! - Reference PHP 8.4 raises nothing for an out-of-range `$base`; `strtol()` fails with
+//!   `EINVAL` and `intval("42", 1)` is simply `0`, so no `ValueError` is emitted here.
 
 use crate::builtins::semantics::{
     BuiltinCallablePolicy, BuiltinEffects, BuiltinLowering, BuiltinLoweringContext,
@@ -14,29 +20,24 @@ use crate::builtins::semantics::{
     BuiltinRuntimeFunctions, BuiltinSemanticInput, BuiltinSemantics, BuiltinTargetStrategy,
     BuiltinTargetSupport, BuiltinValidation, LoweredBuiltinValue, NormalizedBuiltinCall,
 };
-use crate::ir::{Immediate, IrType, Op};
+use crate::ir::{Immediate, IrType, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::types::PhpType;
 
 builtin! {
-    name: "intval",
-    area: Types,
-    params: [value: Mixed],
-    returns: Int,
+    contract: "intval",
     semantics: BuiltinSemantics {
         validation: BuiltinValidation::SignatureOnly,
         result_type: BuiltinResultType::Declared,
         effects: BuiltinEffects::Shared(effects),
         result_ownership: BuiltinResultOwnership::NonHeap,
         requirements: BuiltinRequirements::Static(&[]),
-        target_strategy: BuiltinTargetStrategy::EirPrimitive,
+        target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
-        runtime_functions: BuiltinRuntimeFunctions::None,
+        runtime_functions: BuiltinRuntimeFunctions::One(RuntimeFnId::IntvalBase),
         argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::Dynamic(callable_accepts),
         lowering: BuiltinLowering::Eir(lower),
     },
-    summary: "Returns the integer value of a variable.",
-    php_manual: "function.intval",
 }
 
 /// Returns the conservative effect contract of the reusable EIR integer cast.
@@ -61,11 +62,26 @@ fn callable_accepts(source: Option<&PhpType>) -> bool {
     })
 }
 
-/// Lowers `intval` through the reusable EIR integer-cast operation.
+/// Lowers `intval` through the reusable EIR integer-cast operation, or through the
+/// base-aware runtime target when PHP's `$base` argument is supplied.
+///
+/// The single-argument spelling keeps the plain cast so the common case stays a primitive.
+/// With a `$base` the whole decision moves to `RuntimeFnId::IntvalBase`, because PHP only
+/// honors the base for string subjects and the subject's runtime type is not always known
+/// here (a `Mixed` cell may or may not hold a string).
 fn lower(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+    if call.operands.len() >= 2 {
+        return Ok(ctx.emit_runtime_call(
+            RuntimeCallTarget::Function(RuntimeFnId::IntvalBase),
+            vec![call.operand(0)?, call.operand(1)?],
+            call.result_type.clone(),
+            Op::Cast.default_effects(),
+            Some(call.span),
+        ));
+    }
     Ok(ctx.emit_value(
         Op::Cast,
         vec![call.operand(0)?],

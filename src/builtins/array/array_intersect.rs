@@ -18,19 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_intersect",
-    area: Array,
-    params: [array: Mixed],
-    variadic: "arrays",
-    min_args: 2,
-    max_args: 2,
-    returns: Mixed,
+    contract: "array_intersect",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayIntersect,
     ),
-    summary: "Computes the intersection of arrays.",
-    php_manual: "https://www.php.net/manual/en/function.array-intersect.php",
 }
 
 /// Validates the first argument is an array and returns its (preserved) type.

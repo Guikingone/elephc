@@ -6,12 +6,15 @@
 //!
 //! Key details:
 //! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+//! - The trailing group pins the result storage of a builtin reached through a callable
+//!   binding: every dispatch form must agree with the direct call, because a mislabelled
+//!   result silently boxed a raw scalar or array return.
 
 use crate::support::*;
 
 /// Returns true when assembly contains a valid invokable object dispatch path.
 fn asm_has_invokable_object_call(user_asm: &str, class_name: &str) -> bool {
-    let eir_method = format!("_method_{}__u__u_invoke", class_name);
+    let eir_method = elephc::names::method_symbol(class_name, "__invoke");
     (user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"))
         || user_asm.contains(&eir_method)
 }
@@ -1746,4 +1749,85 @@ echo $adapter->run();
         "short callable array should fail cleanly, got: {}",
         out.stderr
     );
+}
+
+/// Regression: a builtin reached through `call_user_func()` must be typed from its own
+/// descriptor, not from the checker's result type for the `call_user_func()` call itself.
+///
+/// The checker cannot resolve a callback held in a variable, so it types the call
+/// runtime-opaque `mixed`; constant propagation then turns the variable into a literal and
+/// lowering *does* resolve it. Reading the checker's per-span type back for the resolved
+/// builtin labelled `array_reverse`'s raw array pointer as a boxed Mixed cell, and
+/// `var_dump()` printed `bool(true)`. Expected output is verbatim `LC_ALL=C php` 8.4.20.
+#[test]
+fn test_call_user_func_variable_builtin_name_keeps_array_result_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$g = "array_reverse";
+var_dump(call_user_func($g, [1, 2, 3]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(3)\n  [1]=>\n  int(2)\n  [2]=>\n  int(1)\n}\n"
+    );
+}
+
+/// Regression: every `array_slice()` dispatch form agrees on the result layout.
+///
+/// A variable-held callback previously reached the backend typed `mixed` and aborted with
+/// `unsupported EIR backend feature: array_slice result PHP type Mixed`, while the direct,
+/// value-call and literal-callback forms compiled. Expected output is verbatim
+/// `LC_ALL=C php` 8.4.20.
+#[test]
+fn test_array_slice_dispatch_forms_agree_on_result_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3, 4];
+$f = "array_slice";
+echo implode(",", array_slice($a, 1, 2)), ":";
+echo implode(",", $f($a, 1, 2)), ":";
+echo implode(",", call_user_func("array_slice", $a, 1, 2)), ":";
+echo implode(",", call_user_func($f, $a, 1, 2)), ":";
+echo implode(",", call_user_func_array($f, [$a, 1, 2]));
+"#,
+    );
+    assert_eq!(out, "2,3:2,3:2,3:2,3:2,3");
+}
+
+/// Regression: a `bool`-returning builtin dispatched through a variable-held callback name
+/// must return a raw bool, not a boxed Mixed cell.
+///
+/// This is the shape that segfaulted — the `mixed` label made the consumer dereference the
+/// raw bool as a heap pointer. `in_array()` carries a checker hook, so its registry result
+/// type is `Checked` and it took the bad per-span lookup; `str_contains()` is `Declared` and
+/// never did. Expected output is verbatim `LC_ALL=C php` 8.4.20.
+#[test]
+fn test_call_user_func_variable_builtin_name_keeps_bool_result_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$f = "in_array";
+var_dump(call_user_func($f, 2, [1, 2, 3]));
+var_dump(call_user_func($f, 9, [1, 2, 3]));
+echo call_user_func($f, 2, [1, 2, 3]) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\ny");
+}
+
+/// Regression: an `int`-returning builtin dispatched through a variable-held callback name
+/// keeps its raw integer result instead of a boxed Mixed cell.
+///
+/// Same crash shape as the `bool` case, on the other scalar storage class. Expected output
+/// is verbatim `LC_ALL=C php` 8.4.20.
+#[test]
+fn test_call_user_func_variable_builtin_name_keeps_int_result_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$f = "count";
+var_dump(call_user_func($f, [1, 2, 3]));
+echo call_user_func($f, [1, 2, 3]) + 1;
+"#,
+    );
+    assert_eq!(out, "int(3)\n4");
 }

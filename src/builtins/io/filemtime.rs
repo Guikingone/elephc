@@ -6,19 +6,30 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - No `check` hook is needed: `filemtime` is a pure-data builtin whose return type
-//!   (`Int`) is fully determined by its declaration. The registry common path
-//!   infers the argument and enforces arity before falling back to `returns`.
+//! - `check` returns `Union(Int, False)` reflecting PHP behaviour where `filemtime`
+//!   returns the modification time as a Unix timestamp on success or `false` on failure,
+//!   matching its `fileatime` and `filectime` siblings.
+//! - The registry pre-infers arguments before calling this hook.
 
+use crate::builtins::spec::BuiltinCheckCtx;
+use crate::errors::CompileError;
+use crate::types::PhpType;
 
 builtin! {
-    name: "filemtime",
-    area: Io,
-    params: [filename: Str],
-    returns: Int,
+    contract: "filemtime",
+    check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Filemtime,
     ),
-    summary: "Gets file modification time.",
-    php_manual: "function.filemtime",
+}
+
+/// Returns `Union(Int, False)` reflecting that `filemtime` can return a timestamp or `false`.
+///
+/// This used to declare a plain `Int` — described as "fully determined by its declaration",
+/// which it was not: the declaration is what DISCARDED the failure, so a path that could not be
+/// stat'ed answered with whatever the stat buffer happened to hold.
+///
+/// The registry pre-infers arguments before calling this hook.
+fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::False]))
 }

@@ -17,10 +17,7 @@ use crate::ir::Op;
 use crate::types::PhpType;
 
 builtin! {
-    name: "boolval",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "boolval",
     semantics: BuiltinSemantics {
         validation: BuiltinValidation::SignatureOnly,
         result_type: BuiltinResultType::Declared,
@@ -34,8 +31,6 @@ builtin! {
         callable: BuiltinCallablePolicy::Dynamic(callable_accepts),
         lowering: BuiltinLowering::Eir(lower),
     },
-    summary: "Returns the boolean value of a variable.",
-    php_manual: "function.boolval",
 }
 
 /// Returns the conservative effect contract of the reusable EIR truthiness predicate.

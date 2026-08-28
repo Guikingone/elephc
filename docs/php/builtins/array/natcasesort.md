@@ -2,7 +2,7 @@
 title: "natcasesort()"
 description: "Sorts an array using a case-insensitive natural order algorithm."
 sidebar:
-  order: 55
+  order: 59
 ---
 
 ## natcasesort()
@@ -24,12 +24,6 @@ Sorts an array using a case-insensitive natural order algorithm.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/natcasesort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/natcasesort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

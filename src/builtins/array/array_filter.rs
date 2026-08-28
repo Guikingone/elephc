@@ -13,22 +13,16 @@
 //!   from the static mode value, and validates the callback signature. The return type
 //!   preserves the input array element type.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_filter",
-    area: Array,
-    params: [array: Mixed, callback: Mixed = DefaultSpec::Null, mode: Mixed = DefaultSpec::Int(0)],
-    min_args: 2,
-    returns: Mixed,
+    contract: "array_filter",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayFilter,
     ),
-    summary: "Filters elements of an array using a callback function.",
-    php_manual: "https://www.php.net/manual/en/function.array-filter.php",
 }
 
 /// Returns the filtered array type for an `array_filter` call.

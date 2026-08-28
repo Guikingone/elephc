@@ -53,6 +53,64 @@ pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
+/// Lowers `ReleaseUnlessAliases`: releases operand 0 only when it is not the same payload the
+/// call returned in operand 1.
+///
+/// A callee summarized as *possibly* returning a parameter (`if ($c) return $x; return 7;`)
+/// makes the caller suppress that argument's release on every path, because releasing it on the
+/// branch that hands the box back would free it twice (issue #604). Suppressing it on the other
+/// branches leaks one block per call (issue #619). Comparing the two payloads at runtime picks
+/// the right behaviour per call: identical pointers mean ownership moved into the result and the
+/// caller must keep its hands off, different pointers mean the callee dropped the argument and
+/// the caller still owns it.
+pub(super) fn lower_release_unless_aliases(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let result = expect_operand(inst, 1)?;
+    let ownership = ctx.value_ownership(value)?;
+    if !ownership.may_require_release() {
+        return Ok(());
+    }
+    if value_is_scratch_string(ctx, value)? {
+        return Ok(());
+    }
+
+    let skip_label = ctx.next_label("release_unless_aliases_skip");
+    let value_reg = abi::int_result_reg(ctx.emitter);
+    let result_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let ty = ctx.load_value_to_result(value)?;
+    ctx.load_value_to_reg(result, result_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", value_reg, result_reg));    // compare the argument payload with the value the callee returned
+            ctx.emitter.instruction(&format!("b.eq {}", skip_label));           // ownership moved into the result: the caller must not release it
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", value_reg, result_reg));    // compare the argument payload with the value the callee returned
+            ctx.emitter.instruction(&format!("je {}", skip_label));             // ownership moved into the result: the caller must not release it
+        }
+    }
+    match ty {
+        PhpType::Str => {
+            release_loaded_string(ctx);
+        }
+        PhpType::Callable => {
+            abi::emit_decref_if_refcounted(ctx.emitter, &ty);
+        }
+        PhpType::Buffer(_) => {}
+        other if other.is_refcounted() => {
+            abi::emit_decref_if_refcounted(ctx.emitter, &other);
+        }
+        _ => {}
+    }
+    ctx.emitter.label(&skip_label);
+    Ok(())
+}
+
 /// Lowers a release only for values that own or may own runtime-managed storage.
 pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
@@ -162,12 +220,16 @@ fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the loaded string pointer to the validating heap-free helper
+            ctx.emitter.instruction(
+                &format!("mov {}, {}", result_reg, ptr_reg)
+            );                                                                  // pass the loaded string pointer to the validating heap-free helper
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
         Arch::X86_64 => {
             if ptr_reg != result_reg {
-                ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the loaded string pointer to the validating heap-free helper
+                ctx.emitter.instruction(
+                    &format!("mov {}, {}", result_reg, ptr_reg)
+                );                                                              // pass the loaded string pointer to the validating heap-free helper
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }

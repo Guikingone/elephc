@@ -2,7 +2,7 @@
 title: "array_replace_recursive()"
 description: "Replaces elements from passed arrays into the first array recursively."
 sidebar:
-  order: 33
+  order: 34
 ---
 
 ## array_replace_recursive()
@@ -25,12 +25,6 @@ Replaces elements from passed arrays into the first array recursively.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

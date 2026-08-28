@@ -2,7 +2,7 @@
 title: "ptr_write16()"
 description: "Writes one 16-bit word through a raw pointer."
 sidebar:
-  order: 317
+  order: 346
 ---
 
 ## ptr_write16()
@@ -26,12 +26,6 @@ Writes one 16-bit word through a raw pointer.
 - **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -2,7 +2,7 @@
 title: "stream_socket_accept()"
 description: "Accept a connection on a socket created by stream_socket_server()."
 sidebar:
-  order: 235
+  order: 242
 ---
 
 ## stream_socket_accept()
@@ -26,12 +26,6 @@ Accept a connection on a socket created by stream_socket_server().
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_accept.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_accept.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

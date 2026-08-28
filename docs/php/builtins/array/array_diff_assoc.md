@@ -2,7 +2,7 @@
 title: "array_diff_assoc()"
 description: "Computes the difference of arrays with additional index check."
 sidebar:
-  order: 7
+  order: 8
 ---
 
 ## array_diff_assoc()
@@ -25,12 +25,6 @@ Computes the difference of arrays with additional index check.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

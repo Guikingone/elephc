@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ob_list_handlers",
-    area: Io,
-    params: [],
-    returns: Mixed,
+    contract: "ob_list_handlers",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ObListHandlers,
     ),
-    summary: "Lists all output handlers in use.",
-    php_manual: "function.ob-list-handlers",
 }
 
 /// Returns `Array<Str>`: one "default output handler" name per active buffer level.

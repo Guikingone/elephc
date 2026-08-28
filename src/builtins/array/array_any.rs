@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_any",
-    area: Array,
-    params: [array: Mixed, callback: Mixed],
-    returns: Bool,
+    contract: "array_any",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayAny,
     ),
-    summary: "Returns true when at least one array element satisfies the predicate callback.",
-    php_manual: "https://www.php.net/manual/en/function.array-any.php",
 }
 
 /// Validates the predicate callback for an `array_any` call and returns `PhpType::Bool`.

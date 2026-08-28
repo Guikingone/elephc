@@ -7,12 +7,9 @@
 //! Key details:
 //! - Shared class-relation logic lives in `class_implements`.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "class_parents",
+    contract: "class_parents",
     area: Symbols,
-    params: [object_or_class, autoload = EvalBuiltinDefaultValue::Bool(true)],
     direct: Symbols,
     values: Symbols,
 }

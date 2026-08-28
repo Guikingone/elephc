@@ -2,7 +2,7 @@
 title: "rawurlencode()"
 description: "URL-encodes a string using RFC 3986 percent-encoding (no '+' for spaces)."
 sidebar:
-  order: 399
+  order: 448
 ---
 
 ## rawurlencode()
@@ -24,12 +24,6 @@ URL-encodes a string using RFC 3986 percent-encoding (no '+' for spaces).
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/rawurlencode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/rawurlencode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

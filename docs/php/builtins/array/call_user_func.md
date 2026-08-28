@@ -2,7 +2,7 @@
 title: "call_user_func()"
 description: "Calls a callback with the given arguments."
 sidebar:
-  order: 49
+  order: 50
 ---
 
 ## call_user_func()
@@ -25,12 +25,6 @@ Calls a callback with the given arguments.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/call_user_func.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/call_user_func.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -11,8 +11,8 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction, IrType, ValueId};
-use crate::names::method_symbol;
+use crate::ir::{Immediate, Instruction, IrHeapKind, IrType, ValueId};
+use crate::names::{label_fragment, method_symbol};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -61,11 +61,25 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         IrType::I64 => lower_cast_to_int(ctx, inst),
         IrType::F64 => lower_cast_to_float(ctx, inst),
         IrType::Str => lower_cast_to_string(ctx, inst),
+        IrType::Heap(IrHeapKind::Hash) => {
+            super::builtins::types::lower_object_array_cast(ctx, inst)
+        }
+        IrType::Heap(IrHeapKind::Mixed) if inst.result_php_type == PhpType::Mixed => {
+            lower_mixed_array_cast(ctx, inst)
+        }
         target => Err(CodegenIrError::unsupported(format!(
             "cast to EIR type {:?}",
             target
         ))),
     }
+}
+
+/// Lowers a runtime-typed PHP array cast through the tag-dispatch helper.
+fn lower_mixed_array_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_array");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers an explicit cast to PHP int for concrete scalar operands.
@@ -215,13 +229,35 @@ pub(super) fn emit_mixed_string_context_stdout(
 }
 
 /// Describes whether a Mixed string context should leave a string result or write it.
-enum MixedStringContextMode {
+pub(in crate::codegen) enum MixedStringContextMode {
     Result,
     Stdout,
 }
 
 /// Handles PHP string contexts for boxed Mixed values with an object-aware branch.
+///
+/// The dispatch below carries one arm per class publishing `__toString`, so a program
+/// with several string contexts used to emit the same ladder once per site. When the
+/// module shares it, the site keeps only the load and calls the shared helper; the
+/// helper's own body takes the inline path, which is what terminates the recursion.
 fn emit_mixed_string_context(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    mode: MixedStringContextMode,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    if let Some(label) = crate::codegen::shared_mixed_string::shared_ladder_label(ctx, &mode) {
+        abi::emit_call_label(ctx.emitter, label);
+        return Ok(());
+    }
+    emit_mixed_string_dispatch_from_result(ctx, value, mode)
+}
+
+/// Emits the object-aware string dispatch for a boxed Mixed already in the result register.
+///
+/// Split out so the shared helper can emit the SAME arms rather than a reimplementation of
+/// them: what moves is where the ladder lives, not what it does.
+pub(in crate::codegen) fn emit_mixed_string_dispatch_from_result(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     mode: MixedStringContextMode,
@@ -236,12 +272,11 @@ fn emit_mixed_string_context(
         .map(|candidate| {
             ctx.next_label(&format!(
                 "mixed_string_{}",
-                super::label_fragment(&candidate.class_name)
+                label_fragment(&candidate.class_name)
             ))
         })
         .collect::<Vec<_>>();
 
-    ctx.load_value_to_result(value)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_unboxed_mixed_object(ctx, &object_label);

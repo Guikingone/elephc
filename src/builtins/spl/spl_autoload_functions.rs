@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "spl_autoload_functions",
-    area: Spl,
-    params: [],
-    returns: Mixed,
+    contract: "spl_autoload_functions",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::SplAutoloadFunctions,
     ),
-    summary: "Return all registered __autoload() functions.",
-    php_manual: "https://www.php.net/manual/en/function.spl-autoload-functions.php",
 }
 
 /// Returns `Array<Mixed>` as the precise return type for `spl_autoload_functions()`.

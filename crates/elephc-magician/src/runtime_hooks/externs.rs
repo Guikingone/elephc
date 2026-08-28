@@ -17,6 +17,14 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Calls one typed generated-runtime builtin over borrowed boxed arguments.
+    pub(super) fn __elephc_runtime_builtin_call_v1(
+        runtime_builtin_id: u32,
+        args: *const *mut RuntimeCell,
+        arg_count: u64,
+        context: *const c_void,
+        result_out: *mut *mut RuntimeCell,
+    ) -> i32;
     pub(super) fn __elephc_eval_value_array_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string_array_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string_array_push(
@@ -305,6 +313,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_bool(value: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_int(value: i64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_resource(value: i64) -> *mut RuntimeCell;
+    /// Boxes an eval hash-context table key as an inert (id-less, destructor-less) resource.
+    pub(super) fn __elephc_eval_value_hash_context(value: i64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_float(value: f64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string(ptr: *const u8, len: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_cast_int(value: *mut RuntimeCell) -> *mut RuntimeCell;
@@ -372,6 +382,11 @@ unsafe extern "C" {
         left: *mut RuntimeCell,
         right: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    /// Compares normalized array keys with the compiled runtime's regular ordering.
+    pub(super) fn __elephc_eval_value_regular_key_compare(
+        left: *mut RuntimeCell,
+        right: *mut RuntimeCell,
+    ) -> i64;
     pub(super) fn __elephc_eval_value_echo(value: *mut RuntimeCell);
     pub(super) fn __elephc_eval_value_string_bytes(
         value: *mut RuntimeCell,

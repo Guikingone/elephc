@@ -2,7 +2,7 @@
 title: "fstat()"
 description: "Gets information about a file using an open file pointer."
 sidebar:
-  order: 178
+  order: 185
 ---
 
 ## fstat()
@@ -24,12 +24,6 @@ Gets information about a file using an open file pointer.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fstat.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fstat.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

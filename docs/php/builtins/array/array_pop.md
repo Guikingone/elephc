@@ -2,7 +2,7 @@
 title: "array_pop()"
 description: "Pops the element off the end of array."
 sidebar:
-  order: 27
+  order: 28
 ---
 
 ## array_pop()
@@ -24,12 +24,6 @@ Pops the element off the end of array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_pop.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_pop.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

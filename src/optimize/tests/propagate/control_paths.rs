@@ -40,7 +40,7 @@ fn test_propagate_constants_merges_identical_switch_assignments() {
 
     assert_eq!(
         propagated[1],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
@@ -72,7 +72,7 @@ fn test_propagate_constants_merges_identical_try_catch_assignments() {
 
     assert_eq!(
         propagated[1],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
@@ -104,6 +104,6 @@ fn test_propagate_constants_ignores_unreachable_catch_after_non_throwing_try() {
 
     assert_eq!(
         propagated[1],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }

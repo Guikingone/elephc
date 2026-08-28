@@ -10,6 +10,9 @@
 //!   so their values persist across function calls without using frame slots.
 //! - Initializers transfer their freshly-created owner into the static slot;
 //!   assignments retain refcounted values before publishing a second owner.
+//! - Both symbols come from `crate::names::static_local_symbol()` /
+//!   `static_local_init_symbol()`, which encode the (function, variable) pair injectively.
+//!   Building them by string concatenation merged unrelated statics onto one cell.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -136,9 +139,8 @@ fn resolve_static_local_slot(
         CodegenIrError::invalid_module(format!("{} static local is missing a source name", inst.op.name()))
     })?;
     let php_type = local.php_type.codegen_repr();
-    let function_fragment = static_local_function_fragment(&ctx.function.name);
-    let symbol = format!("_static_{}_{}", function_fragment, name);
-    let init_symbol = format!("{}_init", symbol);
+    let symbol = crate::names::static_local_symbol(&ctx.function.name, &name);
+    let init_symbol = crate::names::static_local_init_symbol(&ctx.function.name, &name);
     ctx.data.add_comm(symbol.clone(), 16);
     ctx.data.add_comm(init_symbol.clone(), 8);
     // Record this static so the `--web` `__rt_web_reset` routine can release and
@@ -232,19 +234,4 @@ fn clear_static_local_high_word_if_needed(ctx: &mut FunctionContext<'_>, slot: &
     if !matches!(slot.php_type.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
         abi::emit_store_zero_to_symbol(ctx.emitter, &slot.symbol, 8);
     }
-}
-
-/// Builds an assembly-safe function fragment for a static-local storage symbol.
-fn static_local_function_fragment(name: &str) -> String {
-    let mut fragment = String::new();
-    for ch in name.chars() {
-        match ch {
-            'A'..='Z' | 'a'..='z' | '0'..='9' => fragment.push(ch),
-            '_' => fragment.push_str("_u_"),
-            '\\' => fragment.push_str("_N_"),
-            ':' => fragment.push_str("_C_"),
-            _ => fragment.push('_'),
-        }
-    }
-    fragment
 }

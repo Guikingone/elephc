@@ -2,7 +2,7 @@
 title: "sys_get_temp_dir()"
 description: "Returns the directory path used for temporary files."
 sidebar:
-  order: 153
+  order: 160
 ---
 
 ## sys_get_temp_dir()
@@ -23,12 +23,6 @@ Returns the directory path used for temporary files.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/sys_get_temp_dir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/sys_get_temp_dir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

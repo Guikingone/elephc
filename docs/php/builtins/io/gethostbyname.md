@@ -2,7 +2,7 @@
 title: "gethostbyname()"
 description: "Gets the IPv4 address corresponding to the given Internet host name."
 sidebar:
-  order: 184
+  order: 191
 ---
 
 ## gethostbyname()
@@ -24,12 +24,6 @@ Gets the IPv4 address corresponding to the given Internet host name.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/gethostbyname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gethostbyname.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

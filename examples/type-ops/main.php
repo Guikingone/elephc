@@ -26,12 +26,15 @@ echo "empty(null) = " . empty(null) . "\n";
 echo "empty(false) = " . empty(false) . "\n";
 
 // unset
+// `unset` destroys the binding, so the name is undefined afterwards: probe it with
+// `isset` rather than reading it, exactly as in PHP.
 echo "\n--- unset ---\n";
 $x = 42;
 $z = 7;
 echo "before unset: " . $x . ", " . $z . "\n";
+echo "before unset, isset: " . (isset($x) ? "yes" : "no") . ", " . (isset($z) ? "yes" : "no") . "\n";
 unset($x, $z);
-echo "after unset, is_null: " . is_null($x) . ", " . is_null($z) . "\n";
+echo "after unset, isset: " . (isset($x) ? "yes" : "no") . ", " . (isset($z) ? "yes" : "no") . "\n";
 
 // settype
 echo "\n--- settype ---\n";

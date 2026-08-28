@@ -1141,8 +1141,11 @@ fn ir_backend_handles_scalar_builtins() {
         ),
         (
             "substr_strings",
+            // `substr('Hello', 1, -2)` is "el": PHP reads a negative length as bytes omitted from
+            // the end, not as an error. This expectation used to be "[]", written from an
+            // implementation that clamped every negative length to zero.
             "<?php echo substr('Hello World', 6); echo ':'; echo substr('Hello World', 0, 5); echo ':'; echo substr('Hello World', -5); echo ':'; echo '['; echo substr('Hello', 50); echo ']'; echo ':'; echo '['; echo substr('Hello', 1, -2); echo ']';",
-            "World:Hello:World:[]:[]",
+            "World:Hello:World:[]:[el]",
         ),
         (
             "substr_replace_strings",
@@ -1556,18 +1559,32 @@ $c = new Constructed([1]);
 }
 
 /// Verifies `unset($local)` writes PHP null into local slots on the EIR backend.
+///
+/// The probes are `isset`, not `is_null`. Reading a variable after a straight-line `unset` is a
+/// compile ERROR since the checker learned to end the binding there (`Undefined variable: $x`),
+/// and `is_null($x)` is such a read. `isset`/`??` are the two forms PHP defines on an unbound
+/// name, so they are what a program may still ask — and they lower to exactly the load-and-
+/// null-check this test is here to smoke: the kill leaves the name typed `Void` and its slot
+/// holding PHP null, which is what the probes observe.
 #[test]
 fn ir_backend_handles_unset_locals() {
     for (name, source, expected) in [
         (
             "unset_int_local",
-            "<?php $x = 42; unset($x); echo is_null($x) ? 'null' : 'value';",
+            "<?php $x = 42; unset($x); echo isset($x) ? 'value' : 'null';",
             "null",
         ),
         (
             "unset_multiple_locals",
-            "<?php $a = 1; $b = 'owned' . $argc; unset($a, $b); echo is_null($a) ? 'A' : 'a'; echo is_null($b) ? 'B' : 'b';",
+            "<?php $a = 1; $b = 'owned' . $argc; unset($a, $b); echo isset($a) ? 'a' : 'A'; echo isset($b) ? 'b' : 'B';",
             "AB",
+        ),
+        // The owned heap string is released by the unset and the name re-bound at a new type,
+        // so the slot the backend hands the rebind is the one the kill nulled.
+        (
+            "unset_then_rebind_local",
+            "<?php $c = 'owned' . $argc; unset($c); $c = 7; echo $c;",
+            "7",
         ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
@@ -3076,7 +3093,8 @@ class BaseCallbacks {
     public static function run(): void {
         echo array_reduce([1, 2], static::add(...), 0);
         echo ":";
-        array_walk([1, 2], static::show(...));
+        $walked = [1, 2];
+        array_walk($walked, static::show(...));
         echo ":";
         $usorted = [1, 2, 3];
         usort($usorted, static::compare(...));
@@ -3171,7 +3189,8 @@ class CallbackBox {
 $box = new CallbackBox();
 echo array_reduce([1, 2], $box->add_offset(...), 0);
 echo "|";
-array_walk([1, 2], $box->show(...));
+$walked = [1, 2];
+array_walk($walked, $box->show(...));
 "#;
     assert_eq!(
         compile_and_run_ir_backend("instance_method_reduce_and_walk_callbacks", source),
@@ -3306,7 +3325,8 @@ $box = new StoredReduceWalkBox();
 $box->base = 100;
 echo array_reduce([1, 2], $reduce, 0);
 echo "|";
-array_walk([1, 2], $walk);
+$walked = [1, 2];
+array_walk($walked, $walk);
 "#;
     assert_eq!(
         compile_and_run_ir_backend("stored_instance_method_reduce_and_walk_callbacks", source),
@@ -4110,14 +4130,15 @@ fn ir_backend_handles_intdiv_division_by_zero() {
         !run.status.success(),
         "IR backend intdiv zero fixture unexpectedly succeeded"
     );
-    assert_eq!(
-        String::from_utf8(run.stdout).expect("intdiv stdout should be utf8"),
-        ""
-    );
-    let stderr = String::from_utf8(run.stderr).expect("intdiv stderr should be utf8");
+    // The report is on STDOUT, where PHP puts it, so stdout is no longer empty and stderr is.
+    let reported = String::from_utf8(run.stdout).expect("intdiv stdout should be utf8");
     assert!(
-        stderr.contains("Uncaught DivisionByZeroError: Division by zero"),
-        "unexpected intdiv stderr: {stderr}"
+        reported.contains("Uncaught DivisionByZeroError: Division by zero"),
+        "unexpected intdiv output: {reported}"
+    );
+    assert_eq!(
+        String::from_utf8(run.stderr).expect("intdiv stderr should be utf8"),
+        ""
     );
 }
 
@@ -4506,9 +4527,9 @@ fn ir_backend_handles_indexed_array_sorting() {
             "312",
         ),
         (
-            "krsort_indexed_ints_preserves_slots",
-            "<?php $a = [1, 2, 3]; krsort($a); echo $a[0]; echo $a[1]; echo $a[2];",
-            "123",
+            "krsort_hash_int_keys_preserves_association",
+            "<?php $a = [2 => 'b', 1 => 'a', 3 => 'c']; krsort($a); foreach ($a as $k => $v) { echo $k; echo $v; }",
+            "3c2b1a",
         ),
         (
             "natsort_indexed_ints",
@@ -4810,10 +4831,15 @@ fn ir_backend_handles_indexed_array_reverse() {
     assert_eq!(compile_and_run_ir_backend("array_reverse_indexed", source), "213:312");
 }
 
-/// Verifies indexed-array deduplication returns first occurrences without mutating the source.
+/// Verifies indexed-array deduplication returns first occurrences without mutating the source,
+/// KEEPING each survivor's original key.
+///
+/// The reads are `$b[0] . $b[1] . $b[3]`, not `[0][1][2]`: PHP preserves the key of every
+/// survivor, so de-duplicating `[1,2,1,3,2]` yields keys `0, 1, 3` and there is no key 2. The
+/// dense reading this test used to make is the divergence it recorded.
 #[test]
 fn ir_backend_handles_indexed_array_unique() {
-    let source = "<?php $a = [1, 2, 1, 3, 2]; $b = array_unique($a); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[2]; echo ':'; echo count($a); echo ':'; echo $a[0] . $a[1] . $a[2] . $a[3] . $a[4];";
+    let source = "<?php $a = [1, 2, 1, 3, 2]; $b = array_unique($a); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[3]; echo ':'; echo count($a); echo ':'; echo $a[0] . $a[1] . $a[2] . $a[3] . $a[4];";
     assert_eq!(
         compile_and_run_ir_backend("array_unique_indexed", source),
         "3:123:5:12132"
@@ -6977,4 +7003,26 @@ fn unique_test_id() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time should be after unix epoch")
         .as_nanos()
+}
+
+/// Verifies that an assignment used as the right operand of a comparison evaluates with PHP
+/// semantics: the assignment happens first and its value is what the comparison sees.
+#[test]
+fn ir_backend_evaluates_assignment_as_right_operand_of_comparison() {
+    let source = "<?php $s = \"a/b/c\"; if (false !== $pos = strrpos($s, \"/\")) { echo $pos; }";
+    assert_eq!(
+        compile_and_run_ir_backend("assign_in_comparison", source),
+        "3"
+    );
+}
+
+/// Verifies that a chained assignment inside an arithmetic expression assigns the inner
+/// variable and folds its value into the surrounding sum, matching PHP.
+#[test]
+fn ir_backend_evaluates_assignment_as_right_operand_of_arithmetic() {
+    let source = "<?php $x = 1 + $y = 2; echo $x; echo $y;";
+    assert_eq!(
+        compile_and_run_ir_backend("assign_in_arithmetic", source),
+        "32"
+    );
 }

@@ -63,7 +63,7 @@ Things that have a value:
 | `PreDecrement(String)` | `--$i` | |
 | `PostDecrement(String)` | `$i--` | |
 | `FunctionCall { name, args }` | `strlen($s)`, `Tools\fmt($s)`, `\strlen($s)` | Parsed as a structured name so later phases can resolve namespace aliases and fully-qualified names |
-| `Yield { key, value }` | `yield`, `yield $v`, `yield $k => $v` | Yield expression inside a generator body. The parser keeps optional key/value expressions; later checker/codegen turns the enclosing function or closure into a `Generator` state machine. |
+| `Yield { key, value }` | `yield`, `yield $v`, `yield $k => $v` | Yield expression inside a generator body. The parser keeps optional key/value expressions; later checker/codegen emits the enclosing function or closure as a stackful, Fiber-backed `Generator` coroutine. |
 | `YieldFrom(Expr)` | `yield from inner()` | Contextual `yield from` delegation. The lexer leaves `from` as an identifier and the parser recognizes it only immediately after `yield`. |
 | `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]`, `[...$arr, 4]` | Indexed array; elements may include `Spread` expressions |
 | `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |
@@ -162,7 +162,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 
 Constructor property promotion is normalized during class-body parsing. A parameter such as `public int $id` in `__construct` becomes a `ClassProperty` plus a synthetic leading `PropertyAssign` statement equivalent to `$this->id = $id;`. Parameter defaults stay on the constructor signature rather than `ClassProperty.default`, matching PHP's distinction between promoted parameter defaults and property defaults. By-reference promoted parameters preserve a `by_ref` flag on the generated property so codegen can bind the property slot to the referenced argument or to a heap reference cell when a default value is used. Later passes otherwise see ordinary properties and ordinary constructor assignments.
 
-There is no `Declare` statement kind. `declare(directive=literal, ...)` is parsed by `src/parser/stmt/declare.rs` and lowered directly to `Synthetic`: the statement form `declare(strict_types=1);` becomes an empty `Synthetic(vec![])`, while the block form `declare(ticks=1) { ... }` (single statement, braced block, or alternative `: ... enddeclare;` syntax) becomes a `Synthetic` wrapping the body statements so they execute in the enclosing scope. Directive values must be literals; the parser enforces PHP's rules that `strict_types` takes only `0` or `1`, must be the very first statement in the script, and cannot use block mode. The directives themselves are compile-time syntax only, because elephc always uses strict typing.
+There is no `Declare` statement kind. `declare(directive=literal, ...)` is parsed by `src/parser/stmt/declare.rs` and lowered directly to `Synthetic`: the statement form `declare(strict_types=1);` becomes an empty `Synthetic(vec![])`, while the block form `declare(ticks=1) { ... }` (single statement, braced block, or alternative `: ... enddeclare;` syntax) becomes a `Synthetic` wrapping the body statements so they execute in the enclosing scope. Directive values must be literals; the parser enforces PHP's rules that `strict_types` takes only `0` or `1`, must be the very first statement in the script, and cannot use block mode. `ticks` and `encoding` are compile-time syntax only, but `strict_types` is applied: once the directive passes those checks, the parser records it on its per-file source profile (`crate::source::declare_strict_types`), which stamps `Stmt::strict_types` on every statement parsed afterwards. Because PHP requires the directive to be the file's first statement, "afterwards" is exactly "the rest of this file", and the flag survives include/autoload merging so the type checker can pick strict or coercive parameter binding per call site (`src/types/param_binding.rs`).
 
 ### Statement dispatch
 
@@ -204,6 +204,7 @@ Current recovery behavior is intentionally simple:
 - top-level parsing can skip forward to the next plausible statement boundary after a syntax error
 - block parsing (`{ ... }`) can resynchronize on `;`, `}`, and `EOF`
 - the parser still prefers correctness over aggressive recovery, so heavily malformed input may still collapse into fewer diagnostics than an IDE-style parser would produce
+- before recursive parsing starts, `reject_excessive_nesting()` scans the token stream against a hard cap (`MAX_COMPILER_NESTING = 1024` bracket depth) and rejects deeper input with "maximum compiler nesting depth exceeded", so pathological nesting cannot overflow the parser's stack
 
 ### Binary operators (`BinOp`)
 
@@ -288,7 +289,7 @@ assignment          7          6         RIGHT (lvalue targets)
 |  (bitwise OR)    15         16         left
 ^  (bitwise XOR)   17         18         left
 &  (bitwise AND)   19         20         left
-== != === !==      21         22         left
+== != <> === !==   21         22         left
 < > <= >= <=>      23         24         left
 |>                 24         25         left (dedicated Pipe node)
 << >>              25         26         left
@@ -314,7 +315,7 @@ The word-form logical operators (`and`, `xor`, `or`) have PHP's lower precedence
 
 The full ternary form builds `ExprKind::Ternary`. The omitted-middle form `expr ?: fallback` builds `ExprKind::ShortTernary` so later phases can preserve PHP's single-evaluation rule for the left-hand expression.
 
-Assignment expressions build `ExprKind::Assignment { target, value, result_target, prelude, conditional_value_temp }`. Their binding power matches PHP's low-precedence assignment slot, so `$x = true and false` parses as `($x = true) and false`, while `$x = $y = 1` remains right-associative. Standalone variable assignment statements still lower to `StmtKind::Assign` unless a lower-precedence word logical operator requires the whole statement to be represented as an expression statement.
+Assignment expressions build `ExprKind::Assignment { target, value, result_target, prelude, conditional_value_temp }`. Their binding power matches PHP's low-precedence assignment slot, so `$x = true and false` parses as `($x = true) and false`, while `$x = $y = 1` remains right-associative. The low `(7, 6)` power is bypassed when the left operand is already an assignment target (`is_assignment_expression_target`: a variable, property, dynamic property, static property, or array access over one of those) — PHP's grammar admits an assignment wherever a `variable` has just been parsed, which is what makes `false !== $pos = strrpos($s, '/')` parse as `false !== ($pos = strrpos($s, '/'))` and lets `if (!$a = foo())` compile. Standalone variable assignment statements still lower to `StmtKind::Assign` unless a lower-precedence word logical operator requires the whole statement to be represented as an expression statement.
 
 For non-local expression targets, the parser emits hidden assignment prelude statements when a receiver, index, or RHS must be evaluated exactly once before the final write. The lowered `target` is the write target, `result_target` is the expression read after the write, and `prelude` contains temporary assignments such as the captured result of `idx()` in `$items[idx()] = value()` or the RHS value in `$items[$i] = ($i = 1)`. This keeps codegen on the normal assignment paths while preserving PHP's evaluation order for plain and compound assignment expressions. For `??=`, `conditional_value_temp` reserves a hidden temporary that codegen fills only in the null branch, preserving PHP's conditional RHS evaluation for targets such as `$items[$i] ??= ($i = 1)`.
 
@@ -390,7 +391,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `~` (bitwise not) | Parse inner expr at unary precedence (bp=35), return `BitNot` |
 | `@` (error control) | Parse inner expr at unary precedence (bp=35), return `ErrorSuppress` |
 | `clone` | Parse inner expr at unary precedence (bp=35), return `Clone` |
-| `++` / `--` | Return `PreIncrement` / `PreDecrement` |
+| `++` / `--` | Return `PreIncrement` / `PreDecrement` for a bare variable; a non-variable l-value (`++$obj->p`, `++$a[0]`) desugars to `ExprKind::Assignment` with a prelude instead |
 | `(int)` / `(float)` / ... | Parse inner expr, return `Cast` |
 | `(` | Parse inner expr, expect `)`, return inner expr (and allow a later postfix call like `(expr)(args)`) |
 | `[` | Parse comma-separated exprs, expect `]`, return `ArrayLiteral` |
@@ -423,6 +424,7 @@ After parsing a prefix, the parser checks for postfix operators:
 - `?->` for nullsafe property access or method call
 - `::` for enum-case lookup, static method call, or static-method first-class callable (when the prefix is a parsed name)
 - `::` on a dynamic (non-name) receiver: `$obj::class` / `expr::class` builds `ObjectClassName`, and `$cls::method(args)` / `$cls::$method(args)` desugar to `call_user_func([$cls, $method], ...args)`; any other dynamic `$class::X` access is rejected
+- `++` / `--` in expression position on a property, static property, or array element: the postfix form desugars through `desugar_lvalue_incdec()` to an `ExprKind::Assignment` whose prelude captures the old value into a hidden `__elephc_incdec_*` temporary, so `$k = $this->i++;` reads the pre-increment value
 
 Member names after `->` / `?->` may be a plain identifier, a variable (`->$name`), a brace-enclosed expression (`->{$expr}`), or — per PHP 8's semi-reserved rule — any keyword (`->class`, `->print`, `->static`, ...), whose exact source spelling is preserved via the lexer's `TokenMetadata` and the shared bareword mapper in `src/parser/keyword_name.rs`. The same mapper serves named-argument labels, `::` scoped access, and method/constant declaration names.
 

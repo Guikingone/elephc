@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Associative keys are collected in insertion order through `__rt_hash_iter_next`.
-//! - String keys are persisted before storing them in the result indexed array.
+//! - String keys are copied out of hash-owned storage before entering the result array.
 //! - Mixed key arrays box each normalized int/string key into an owned Mixed cell.
 
 use crate::codegen::abi;
@@ -75,46 +75,46 @@ fn lower_boxed_mixed_array_keys(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #4");                               // runtime tag 4 = indexed-array payload
-            ctx.emitter.instruction(&format!("b.eq {}", indexed_label));         // positional integer keys come from the indexed path
-            ctx.emitter.instruction("cmp x0, #5");                               // runtime tag 5 = associative-hash payload
-            ctx.emitter.instruction(&format!("b.eq {}", assoc_label));           // insertion-order hash keys come from the associative path
-            ctx.emitter.instruction("cmp x0, #3");                               // runtime tag 3 = bool payload
-            ctx.emitter.instruction(&format!("b.eq {}", bool_dispatch_label));   // php-src names the literal `true`/`false`, not `bool`
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 = indexed-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_label));        // positional integer keys come from the indexed path
+            ctx.emitter.instruction("cmp x0, #5");                              // runtime tag 5 = associative-hash payload
+            ctx.emitter.instruction(&format!("b.eq {}", assoc_label));          // insertion-order hash keys come from the associative path
+            ctx.emitter.instruction("cmp x0, #3");                              // runtime tag 3 = bool payload
+            ctx.emitter.instruction(&format!("b.eq {}", bool_dispatch_label));  // php-src names the literal `true`/`false`, not `bool`
             for (tag, _, label) in &error_labels {
-                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));           // identify the non-array payload kind for PHP's TypeError wording
-                ctx.emitter.instruction(&format!("b.eq {}", label));             // raise the TypeError naming this payload kind
+                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));          // identify the non-array payload kind for PHP's TypeError wording
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // raise the TypeError naming this payload kind
             }
-            ctx.emitter.instruction(&format!("b {}", fallback_error_label));     // any remaining tag is still not an array
+            ctx.emitter.instruction(&format!("b {}", fallback_error_label));    // any remaining tag is still not an array
             ctx.emitter.label(&assoc_label);
-            ctx.emitter.instruction("mov x0, x1");                               // move the unboxed hash pointer into the key-extraction input register
+            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed hash pointer into the key-extraction input register
             lower_assoc_array_keys_aarch64(ctx, &PhpType::Mixed, result_elem_ty)?;
-            ctx.emitter.instruction(&format!("b {}", done_label));               // skip the indexed and error paths after hash key materialization
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the indexed and error paths after hash key materialization
             ctx.emitter.label(&indexed_label);
-            ctx.emitter.instruction("mov x0, x1");                               // move the unboxed indexed-array pointer into the key-extraction input register
+            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed indexed-array pointer into the key-extraction input register
             lower_indexed_array_keys_aarch64(ctx, result_elem_ty)?;
-            ctx.emitter.instruction(&format!("b {}", done_label));               // skip the error paths after indexed key materialization
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the error paths after indexed key materialization
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 4");                               // runtime tag 4 = indexed-array payload
-            ctx.emitter.instruction(&format!("je {}", indexed_label));           // positional integer keys come from the indexed path
-            ctx.emitter.instruction("cmp rax, 5");                               // runtime tag 5 = associative-hash payload
-            ctx.emitter.instruction(&format!("je {}", assoc_label));             // insertion-order hash keys come from the associative path
-            ctx.emitter.instruction("cmp rax, 3");                               // runtime tag 3 = bool payload
-            ctx.emitter.instruction(&format!("je {}", bool_dispatch_label));     // php-src names the literal `true`/`false`, not `bool`
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 = indexed-array payload
+            ctx.emitter.instruction(&format!("je {}", indexed_label));          // positional integer keys come from the indexed path
+            ctx.emitter.instruction("cmp rax, 5");                              // runtime tag 5 = associative-hash payload
+            ctx.emitter.instruction(&format!("je {}", assoc_label));            // insertion-order hash keys come from the associative path
+            ctx.emitter.instruction("cmp rax, 3");                              // runtime tag 3 = bool payload
+            ctx.emitter.instruction(&format!("je {}", bool_dispatch_label));    // php-src names the literal `true`/`false`, not `bool`
             for (tag, _, label) in &error_labels {
-                ctx.emitter.instruction(&format!("cmp rax, {}", tag));           // identify the non-array payload kind for PHP's TypeError wording
-                ctx.emitter.instruction(&format!("je {}", label));               // raise the TypeError naming this payload kind
+                ctx.emitter.instruction(&format!("cmp rax, {}", tag));          // identify the non-array payload kind for PHP's TypeError wording
+                ctx.emitter.instruction(&format!("je {}", label));              // raise the TypeError naming this payload kind
             }
-            ctx.emitter.instruction(&format!("jmp {}", fallback_error_label));   // any remaining tag is still not an array
+            ctx.emitter.instruction(&format!("jmp {}", fallback_error_label));  // any remaining tag is still not an array
             ctx.emitter.label(&assoc_label);
-            ctx.emitter.instruction("mov rax, rdi");                             // move the unboxed hash pointer into the key-extraction input register
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed hash pointer into the key-extraction input register
             lower_assoc_array_keys_x86_64(ctx, &PhpType::Mixed, result_elem_ty)?;
-            ctx.emitter.instruction(&format!("jmp {}", done_label));             // skip the indexed and error paths after hash key materialization
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the indexed and error paths after hash key materialization
             ctx.emitter.label(&indexed_label);
-            ctx.emitter.instruction("mov rax, rdi");                             // move the unboxed indexed-array pointer into the key-extraction input register
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed indexed-array pointer into the key-extraction input register
             lower_indexed_array_keys_x86_64(ctx, result_elem_ty)?;
-            ctx.emitter.instruction(&format!("jmp {}", done_label));             // skip the error paths after indexed key materialization
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the error paths after indexed key materialization
         }
     }
     ctx.emitter.label(&bool_dispatch_label);
@@ -522,8 +522,8 @@ fn emit_assoc_mixed_key_append_aarch64(ctx: &mut FunctionContext<'_>, key_ty: &P
             emit_append_word_key_aarch64(ctx, "x0");
         }
         PhpType::Str => {
-            ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string mixed key
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
             emit_append_word_key_aarch64(ctx, "x0");
         }
         PhpType::Mixed => {
@@ -536,8 +536,8 @@ fn emit_assoc_mixed_key_append_aarch64(ctx: &mut FunctionContext<'_>, key_ty: &P
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.instruction(&format!("b {}", key_boxed));               // skip string-key boxing after producing an integer mixed key
             ctx.emitter.label(&key_string);
-            ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string mixed key
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
             ctx.emitter.label(&key_boxed);
             emit_append_word_key_aarch64(ctx, "x0");
         }
@@ -561,9 +561,9 @@ fn emit_assoc_mixed_key_append_x86_64(ctx: &mut FunctionContext<'_>, key_ty: &Ph
             emit_append_word_key_x86_64(ctx, "rax");
         }
         PhpType::Str => {
-            ctx.emitter.instruction("mov rsi, rdx");                            // move the string key length into the mixed helper high-word register
-            ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string mixed key
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction("mov rax, rdi");                            // pass the borrowed hash key pointer to the persistence helper
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
             emit_append_word_key_x86_64(ctx, "rax");
         }
         PhpType::Mixed => {
@@ -576,9 +576,9 @@ fn emit_assoc_mixed_key_append_x86_64(ctx: &mut FunctionContext<'_>, key_ty: &Ph
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.instruction(&format!("jmp {}", key_boxed));             // skip string-key boxing after producing an integer mixed key
             ctx.emitter.label(&key_string);
-            ctx.emitter.instruction("mov rsi, rdx");                            // move the string key length into the mixed helper high-word register
-            ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string mixed key
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction("mov rax, rdi");                            // pass the borrowed hash key pointer to the persistence helper
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
             ctx.emitter.label(&key_boxed);
             emit_append_word_key_x86_64(ctx, "rax");
         }
@@ -619,7 +619,9 @@ fn emit_append_string_key_aarch64(ctx: &mut FunctionContext<'_>, ptr_reg: &str, 
 fn emit_append_word_key_x86_64(ctx: &mut FunctionContext<'_>, value_reg: &str) {
     ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                   // load the result keys array pointer from the fixed stack layout
     ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the current result keys array length before appending
-    ctx.emitter.instruction(&format!("mov QWORD PTR [r10 + r11 * 8 + 24], {}", value_reg)); // store the key payload into the next result keys slot
+    ctx.emitter.instruction(
+        &format!("mov QWORD PTR [r10 + r11 * 8 + 24], {}", value_reg)
+    );                                                                          // store the key payload into the next result keys slot
     ctx.emitter.instruction("add r11, 1");                                      // increment the result keys length after the append
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // persist the updated result keys length in the array header
 }

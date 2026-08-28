@@ -2,7 +2,7 @@
 title: "asort()"
 description: "Sorts an array and maintains index association."
 sidebar:
-  order: 48
+  order: 49
 ---
 
 ## asort()
@@ -24,12 +24,6 @@ Sorts an array and maintains index association.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/asort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/asort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

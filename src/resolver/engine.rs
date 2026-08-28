@@ -88,7 +88,7 @@ pub(super) fn resolve_stmts(
     let mut result = Vec::new();
 
     for stmt in stmts {
-        let _source_mode = crate::source::scoped_parse_mode(stmt.source_mode);
+        let _source_mode = crate::source::scoped_parse_mode(stmt.profile());
         // Expression-position includes (`$x = require X;` / `return require X;`) are expanded
         // before generic expression resolution so the included file's statements are inlined into
         // the caller's scope rather than resolved as an opaque sub-expression.
@@ -418,7 +418,7 @@ pub(super) fn resolve_stmts(
                     state,
                     function_variants,
                 )?;
-                result.push(Stmt::new(
+                result.push(Stmt::with_attributes(
                     StmtKind::FunctionDecl {
                         name: name.clone(),
                         params: params.clone(),
@@ -431,6 +431,7 @@ pub(super) fn resolve_stmts(
                         body,
                     },
                     stmt.span,
+                    stmt.attributes.clone(),
                 ));
             }
             StmtKind::ClassDecl {

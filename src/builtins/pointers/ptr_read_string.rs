@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ptr_read_string",
-    area: Pointers,
-    params: [pointer: Mixed, length: Mixed],
-    returns: Str,
+    contract: "ptr_read_string",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PtrReadString,
     ),
-    summary: "Copies raw bytes from a pointer into a PHP string of the given length.",
-    extension: true,
 }
 
 /// Validates pointer and integer length arguments and returns `PhpType::Str`.

@@ -2,7 +2,7 @@
 title: "array_pad()"
 description: "Pads an array to the specified length with a value."
 sidebar:
-  order: 26
+  order: 27
 ---
 
 ## array_pad()
@@ -26,12 +26,6 @@ Pads an array to the specified length with a value.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_pad.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_pad.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

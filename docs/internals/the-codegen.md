@@ -79,7 +79,7 @@ Codegen always produces two compiler-owned artifacts:
 
 The linker may also add optional bridge staticlibs as a third class of input.
 For example, dynamic eval links `libelephc_magician.a`; fully AOT literal eval
-does not. Bridge archives are discovered and linked by `src/linker.rs` rather
+does not. Bridge archives are discovered and linked by `src/linker/` rather
 than emitted by the assembly backend.
 
 Runtime feature selection is derived from the EIR module plus CLI-owned modes
@@ -88,10 +88,12 @@ families while preserving deterministic linking.
 
 ## Builtin Boundary
 
-Each registry-backed builtin owns one backend-neutral `BuiltinSemantics`
-descriptor in `src/builtins/<area>/<name>.rs`. Checker validation/result typing,
-optimizer effects, ownership/aliasing, runtime/link requirements, callable policy,
-argument lowering, and EIR lowering consume that same descriptor.
+Each PHP builtin surface has one dependency-neutral contract in
+`crates/elephc-builtin-contract`. The AOT home file in
+`src/builtins/<area>/<name>.rs` joins its `BuiltinSemantics` by stable `BuiltinId`.
+Checker validation/result typing, optimizer effects, ownership/aliasing,
+runtime/link requirements, callable policy, argument lowering, and EIR lowering
+consume that assembled view without repeating signature metadata.
 
 Lowering emits reusable EIR primitives/graphs or an `Op::RuntimeCall` carrying a
 typed `RuntimeCallTarget`. `src/codegen/lower_inst/runtime_calls.rs` and the bounded
@@ -121,9 +123,16 @@ target-aware call helpers on macOS ARM64, Linux ARM64, and Linux x86_64. See
 ## Emit Modes
 
 `--emit executable` is the default and emits a process entry point. `--emit
-cdylib` emits a PIC user object with `#[Export]` trampolines and lifecycle
-symbols for embedding hosts. On Linux cdylib output also hides internal runtime
-symbols so separate loaded elephc modules do not preempt each other's state.
+cdylib` emits a PIC user object with `#[Export]` trampolines, ABI/error/memory
+helpers, and lifecycle symbols for embedding hosts. Every export uses a native
+exception boundary; scalar exports preserve their C signatures and publish
+status through `elephc_last_status()`, while exact `string -> string` exports
+return status directly and copy the PHP byte string into caller-owned heap
+storage. Boundary nesting is explicit and concat scratch state is saved and
+restored around each entry. Internal symbols are hidden on ELF (including
+driver-supplied `_init`/`_fini`) and private externs on Mach-O, so separate
+loaded Elephc modules do not preempt each other's runtime state and Mach-O
+`-dead_strip` has real roots to collect against.
 
 ## Key Mechanisms
 
@@ -161,6 +170,32 @@ requests. Static properties live behind per-class user-data symbols
 resolved through native class-id branches. `global` variables load and store
 through `_eir_global_<mangled_fqn>` symbols emitted for the EIR `LoadGlobal` /
 `StoreGlobal` instructions.
+
+### Call-stack overflow guard
+
+`src/codegen/stack_guard.rs` emits a stack-depth check into every compiled
+function, method, closure, and generator body prologue, immediately after the
+frame has been reserved (so the compare already accounts for that frame) and
+before the incoming parameters are spilled. It is an unsigned comparison of the
+stack pointer against the runtime `_stack_limit` word, branching to
+`__rt_stack_overflow` when the pointer is below it:
+
+- **AArch64** (macOS and Linux): `adrp` / `ldr` / `cmp sp, x9` / `b.hs <local>` /
+  `b __rt_stack_overflow` — five instructions, clobbering only `x9`. The
+  conditional branch stays local because `b.cond` only encodes a ±1 MiB
+  displacement, which large programs exceed; the unconditional `b` reaches
+  ±128 MiB and gets linker veneers beyond that.
+- **x86_64**: `cmp rsp, QWORD PTR [rip + _stack_limit]` / `jb __rt_stack_overflow`
+  — two instructions, clobbering nothing.
+
+The check never writes memory, so it is safe to run when the remaining stack is a
+single page. A zero `_stack_limit` makes it always pass, which is the state
+before `__rt_stack_limit_init` runs and whenever the stack bounds could not be
+determined — the guard is inert rather than wrong. `main` is not guarded: it is
+the root of every process-entry call chain and runs before the floor exists.
+Cdylibs publish the floor from `elephc_init()` because they have no process
+entry point. See [The runtime](the-runtime.md) for the floor measurement and
+the fiber handoff.
 
 ### Sentinels and null representation
 

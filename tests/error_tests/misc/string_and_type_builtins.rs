@@ -16,18 +16,45 @@ expect_builtin_arity_error!(
     "strlen() takes exactly 1 argument"
 );
 
-// Tests intval() arity error when called with no arguments.
+// Tests intval() arity error when called with no arguments. The optional second parameter
+// (`$base`) is now accepted, so the derived phrasing is a range rather than an exact count.
 expect_builtin_arity_error!(
     test_error_intval_wrong_args,
     "<?php intval();",
-    "intval() takes exactly 1 argument"
+    "intval() takes 1 or 2 arguments"
 );
 
+/// Verifies the `is_integer()` alias keeps the one-argument predicate contract.
+#[test]
+fn test_error_is_integer_wrong_args() {
+    expect_error("<?php is_integer();", "is_integer() takes exactly 1 argument");
+}
+
+/// Verifies the `is_long()` alias keeps the one-argument predicate contract.
+#[test]
+fn test_error_is_long_wrong_args() {
+    expect_error("<?php is_long();", "is_long() takes exactly 1 argument");
+}
+
+/// Verifies the `is_double()` alias keeps the one-argument predicate contract.
+#[test]
+fn test_error_is_double_wrong_args() {
+    expect_error("<?php is_double();", "is_double() takes exactly 1 argument");
+}
+
+/// Verifies `strval()` requires exactly one value to convert.
+#[test]
+fn test_error_strval_wrong_args() {
+    expect_error("<?php strval();", "strval() takes exactly 1 argument");
+}
+
 // Tests strrpos() arity error when called with only one argument (needs haystack + needle).
+// The optional third parameter (`$offset`) is now accepted, so the derived phrasing is a
+// range rather than an exact count.
 expect_builtin_arity_error!(
     test_error_strrpos_wrong_args,
     "<?php strrpos(\"abc\");",
-    "strrpos() takes exactly 2 arguments"
+    "strrpos() takes 2 or 3 arguments"
 );
 
 // Tests strstr() arity error when called with only one argument (needs haystack + needle).
@@ -154,18 +181,28 @@ expect_builtin_arity_error!(
     "str_ends_with() takes exactly 2 arguments"
 );
 
-// Tests implode() arity error when called with only one argument (needs separator + array).
+// Tests implode() arity error for a genuinely invalid call. The one-argument form
+// `implode($array)` is valid PHP and now compiles, so the rejected shapes are zero
+// arguments and three, which PHP reports as ArgumentCountError.
 expect_builtin_arity_error!(
     test_error_implode_wrong_args,
-    "<?php implode([\"a\"]);",
-    "implode() takes exactly 2 arguments"
+    "<?php implode();",
+    "implode() takes 1 or 2 arguments"
 );
 
-// Tests ucwords() arity error when called with no arguments.
+// Tests implode() arity error when called with more arguments than PHP accepts.
+expect_builtin_arity_error!(
+    test_error_implode_too_many_args,
+    "<?php implode(\",\", [1], 3);",
+    "implode() takes 1 or 2 arguments"
+);
+
+// Tests ucwords() arity error when called with no arguments. The optional second parameter
+// (`$separators`) is now accepted, so the derived phrasing is a range rather than an exact count.
 expect_builtin_arity_error!(
     test_error_ucwords_wrong_args,
     "<?php ucwords();",
-    "ucwords() takes exactly 1 argument"
+    "ucwords() takes 1 or 2 arguments"
 );
 
 // Tests str_ireplace() arity error when called with only two arguments (needs search, replace, subject).
@@ -293,4 +330,69 @@ expect_builtin_arity_error!(
     test_error_is_callable_wrong_args,
     "<?php is_callable();",
     "is_callable() takes exactly 1 argument"
+);
+
+// Tests quotemeta() arity error when called with no arguments.
+expect_builtin_arity_error!(
+    test_error_quotemeta_wrong_args,
+    "<?php quotemeta();",
+    "quotemeta() takes exactly 1 argument"
+);
+
+// Tests chunk_split() arity error when called with too many arguments (accepts 1 to 3).
+expect_builtin_arity_error!(
+    test_error_chunk_split_wrong_args,
+    "<?php chunk_split(\"a\", 1, \"-\", 5);",
+    "chunk_split() takes 1 to 3 arguments"
+);
+
+// Tests str_word_count() arity error when called with too many arguments (accepts 1 to 3).
+expect_builtin_arity_error!(
+    test_error_str_word_count_wrong_args,
+    "<?php str_word_count(\"a\", 0, \"x\", 5);",
+    "str_word_count() takes 1 to 3 arguments"
+);
+
+// Tests count_chars() arity error when called with too many arguments (accepts 1 to 2).
+expect_builtin_arity_error!(
+    test_error_count_chars_wrong_args,
+    "<?php count_chars(\"a\", 0, 1);",
+    "count_chars() takes 1 or 2 arguments"
+);
+
+// Tests strtr() arity error when called with too many arguments (accepts 2 to 3).
+expect_builtin_arity_error!(
+    test_error_strtr_wrong_args,
+    "<?php strtr(\"a\", \"b\", \"c\", \"d\");",
+    "strtr() takes 2 or 3 arguments"
+);
+
+// Tests strtr() rejecting a string $from in the two-argument replacement-pair form, using
+// php-src's own TypeError wording.
+expect_builtin_arity_error!(
+    test_error_strtr_two_arg_string_from,
+    "<?php strtr(\"abc\", \"a\");",
+    "strtr(): Argument #2 ($from) must be of type array, string given"
+);
+
+// Tests strtr() rejecting an array $from in the three-argument pairwise form, using php-src's
+// own TypeError wording.
+expect_builtin_arity_error!(
+    test_error_strtr_three_arg_array_from,
+    "<?php strtr(\"abc\", [\"a\" => \"b\"], \"x\");",
+    "strtr(): Argument #2 ($from) must be of type string, array given"
+);
+
+// Tests str_word_count() rejecting a $format that elephc cannot resolve at compile time.
+expect_builtin_arity_error!(
+    test_error_str_word_count_non_literal_format,
+    "<?php $f = strlen(\"ab\"); str_word_count(\"a b\", $f);",
+    "str_word_count() format argument must be an integer literal in AOT mode"
+);
+
+// Tests count_chars() rejecting a $mode that elephc cannot resolve at compile time.
+expect_builtin_arity_error!(
+    test_error_count_chars_non_literal_mode,
+    "<?php $m = strlen(\"ab\"); count_chars(\"ab\", $m);",
+    "count_chars() mode argument must be an integer literal in AOT mode"
 );

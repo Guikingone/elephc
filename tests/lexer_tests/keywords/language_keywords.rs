@@ -419,6 +419,64 @@ fn test_enddeclare_keyword() {
     assert!(t.contains(&Token::EndDeclare));
 }
 
+// --- Alternative control-structure syntax terminators ---
+
+/// Verifies `if (…): … endif;` lexes the colon body opener and the `endif` terminator.
+#[test]
+fn test_alternative_if_tokens() {
+    let t = tokens("<?php if (true): echo 1; endif;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::If,
+            Token::LParen,
+            Token::True,
+            Token::RParen,
+            Token::Colon,
+            Token::Echo,
+            Token::IntLiteral(1),
+            Token::Semicolon,
+            Token::EndIf,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies each loop/switch alternative terminator keyword gets its own token kind.
+#[test]
+fn test_alternative_loop_terminator_keywords() {
+    assert!(tokens("<?php while (false): endwhile;").contains(&Token::EndWhile));
+    assert!(tokens("<?php for (;false;): endfor;").contains(&Token::EndFor));
+    assert!(tokens("<?php foreach ([] as $x): endforeach;").contains(&Token::EndForeach));
+    assert!(tokens("<?php switch (1): endswitch;").contains(&Token::EndSwitch));
+}
+
+/// Verifies the alternative terminators are lexed case-insensitively, like every PHP keyword.
+#[test]
+fn test_alternative_terminator_keywords_are_case_insensitive() {
+    let t = tokens("<?php IF (true): ENDIF; WHILE (false): ENDWHILE;");
+    assert!(t.contains(&Token::EndIf));
+    assert!(t.contains(&Token::EndWhile));
+}
+
+/// Verifies `goto` is lexed as its own reserved keyword token rather than an identifier.
+#[test]
+fn test_goto_keyword_token() {
+    let t = tokens("<?php goto done;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Goto,
+            Token::Identifier("done".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
 // --- Reference parameter ---
 
 /// Verifies `extern` compiler extension keyword tokenizes alongside `function`.

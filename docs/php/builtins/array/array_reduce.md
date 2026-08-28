@@ -2,7 +2,7 @@
 title: "array_reduce()"
 description: "Iteratively reduces an array to a single value using a callback function."
 sidebar:
-  order: 31
+  order: 32
 ---
 
 ## array_reduce()
@@ -26,12 +26,6 @@ Iteratively reduces an array to a single value using a callback function.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_reduce.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_reduce.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

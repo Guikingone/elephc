@@ -129,7 +129,8 @@ echo $v->d();
 "#,
     );
     assert!(!out.success);
-    assert!(out.stderr.contains("Call to a member function d()"));
+    // STDOUT: the uncaught report follows PHP's stream.
+    assert!(out.stdout.contains("Call to a member function d()"), "{}", out.stdout);
 }
 
 /// Regression: a user method whose name collides with a builtin method of a different arity (here

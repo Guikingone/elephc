@@ -2,7 +2,7 @@
 title: "array_flip()"
 description: "Exchanges all keys with their associated values in an array."
 sidebar:
-  order: 13
+  order: 14
 ---
 
 ## array_flip()
@@ -24,12 +24,6 @@ Exchanges all keys with their associated values in an array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_flip.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_flip.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

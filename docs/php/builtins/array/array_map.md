@@ -2,7 +2,7 @@
 title: "array_map()"
 description: "Applies a callback to the elements of an array."
 sidebar:
-  order: 22
+  order: 23
 ---
 
 ## array_map()
@@ -26,12 +26,6 @@ Applies a callback to the elements of an array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_map.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_map.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

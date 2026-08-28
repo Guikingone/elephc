@@ -16,13 +16,16 @@ use super::*;
 /// - `subject` is pruned before analysis.
 /// - Cases and default branch are normalized and pruned.
 /// - Returns the execution path for a known subject value, or the original switch if
-///   level-sensitive exits prevent safe rewriting, or if the subject is not scalar.
+///   level-sensitive exits prevent safe rewriting, if the subject is not scalar, or if the
+///   single-case rewrite would clone a node carrying a checker local-binding decision (see
+///   `single_case_rewrite_would_clone_a_decision`).
 pub(crate) fn prune_switch_stmt(
     subject: Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
     default: Option<Vec<Stmt>>,
     span: crate::span::Span,
     source_mode: crate::source::SourceMode,
+    strict_types: bool,
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
     let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
@@ -48,6 +51,7 @@ pub(crate) fn prune_switch_stmt(
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }];
     }
@@ -61,7 +65,9 @@ pub(crate) fn prune_switch_stmt(
     }
 
     let Some(subject_value) = scalar_value(&subject) else {
-        if cases.len() == 1 {
+        if cases.len() == 1
+            && !single_case_rewrite_would_clone_a_decision(&subject, &cases, &default)
+        {
             let (patterns, _) = &cases[0];
             if let Some(condition) = build_switch_match_condition(&subject, patterns) {
                 let then_body = materialize_switch_execution(&cases, &default, Some(0));
@@ -79,6 +85,7 @@ pub(crate) fn prune_switch_stmt(
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }];
     };
@@ -97,6 +104,7 @@ pub(crate) fn prune_switch_stmt(
                     },
                     span,
                     source_mode,
+                    strict_types,
                     attributes: Vec::new(),
                 }];
             }
@@ -109,6 +117,43 @@ pub(crate) fn prune_switch_stmt(
     } else {
         Vec::new()
     }
+}
+
+/// Returns whether rewriting this single-case switch into an `if` would put a node the CHECKER
+/// filed a local-binding decision against at TWO syntactic positions.
+///
+/// The decisions are keyed BY SPAN and a clone carries the original's span, so one decision would
+/// then name two statements — the invariant `checker::binding_decision_ambiguity` certified on the
+/// ORIGINAL program, and the one EIR lowering consults the maps under. This rewrite is the second
+/// pass that can break it (DCE tail-sinking is the other, guarded by the same walker); it runs in
+/// the normalize/prune phases, which is why `optimize::PostTypecheckOptimizer::prune` and
+/// `::normalize` install the decision spans as well.
+///
+/// Two things the rewrite writes twice:
+/// - the DEFAULT body — `materialize_switch_execution` appends it to the `then` branch when the
+///   single case falls through, and emits it AGAIN as the whole `else` branch. It is the only body
+///   that can be duplicated: the case body is materialized into `then` alone. It is checked
+///   WHETHER OR NOT the case actually falls through into it, because deciding that here would mean
+///   re-deriving `materialize_switch_execution`'s stop rule — and a rewrite this pass declines is
+///   cheaper than a stop rule that drifts out of step with it.
+/// - the SUBJECT expression — `build_switch_match_condition` clones it once per case pattern, so
+///   more than one pattern means more than one copy. (Kill sites are filed against an EXPRESSION
+///   span, which is why the subject is checked at all.)
+///
+/// A `true` answer costs the optimization on that one switch and nothing else.
+fn single_case_rewrite_would_clone_a_decision(
+    subject: &Expr,
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: &Option<Vec<Stmt>>,
+) -> bool {
+    let default_body_carries_a_decision = default
+        .as_ref()
+        .is_some_and(|body| stmts_carry_local_binding_decision(body));
+    let subject_is_cloned = cases
+        .first()
+        .is_some_and(|(patterns, _)| patterns.len() > 1);
+    default_body_carries_a_decision
+        || (subject_is_cloned && expr_carries_local_binding_decision(subject))
 }
 
 /// Optimizes a `match` expression by folding a known scalar subject value into the arms.
@@ -262,28 +307,11 @@ pub(crate) fn compare_scalar_strict(left: &ScalarValue, right: &ScalarValue) -> 
 
 /// Loose PHP-style switch comparison between two scalar values.
 ///
-/// String compares by value; float compares by numeric value; int is extracted via
-/// `scalar_dispatch_int`. Cross-type comparisons between string/float and other types
-/// yield `None` (indeterminate).
+/// A `switch` case is decided by PHP's `==`, so this is exactly `loose_eq_values`: `case
+/// true` matches any truthy subject (`switch (2)` selects it), `case null` matches `0` and
+/// `""`, and PHP 8's string/number rules make `case 0` *not* match the subject `"foo"`.
+/// Returns `None` only when the pair has no compile-time answer, which keeps the switch on
+/// the runtime path.
 pub(crate) fn compare_scalar_switch(left: &ScalarValue, right: &ScalarValue) -> Option<bool> {
-    match (left, right) {
-        (ScalarValue::String(left), ScalarValue::String(right)) => Some(left == right),
-        (ScalarValue::Float(left), ScalarValue::Float(right)) => Some(left == right),
-        (ScalarValue::String(_), _) | (_, ScalarValue::String(_)) => None,
-        (ScalarValue::Float(_), _) | (_, ScalarValue::Float(_)) => None,
-        _ => Some(scalar_dispatch_int(left)? == scalar_dispatch_int(right)?),
-    }
-}
-
-/// Converts a scalar value to an integer for switch dispatch purposes.
-///
-/// Returns `Some(i64)` for Null (as 0), Bool (0/1), and Int values.
-/// Returns `None` for Float and String, which cannot be safely coerced in this context.
-pub(crate) fn scalar_dispatch_int(value: &ScalarValue) -> Option<i64> {
-    match value {
-        ScalarValue::Null => Some(0),
-        ScalarValue::Bool(value) => Some(i64::from(*value)),
-        ScalarValue::Int(value) => Some(*value),
-        ScalarValue::Float(_) | ScalarValue::String(_) => None,
-    }
+    loose_eq_values(left, right)
 }

@@ -12,12 +12,9 @@
 
 use super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "phpversion",
+    contract: "phpversion",
     area: NetworkEnv,
-    params: [extension = EvalBuiltinDefaultValue::Null],
     direct: NetworkEnv,
     values: NetworkEnv,
 }
@@ -43,7 +40,7 @@ pub(in crate::interpreter) fn eval_builtin_phpversion(
 pub(in crate::interpreter) fn eval_phpversion_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    values.string(EVAL_PHP_VERSION)
+    values.string(crate::eval_php_profile::eval_php_version_string())
 }
 
 /// Returns the reported PHP version for a loaded extension, or `false` for anything else.
@@ -61,7 +58,7 @@ pub(in crate::interpreter) fn eval_phpversion_extension_result(
     let name = values.string_bytes(extension)?;
     let name = String::from_utf8_lossy(&name);
     if eval_extension_is_loaded(name.as_ref()) {
-        values.string(EVAL_PHP_VERSION)
+        values.string(crate::eval_php_profile::eval_php_version_string())
     } else {
         values.bool_value(false)
     }

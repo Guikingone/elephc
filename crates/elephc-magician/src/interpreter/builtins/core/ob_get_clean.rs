@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "ob_get_clean",
+    contract: "ob_get_clean",
     area: Core,
-    params: [],
     direct: Core,
     values: Core,
 }

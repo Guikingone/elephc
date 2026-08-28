@@ -2,7 +2,7 @@
 title: "arsort()"
 description: "Sorts an array in descending order and maintains index association."
 sidebar:
-  order: 47
+  order: 48
 ---
 
 ## arsort()
@@ -24,12 +24,6 @@ Sorts an array in descending order and maintains index association.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/arsort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/arsort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

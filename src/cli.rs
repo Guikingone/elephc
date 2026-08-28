@@ -13,12 +13,31 @@ use std::collections::HashSet;
 use std::process;
 
 pub(crate) use crate::codegen::Emit;
+use crate::codegen::WebIsolation;
 use crate::codegen::platform::Target;
 use crate::native_deps::{native_help, parse_native_args, NativeCommand, NativeParseOutcome};
+
+/// The bridge crates `--with-monitoring` turns on.
+///
+/// They are also the two the `--with-<name>` surface must not offer by name.
+/// Both are ordinary bridges, so the accepted set — derived from the bridge
+/// table — would list `instrument` and `probe` for free, and the error text for
+/// a mistyped capability would advertise the two names this whole flag exists to
+/// retire. Naming them once here keeps the flag and its exclusion from drifting
+/// apart.
+const MONITORING_BRIDGES: [&str; 2] = ["instrument", "probe"];
+
+/// Non-bridge runtime capabilities accepted by `--with-<name>`. `mysqli` is not
+/// a bridge of its own: it force-injects the mysqli prelude, which links the
+/// shared `elephc_pdo` archive (and never injects the PDO classes).
+const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex", "mysqli"];
 
 /// Short usage line shown after every parameter error, alongside the `--help` hint.
 /// The full categorized reference lives in `HELP`.
 pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source-file>";
+
+/// Compiler package version embedded into the binary by Cargo.
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// ASCII mascot printed by `--mascotte`, embedded at compile time (not read
 /// from a filesystem path — the original source file lives outside this
@@ -73,24 +92,38 @@ fn wants_help(args: &[String]) -> bool {
     args.iter().any(|a| a == "-h" || a == "--help")
 }
 
+/// Returns true if `-V` or `--version` appears anywhere in the argument list.
+fn wants_version(args: &[String]) -> bool {
+    args.iter().any(|a| a == "-V" || a == "--version")
+}
+
 /// Full `--help` reference text, categorized by section. Printed to stdout
 /// with exit code 0 — this is a successful, requested action, not an error.
-pub(crate) const HELP: &str = "Usage: elephc [OPTIONS] <source-file>
+pub(crate) const HELP: &str = concat!("Usage: elephc [OPTIONS] <source-file>
 
 A PHP-to-native AOT compiler
+Version: ", env!("CARGO_PKG_VERSION"), "
 
 Arguments:
   <source-file>           Tagged .php or tagless .lfc source file to compile
 
+Subcommands:
+  native <COMMAND>        Native dependency management (see `elephc native --help`)
+  monitor <TARGET>        Profile a program built with --with-monitoring: a .php
+                          source, a binary, or a running service's address
+                          (see `elephc monitor --help`)
+
 Modes:
   --web                   Compile as a prefork HTTP server
+  --web-isolation MODE    worker (default) | pool | request; requires --web
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
+  --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
 
 Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
   --emit-ir               Emit EIR text instead of compiling
   --emit-asm              Emit assembly (.s) instead of linking
-  --emit KIND             Output kind: executable (default) | cdylib
+  --emit KIND             Output kind: executable (default) | cdylib | staticlib
 
 Target:
   --target TARGET         macos-aarch64 | ios-arm64 | ios-sim-arm64 |
@@ -99,30 +132,44 @@ Target:
 
 Codegen:
   --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
-  --null-repr=MODE        sentinel (default) | tagged
+  --null-repr=MODE        tagged (default) | sentinel
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
   --gc-stats              Print GC statistics at exit
+  --counters              Embed per-function call counters (BSS) and print exact call
+                          counts to stderr at exit
+  --with-monitoring       Embed the profiling capability, dormant until `elephc monitor`
+                          asks. Local/--exact captures report exact wall time,
+                          allocations, retained objects, DB queries/wait and calls,
+                          rooted at {main}; file I/O is not measured. A service's
+                          default answer is sampled CPU time. Inlined functions
+                          fold into their caller (as with --counters).
+  --with-monitoring=NAMES Embed it for the named functions only (comma list; trailing
+                          `*` matches by prefix; name `{main}` for the top-level root;
+                          or use @file with one name per line)
   --heap-debug            Enable heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
   --ini KEY=VALUE         Bake an INI directive override (repeatable; opcache.* honored)
+  --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
 Linking:
   --link LIB, -l LIB      Extra library to link
   --link-path DIR, -L DIR Extra library search path
   --framework NAME        macOS framework to link
-  --with-CRATE            Force-link a bridge crate (pdo, tls, crypto, phar, tz, image, web, eval)
+  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, eval, regex, mysqli, monitoring)
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers
+  --keep-symbols          Keep the symbol table (stripped by default; for profilers)
 
 Other:
   -h, --help              Print this help and exit
+  -V, --version           Print version and exit
   --mascotte              Print an ASCII mascot and a random quote before output
-";
+");
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -130,7 +177,20 @@ pub(crate) struct CliConfig {
     pub(crate) filename: String,
     pub(crate) heap_size: usize,
     pub(crate) gc_stats: bool,
+    /// Embed per-function call counters and print exact counts to stderr at exit.
+    pub(crate) counters: bool,
+    /// Embed exact per-function instrumentation (enter/exit timing + edges);
+    /// prints an exact profile to stderr at exit. Inlined functions fold into
+    /// their caller, exactly as with `--counters`.
+    pub(crate) instrument: crate::codegen::Instrumentation,
     pub(crate) heap_debug: bool,
+    /// Opt-in: make the one documented OPcache divergence (D5) LOUD instead of silent.
+    ///
+    /// Code compiled into the binary cannot be evicted, so `opcache_invalidate()` on a
+    /// manifest member can never do what the caller is asking for. Off (the default) it
+    /// reports success exactly as reference PHP does; on, it throws so a program that
+    /// RELIES on invalidation fails loudly rather than silently running stale code.
+    pub(crate) strict_opcache: bool,
     pub(crate) emit_ir: bool,
     pub(crate) null_repr: crate::codegen::NullRepr,
     pub(crate) emit_asm: bool,
@@ -139,12 +199,17 @@ pub(crate) struct CliConfig {
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
     pub(crate) emit_debug_info: bool,
+    /// Keep the symbol table in the linked executable; it is stripped by default.
+    pub(crate) keep_symbols: bool,
     pub(crate) regalloc_linear: bool,
     pub(crate) ir_opt: bool,
     pub(crate) target: Target,
     /// PHP compatibility profile used by version-dependent language/runtime
     /// surfaces. Session behavior under `--web` currently consumes it.
     pub(crate) php_version: crate::web_prelude::PhpVersion,
+    /// Where [`Self::php_version`] came from, so the compiler can distinguish a profile the
+    /// user chose from one it assumed. Reported by `php_profile::report`.
+    pub(crate) php_version_provenance: crate::php_profile::Provenance,
     pub(crate) extra_link_libs: Vec<String>,
     pub(crate) extra_link_paths: Vec<String>,
     pub(crate) extra_frameworks: Vec<String>,
@@ -152,11 +217,16 @@ pub(crate) struct CliConfig {
     /// Accept only PHP-compatible constructs: elephc extensions (`ptr`, `buffer<T>`,
     /// `packed class`, `extern`, `ifdef`, extension builtins) become compile errors.
     pub(crate) strict_php: bool,
+    /// Make an incompatible local retype (e.g. a variable assigned `int` then
+    /// later `string`) a compile error instead of a warning.
+    pub(crate) strict_locals: bool,
     pub(crate) web: bool,
-    /// Bridge crates the user force-enabled with `--with-<crate>` (short flag
-    /// names such as `"pdo"`). Each one force-links the matching staticlib and,
-    /// for crates with a PHP-surface prelude, forces that prelude's injection so
-    /// the API is available even when feature auto-detection would not trigger.
+    /// Process-isolation architecture baked into a `--web` executable.
+    pub(crate) web_isolation: WebIsolation,
+    /// Optional capabilities the user force-enabled with `--with-<name>` (short
+    /// names such as `"pdo"` or `"regex"`). Bridge names force-link their
+    /// staticlib; runtime capabilities enable their helper/native requirements.
+    /// Crates with a PHP-surface prelude also force that prelude's injection.
     /// `--with-web` is folded into `web` instead, since it aliases `--web`.
     pub(crate) with_crates: HashSet<String>,
     /// Suppresses live/completed progress and bridge-library "Linking" event lines,
@@ -178,10 +248,21 @@ pub(crate) enum Command {
     Compile(CliConfig),
     /// One validated `elephc native` subcommand.
     Native(NativeCommand),
+    /// One validated `elephc monitor` sampling invocation.
+    Monitor(crate::monitor::MonitorCommand),
 }
 
 /// Parses the exact top-level `native` selector before falling back to legacy compilation.
 pub(crate) fn parse_args(args: &[String]) -> Command {
+    if args.get(1).map(String::as_str) == Some("monitor") {
+        return match crate::monitor::parse_monitor_args(&args[2..]) {
+            Ok(command) => Command::Monitor(command),
+            Err(error) => {
+                eprintln!("{error}\n\n{}", crate::monitor::MONITOR_USAGE);
+                process::exit(1);
+            }
+        };
+    }
     if args.get(1).map(String::as_str) != Some("native") {
         return Command::Compile(parse_compile_args(args));
     }
@@ -208,10 +289,17 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         println!("{HELP}");
         process::exit(0);
     }
+    if wants_version(args) {
+        println!("elephc {VERSION}");
+        process::exit(0);
+    }
 
     let mut heap_size: usize = 8_388_608; // 8MB default
     let mut gc_stats = false;
+    let mut counters = false;
+    let mut instrument = crate::codegen::Instrumentation::Off;
     let mut heap_debug = false;
+    let mut strict_opcache = false;
     let mut emit_ir = false;
     let mut emit_asm = false;
     let mut emit = Emit::Executable;
@@ -219,15 +307,20 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut emit_timings = false;
     let mut emit_source_map = false;
     let mut emit_debug_info = false;
+    let mut keep_symbols = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
     let mut php_version = crate::web_prelude::PhpVersion::default();
+    let mut php_version_provenance = crate::php_profile::Provenance::Default;
     let mut extra_link_libs: Vec<String> = Vec::new();
     let mut extra_link_paths: Vec<String> = Vec::new();
     let mut extra_frameworks: Vec<String> = Vec::new();
     let mut defines: HashSet<String> = HashSet::new();
     let mut strict_php = false;
+    let mut strict_locals = false;
     let mut web = false;
+    let mut web_isolation = WebIsolation::default();
+    let mut web_isolation_explicit = false;
     let mut quiet = false;
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut ini_overrides: Vec<(String, String)> = Vec::new();
@@ -264,12 +357,45 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         } else if arg == "--php-version" {
             i += 1;
             php_version = parse_required_php_version(args, i);
+            php_version_provenance = crate::php_profile::Provenance::Flag;
         } else if let Some(value) = arg.strip_prefix("--php-version=") {
             php_version = parse_php_version(value);
+            php_version_provenance = crate::php_profile::Provenance::Flag;
         } else if arg == "--gc-stats" {
             gc_stats = true;
+        } else if arg == "--counters" {
+            counters = true;
+        } else if let Some(spec) = arg.strip_prefix("--with-monitoring=") {
+            // Selective instrumentation: exactness where it was asked for, full
+            // speed everywhere else. `@file` reads one name per line, because a
+            // useful set outgrows a command line quickly — and a set produced by
+            // a previous sampled run is exactly how you would build one.
+            let names = match spec.strip_prefix('@') {
+                Some(path) => match std::fs::read_to_string(path) {
+                    Ok(text) => text
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                        .map(str::to_string)
+                        .collect::<Vec<_>>(),
+                    Err(error) => fail(&format!("--with-monitoring=@{path}: {error}")),
+                },
+                None => spec
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>(),
+            };
+            if names.is_empty() {
+                fail("--with-monitoring=<names> needs at least one function name");
+            }
+            instrument = crate::codegen::Instrumentation::Only(names);
+            with_crates.extend(MONITORING_BRIDGES.iter().map(|s| s.to_string()));
         } else if arg == "--heap-debug" {
             heap_debug = true;
+        } else if arg == "--strict-opcache" {
+            strict_opcache = true;
         } else if arg == "--emit-ir" {
             emit_ir = true;
         } else if arg == "--emit-asm" {
@@ -287,6 +413,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             emit_source_map = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
+        } else if arg == "--keep-symbols" {
+            keep_symbols = true;
         } else if arg == "--quiet" || arg == "-q" {
             quiet = true;
         } else if arg == "--mascotte" {
@@ -348,22 +476,44 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             ));
         } else if arg == "--strict-php" {
             strict_php = true;
+        } else if arg == "--strict-locals" {
+            strict_locals = true;
         } else if arg == "--web" {
             web = true;
+        } else if arg == "--web-isolation" {
+            i += 1;
+            web_isolation = parse_web_isolation(&required_value(
+                args,
+                i,
+                "Missing mode after --web-isolation (expected: worker, pool, request)",
+            ));
+            web_isolation_explicit = true;
+        } else if let Some(value) = arg.strip_prefix("--web-isolation=") {
+            web_isolation = parse_web_isolation(value);
+            web_isolation_explicit = true;
         } else if let Some(name) = arg.strip_prefix("--with-") {
             // `--with-web` aliases the full `--web` mode (it owns the program
-            // entry point); every other known crate is recorded for force-link
-            // and prelude forcing. An unknown crate name is a hard error so a
-            // typo never silently no-ops.
+            // entry point); every other known bridge or runtime capability is
+            // recorded for pipeline forcing. An unknown name is a hard error
+            // so a typo never silently no-ops.
             if name == "web" {
                 web = true;
-            } else if crate::linker::bridge_lib_for_flag(name).is_some() {
+            } else if name == "monitoring" {
+                // One flag for the whole capability. `--probe` and `--instrument`
+                // used to be two ways to ask a related question, and the answer to
+                // "which one do I want" was always "it depends where I am running"
+                // — which is exactly the distinction this removes. The binary
+                // carries both mechanisms and stays dormant; `monitor` decides at
+                // run time what to collect.
+                instrument = crate::codegen::Instrumentation::All;
+                with_crates.extend(MONITORING_BRIDGES.iter().map(|s| s.to_string()));
+            } else if with_flag_is_known(name) {
                 with_crates.insert(name.to_string());
             } else {
                 fail(&format!(
-                    "Unknown crate for --with-{}: expected one of: {}",
+                    "Unknown capability for --with-{}: expected one of: {}",
                     name,
-                    crate::linker::crate_flag_names().join(", ")
+                    with_flag_names().join(", ")
                 ));
             }
         } else if arg.starts_with("--") {
@@ -390,17 +540,51 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if web && emit.is_library() {
         fail("--web cannot be combined with a library --emit kind (cdylib, staticlib)");
     }
+    // A library has no `main`, and `main` is where the profiling runtimes are
+    // initialized. Accepting this produced a library carrying an enter/exit hook
+    // at every call site with nothing able to arm them — the cost of the
+    // capability without the capability. Turning a library on would need an
+    // initialization ABI the host calls, which does not exist.
+    if emit.is_library() && !matches!(instrument, crate::codegen::Instrumentation::Off) {
+        fail(
+            "--with-monitoring cannot be combined with a library --emit kind: a library has no \
+             main, so the profiling runtime is never initialized and the hooks it \
+             embeds can never be activated",
+        );
+    }
     if web && emit_asm {
         fail("--web cannot be combined with --emit-asm");
     }
     if web && emit_ir {
         fail("--web cannot be combined with --emit-ir");
     }
+    if web_isolation_explicit && !web {
+        fail("--web-isolation requires --web (or --with-web)");
+    }
+
+    // With no explicit `--php-version`, take the profile the project already declares. Every
+    // source is optional at every level, so a lone `.php` file still resolves to the default
+    // without needing a manifest — see `php_profile::resolve`.
+    if php_version_provenance == crate::php_profile::Provenance::Default {
+        let resolved = crate::php_profile::resolve::resolve(std::path::Path::new(&filename));
+        php_version = resolved.profile;
+        php_version_provenance = resolved.provenance;
+        // Emitted here rather than carried into the config: these report how the ANSWER was
+        // reached (a clamped pin, an unreadable manifest), so they belong with the decision
+        // and are silent whenever it was unambiguous.
+        for note in resolved.notes {
+            eprintln!("  note: {note}");
+        }
+    }
+
     CliConfig {
         filename,
         heap_size,
         gc_stats,
+        counters,
+        instrument,
         heap_debug,
+        strict_opcache,
         emit_ir,
         null_repr,
         emit_asm,
@@ -409,20 +593,46 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         emit_timings,
         emit_source_map,
         emit_debug_info,
+        keep_symbols,
         regalloc_linear,
         ir_opt,
         target,
         php_version,
+        php_version_provenance,
         extra_link_libs,
         extra_link_paths,
         extra_frameworks,
         defines,
         strict_php,
+        strict_locals,
         web,
+        web_isolation,
         with_crates,
         quiet,
         ini_overrides,
     }
+}
+
+/// Returns whether a `--with-<name>` suffix selects a bridge or runtime capability.
+///
+/// The monitoring bridges are excluded: they are how `--with-monitoring` is
+/// built, not something to ask for by mechanism.
+fn with_flag_is_known(name: &str) -> bool {
+    if MONITORING_BRIDGES.contains(&name) {
+        return false;
+    }
+    crate::linker::bridge_lib_for_flag(name).is_some()
+        || RUNTIME_CAPABILITY_FLAGS.contains(&name)
+}
+
+/// Returns accepted `--with-<name>` suffixes in stable help/error order.
+fn with_flag_names() -> Vec<&'static str> {
+    crate::linker::crate_flag_names()
+        .into_iter()
+        .filter(|name| !MONITORING_BRIDGES.contains(name))
+        .chain(RUNTIME_CAPABILITY_FLAGS.iter().copied())
+        .chain(std::iter::once("monitoring"))
+        .collect()
 }
 
 /// Parses a single `--ini KEY=VALUE` assignment into a `(key, value)` pair, splitting on the
@@ -449,7 +659,7 @@ fn parse_required_php_version(
     if index < args.len() {
         parse_php_version(&args[index])
     } else {
-        fail("Missing version after --php-version (expected 8.2, 8.3, 8.4, or 8.5)")
+        fail("Missing version after --php-version (expected 8.0 through 8.6)")
     }
 }
 
@@ -457,8 +667,9 @@ fn parse_required_php_version(
 fn parse_php_version(value: &str) -> crate::web_prelude::PhpVersion {
     crate::web_prelude::PhpVersion::parse(value).unwrap_or_else(|| {
         fail(&format!(
-            "Unsupported PHP version '{}': expected 8.2, 8.3, 8.4, or 8.5",
-            value
+            "Unsupported PHP version '{}': expected one of: {}",
+            value,
+            crate::web_prelude::PhpVersion::accepted_values()
         ))
     })
 }
@@ -529,6 +740,19 @@ fn parse_ir_opt(value: &str) -> bool {
     }
 }
 
+/// Parses the compile-time web process-isolation model.
+fn parse_web_isolation(value: &str) -> WebIsolation {
+    match value {
+        "worker" => WebIsolation::Worker,
+        "pool" => WebIsolation::Pool,
+        "request" => WebIsolation::Request,
+        other => fail(&format!(
+            "Unknown --web-isolation value: {} (expected worker|pool|request)",
+            other
+        )),
+    }
+}
+
 /// Parse a target string to a Target enum, or fail with an error message.
 fn parse_target(value: &str) -> Target {
     match Target::parse(value) {
@@ -576,6 +800,36 @@ fn fail(message: &str) -> ! {
 
 #[cfg(test)]
 mod tests {
+    /// `--with-<name>` must not offer the two mechanism names by another door.
+    ///
+    /// `instrument` and `probe` are ordinary bridges, and the accepted set is
+    /// derived from the bridge table — so without an explicit exclusion the CLI
+    /// keeps accepting `--with-instrument` and, worse, *advertises* both names in
+    /// the error text every user sees after a typo. That is the surface the
+    /// single `--with-monitoring` flag exists to replace, reachable by a route
+    /// nobody thought to check.
+    #[test]
+    fn the_with_surface_offers_the_capability_not_its_mechanisms() {
+        let names = super::with_flag_names();
+        for hidden in super::MONITORING_BRIDGES {
+            assert!(
+                !names.contains(&hidden),
+                "--with-{hidden} is still offered; the accepted set is what the \
+                 error text advertises"
+            );
+            assert!(
+                !super::with_flag_is_known(hidden),
+                "--with-{hidden} is still accepted"
+            );
+        }
+        assert!(
+            names.contains(&"monitoring"),
+            "the capability that replaced them must be listed"
+        );
+        // The exclusion must be surgical: every other bridge stays offered.
+        assert!(names.contains(&"pdo") && names.contains(&"tls"));
+    }
+
     use super::*;
 
     /// Extracts the compile configuration returned for a legacy invocation.
@@ -584,6 +838,56 @@ mod tests {
             panic!("expected compile command");
         };
         config
+    }
+
+    /// Verifies the symbol table is stripped unless the invocation asks to keep it.
+    ///
+    /// The default is the load-bearing part: stripping removes about a quarter of every linked
+    /// executable, so a regression that silently flipped this back would cost that on every build
+    /// while breaking nothing a test would otherwise notice.
+    #[test]
+    fn symbols_are_stripped_unless_kept() {
+        let default = compile_config(&["elephc".to_string(), "app.php".to_string()]);
+        assert!(!default.keep_symbols, "stripping is the default");
+
+        let kept = compile_config(&[
+            "elephc".to_string(),
+            "--keep-symbols".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(kept.keep_symbols, "--keep-symbols must keep the symbol table");
+    }
+
+    /// Verifies `--debug-info` and `--keep-symbols` are independent flags.
+    ///
+    /// They are consumed together at link time — either one keeps the names — but each must parse
+    /// on its own, so that reading one out of the config cannot be mistaken for the other.
+    #[test]
+    fn debug_info_and_keep_symbols_parse_independently() {
+        let debug = compile_config(&[
+            "elephc".to_string(),
+            "--debug-info".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(debug.emit_debug_info);
+        assert!(!debug.keep_symbols, "--debug-info is not --keep-symbols");
+
+        let both = compile_config(&[
+            "elephc".to_string(),
+            "--debug-info".to_string(),
+            "--keep-symbols".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(both.emit_debug_info && both.keep_symbols);
+    }
+
+    /// Verifies `--keep-symbols` appears in the help text.
+    ///
+    /// `docs/compiling/cli-reference.md` is authoritative and must stay in sync with this file; a
+    /// flag missing from `--help` is the first way those two drift apart.
+    #[test]
+    fn keep_symbols_is_documented_in_help() {
+        assert!(HELP.contains("--keep-symbols"));
     }
 
     /// Verifies an empty `--define` symbol is rejected, matching the `--define=` form,
@@ -604,6 +908,7 @@ mod tests {
     fn emit_kind_parses_canonical_spellings() {
         assert_eq!(parse_emit("executable"), Emit::Executable);
         assert_eq!(parse_emit("cdylib"), Emit::Cdylib);
+        assert_eq!(parse_emit("staticlib"), Emit::Staticlib);
     }
 
     /// Verifies the accepted aliases map to their canonical variants so users coming
@@ -614,6 +919,8 @@ mod tests {
         assert_eq!(parse_emit("bin"), Emit::Executable);
         assert_eq!(parse_emit("dylib"), Emit::Cdylib);
         assert_eq!(parse_emit("shared"), Emit::Cdylib);
+        assert_eq!(parse_emit("static"), Emit::Staticlib);
+        assert_eq!(parse_emit("lib"), Emit::Staticlib);
     }
 
     /// Verifies the canonical `--ir-opt=` spellings toggle the EIR optimization
@@ -637,6 +944,38 @@ mod tests {
         let args = vec!["elephc".into(), "--web".into(), "app.php".into()];
         let config = compile_config(&args);
         assert!(config.web);
+        assert_eq!(config.web_isolation, WebIsolation::Worker);
+    }
+
+    /// Verifies all explicit web-isolation spellings select their compile-time model.
+    #[test]
+    fn web_isolation_parses_all_modes() {
+        for (value, expected) in [
+            ("worker", WebIsolation::Worker),
+            ("pool", WebIsolation::Pool),
+            ("request", WebIsolation::Request),
+        ] {
+            let args = vec![
+                "elephc".into(),
+                "--web".into(),
+                format!("--web-isolation={value}"),
+                "app.php".into(),
+            ];
+            assert_eq!(compile_config(&args).web_isolation, expected);
+        }
+    }
+
+    /// Verifies the split spelling selects the same mode as the equals spelling.
+    #[test]
+    fn web_isolation_accepts_split_form() {
+        let args = vec![
+            "elephc".into(),
+            "--web".into(),
+            "--web-isolation".into(),
+            "pool".into(),
+            "app.php".into(),
+        ];
+        assert_eq!(compile_config(&args).web_isolation, WebIsolation::Pool);
     }
 
     /// Verifies the absence of `--web` leaves the web flag off.
@@ -645,16 +984,19 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = compile_config(&args);
         assert!(!config.web);
+        assert_eq!(config.web_isolation, WebIsolation::Worker);
     }
 
     /// Verifies every maintained PHP minor maps to its exact compatibility profile.
     #[test]
     fn maintained_php_versions_parse() {
+        assert_eq!(parse_php_version("8.0").version_id(), 80000);
+        assert_eq!(parse_php_version("8.1").version_id(), 80100);
         assert_eq!(parse_php_version("8.2").version_id(), 80200);
         assert_eq!(parse_php_version("8.3").version_id(), 80300);
         assert_eq!(parse_php_version("8.4").version_id(), 80400);
         assert_eq!(parse_php_version("8.5").version_id(), 80500);
-        assert!(crate::web_prelude::PhpVersion::parse("8.1").is_none());
+        assert_eq!(parse_php_version("8.6").version_id(), 80600);
     }
 
     /// Verifies both CLI spellings store the selected PHP compatibility profile.
@@ -693,7 +1035,44 @@ mod tests {
         assert!(!config.web);
     }
 
-    /// Verifies multiple `--with-<crate>` flags accumulate into the forced set.
+    /// Verifies `--with-iconv` records the charset bridge for force-linking.
+    #[test]
+    fn with_iconv_records_forced_crate() {
+        let args = vec!["elephc".into(), "--with-iconv".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("iconv"));
+        assert!(!config.web);
+    }
+
+    /// Verifies `--with-regex` records the dynamic-code regex capability without web mode.
+    #[test]
+    fn with_regex_records_runtime_capability() {
+        let args = vec![
+            "elephc".into(),
+            "--with-regex".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("regex"));
+        assert!(!config.web);
+    }
+
+    /// Verifies `--with-mysqli` records the runtime capability that force-injects
+    /// the mysqli prelude (which links the shared `elephc_pdo` archive), without
+    /// touching web mode.
+    #[test]
+    fn with_mysqli_records_runtime_capability() {
+        let args = vec![
+            "elephc".into(),
+            "--with-mysqli".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("mysqli"));
+        assert!(!config.web);
+    }
+
+    /// Verifies multiple `--with-<name>` flags accumulate into the forced set.
     #[test]
     fn multiple_with_crates_accumulate() {
         let args = vec![
@@ -802,6 +1181,22 @@ mod tests {
         assert!(config.defines.contains("FEATURE"));
     }
 
+    /// Verifies `--strict-locals` sets the strict_locals flag on the parsed config.
+    #[test]
+    fn strict_locals_flag_sets_strict_locals() {
+        let args = vec!["elephc".into(), "--strict-locals".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.strict_locals);
+    }
+
+    /// Verifies the absence of `--strict-locals` defaults to permissive local retyping.
+    #[test]
+    fn no_strict_locals_flag_defaults_off() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(!config.strict_locals);
+    }
+
     /// Verifies `--quiet` sets the quiet flag.
     #[test]
     fn quiet_flag_sets_quiet() {
@@ -850,6 +1245,39 @@ mod tests {
     fn wants_help_false_without_help_flag() {
         let args = vec!["elephc".into(), "app.php".into()];
         assert!(!wants_help(&args));
+    }
+
+    /// Verifies `--version` is detected anywhere in the argument list.
+    #[test]
+    fn wants_version_detects_long_flag_anywhere() {
+        let args = vec![
+            "elephc".into(),
+            "--check".into(),
+            "--version".into(),
+            "app.php".into(),
+        ];
+        assert!(wants_version(&args));
+    }
+
+    /// Verifies `-V` is detected as the short alias for `--version`.
+    #[test]
+    fn wants_version_detects_short_flag() {
+        let args = vec!["elephc".into(), "-V".into()];
+        assert!(wants_version(&args));
+    }
+
+    /// Verifies normal arguments are not mistaken for a version request.
+    #[test]
+    fn wants_version_false_without_version_flag() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        assert!(!wants_version(&args));
+    }
+
+    /// Verifies help exposes both the current compiler version and its version flags.
+    #[test]
+    fn help_includes_version_and_version_flags() {
+        assert!(HELP.contains(&format!("Version: {VERSION}")));
+        assert!(HELP.contains("-V, --version"));
     }
 
     /// Verifies `--mascotte` is detected anywhere in the argument list.

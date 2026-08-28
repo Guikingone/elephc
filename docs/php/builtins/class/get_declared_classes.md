@@ -2,7 +2,7 @@
 title: "get_declared_classes()"
 description: "Returns an array of the names of the defined classes."
 sidebar:
-  order: 80
+  order: 87
 ---
 
 ## get_declared_classes()
@@ -23,12 +23,6 @@ Returns an array of the names of the defined classes.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_declared_classes.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_declared_classes.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

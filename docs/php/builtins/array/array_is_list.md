@@ -2,7 +2,7 @@
 title: "array_is_list()"
 description: "Checks whether an array is a list (sequential 0-based integer keys)."
 sidebar:
-  order: 17
+  order: 18
 ---
 
 ## array_is_list()
@@ -24,12 +24,6 @@ Checks whether an array is a list (sequential 0-based integer keys).
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

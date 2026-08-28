@@ -37,12 +37,19 @@ pub fn emit_base64_encode(emitter: &mut Emitter) {
     emitter.comment("--- runtime: base64_encode ---");
     emitter.label_global("__rt_base64_encode");
 
-    // -- set up concat_buf destination --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // destination pointer
-    emitter.instruction("mov x10, x9");                                         // save result start
+    // -- reserve the worst-case 4-chars-per-3-bytes result before writing anything --
+    emitter.instruction("sub sp, sp, #32");                                     // allocate spill space for the borrowed source string
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across the reservation call
+    emitter.instruction("add x29, sp, #16");                                    // establish the base64 encoder frame pointer
+    emitter.instruction("stp x1, x2, [sp]");                                    // save the source pointer and length across the reservation call
+    emitter.instruction("adds x0, x2, x2");                                     // start the 4*ceil(len/3) upper bound from 2 * source length
+    emitter.instruction("b.cs __rt_b64enc_size_overflow");                      // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("adds x0, x0, #4");                                     // add the padded final quantum so short inputs still fit the bound
+    emitter.instruction("b.cs __rt_b64enc_size_overflow");                      // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the encoded result
+    emitter.instruction("mov x9, x0");                                          // destination pointer
+    emitter.instruction("mov x10, x0");                                         // save result start
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload the borrowed source pointer and length
     emitter.instruction("mov x11, x2");                                         // remaining byte count
 
     // -- load base64 lookup table --
@@ -138,10 +145,14 @@ pub fn emit_base64_encode(emitter: &mut Emitter) {
     emitter.label("__rt_b64enc_done");
     emitter.instruction("mov x1, x10");                                         // result pointer
     emitter.instruction("sub x2, x9, x10");                                     // result length
-    emitter.instruction("ldr x8, [x6]");                                        // reload offset
-    emitter.instruction("add x8, x8, x2");                                      // advance by result length
-    emitter.instruction("str x8, [x6]");                                        // store updated offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the base64 encoder frame
     emitter.instruction("ret");                                                 // return
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_b64enc_size_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 }
 
 /// Emits the x86_64 Linux variant of `__rt_base64_encode`.
@@ -155,12 +166,21 @@ fn emit_base64_encode_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: base64_encode ---");
     emitter.label_global("__rt_base64_encode");
 
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer offset before appending the encoded bytes
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // load the base address of the shared concat buffer
-    emitter.instruction("add r9, r8");                                          // compute the destination pointer at the current concat-buffer tail
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the reservation and publish calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the borrowed source string
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the source pointer and length
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source pointer across the reservation call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the source byte count across the reservation call
+    emitter.instruction("mov rax, rdx");                                        // seed the encoded-size bound from the source byte count
+    emitter.instruction("add rax, rax");                                        // start the 4*ceil(len/3) upper bound from 2 * source length
+    emitter.instruction("jc __rt_b64enc_size_overflow_linux_x86_64");           // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("add rax, 4");                                          // add the padded final quantum so short inputs still fit the bound
+    emitter.instruction("jc __rt_b64enc_size_overflow_linux_x86_64");           // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the encoded result
+    emitter.instruction("mov r9, rax");                                         // compute the destination pointer at the reserved result start
     emitter.instruction("mov r10, r9");                                         // preserve the encoded string start pointer for the return value
-    emitter.instruction("mov rcx, rdx");                                        // copy the source byte count into a decrementing loop counter
-    emitter.instruction("mov rsi, rax");                                        // copy the source pointer into a cursor register for byte-by-byte reads
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // copy the source byte count into a decrementing loop counter
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // copy the source pointer into a cursor register for byte-by-byte reads
     abi::emit_symbol_address(emitter, "r11", "_b64_encode_tbl");                // load the base64 lookup-table address for the encoding loop
 
     emitter.label("__rt_b64enc_loop_linux_x86_64");
@@ -261,12 +281,14 @@ fn emit_base64_encode_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_b64enc_done_linux_x86_64");
     emitter.instruction("mov rax, r10");                                        // return the encoded string start pointer in the standard x86_64 string result register
-    emitter.instruction("mov rdx, r9");                                         // copy the concat-buffer tail into the length scratch register
+    emitter.instruction("mov rdx, r9");                                         // copy the destination cursor into the length scratch register
     emitter.instruction("sub rdx, r10");                                        // compute the encoded string length from the written byte count
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // temporarily publish the absolute concat-buffer tail before normalizing the shared offset
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // reload the absolute concat-buffer tail through the shared offset slot
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // load the concat-buffer base so the shared offset can stay relative
-    emitter.instruction("sub r8, r9");                                          // convert the absolute concat-buffer tail back into the shared relative offset
-    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated relative concat-buffer offset for later string appenders
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("add rsp, 32");                                         // release the base64 encoder spill slots before returning the encoded string
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the encoded string
     emitter.instruction("ret");                                                 // return the encoded string through the standard x86_64 string result registers
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_b64enc_size_overflow_linux_x86_64");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline reachable from every caller
 }

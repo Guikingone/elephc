@@ -23,7 +23,7 @@ use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, LocalKind, Module};
-use crate::names::{method_symbol, static_method_symbol};
+use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
@@ -501,7 +501,9 @@ fn emit_static_method_call_aarch64(
 ) {
     let fail_label = "__elephc_eval_value_static_method_call_fail";
     let done_label = "__elephc_eval_value_static_method_call_done";
-    emitter.instruction(&format!("sub sp, sp, #{}", STATIC_METHOD_HELPER_FRAME_SIZE)); // reserve helper frame plus a boundary exception handler
+    emitter.instruction(
+        &format!("sub sp, sp, #{}", STATIC_METHOD_HELPER_FRAME_SIZE)
+    );                                                                          // reserve helper frame plus a boundary exception handler
     emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #64");                                    // establish a stable helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
@@ -527,7 +529,9 @@ fn emit_static_method_call_aarch64(
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the Rust caller frame
-    emitter.instruction(&format!("add sp, sp, #{}", STATIC_METHOD_HELPER_FRAME_SIZE)); // release the helper frame and boundary handler
+    emitter.instruction(
+        &format!("add sp, sp, #{}", STATIC_METHOD_HELPER_FRAME_SIZE)
+    );                                                                          // release the helper frame and boundary handler
     emitter.instruction("ret");                                                 // return the boxed static method result to Rust
 }
 
@@ -543,7 +547,9 @@ fn emit_static_method_call_x86_64(
     let done_label = "__elephc_eval_value_static_method_call_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction(&format!("sub rsp, {}", STATIC_METHOD_HELPER_FRAME_SIZE)); // reserve aligned slots plus a boundary exception handler
+    emitter.instruction(
+        &format!("sub rsp, {}", STATIC_METHOD_HELPER_FRAME_SIZE)
+    );                                                                          // reserve aligned slots plus a boundary exception handler
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested method-name pointer
@@ -693,13 +699,13 @@ fn emit_aarch64_method_exception_boundary_push(
     emitter.instruction(&format!(
         "str x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                          // save diagnostic suppression depth for restoration
+    ));                                                                         // save diagnostic suppression depth for restoration
     emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!(
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
-    ));                                                                          // pass the boundary jmp_buf to setjmp
+    ));                                                                         // pass the boundary jmp_buf to setjmp
     emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native methods
     emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a method Throwable escaped
 }
@@ -712,7 +718,7 @@ fn emit_aarch64_method_exception_boundary_pop(emitter: &mut Emitter, handler_off
     emitter.instruction(&format!(
         "ldr x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                          // reload the saved diagnostic suppression depth
+    ));                                                                         // reload the saved diagnostic suppression depth
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
 }
 
@@ -724,20 +730,24 @@ fn emit_x86_64_method_exception_boundary_push(
 ) {
     emitter.comment("push eval method exception boundary");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base)); // save the previous native exception-handler head
+    emitter.instruction(
+        &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
+    );                                                                          // save the previous native exception-handler head
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)); // preserve the caller activation frame across method unwinding
+    emitter.instruction(
+        &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
+    );                                                                          // preserve the caller activation frame across method unwinding
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
     emitter.instruction(&format!(
         "mov QWORD PTR [rbp - {}], r10",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                          // save diagnostic suppression depth for restoration
+    ));                                                                         // save diagnostic suppression depth for restoration
     emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!(
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
-    ));                                                                          // pass the boundary jmp_buf to setjmp
+    ));                                                                         // pass the boundary jmp_buf to setjmp
     emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native methods
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
     emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a method Throwable escaped
@@ -746,12 +756,14 @@ fn emit_x86_64_method_exception_boundary_push(
 /// Emits an x86_64 boundary pop after a native method call returns to magician.
 fn emit_x86_64_method_exception_boundary_pop(emitter: &mut Emitter, handler_base: usize) {
     emitter.comment("pop eval method exception boundary");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler_base)); // reload the previous native exception-handler head
+    emitter.instruction(
+        &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
+    );                                                                          // reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!(
         "mov r10, QWORD PTR [rbp - {}]",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                          // reload the saved diagnostic suppression depth
+    ));                                                                         // reload the saved diagnostic suppression depth
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
 }
 
@@ -808,10 +820,7 @@ fn emit_aarch64_static_method_dispatch(
     fail_label: &str,
 ) {
     for (class_name, class_slots) in grouped_static_slots(slots) {
-        let next_label = format!(
-            "__elephc_eval_static_method_next_{}",
-            label_fragment(class_name)
-        );
+        let next_label = join_php_symbol("__elephc_eval_static_method_next", &[class_name]);
         emit_aarch64_static_class_name_compare(emitter, data, class_name, &next_label);
         for slot in class_slots {
             emit_aarch64_static_method_name_compare(module, emitter, data, slot, fail_label);
@@ -830,8 +839,8 @@ fn emit_x86_64_static_method_dispatch(
 ) {
     for (class_name, class_slots) in grouped_static_slots(slots) {
         let next_label = format!(
-            "__elephc_eval_static_method_next_{}_x",
-            label_fragment(class_name)
+            "{}_x",
+            join_php_symbol("__elephc_eval_static_method_next", &[class_name])
         );
         emit_x86_64_static_class_name_compare(emitter, data, class_name, &next_label);
         for slot in class_slots {
@@ -1134,14 +1143,22 @@ fn emit_x86_64_method_scope_check(
     fail_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = x86_64_method_scope_offsets(is_static);
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)); // reload the active eval class-scope pointer
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)); // reload the active eval class-scope length
+    emitter.instruction(
+        &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
+    );                                                                          // reload the active eval class-scope pointer
+    emitter.instruction(
+        &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
+    );                                                                          // reload the active eval class-scope length
     emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
     emitter.instruction(&format!("jz {}", fail_label));                         // reject scoped method access outside a class scope
     for scope_name in allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)); // reload the active eval class-scope pointer
-        emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)); // reload the active eval class-scope length
+        emitter.instruction(
+            &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
+        );                                                                      // reload the active eval class-scope pointer
+        emitter.instruction(
+            &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
+        );                                                                      // reload the active eval class-scope length
         abi::emit_symbol_address(emitter, "rdx", &label);
         abi::emit_load_int_immediate(emitter, "rcx", len as i64);
         emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
@@ -1913,7 +1930,9 @@ fn emit_aarch64_load_eval_arg(
     abi::emit_call_label(emitter, &value_int_symbol);
     emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed index while loading from the argument array
     emitter.instruction("ldr x1, [x29, #-16]");                                 // pass the boxed index to the eval array reader
-    emitter.instruction(&format!("ldr x0, [x29, #-{}]", arg_array_frame_offset)); // pass the eval argument array to the reader
+    emitter.instruction(
+        &format!("ldr x0, [x29, #-{}]", arg_array_frame_offset)
+    );                                                                          // pass the eval argument array to the reader
     abi::emit_call_label(emitter, &array_get_symbol);
     emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed eval argument for coercion
 }
@@ -2309,16 +2328,20 @@ fn grouped_static_slots(
 }
 
 /// Returns a platform-safe body label for a method slot.
+///
+/// The class/impl-class/method triplet is joined through `join_php_symbol()` so two slots whose
+/// names differ only in where an underscore falls cannot land on the same label.
 fn method_body_label(module: &Module, slot: &EvalMethodSlot) -> String {
     let suffix = match module.target.arch {
         Arch::AArch64 => "",
         Arch::X86_64 => "_x",
     };
     format!(
-        "__elephc_eval_method_{}_{}_{}{}",
-        label_fragment(&slot.class_name),
-        label_fragment(&slot.impl_class),
-        label_fragment(&slot.method),
+        "{}{}",
+        join_php_symbol(
+            "__elephc_eval_method",
+            &[&slot.class_name, &slot.impl_class, &slot.method]
+        ),
         suffix
     )
 }
@@ -2329,16 +2352,19 @@ fn method_access_miss_label(module: &Module, slot: &EvalMethodSlot) -> String {
 }
 
 /// Returns a platform-safe body label for a static method slot.
+///
+/// Uses the same injective join as `method_body_label()` under a distinct symbol prefix.
 fn static_method_body_label(module: &Module, slot: &EvalStaticMethodSlot) -> String {
     let suffix = match module.target.arch {
         Arch::AArch64 => "",
         Arch::X86_64 => "_x",
     };
     format!(
-        "__elephc_eval_static_method_{}_{}_{}{}",
-        label_fragment(&slot.class_name),
-        label_fragment(&slot.impl_class),
-        label_fragment(&slot.method),
+        "{}{}",
+        join_php_symbol(
+            "__elephc_eval_static_method_body",
+            &[&slot.class_name, &slot.impl_class, &slot.method]
+        ),
         suffix
     )
 }
@@ -2404,13 +2430,6 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-/// Converts arbitrary PHP metadata names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {

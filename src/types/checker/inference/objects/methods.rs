@@ -107,6 +107,11 @@ impl Checker {
                     return Ok(PhpType::Callable);
                 }
                 "call" => {
+                    // `call` INVOKES the receiver closure with `$args[1..]`, and the receiver's
+                    // signature is not resolvable here — the arguments are conservatively
+                    // reference-aliased. (`bindTo` above only rebinds `$this`; it invokes
+                    // nothing, so its arguments are ordinary by-value reads.)
+                    self.record_unresolved_callee_argument_aliases(args);
                     for arg in args {
                         self.infer_type(arg, env)?;
                     }
@@ -129,10 +134,15 @@ impl Checker {
         // `0`. With no declaring class the runtime would fatal, so `mixed` is the
         // safe static result.
         if matches!(obj_ty, PhpType::Mixed) {
+            // The callee is picked from the runtime class id over every candidate that declares
+            // the method, so no single parameter list governs the arguments: any candidate's
+            // by-reference parameter would alias the local behind them.
+            self.record_unresolved_callee_argument_aliases(args);
             return Ok(self
                 .mixed_receiver_method_return_type(method, args.len())
                 .unwrap_or(PhpType::Mixed));
         }
+        self.record_unresolved_callee_argument_aliases(args);
         Ok(PhpType::Int)
     }
 
@@ -240,6 +250,9 @@ impl Checker {
         else {
             return Ok(PhpType::Void);
         };
+        // A runtime method name resolves no signature, so the arguments are conservatively
+        // reference-aliased — see `Checker::record_unresolved_callee_argument_aliases`.
+        self.record_unresolved_callee_argument_aliases(args);
         self.infer_type(method, env)?;
         for arg in args {
             self.infer_type(arg, env)?;
@@ -279,12 +292,13 @@ impl Checker {
             &format!("Method {}::{}", interface_name, method),
             env,
         )?;
-        self.check_known_callable_call(
+        self.check_user_declared_call(
             &sig,
             &normalized_args,
             expr.span,
             env,
             &format!("Method {}::{}", interface_name, method),
+            interface_name,
         )?;
         let late_static_return = self.instance_method_late_static_return(interface_name, &method_key);
         match late_static_return {
@@ -370,12 +384,16 @@ impl Checker {
                         .get(&method_key)
                         .map(String::as_str)
                         .unwrap_or(class_name);
-                    if !self.can_access_member(declaring_class, visibility) {
+                    if !self.can_access_member(declaring_class, visibility)
+                        && !self.can_access_pdo_prelude_internal_method(class_name, &method_key)
+                        && !self.can_access_mysqli_prelude_internal_method(class_name, &method_key)
+                    {
                         // PHP raises this as a catchable `Error` at runtime instead of a
                         // compile-time rejection. Record the throw site so EIR lowering
                         // emits the throw sequence, and continue with the declared return
                         // type so later passes stay type-consistent.
-                        self.throw_access_sites.insert(
+                        crate::types::checker::record_throw_access_site(
+                            &mut self.throw_access_sites,
                             expr.span,
                             crate::types::ThrowAccessInfo {
                                 span: expr.span,
@@ -414,20 +432,22 @@ impl Checker {
                     env,
                 )?;
                 if allow_by_ref_spread {
-                    self.check_known_callable_call_allowing_by_ref_spread(
+                    self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Method {}::{}", class_name, method),
+                        class_name,
                     )?;
                 } else {
-                    self.check_known_callable_call(
+                    self.check_user_declared_call(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Method {}::{}", class_name, method),
+                        class_name,
                     )?;
                 }
             } else if let Some(sig) = class_info.methods.get("__call") {
@@ -444,20 +464,22 @@ impl Checker {
                     env,
                 )?;
                 if allow_by_ref_spread {
-                    self.check_known_callable_call_allowing_by_ref_spread(
+                    self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Method {}::__call", class_name),
+                        class_name,
                     )?;
                 } else {
-                    self.check_known_callable_call(
+                    self.check_user_declared_call(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Method {}::__call", class_name),
+                        class_name,
                     )?;
                 }
                 magic_return_ty = Some(effective_sig.return_type.clone());
@@ -528,19 +550,32 @@ impl Checker {
                         }
                     }
                 }
-                if method_variadic_tail_needs_iterable(
-                    &normalized_args,
-                    sig,
-                    regular_param_count,
-                    env,
-                ) && !method_variadic_param_is_by_ref(sig)
+                let variadic_is_declared = declared_flags
+                    .get(regular_param_count)
+                    .copied()
+                    .unwrap_or(false);
+                if !variadic_is_declared
+                    && method_variadic_tail_needs_iterable(
+                        &normalized_args,
+                        sig,
+                        regular_param_count,
+                        env,
+                    )
+                    && !method_variadic_param_is_by_ref(sig)
                 {
                     if let Some((_, variadic_ty)) = sig.params.last_mut() {
                         *variadic_ty = PhpType::Iterable;
                     }
-                } else if sig.variadic.is_some()
+                } else if !variadic_is_declared
+                    && sig.variadic.is_some()
                     && arg_types.len() > regular_param_count
                     && !method_variadic_param_is_by_ref(sig)
+                    // A declared element type on the variadic (`mixed ...$xs`, `int ...$xs`) is
+                    // the contract, exactly like a declared regular parameter above: call-site
+                    // arguments are validated against it and must never narrow it. Without this
+                    // guard `mixed ...$xs` was rewritten to the widened argument type, and a
+                    // later checker pass then rejected the very call that produced it.
+                    && !declared_flags.get(regular_param_count).copied().unwrap_or(false)
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
@@ -858,7 +893,10 @@ impl Checker {
                         .get(&method_key)
                         .map(String::as_str)
                         .unwrap_or(class_name);
-                    if !self.can_access_member(declaring_class, visibility) {
+                    if !self.can_access_member(declaring_class, visibility)
+                        && !self.can_access_pdo_exception_internal_factory(class_name, method)
+                        && !self.can_access_mysqli_prelude_internal_factory(class_name, method)
+                    {
                         return Err(CompileError::new(
                             expr.span,
                             &format!(
@@ -885,20 +923,22 @@ impl Checker {
                     env,
                 )?;
                 if allow_by_ref_spread {
-                    self.check_known_callable_call_allowing_by_ref_spread(
+                    self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Static method {}::{}", class_name, method),
+                        class_name,
                     )?;
                 } else {
-                    self.check_known_callable_call(
+                    self.check_user_declared_call(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Static method {}::{}", class_name, method),
+                        class_name,
                     )?;
                 }
             } else if parent_call || self_call {
@@ -952,7 +992,7 @@ impl Checker {
                     env,
                 )?;
                 if allow_by_ref_spread {
-                    self.check_known_callable_call_allowing_by_ref_spread(
+                    self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
@@ -963,9 +1003,10 @@ impl Checker {
                             class_name,
                             method
                         ),
+                        class_name,
                     )?;
                 } else {
-                    self.check_known_callable_call(
+                    self.check_user_declared_call(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
@@ -976,6 +1017,7 @@ impl Checker {
                             class_name,
                             method
                         ),
+                        class_name,
                     )?;
                 }
             } else if class_info.methods.contains_key(&method_key) {
@@ -1001,20 +1043,22 @@ impl Checker {
                     env,
                 )?;
                 if allow_by_ref_spread {
-                    self.check_known_callable_call_allowing_by_ref_spread(
+                    self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Static method {}::__callStatic", class_name),
+                        class_name,
                     )?;
                 } else {
-                    self.check_known_callable_call(
+                    self.check_user_declared_call(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Static method {}::__callStatic", class_name),
+                        class_name,
                     )?;
                 }
                 magic_return_ty = Some(effective_sig.return_type.clone());
@@ -1026,6 +1070,9 @@ impl Checker {
                 ));
             }
         } else if self.eval_barrier_active && matches!(receiver, StaticReceiver::Named(_)) {
+            // The class is not in the closed world (an `eval` fragment may declare it), so no
+            // signature governs the arguments: alias them conservatively.
+            self.record_unresolved_callee_argument_aliases(args);
             for arg in args {
                 self.infer_type(arg, env)?;
             }
@@ -1094,19 +1141,32 @@ impl Checker {
                         }
                     }
                 }
-                if method_variadic_tail_needs_iterable(
-                    &normalized_args,
-                    sig,
-                    regular_param_count,
-                    env,
-                ) && !method_variadic_param_is_by_ref(sig)
+                let variadic_is_declared = static_declared_flags
+                    .get(regular_param_count)
+                    .copied()
+                    .unwrap_or(false);
+                if !variadic_is_declared
+                    && method_variadic_tail_needs_iterable(
+                        &normalized_args,
+                        sig,
+                        regular_param_count,
+                        env,
+                    )
+                    && !method_variadic_param_is_by_ref(sig)
                 {
                     if let Some((_, variadic_ty)) = sig.params.last_mut() {
                         *variadic_ty = PhpType::Iterable;
                     }
-                } else if sig.variadic.is_some()
+                } else if !variadic_is_declared
+                    && sig.variadic.is_some()
                     && arg_types.len() > regular_param_count
                     && !method_variadic_param_is_by_ref(sig)
+                    // Same rule as the instance-method path: a declared variadic element type is
+                    // a contract to validate against, not a slot to narrow from the call site.
+                    && !static_declared_flags
+                        .get(regular_param_count)
+                        .copied()
+                        .unwrap_or(false)
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
@@ -1164,7 +1224,12 @@ impl Checker {
                         }
                     }
                 }
-                if sig.variadic.is_some()
+                let variadic_is_declared = instance_declared_flags
+                    .get(regular_param_count)
+                    .copied()
+                    .unwrap_or(false);
+                if !variadic_is_declared
+                    && sig.variadic.is_some()
                     && arg_types.len() > regular_param_count
                     && !method_variadic_param_is_by_ref(sig)
                 {
@@ -1199,6 +1264,70 @@ impl Checker {
                     .get(method_key)
             })
             .cloned()
+    }
+
+    /// Allows tightly-scoped private helper calls between compiler-generated PDO prelude classes.
+    fn can_access_pdo_prelude_internal_method(&self, class_name: &str, method_key: &str) -> bool {
+        let lazy_row_refresh = class_name == "PDORow"
+            && method_key == "__elephcrefresh"
+            && self.current_class.as_deref() == Some("PDOStatement")
+            && self.current_method.as_deref() == Some("fetch");
+        let pgsql_notice_drain = matches!(class_name, "PDO" | "Pdo\\Pgsql")
+            && method_key == "__elephcdrainpgsqlnotices"
+            && matches!(
+                (self.current_class.as_deref(), self.current_method.as_deref()),
+                (Some("PDOStatement"), Some("execute"))
+                    | (Some("Pdo\\Pgsql"), Some("exec" | "query"))
+            );
+        lazy_row_refresh || pgsql_notice_drain
+    }
+
+    /// Allows compiler-generated PDO methods to construct exceptions with private driver state.
+    fn can_access_pdo_exception_internal_factory(&self, class_name: &str, method: &str) -> bool {
+        class_name == "PDOException"
+            && php_symbol_key(method) == "__elephcfromerrorinfo"
+            && matches!(self.current_class.as_deref(), Some("PDO" | "PDOStatement"))
+    }
+
+    /// Allows the mysqli prelude's internal static factories to stay private
+    /// (they are not part of PHP's mysqli surface): the buffered-result drain
+    /// factory is invoked by the connection's query/multi_query paths and by
+    /// `mysqli_stmt::get_result`, the prepared-statement factory by
+    /// `mysqli::prepare`, and the unprepared-statement factory by
+    /// `mysqli::stmt_init`.
+    fn can_access_mysqli_prelude_internal_factory(&self, class_name: &str, method: &str) -> bool {
+        let drain_factory = class_name == "mysqli_result"
+            && php_symbol_key(method) == "__elephcfromdrain"
+            && matches!(self.current_class.as_deref(), Some("mysqli" | "mysqli_stmt"));
+        let prepare_factory = class_name == "mysqli_stmt"
+            && php_symbol_key(method) == "__elephcfromprepare"
+            && self.current_class.as_deref() == Some("mysqli");
+        let init_factory = class_name == "mysqli_stmt"
+            && php_symbol_key(method) == "__elephcinit"
+            && self.current_class.as_deref() == Some("mysqli");
+        drain_factory || prepare_factory || init_factory
+    }
+
+    /// Allows tightly-scoped private helper calls within the mysqli prelude:
+    /// `mysqli_stmt::requireLinkNotBusy` (the two-step prepare/execute
+    /// commands-out-of-sync guard) reads the connection's private
+    /// pending-result probe, and the procedural `mysqli_stmt_bind_param`
+    /// alias — a compiler-owned free function, identified via
+    /// `current_function` — reaches the statement's private bind-values
+    /// helper (its by-ref variadic tail cannot be spread-forwarded into
+    /// `bind_param`). Neither helper is part of PHP's mysqli surface.
+    fn can_access_mysqli_prelude_internal_method(&self, class_name: &str, method_key: &str) -> bool {
+        let pending_probe = class_name == "mysqli"
+            && method_key == "__elephchaspendingresults"
+            && self.current_class.as_deref() == Some("mysqli_stmt")
+            && self.current_method.as_deref() == Some("requirelinknotbusy");
+        let bind_values = class_name == "mysqli_stmt"
+            && method_key == "__elephcbindparamvalues"
+            && self
+                .current_function
+                .as_deref()
+                .is_some_and(|name| php_symbol_key(name) == "mysqli_stmt_bind_param");
+        pending_probe || bind_values
     }
 }
 

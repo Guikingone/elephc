@@ -7,21 +7,26 @@
 //!
 //! Key details:
 //! - URL encoding helpers are emitted byte scanners that must preserve PHP escaping rules for supported encodings.
+//! - The worst-case `3 * len` percent-encoded result is reserved through `__rt_concat_reserve`
+//!   before the first store, so long inputs fall back to heap storage instead of running off
+//!   the end of the 64 KiB concat scratch buffer.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
 
 /// Emits the `__rt_rawurlencode` runtime helper for rawurlencode (RFC 3986).
 ///
 /// Percent-encodes all bytes except alphanumeric and `-_.~`. Each unsafe byte
-/// expands to three bytes (`%XX` where XX is uppercase hex). The result is appended
-/// to the concatenation buffer.
+/// expands to three bytes (`%XX` where XX is uppercase hex). The worst-case `3 * len`
+/// expansion is reserved through `__rt_concat_reserve` (concat scratch while it fits,
+/// owned heap storage otherwise) and finished through `__rt_concat_publish`.
 ///
 /// ABI (ARM64):
 /// - Input: x1=source pointer, x2=source length
 /// - Output: x1=result pointer, x2=result length
-/// - Clobbers: x6-x13, concat buffer offset is updated
+/// - Clobbers every caller-saved register, because the reservation can reach `__rt_heap_alloc`.
+/// - A wrapped `3 * len` product reports PHP's allocation-overflow fatal through
+///   `__rt_alloc_overflow` instead of reserving a too-small destination.
 pub fn emit_rawurlencode(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_rawurlencode_linux_x86_64(emitter);
@@ -32,12 +37,19 @@ pub fn emit_rawurlencode(emitter: &mut Emitter) {
     emitter.comment("--- runtime: rawurlencode ---");
     emitter.label_global("__rt_rawurlencode");
 
-    // -- set up concat_buf destination --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // destination pointer
-    emitter.instruction("mov x10, x9");                                         // save result start
+    // -- reserve the worst-case three-bytes-per-input-byte result before writing anything --
+    emitter.instruction("sub sp, sp, #32");                                     // allocate spill space for the borrowed source string
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across the reservation call
+    emitter.instruction("add x29, sp, #16");                                    // establish the rawurlencode helper frame pointer
+    emitter.instruction("stp x1, x2, [sp]");                                    // save the source pointer and length across the reservation call
+    emitter.instruction("mov x9, #3");                                          // worst-case percent-encoded expansion factor
+    emitter.instruction("umulh x10, x2, x9");                                   // capture the high half of the 3 * length product
+    emitter.instruction("cbnz x10, __rt_rawurlencode_size_overflow");           // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("mul x0, x2, x9");                                      // compute the worst-case percent-encoded result size
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the percent-encoded result
+    emitter.instruction("mov x9, x0");                                          // destination pointer
+    emitter.instruction("mov x10, x0");                                         // save result start
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload the borrowed source pointer and length
     emitter.instruction("mov x11, x2");                                         // remaining byte count
 
     emitter.label("__rt_rawurlencode_loop");
@@ -105,10 +117,14 @@ pub fn emit_rawurlencode(emitter: &mut Emitter) {
     emitter.label("__rt_rawurlencode_done");
     emitter.instruction("mov x1, x10");                                         // result pointer
     emitter.instruction("sub x2, x9, x10");                                     // result length
-    emitter.instruction("ldr x8, [x6]");                                        // reload offset
-    emitter.instruction("add x8, x8, x2");                                      // advance by result length
-    emitter.instruction("str x8, [x6]");                                        // store updated offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the rawurlencode helper frame
     emitter.instruction("ret");                                                 // return
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_rawurlencode_size_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 }
 
 /// Emits the x86_64 Linux variant of the `__rt_rawurlencode` runtime helper.
@@ -119,19 +135,24 @@ pub fn emit_rawurlencode(emitter: &mut Emitter) {
 /// ABI (x86_64 System V):
 /// - Input: rax=source pointer, rdx=source length
 /// - Output: rax=result pointer, rdx=result length
-/// - Clobbers: rcx, rsi, rdx, r8-r11, concat buffer offset is updated
+/// - Clobbers every caller-saved register, because the reservation can reach `__rt_heap_alloc`.
 fn emit_rawurlencode_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rawurlencode ---");
     emitter.label_global("__rt_rawurlencode");
 
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before RFC 3986 percent-encoding the borrowed source string
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea r11, [r10 + r9]");                                 // compute the concat-buffer destination pointer where the rawurlencoded string begins
-    emitter.instruction("mov r8, r11");                                         // preserve the concat-backed result start pointer for the returned string value after the loop mutates the destination cursor
-    emitter.instruction("mov rcx, rdx");                                        // seed the remaining source length counter from the borrowed input string length
-    emitter.instruction("mov rsi, rax");                                        // preserve the borrowed source string cursor in a dedicated register before the loop mutates caller-saved registers
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the reservation and publish calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the borrowed source string
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the source pointer and length
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the borrowed source pointer across the reservation call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the borrowed source length across the reservation call
+    emitter.instruction("imul rax, rdx, 3");                                    // compute the worst-case percent-encoded result size as 3 * source length
+    emitter.instruction("jo __rt_rawurlencode_size_overflow_linux_x86_64");     // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the percent-encoded result
+    emitter.instruction("mov r11, rax");                                        // compute the destination pointer where the rawurlencoded string begins
+    emitter.instruction("mov r8, r11");                                         // preserve the result start pointer for the returned string value after the loop mutates the destination cursor
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // seed the remaining source length counter from the borrowed input string length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // preserve the borrowed source string cursor in a dedicated register before the loop mutates caller-saved registers
 
     emitter.label("__rt_rawurlencode_loop_linux_x86_64");
     emitter.instruction("test rcx, rcx");                                       // stop once every source byte has been classified and copied or percent-encoded into concat storage
@@ -198,11 +219,15 @@ fn emit_rawurlencode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_rawurlencode_loop_linux_x86_64");             // continue encoding the remaining source bytes after copying one safe byte
 
     emitter.label("__rt_rawurlencode_done_linux_x86_64");
-    emitter.instruction("mov rax, r8");                                         // return the concat-backed result start pointer after percent-encoding the full input string
-    emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer destination cursor before computing the encoded string length
+    emitter.instruction("mov rax, r8");                                         // return the reserved result start pointer after percent-encoding the full input string
+    emitter.instruction("mov rdx, r11");                                        // copy the final destination cursor before computing the encoded string length
     emitter.instruction("sub rdx, r8");                                         // compute the encoded string length as dest_end - dest_start for the returned x86_64 string value
-    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer write offset before publishing the bytes that rawurlencode() appended
-    emitter.instruction("add rcx, rdx");                                        // advance the concat-buffer write offset by the produced encoded-string length
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // persist the updated concat-buffer write offset after finishing the rawurlencode() pass
-    emitter.instruction("ret");                                                 // return the concat-backed rawurlencoded string in the standard x86_64 string result registers
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("add rsp, 32");                                         // release the rawurlencode spill slots before returning the encoded string
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the encoded string
+    emitter.instruction("ret");                                                 // return the rawurlencoded string in the standard x86_64 string result registers
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_rawurlencode_size_overflow_linux_x86_64");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline reachable from every caller
 }

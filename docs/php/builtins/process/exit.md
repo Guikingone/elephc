@@ -1,26 +1,30 @@
 ---
 title: "exit()"
-description: "exit() — process builtin supported by Elephc."
+description: "Terminates execution with an optional status."
 sidebar:
-  order: 327
+  order: 356
 ---
 
 ## exit()
 
 ```php
-function exit(int $status): void
+function exit(int $status = 0): void
 ```
 
-`exit()` is a process builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Terminates execution with an optional status.
 
 **Parameters**:
-- `$status` (`int`), optional
+- `$status` (`int`), default `0`, optional
 
 **Returns**: `void`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
+- **Compiled (AOT)**: supported through a dedicated compiler language-construct path.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/exit.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/exit.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
+
+## Internals
+
+For how `exit` is implemented in the compiler, see [the internals page](../../../internals/builtins/process/exit.md).

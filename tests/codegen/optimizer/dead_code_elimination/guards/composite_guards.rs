@@ -192,7 +192,7 @@ run(false, false, false);
     );
 
     assert_eq!(out, "acx");
-    assert!(!user_asm.contains("dead"));
+    assert!(!asm_without_embedded_script_path(&user_asm).contains("dead"));
 }
 
 /// Verifies that a nested subexpr contradicting a composite guard is pruned. Confirms "acx"

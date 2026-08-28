@@ -7,92 +7,175 @@
 //!
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - The result is bounded by the fixed `RAW_BUFFER_BYTES` snprintf buffer plus its grouping
+//!   separators, so `GROUPED_RESULT_BYTES` is reserved through `__rt_concat_reserve` before the
+//!   first store. That keeps a format that lands near the end of the 64 KiB concat scratch
+//!   buffer from spilling past it into the adjacent BSS globals.
+//! - `$decimals` is a PHP integer, not a digit. A negative value is not an error in PHP: the
+//!   number is pre-rounded to that power of ten (half away from zero, on the magnitude) and then
+//!   formatted with no decimals, so `number_format(1234.5678, -1)` is `"1,230"`. The precision
+//!   actually handed to `snprintf` is therefore always in `0..=MAX_FORMAT_PRECISION` and is
+//!   written as two ASCII digits; the previous single-digit `'0' + N` shortcut turned `-1` into
+//!   `"%./f"` and `10` into `"%.:f"`, which is where the `"/f"` garbage came from.
+//! - `snprintf` returns the length it *would* have written, so that return value is clamped to
+//!   the buffer capacity before the grouping pass copies from it. Without both the wider buffer
+//!   and that clamp, a wide number read past the old 48-byte buffer into the adjacent frame
+//!   slots and rendered the trailing digits from whatever was there.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+/// Bytes of the fixed on-stack buffer `snprintf` renders the ungrouped number into.
+///
+/// A `double` needs at most 309 integer digits, so 384 bytes holds the widest possible
+/// integer part plus the decimal point plus `MAX_FORMAT_PRECISION` decimals without ever
+/// truncating.
+const RAW_BUFFER_BYTES: i64 = 384;
+
+/// Bytes reserved through `__rt_concat_reserve` for the grouped result.
+///
+/// The widest raw render plus one thousands separator per three integer digits.
+const GROUPED_RESULT_BYTES: i64 = 512;
+
+/// Highest `$decimals` value `snprintf` is asked for.
+///
+/// Two ASCII precision digits allow `0..=99`; the cap keeps the widest possible render
+/// (309 integer digits + `.` + this many decimals) inside `RAW_BUFFER_BYTES`, and the raw
+/// length is clamped again after `snprintf` returns as a belt-and-braces bound.
+const MAX_FORMAT_PRECISION: i64 = 40;
+
 /// Emits the `__rt_number_format` runtime helper.
 ///
 /// Formats a floating-point number with configurable decimal places and separators,
-/// writing the result into the concat buffer. Dispatches to target-specific implementations.
+/// writing the result into storage reserved through `__rt_concat_reserve` and publishing the
+/// written length through `__rt_concat_publish`. Dispatches to target-specific implementations.
 ///
 /// Input registers (ARM64): `d0` = number, `x1` = decimals, `x2` = dec_point char, `x3` = thousands_sep (0=none)
 /// Output registers (ARM64): `x1` = string pointer, `x2` = string length
 /// Input registers (x86_64 SysV): `xmm0` = number, `rdi` = decimals, `rsi` = dec_point, `rdx` = thousands_sep
 /// Output registers (x86_64 SysV): `rax` = string pointer, `rdx` = string length
 ///
-/// Stack frame layout (ARM64, 128 bytes):
-///   `[sp+0..47]`  snprintf buffer (48 bytes)
-///   `[sp+64..68]` format string `"%.Nf\0"`
+/// Stack frame layout (ARM64, 512 bytes):
+///   `[sp+48]`     pre-round magnitude scratch (negative `$decimals` only)
+///   `[sp+56]`     pre-round sign flag (negative `$decimals` only)
+///   `[sp+64..69]` format string `"%.NNf\0"`
 ///   `[sp+72]`     result start ptr
 ///   `[sp+80]`     raw snprintf length
 ///   `[sp+88]`     number (double)
 ///   `[sp+96]`     decimals
-///   `[sp+100]`    dec_point char
-///   `[sp+104]`    thousands_sep char
+///   `[sp+104]`    dec_point char (one byte)
+///   `[sp+105]`    thousands_sep char (one byte)
 ///   `[sp+112]`    saved x29, x30
+///   `[sp+128..511]` snprintf buffer (`RAW_BUFFER_BYTES`)
 pub fn emit_number_format(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_number_format_linux_x86_64(emitter);
         return;
     }
 
-    // Stack frame layout (128 bytes):
-    //   [sp+0..47]  snprintf buffer (48 bytes)
-    //   [sp+64..68] format string "%.Nf\0"
+    // Stack frame layout (512 bytes):
+    //   [sp+48]     pre-round magnitude / scale scratch (negative $decimals only)
+    //   [sp+56]     pre-round sign flag (negative $decimals only)
+    //   [sp+64..69] format string "%.NNf\0"
     //   [sp+72]     result start ptr
     //   [sp+80]     raw_len
     //   [sp+88]     number (d0)
     //   [sp+96]     decimals
-    //   [sp+100]    dec_point char
-    //   [sp+104]    thousands_sep char
+    //   [sp+104]    dec_point char (one byte)
+    //   [sp+105]    thousands_sep char (one byte)
     //   [sp+112]    saved x29, x30
+    //   [sp+128..511] snprintf buffer (RAW_BUFFER_BYTES)
     emitter.blank();
     emitter.comment("--- runtime: number_format ---");
     emitter.label_global("__rt_number_format");
 
-    // -- set up stack frame (128 bytes) --
-    emitter.instruction("sub sp, sp, #128");                                    // allocate 128 bytes on the stack
+    // -- set up stack frame (512 bytes) --
+    emitter.instruction("sub sp, sp, #512");                                    // allocate the number_format() frame: metadata low, raw snprintf buffer high
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish new frame pointer
 
     // -- save input arguments --
     emitter.instruction("str x1, [sp, #96]");                                   // save decimals count
     emitter.instruction("str d0, [sp, #88]");                                   // save the floating-point number
-    emitter.instruction("str x2, [sp, #100]");                                  // save decimal point character
-    emitter.instruction("str x3, [sp, #104]");                                  // save thousands separator character
+    emitter.instruction("strb w2, [sp, #104]");                                 // save decimal point character as a byte so it cannot overlap the decimals slot
+    emitter.instruction("strb w3, [sp, #105]");                                 // save thousands separator character as its own byte
 
-    // -- build format string "%.Nf" at [sp+64] --
+    // -- negative $decimals: pre-round the magnitude to that power of ten, then use no decimals --
+    emitter.instruction("ldr x9, [sp, #96]");                                   // load the requested decimals count
+    emitter.instruction("cmp x9, #0");                                          // is the caller asking for fewer significant digits?
+    emitter.instruction("b.ge __rt_nf_precision_ready");                        // a non-negative precision goes straight to snprintf
+    emitter.instruction("ldr d0, [sp, #88]");                                   // reload the caller's number
+    emitter.instruction("fabs d1, d0");                                         // PHP rounds the magnitude, then reapplies the sign
+    emitter.instruction("str d1, [sp, #48]");                                   // park the magnitude across the libm calls
+    emitter.instruction("fcmp d0, #0.0");                                       // was the caller's number negative?
+    emitter.instruction("cset x10, mi");                                        // remember the sign so it can be restored after rounding
+    emitter.instruction("str x10, [sp, #56]");                                  // park the sign flag across the libm calls
+    emitter.instruction("neg x9, x9");                                          // the power of ten to round to is -$decimals
+    emitter.instruction("scvtf d1, x9");                                        // pass that power as the libm pow() exponent
+    emitter.instruction("mov x10, #10");                                        // the rounding base is ten
+    emitter.instruction("scvtf d0, x10");                                       // pass the base as the libm pow() mantissa argument
+    emitter.bl_c("pow");                                                        // d0 = 10 ** -$decimals
+    emitter.instruction("ldr d1, [sp, #48]");                                   // reload the parked magnitude
+    emitter.instruction("fdiv d1, d1, d0");                                     // scale the magnitude down to the requested precision
+    emitter.instruction("str d0, [sp, #48]");                                   // park the scale for the rescale step
+    emitter.instruction("fmov d2, #0.5");                                       // half-away-from-zero rounding adds a half before flooring
+    emitter.instruction("fadd d0, d1, d2");                                     // bias the scaled magnitude for PHP_ROUND_HALF_UP
+    emitter.instruction("frintm d0, d0");                                       // floor the biased magnitude, matching PHP on exact halves
+    emitter.instruction("fcmp d0, #0.0");                                       // did the requested precision round the value away entirely?
+    emitter.instruction("b.eq __rt_nf_precision_zero");                         // PHP prints a plain "0", never "-0", in that case
+    emitter.instruction("ldr d1, [sp, #48]");                                   // reload the parked scale
+    emitter.instruction("fmul d0, d0, d1");                                     // rescale the rounded magnitude back up
+    emitter.instruction("ldr x10, [sp, #56]");                                  // reload the parked sign flag
+    emitter.instruction("cbz x10, __rt_nf_precision_zero");                     // a positive number needs no sign restored
+    emitter.instruction("fneg d0, d0");                                         // restore the caller's sign on the rounded magnitude
+    emitter.label("__rt_nf_precision_zero");
+    emitter.instruction("str d0, [sp, #88]");                                   // publish the pre-rounded number for snprintf
+    emitter.instruction("str xzr, [sp, #96]");                                  // a pre-rounded value is formatted with no decimals
+    emitter.label("__rt_nf_precision_ready");
+
+    // -- build format string "%.NNf" at [sp+64] --
     emitter.instruction("mov w9, #37");                                         // ASCII '%'
     emitter.instruction("strb w9, [sp, #64]");                                  // write '%' to format string
     emitter.instruction("mov w9, #46");                                         // ASCII '.'
     emitter.instruction("strb w9, [sp, #65]");                                  // write '.' to format string
-    emitter.instruction("ldr x9, [sp, #96]");                                   // load decimals count
-    emitter.instruction("add w9, w9, #48");                                     // convert to ASCII digit ('0' + N)
-    emitter.instruction("strb w9, [sp, #66]");                                  // write decimal count digit
+    emitter.instruction("ldr x9, [sp, #96]");                                   // load the now non-negative decimals count
+    emitter.instruction(&format!("cmp x9, #{}", MAX_FORMAT_PRECISION));         // cap the precision at what the raw buffer can hold
+    emitter.instruction("b.le __rt_nf_precision_capped");                       // keep the requested precision when it already fits
+    emitter.instruction(&format!("mov x9, #{}", MAX_FORMAT_PRECISION));         // clamp an over-wide precision to the buffer limit
+    emitter.label("__rt_nf_precision_capped");
+    emitter.instruction("mov x10, #10");                                        // split the precision into two ASCII digits
+    emitter.instruction("udiv x11, x9, x10");                                   // x11 = tens digit of the precision
+    emitter.instruction("msub x12, x11, x10, x9");                              // x12 = units digit of the precision
+    emitter.instruction("add w11, w11, #48");                                   // convert the tens digit to ASCII
+    emitter.instruction("strb w11, [sp, #66]");                                 // write the tens precision digit
+    emitter.instruction("add w12, w12, #48");                                   // convert the units digit to ASCII
+    emitter.instruction("strb w12, [sp, #67]");                                 // write the units precision digit
     emitter.instruction("mov w9, #102");                                        // ASCII 'f'
-    emitter.instruction("strb w9, [sp, #67]");                                  // write 'f' format specifier
-    emitter.instruction("strb wzr, [sp, #68]");                                 // null-terminate the format string
+    emitter.instruction("strb w9, [sp, #68]");                                  // write 'f' format specifier
+    emitter.instruction("strb wzr, [sp, #69]");                                 // null-terminate the format string
 
     // -- call snprintf(buf, 48, fmt, d0) --
-    emitter.instruction("add x0, sp, #0");                                      // x0 = output buffer at start of stack frame
-    emitter.instruction("mov x1, #48");                                         // buffer size = 48 bytes
+    emitter.instruction("add x0, sp, #128");                                    // x0 = the raw snprintf buffer above the frame metadata
+    emitter.instruction(&format!("mov x1, #{}", RAW_BUFFER_BYTES));             // bound the raw snprintf buffer
     emitter.instruction("add x2, sp, #64");                                     // x2 = format string pointer
     emitter.instruction("ldr d0, [sp, #88]");                                   // reload the float value
     emitter.instruction("str d0, [sp, #-16]!");                                 // push double for variadic ABI, adjust sp
     emitter.bl_c("snprintf");                                        // call snprintf; returns char count in x0
     emitter.instruction("add sp, sp, #16");                                     // pop the variadic argument from stack
+    emitter.instruction(&format!("cmp x0, #{}", RAW_BUFFER_BYTES - 1));         // snprintf reports the untruncated length, which may exceed the buffer
+    emitter.instruction("b.le __rt_nf_raw_len_ok");                             // keep the reported length when it actually fits
+    emitter.instruction(&format!("mov x0, #{}", RAW_BUFFER_BYTES - 1));         // never scan past the raw buffer for a truncated result
+    emitter.label("__rt_nf_raw_len_ok");
     emitter.instruction("str x0, [sp, #80]");                                   // save raw string length
 
-    // -- set up concat_buf destination --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current concat_buf write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x10, x7, x8");                                     // compute destination pointer
+    // -- reserve bounded destination storage (48 raw bytes plus grouping separators) --
+    emitter.instruction(&format!("mov x0, #{}", GROUPED_RESULT_BYTES));         // the raw snprintf buffer plus its thousands separators can never exceed this
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the grouped number
+    emitter.instruction("mov x10, x0");                                         // compute destination pointer
     emitter.instruction("str x10, [sp, #72]");                                  // save result start pointer
 
     // -- scan raw string to find integer part length --
-    emitter.instruction("add x11, sp, #0");                                     // x11 = source ptr (snprintf output)
+    emitter.instruction("add x11, sp, #128");                                   // x11 = source ptr (snprintf output)
     emitter.instruction("ldr x12, [sp, #80]");                                  // x12 = raw string length
     emitter.instruction("mov x13, #0");                                         // x13 = integer part digit count
 
@@ -123,8 +206,11 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     // -- copy integer digits with thousands separator --
     emitter.instruction("mov x16, #0");                                         // source index into integer digits
     emitter.instruction("mov x17, #3");                                         // group size for thousands
-    emitter.instruction("udiv x18, x13, x17");                                  // number of complete 3-digit groups
-    emitter.instruction("msub x14, x18, x17, x13");                             // first group size = digit_count % 3
+    // The quotient lands straight in x14 and `msub` reads it back as a source, so this needs
+    // no scratch register at all — x18 is reserved for the OS on Apple AArch64, and every
+    // register free here is already carrying loop state.
+    emitter.instruction("udiv x14, x13, x17");                                  // number of complete 3-digit groups
+    emitter.instruction("msub x14, x14, x17, x13");                             // first group size = digit_count % 3
     emitter.instruction("cbnz x14, __rt_nf_copy_int");                          // if first group non-empty, start copying
     emitter.instruction("mov x14, #3");                                         // first group is full 3 digits
 
@@ -136,7 +222,7 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("cbz x16, __rt_nf_no_sep");                             // skip separator before first digit
     emitter.instruction("cmp x14, #0");                                         // check if current group is exhausted
     emitter.instruction("b.ne __rt_nf_no_sep");                                 // group not done, no separator yet
-    emitter.instruction("ldr x9, [sp, #104]");                                  // load thousands separator char
+    emitter.instruction("ldrb w9, [sp, #105]");                                 // load thousands separator char
     emitter.instruction("cbz x9, __rt_nf_no_sep_reset");                        // skip if separator is 0 (none)
     emitter.instruction("strb w9, [x10], #1");                                  // write separator to output, advance dest
     emitter.label("__rt_nf_no_sep_reset");
@@ -157,23 +243,21 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("ldrb w9, [x15], #1");                                  // load next decimal char, advance source
     emitter.instruction("cmp w9, #46");                                         // check if it's '.' (snprintf decimal point)
     emitter.instruction("b.ne __rt_nf_dec_store");                              // if not '.', store as-is
-    emitter.instruction("ldr x9, [sp, #100]");                                  // replace with custom decimal point char
+    emitter.instruction("ldrb w9, [sp, #104]");                                 // replace with custom decimal point char
     emitter.label("__rt_nf_dec_store");
     emitter.instruction("strb w9, [x10], #1");                                  // write char to output, advance dest
     emitter.instruction("sub x12, x12, #1");                                    // decrement remaining chars
     emitter.instruction("b __rt_nf_copy_dec");                                  // continue copying decimal part
 
-    // -- finalize: compute length and update concat_off --
+    // -- finalize: compute length and publish the written bytes --
     emitter.label("__rt_nf_done");
     emitter.instruction("ldr x1, [sp, #72]");                                   // load result start pointer
     emitter.instruction("sub x2, x10, x1");                                     // result length = dest_end - dest_start
-    emitter.instruction("ldr x8, [x6]");                                        // load current concat_off
-    emitter.instruction("add x8, x8, x2");                                      // advance offset by result length
-    emitter.instruction("str x8, [x6]");                                        // store updated concat_off
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #128");                                    // deallocate stack frame
+    emitter.instruction("add sp, sp, #512");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -187,30 +271,88 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the raw snprintf buffer, mini format string, and concat-buffer state
     emitter.instruction("push rbx");                                            // preserve the concat-buffer destination cursor across the local formatting and copy loops
     emitter.instruction("push r12");                                            // preserve the concat-buffer start pointer for the final x86_64 string return pair
-    emitter.instruction("push r13");                                            // preserve the concat-offset symbol address across the local formatting and copy loops
-    emitter.instruction("sub rsp, 104");                                        // reserve local storage; bumped 96→104 so the four 8-byte saves above + this sub leave rsp 0-mod-16 before the SysV snprintf call below
+    emitter.instruction("push r13");                                            // preserve one more callee-saved register so the frame stays 16-byte aligned for the SysV snprintf call
+    emitter.instruction("sub rsp, 488");                                        // reserve local storage; the four 8-byte saves above plus this sub leave rsp 0-mod-16 before the SysV snprintf call below
     emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // preserve the requested decimal count across the intermediate formatting and copy loops
     emitter.instruction("mov QWORD PTR [rbp - 48], rsi");                       // preserve the decimal-separator byte across the intermediate formatting and copy loops
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // preserve the thousands-separator byte across the intermediate formatting and copy loops
+    emitter.instruction("movsd QWORD PTR [rbp - 128], xmm0");                   // park the caller's number so the pre-round libm calls cannot lose it
+
+    // -- negative $decimals: pre-round the magnitude to that power of ten, then use no decimals --
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // is the caller asking for fewer significant digits?
+    emitter.instruction("jge __rt_nf_precision_ready_linux_x86_64");            // a non-negative precision goes straight to snprintf
+    emitter.instruction("movq rax, xmm0");                                      // inspect the raw double bits to split off the sign
+    emitter.instruction("mov r9, rax");                                         // copy the bits before the sign bit is cleared
+    emitter.instruction("shr r9, 63");                                          // isolate the sign bit as a 0/1 flag
+    emitter.instruction("mov QWORD PTR [rbp - 32], r9");                        // park the sign flag so it can be reapplied after rounding
+    emitter.instruction("btr rax, 63");                                         // clear the sign bit to obtain the magnitude, which PHP rounds
+    emitter.instruction("movq xmm0, rax");                                      // move the magnitude back into the floating-point register
+    emitter.instruction("movsd QWORD PTR [rbp - 128], xmm0");                   // park the magnitude across the libm calls
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the negative decimals count
+    emitter.instruction("neg rax");                                             // the power of ten to round to is -$decimals
+    emitter.instruction("cvtsi2sd xmm1, rax");                                  // pass that power as the libm pow() exponent
+    emitter.instruction("mov eax, 10");                                         // the rounding base is ten
+    emitter.instruction("cvtsi2sd xmm0, eax");                                  // pass the base as the libm pow() mantissa argument
+    emitter.bl_c("pow");                                                        // xmm0 = 10 ** -$decimals
+    emitter.instruction("movsd xmm2, QWORD PTR [rbp - 128]");                   // reload the parked magnitude
+    emitter.instruction("divsd xmm2, xmm0");                                    // scale the magnitude down to the requested precision
+    emitter.instruction("movsd QWORD PTR [rbp - 128], xmm0");                   // park the scale for the rescale step
+    emitter.instruction("mov eax, 1");                                          // build 0.5 without an immediate double load
+    emitter.instruction("cvtsi2sd xmm1, eax");                                  // xmm1 = 1.0
+    emitter.instruction("mov eax, 2");                                          // the divisor that turns 1.0 into 0.5
+    emitter.instruction("cvtsi2sd xmm3, eax");                                  // xmm3 = 2.0
+    emitter.instruction("divsd xmm1, xmm3");                                    // xmm1 = 0.5, the half-away-from-zero bias
+    emitter.instruction("addsd xmm2, xmm1");                                    // bias the scaled magnitude for PHP_ROUND_HALF_UP
+    emitter.instruction("movapd xmm0, xmm2");                                   // hand the biased magnitude to libm floor()
+    emitter.bl_c("floor");                                                      // floor the biased magnitude, matching PHP on exact halves
+    emitter.instruction("xorpd xmm1, xmm1");                                    // build a zero to test the rounded magnitude against
+    emitter.instruction("ucomisd xmm0, xmm1");                                  // did the requested precision round the value away entirely?
+    emitter.instruction("je __rt_nf_precision_zero_linux_x86_64");              // PHP prints a plain "0", never "-0", in that case
+    emitter.instruction("mulsd xmm0, QWORD PTR [rbp - 128]");                   // rescale the rounded magnitude back up
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // was the caller's number negative?
+    emitter.instruction("je __rt_nf_precision_zero_linux_x86_64");              // a positive number needs no sign restored
+    emitter.instruction("movq rax, xmm0");                                      // inspect the rounded magnitude bits to restore the sign
+    emitter.instruction("btc rax, 63");                                         // flip the sign bit back on for a negative input
+    emitter.instruction("movq xmm0, rax");                                      // move the signed rounded value back into the floating-point register
+    emitter.label("__rt_nf_precision_zero_linux_x86_64");
+    emitter.instruction("movsd QWORD PTR [rbp - 128], xmm0");                   // publish the pre-rounded number for snprintf
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // a pre-rounded value is formatted with no decimals
+    emitter.label("__rt_nf_precision_ready_linux_x86_64");
+
     emitter.instruction("mov BYTE PTR [rbp - 72], 37");                         // seed the mini format string with the leading '%' introducer
     emitter.instruction("mov BYTE PTR [rbp - 71], 46");                         // append the '.' precision introducer to the mini format string
-    emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the requested decimal count before converting it into the single supported ASCII precision digit
-    emitter.instruction("add r8b, 48");                                         // convert the requested decimal count into its single-digit ASCII representation for the mini format string
-    emitter.instruction("mov BYTE PTR [rbp - 70], r8b");                        // append the ASCII precision digit to the mini format string
-    emitter.instruction("mov BYTE PTR [rbp - 69], 102");                        // append the trailing 'f' format type so snprintf renders a fixed-point decimal string
-    emitter.instruction("mov BYTE PTR [rbp - 68], 0");                          // null-terminate the mini format string before handing it to snprintf
-    emitter.instruction("lea rdi, [rbp - 120]");                                // point snprintf at the fixed local raw-decimal buffer that will be post-processed for thousands separators
-    emitter.instruction("mov esi, 48");                                         // bound the raw-decimal buffer to 48 bytes before the variadic snprintf call
+    emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the now non-negative decimal count before converting it to ASCII
+    emitter.instruction(&format!("cmp r8, {}", MAX_FORMAT_PRECISION));          // cap the precision at what the raw buffer can hold
+    emitter.instruction("jle __rt_nf_precision_capped_linux_x86_64");           // keep the requested precision when it already fits
+    emitter.instruction(&format!("mov r8, {}", MAX_FORMAT_PRECISION));          // clamp an over-wide precision to the buffer limit
+    emitter.label("__rt_nf_precision_capped_linux_x86_64");
+    emitter.instruction("mov rax, r8");                                         // split the precision into two ASCII digits
+    emitter.instruction("xor rdx, rdx");                                        // clear the high dividend half before the digit split
+    emitter.instruction("mov r9, 10");                                          // the digit-split divisor
+    emitter.instruction("div r9");                                              // rax = tens digit, rdx = units digit
+    emitter.instruction("add al, 48");                                          // convert the tens digit to ASCII
+    emitter.instruction("mov BYTE PTR [rbp - 70], al");                         // append the tens precision digit to the mini format string
+    emitter.instruction("mov rax, rdx");                                        // move the units digit into the byte-addressable accumulator
+    emitter.instruction("add al, 48");                                          // convert the units digit to ASCII
+    emitter.instruction("mov BYTE PTR [rbp - 69], al");                         // append the units precision digit to the mini format string
+    emitter.instruction("mov BYTE PTR [rbp - 68], 102");                        // append the trailing 'f' format type so snprintf renders a fixed-point decimal string
+    emitter.instruction("mov BYTE PTR [rbp - 67], 0");                          // null-terminate the mini format string before handing it to snprintf
+    emitter.instruction("lea rdi, [rbp - 512]");                                // point snprintf at the fixed local raw-decimal buffer that will be post-processed for thousands separators
+    emitter.instruction(&format!("mov esi, {}", RAW_BUFFER_BYTES));             // bound the raw-decimal buffer before the variadic snprintf call
     emitter.instruction("lea rdx, [rbp - 72]");                                 // pass the mini format string to snprintf as the fixed-point format pointer
+    emitter.instruction("movsd xmm0, QWORD PTR [rbp - 128]");                   // reload the number, which the pre-round path may have replaced
     emitter.instruction("mov eax, 1");                                          // advertise one live SIMD variadic register because the formatted number is passed in xmm0 on SysV x86_64
     emitter.bl_c("snprintf");                                                   // render the raw fixed-point decimal string into the local snprintf buffer
+    emitter.instruction(&format!("cmp rax, {}", RAW_BUFFER_BYTES - 1));         // snprintf reports the untruncated length, which may exceed the buffer
+    emitter.instruction("jle __rt_nf_raw_len_ok_linux_x86_64");                 // keep the reported length when it actually fits
+    emitter.instruction(&format!("mov rax, {}", RAW_BUFFER_BYTES - 1));         // never scan past the raw buffer for a truncated result
+    emitter.label("__rt_nf_raw_len_ok_linux_x86_64");
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // preserve the raw snprintf byte count before the thousands-separator pass consumes caller-saved registers
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r13", "_concat_off");
-    emitter.instruction("mov r8, QWORD PTR [r13]");                             // load the current concat-buffer write cursor before appending the formatted output
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_concat_buf");
-    emitter.instruction("lea rbx, [r9 + r8]");                                  // compute the concat-buffer destination cursor where the formatted output will begin
-    emitter.instruction("mov r12, rbx");                                        // preserve the concat-buffer start pointer for the final x86_64 string return pair
-    emitter.instruction("lea r10, [rbp - 120]");                                // point at the raw snprintf output buffer before scanning for a leading minus sign and decimal point
+    emitter.instruction(&format!("mov rax, {}", GROUPED_RESULT_BYTES));         // the raw snprintf buffer plus its thousands separators can never exceed this
+    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the grouped number
+    emitter.instruction("mov rbx, rax");                                        // compute the destination cursor where the formatted output will begin
+    emitter.instruction("mov r12, rbx");                                        // preserve the reserved start pointer for the final x86_64 string return pair
+    emitter.instruction("lea r10, [rbp - 512]");                                // point at the raw snprintf output buffer before scanning for a leading minus sign and decimal point
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // reload the raw snprintf byte count before splitting the integer and decimal parts
     emitter.instruction("movzx eax, BYTE PTR [r10]");                           // peek at the first raw formatted byte to detect a leading minus sign
     emitter.instruction("cmp al, 45");                                          // is the first raw formatted byte the leading '-' sign?
@@ -285,14 +427,12 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_nf_copy_dec_linux_x86_64");                   // continue copying the decimal part until every remaining raw byte has been emitted
 
     emitter.label("__rt_nf_done_linux_x86_64");
-    emitter.instruction("mov rax, r12");                                        // return the concat-buffer start pointer of the formatted number in the primary x86_64 string result register
-    emitter.instruction("mov rdx, rbx");                                        // copy the concat-buffer end cursor so the final formatted-string length can be derived
-    emitter.instruction("sub rdx, rax");                                        // derive the formatted-string length from the concat-buffer start and end cursors
-    emitter.instruction("mov r8, QWORD PTR [r13]");                             // reload the old concat-buffer write cursor before publishing the formatted-string append
-    emitter.instruction("add r8, rdx");                                         // advance the concat-buffer write cursor by the emitted formatted-string length
-    emitter.instruction("mov QWORD PTR [r13], r8");                             // publish the updated concat-buffer write cursor after appending the formatted number
-    emitter.instruction("add rsp, 104");                                        // release the local raw-buffer and mini-format scratch space before restoring callee-saved registers
-    emitter.instruction("pop r13");                                             // restore the saved concat-offset symbol register after the x86_64 number_format() helper finishes
+    emitter.instruction("mov rax, r12");                                        // return the reserved start pointer of the formatted number in the primary x86_64 string result register
+    emitter.instruction("mov rdx, rbx");                                        // copy the destination end cursor so the final formatted-string length can be derived
+    emitter.instruction("sub rdx, rax");                                        // derive the formatted-string length from the destination start and end cursors
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("add rsp, 488");                                        // release the local raw-buffer and mini-format scratch space before restoring callee-saved registers
+    emitter.instruction("pop r13");                                             // restore the callee-saved register kept only to preserve the frame's 16-byte alignment
     emitter.instruction("pop r12");                                             // restore the saved concat-buffer start register after the x86_64 number_format() helper finishes
     emitter.instruction("pop rbx");                                             // restore the saved concat-buffer destination cursor register after the x86_64 number_format() helper finishes
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the x86_64 formatted string pair

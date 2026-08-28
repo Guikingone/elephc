@@ -8,7 +8,7 @@ sidebar:
 ## array_chunk()
 
 ```php
-function array_chunk(array $array, int $length): array
+function array_chunk(array $array, int $length, bool $preserve_keys = false): array
 ```
 
 Splits an array into chunks of the given size.
@@ -16,6 +16,7 @@ Splits an array into chunks of the given size.
 **Parameters**:
 - `$array` (`array`)
 - `$length` (`int`)
+- `$preserve_keys` (`bool`), default `false`, optional
 
 **Returns**: `array`
 
@@ -25,12 +26,6 @@ Splits an array into chunks of the given size.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_chunk.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_chunk.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -188,11 +188,18 @@ mod tests {
     }
 
     #[test]
-    /// macOS syscall numbers 1, 4, 5, 128, 338 map to Linux aarch64 syscall numbers 93, 64, 56, 38, 79.
+    /// macOS syscall numbers 1, 4, 5, 128, 338 map to Linux aarch64 syscall numbers 94, 64, 56, 38, 79.
     fn test_map_syscall() {
-        assert_eq!(map_syscall(1), 93);
+        assert_eq!(map_syscall(1), 94);
         assert_eq!(map_syscall(4), 64);
         assert_eq!(map_syscall(5), 56);
+        // The process-identity trio behind is_readable()/is_writable(): getuid,
+        // getgid, getgroups. Their macOS and Linux numbers share no digits, so a
+        // transcription slip here answers the permission question about the
+        // wrong identity rather than failing.
+        assert_eq!(map_syscall(24), 174);
+        assert_eq!(map_syscall(47), 176);
+        assert_eq!(map_syscall(79), 158);
         assert_eq!(map_syscall(29), 207);
         assert_eq!(map_syscall(30), 202);
         assert_eq!(map_syscall(31), 205);
@@ -259,7 +266,7 @@ _main:
         assert!(linux_asm.contains("mov x8, #64\n"));
         assert!(linux_asm.contains("svc #0\n"));
         assert!(linux_asm.contains("bl snprintf\n"));
-        assert!(linux_asm.contains("mov x8, #93\n"));
+        assert!(linux_asm.contains("mov x8, #94\n"));
         assert!(!linux_asm.contains("x16"));
         assert!(!linux_asm.contains("@PAGE"));
     }

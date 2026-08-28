@@ -2,13 +2,13 @@
 title: "filesize()"
 description: "Gets file size."
 sidebar:
-  order: 122
+  order: 129
 ---
 
 ## filesize()
 
 ```php
-function filesize(string $filename): int
+function filesize(string $filename): mixed
 ```
 
 Gets file size.
@@ -16,7 +16,7 @@ Gets file size.
 **Parameters**:
 - `$filename` (`string`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 
@@ -24,12 +24,6 @@ Gets file size.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/filesize.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filesize.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

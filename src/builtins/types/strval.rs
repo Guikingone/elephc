@@ -16,10 +16,7 @@ use crate::builtins::semantics::{
 use crate::ir::{Immediate, IrType, Op};
 
 builtin! {
-    name: "strval",
-    area: Types,
-    params: [value: Mixed],
-    returns: Str,
+    contract: "strval",
     semantics: BuiltinSemantics {
         validation: BuiltinValidation::SignatureOnly,
         result_type: BuiltinResultType::Declared,
@@ -35,8 +32,6 @@ builtin! {
         ),
         lowering: BuiltinLowering::Eir(lower),
     },
-    summary: "Gets the string value of a variable.",
-    php_manual: "function.strval",
 }
 
 /// Returns the effect contract of the reusable EIR string cast.

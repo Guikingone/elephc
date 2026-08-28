@@ -11,9 +11,8 @@ use super::super::super::*;
 
 
 eval_builtin! {
-    name: "ptr_read32",
+    contract: "ptr_read32",
     area: RawMemory,
-    params: [pointer],
     direct: PtrRead32,
     values: PtrRead32,
 }

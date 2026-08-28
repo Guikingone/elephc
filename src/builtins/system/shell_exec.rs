@@ -14,15 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "shell_exec",
-    area: System,
-    params: [command: Str],
-    returns: Str,
+    contract: "shell_exec",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ShellExec,
     ),
-    summary: "Executes a command via the shell and returns the complete output as a string.",
 }
 
 /// Refuses the call on targets whose sandbox forbids spawning a process; the

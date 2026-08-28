@@ -76,6 +76,30 @@ fn parse_expr_bp_inner(
         }
 
         match &tokens[*pos].0 {
+            // `$this->n++` / `$a[0]--` in EXPRESSION position. A bare `$x++` never reaches here
+            // — `parse_variable` consumes it — so this only sees the l-values the dedicated
+            // increment node cannot name, which until now simply failed to parse. Purely
+            // additive: a target the desugaring declines leaves the original error in place.
+            Token::PlusPlus | Token::MinusMinus => {
+                let span = tokens[*pos].1.span;
+                let increment = tokens[*pos].0 == Token::PlusPlus;
+                match crate::parser::expr::assignment_targets::desugar_lvalue_incdec(
+                    lhs.clone(),
+                    increment,
+                    false,
+                    span,
+                ) {
+                    Some(desugared) => {
+                        *pos += 1;
+                        lhs = desugared;
+                        continue;
+                    }
+                    // Not a target this can rewrite (a call, say, which cannot be read
+                    // twice). Leave the operator unconsumed so the caller reports it
+                    // exactly as it did before.
+                    None => break,
+                }
+            }
             Token::LBracket => {
                 let span = tokens[*pos].1.span;
                 *pos += 1;
@@ -360,7 +384,7 @@ fn parse_expr_bp_inner(
         }
 
         if let Some((op, l_bp, r_bp)) = assignment_bp(&tokens[*pos].0) {
-            if l_bp < min_bp {
+            if l_bp < min_bp && !is_assignment_expression_target(&lhs) {
                 break;
             }
 
@@ -724,7 +748,7 @@ fn parse_instanceof_target(
 ///
 /// Precedence order (lowest to highest): `or` (1) < `xor` (3) < `and` (5)
 /// < `??` (9) < `||` (11) < `&&` (13) < `|` (15) < `^` (17) < `&` (19)
-/// < `==`/`!=`/`===`/`!==` (21) < `<`/`>`/`<=`/`>=`/`<=>` (23)
+/// < `==`/`!=`/`<>`/`===`/`!==` (21) < `<`/`>`/`<=`/`>=`/`<=>` (23)
 /// < `<<`/`>>` (25) < `.` (27) < `+`/`-` (29) < `*`/`/`/`%` (31)
 /// < `**` (37 right-assoc)
 fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
@@ -740,6 +764,7 @@ fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
         Token::Ampersand => Some((BinOp::BitAnd, 19, 20)),
         Token::EqualEqual => Some((BinOp::Eq, 21, 22)),
         Token::NotEqual => Some((BinOp::NotEq, 21, 22)),
+        Token::LessGreater => Some((BinOp::NotEq, 21, 22)),
         Token::EqualEqualEqual => Some((BinOp::StrictEq, 21, 22)),
         Token::NotEqualEqual => Some((BinOp::StrictNotEq, 21, 22)),
         Token::Less => Some((BinOp::Lt, 23, 24)),

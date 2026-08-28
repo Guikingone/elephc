@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "tempnam",
-    area: Io,
-    params: [directory: Str, prefix: Str],
-    returns: Str,
+    contract: "tempnam",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Tempnam,
     ),
-    summary: "Creates a file with a unique filename.",
-    php_manual: "function.tempnam",
 }

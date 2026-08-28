@@ -13,88 +13,119 @@ use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
 };
+use crate::span::Span;
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
+mod binding_decisions;
 mod control;
+mod effect_analysis;
 mod effects;
+mod exception_flow;
 mod fold;
 mod propagate;
+pub mod reachability;
 
+use binding_decisions::{with_local_binding_decision_spans, with_mixed_storage_locals};
 use control::*;
+use effect_analysis::{
+    collect_instance_dispatch_metadata, compute_program_callable_effects, method_effect_key,
+};
 use effects::*;
+use exception_flow::{with_exception_flow_analysis, ExceptionFlowAnalysis};
 use fold::*;
 use propagate::*;
+
+pub use reachability::prune_unreachable_declarations;
 
 #[cfg(test)]
 mod tests;
 
 thread_local! {
-    static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
-    static ACTIVE_STATIC_METHOD_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
-    static ACTIVE_INSTANCE_METHOD_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
-    static ACTIVE_INSTANCE_DISPATCH_METADATA: RefCell<Option<InstanceDispatchMetadata>> = const { RefCell::new(None) };
+    static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
+    static ACTIVE_STATIC_METHOD_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
+    static ACTIVE_INSTANCE_METHOD_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
+    static ACTIVE_INSTANCE_DISPATCH_METADATA: RefCell<Option<Rc<InstanceDispatchMetadata>>> = const { RefCell::new(None) };
     static ACTIVE_CLASS_EFFECT_CONTEXT: RefCell<Option<ClassEffectContext>> = const { RefCell::new(None) };
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
 }
 
+/// Borrows the active function-effect summary without cloning its whole map.
+pub(in crate::optimize) fn with_active_function_effects<R>(
+    f: impl FnOnce(Option<&HashMap<String, Effect>>) -> R,
+) -> R {
+    ACTIVE_FUNCTION_EFFECTS.with(|slot| f(slot.borrow().as_deref()))
+}
+
+/// Borrows the active static-method summary without cloning its whole map.
+pub(in crate::optimize) fn with_active_static_method_effects<R>(
+    f: impl FnOnce(Option<&HashMap<String, Effect>>) -> R,
+) -> R {
+    ACTIVE_STATIC_METHOD_EFFECTS.with(|slot| f(slot.borrow().as_deref()))
+}
+
+/// Borrows the active instance-method summary without cloning its whole map.
+pub(in crate::optimize) fn with_active_instance_method_effects<R>(
+    f: impl FnOnce(Option<&HashMap<String, Effect>>) -> R,
+) -> R {
+    ACTIVE_INSTANCE_METHOD_EFFECTS.with(|slot| f(slot.borrow().as_deref()))
+}
+
+/// Borrows the active instance-dispatch metadata without cloning it.
+pub(in crate::optimize) fn with_active_instance_dispatch_metadata<R>(
+    f: impl FnOnce(Option<&InstanceDispatchMetadata>) -> R,
+) -> R {
+    ACTIVE_INSTANCE_DISPATCH_METADATA.with(|slot| f(slot.borrow().as_deref()))
+}
+
 /// Folds constant expressions to their compile-time values.
+///
+/// Also gives a CLI program the superglobals PHP's CLI SAPI would already have
+/// created. That is not folding, and it rides here for a reason spelled out in
+/// `superglobals::COMPILING_FOR_WEB`: this function is the last phase every one of
+/// the thirteen hand-rolled pipelines calls before the checker, so a semantic pass
+/// placed here cannot be forgotten by one of them. It runs FIRST so the literal it
+/// prepends folds like any other.
 pub fn fold_constants(program: Program) -> Program {
+    let program = crate::superglobals::seed_cli_populated_superglobals(program);
     program.into_iter().map(fold_stmt).collect()
 }
 
 /// Propagates scalar constants across statements and control flow.
-pub fn propagate_constants(program: Program) -> Program {
-    reset_reference_volatile();
-    // Request superglobals are writable from any scope under `--web`, so they
-    // can never carry propagated facts.
-    for name in crate::superglobals::SUPERGLOBALS {
-        mark_reference_volatile(name);
-    }
-    // Install the callable effect summaries and by-ref signatures so calls to
-    // known-pure user callables stop clearing the environment. Substitution
-    // into by-ref argument positions is masked by `propagate_args`, which
-    // keeps those arguments lvalues.
-    let (function_effects, static_method_effects, instance_method_effects) =
-        compute_program_callable_effects(&program);
-    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
-    let signatures = collect_by_ref_signatures(&program);
-    with_callable_effects(
-        function_effects,
-        static_method_effects,
-        instance_method_effects,
-        instance_dispatch_metadata,
-        || with_by_ref_signatures(signatures, || propagate_block(program, HashMap::new()).0),
-    )
+///
+/// `mixed_storage_locals` comes from `CheckResult::mixed_storage_local_names()`. It is a REQUIRED
+/// argument for the same reason `eliminate_dead_code`'s span set is: a caller that silently passed
+/// an empty set would re-enable substitution on a local the checker boxed, and the divergence
+/// surfaces as a compiler PANIC inside a checked builtin's lowering — nothing a reader would trace
+/// back to this call. The test tree shadows this with a no-set wrapper for hand-built ASTs.
+#[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
+pub fn propagate_constants(program: Program, mixed_storage_locals: HashSet<String>) -> Program {
+    PostTypecheckOptimizer::new(&program).propagate(program, mixed_storage_locals)
 }
 
 /// Normalizes control flow structures (ifs, switches, try/catch) for easier optimization.
-pub fn normalize_control_flow(program: Program) -> Program {
-    let (function_effects, static_method_effects, instance_method_effects) =
-        compute_program_callable_effects(&program);
-    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
-    with_callable_effects(
-        function_effects,
-        static_method_effects,
-        instance_method_effects,
-        instance_dispatch_metadata,
-        || prune_block(program),
-    )
+///
+/// `binding_decision_spans` is `CheckResult::local_binding_decision_spans()`, required for the same
+/// reason `eliminate_dead_code`'s is: this phase runs the single-case switch rewrite, which CLONES
+/// the default body into both branches of the synthesized `if`, and a caller that silently passed
+/// an empty set would let that clone hand one span-keyed checker decision to two statements.
+#[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
+pub fn normalize_control_flow(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+    PostTypecheckOptimizer::new(&program).normalize(program, binding_decision_spans)
 }
 
 /// Prunes branches with constant conditions that cannot be reached.
-pub fn prune_constant_control_flow(program: Program) -> Program {
-    let (function_effects, static_method_effects, instance_method_effects) =
-        compute_program_callable_effects(&program);
-    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
-    with_callable_effects(
-        function_effects,
-        static_method_effects,
-        instance_method_effects,
-        instance_dispatch_metadata,
-        || prune_block(program),
-    )
+///
+/// `binding_decision_spans` is required here for the same reason as in `normalize_control_flow`:
+/// both phases run `control::prune_switch_stmt`, whose single-case rewrite clones statements.
+#[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
+pub fn prune_constant_control_flow(
+    program: Program,
+    binding_decision_spans: HashSet<Span>,
+) -> Program {
+    PostTypecheckOptimizer::new(&program).prune(program, binding_decision_spans)
 }
 
 /// A fact the propagation environment records for a local variable.
@@ -117,32 +148,195 @@ impl PropagatedValue {
             PropagatedValue::ArrayLit(_) => None,
         }
     }
+
+    /// Returns whether two facts denote the *same constant*, i.e. whether merging control-flow
+    /// paths that carry them can substitute either one without changing program output.
+    ///
+    /// Stricter than `PartialEq` for floats: `0.0` and `-0.0` compare equal under IEEE but
+    /// `echo` prints `0` and `-0`, so a merge that unified them would change the program.
+    fn same_constant(&self, other: &Self) -> bool {
+        match (self, other) {
+            (PropagatedValue::Scalar(left), PropagatedValue::Scalar(right)) => {
+                left.same_constant(right)
+            }
+            (PropagatedValue::ArrayLit(left), PropagatedValue::ArrayLit(right)) => {
+                same_array_literal_fact(left, right)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Returns whether two array-literal facts hold identical constants.
+///
+/// `assigned_array_fact` only produces literals whose keys and values are scalar literals, so
+/// the comparison walks them through `ScalarValue::same_constant` and keeps signed zeros apart.
+/// Anything that is not one of those two literal shapes falls back to structural equality.
+fn same_array_literal_fact(left: &Expr, right: &Expr) -> bool {
+    /// Compares two scalar-literal expressions by constant identity.
+    fn same_scalar(left: &Expr, right: &Expr) -> bool {
+        match (scalar_value(left), scalar_value(right)) {
+            (Some(left), Some(right)) => left.same_constant(&right),
+            _ => left == right,
+        }
+    }
+
+    match (&left.kind, &right.kind) {
+        (ExprKind::ArrayLiteral(left), ExprKind::ArrayLiteral(right)) => {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|(left, right)| same_scalar(left, right))
+        }
+        (ExprKind::ArrayLiteralAssoc(left), ExprKind::ArrayLiteralAssoc(right)) => {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|((left_key, left_value), (right_key, right_value))| {
+                    same_scalar(left_key, right_key) && same_scalar(left_value, right_value)
+                })
+        }
+        _ => left == right,
+    }
 }
 
 /// Maps local names to propagated facts during constant propagation.
 type ConstantEnv = HashMap<String, PropagatedValue>;
+
+/// Owns one conservative whole-program callable-effect analysis for all
+/// post-typecheck AST passes. Reusing the summary is sound because these
+/// passes only remove or simplify behavior, so the pre-pass effect summary is
+/// an over-approximation for every later pass.
+pub struct PostTypecheckOptimizer {
+    callable_effects: CallableEffectAnalysis,
+    by_ref_signatures: ByRefSignatures,
+    exception_flow: Rc<ExceptionFlowAnalysis>,
+}
+
+impl PostTypecheckOptimizer {
+    /// Builds the reusable analysis from the program entering post-typecheck optimization.
+    pub fn new(program: &Program) -> Self {
+        Self::new_with_optional_type_metadata(program, None)
+    }
+
+    /// Builds reusable analyses with checker function signatures and canonical type hierarchy.
+    pub fn new_with_type_metadata(
+        program: &Program,
+        functions: &HashMap<String, crate::types::FunctionSig>,
+        classes: &HashMap<String, crate::types::ClassInfo>,
+        interfaces: &HashMap<String, crate::types::InterfaceInfo>,
+    ) -> Self {
+        Self::new_with_optional_type_metadata(program, Some((functions, classes, interfaces)))
+    }
+
+    /// Builds callable and exception analyses, optionally using authoritative checker metadata.
+    fn new_with_optional_type_metadata(
+        program: &Program,
+        type_metadata: Option<(
+            &HashMap<String, crate::types::FunctionSig>,
+            &HashMap<String, crate::types::ClassInfo>,
+            &HashMap<String, crate::types::InterfaceInfo>,
+        )>,
+    ) -> Self {
+        let callable_effects = CallableEffectAnalysis::from_program(program);
+        let exception_flow = with_callable_effect_analysis(&callable_effects, || {
+            Rc::new(ExceptionFlowAnalysis::from_program(program, type_metadata))
+        });
+        Self {
+            callable_effects,
+            by_ref_signatures: collect_by_ref_signatures(program),
+            exception_flow,
+        }
+    }
+
+    /// Propagates constants while using the shared callable-effect summary.
+    ///
+    /// `mixed_storage_locals` is `CheckResult::mixed_storage_local_names()`: the locals the
+    /// checker's pre-scan compiled as boxed `mixed` frame storage. It is a REQUIRED argument for
+    /// the same reason `eliminate_dead_code`'s span set is — a caller that silently passed an
+    /// empty set would re-enable substitution on a boxed local, and the divergence surfaces as a
+    /// compiler PANIC in a checked builtin's fast path rather than as anything a reader would
+    /// connect back to this call.
+    pub fn propagate(&self, program: Program, mixed_storage_locals: HashSet<String>) -> Program {
+        reset_reference_volatile();
+        // Request superglobals are writable from any scope under `--web`, so they
+        // can never carry propagated facts.
+        for name in crate::superglobals::SUPERGLOBALS {
+            mark_reference_volatile(name);
+        }
+        // Install the callable effect summaries and by-ref signatures so calls to
+        // known-pure user callables stop clearing the environment. Substitution
+        // into by-ref argument positions is masked by `propagate_args`, which
+        // keeps those arguments lvalues.
+        with_mixed_storage_locals(mixed_storage_locals, || {
+            with_callable_effect_analysis(&self.callable_effects, || {
+                with_by_ref_signatures(self.by_ref_signatures.clone(), || {
+                    propagate_block(program, HashMap::new()).0
+                })
+            })
+        })
+    }
+
+    /// Normalizes control flow using the shared callable-effect summary.
+    ///
+    /// Takes the same `binding_decision_spans` as `eliminate_dead_code` because this phase is the
+    /// SECOND cloning pass: `control::prune_switch_stmt` rewrites a single-case switch on a
+    /// non-scalar subject into an `if`, and the default body is materialized into BOTH branches
+    /// with its original spans. The spans let that rewrite veto itself; see
+    /// `control::switch::single_case_rewrite_would_clone_a_decision`.
+    pub fn normalize(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+        })
+    }
+
+    /// Prunes constant control-flow branches using the shared callable-effect summary.
+    ///
+    /// Installs `binding_decision_spans` for the same reason `normalize` does — the two phases run
+    /// the same `prune_block`, so the cloning switch rewrite is reachable from both.
+    pub fn prune(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+        })
+    }
+
+    /// Eliminates dead code using the shared callable-effect summary.
+    ///
+    /// `binding_decision_spans` is the union of the checker's three span-keyed local-binding
+    /// decision maps — `CheckResult::local_bind_kill_sites`, `local_retype_sites` and
+    /// `mixed_storage_store_sites`. A clone carries the original's span, so NO post-typecheck pass
+    /// may duplicate a node carrying one: it would hand a single checker decision to two syntactic
+    /// sites. DCE's tail-sinking is one of the two passes that clone (the single-case switch
+    /// rewrite reached from `normalize`/`prune` is the other); passing the spans in lets it keep
+    /// those statements singular. See `control::binding_decisions`.
+    pub fn eliminate_dead_code(
+        &self,
+        program: Program,
+        binding_decision_spans: HashSet<Span>,
+    ) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || {
+                with_exception_flow_analysis(&self.exception_flow, || {
+                    with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+                })
+            })
+        })
+    }
+}
+
 /// Eliminates dead code for this module.
-pub fn eliminate_dead_code(program: Program) -> Program {
-    let (function_effects, static_method_effects, instance_method_effects) =
-        compute_program_callable_effects(&program);
-    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
-    with_callable_effects(
-        function_effects,
-        static_method_effects,
-        instance_method_effects,
-        instance_dispatch_metadata,
-        || dce_block(program),
-    )
+///
+/// `binding_decision_spans` comes from `CheckResult::local_binding_decision_spans`. It is a
+/// REQUIRED argument rather than a default: a caller that silently passed an empty set would
+/// re-enable the tail-sinking clone of a decision-carrying statement, and the divergence would be
+/// invisible until the resulting program printed the wrong answer.
+#[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
+pub fn eliminate_dead_code(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+    PostTypecheckOptimizer::new(&program).eliminate_dead_code(program, binding_decision_spans)
 }
 
 /// Returns true when the named builtin can invoke user code through a callback
-/// argument (registry convention: every callback parameter is named
-/// `callback`). Such builtins inherit the callback's powers: they can write
-/// globals and mutate any argument reachable through the callback's by-ref
-/// parameters.
+/// argument. Such builtins inherit the callback's powers: they can write globals
+/// and mutate any argument reachable through the callback's by-ref parameters.
 fn builtin_invokes_callbacks(name: &str) -> bool {
-    crate::builtins::registry::lookup(name).is_some_and(|def| {
-        def.params.iter().any(|(param, _)| param == "callback")
+    crate::builtins::registry::lookup(name).is_some_and(|definition| {
+        !crate::builtins::registry::callback_parameter_indices(definition).is_empty()
     })
 }
 
@@ -266,40 +460,60 @@ struct InstanceDispatchMetadata {
 
 /// Holds the body and never-return metadata for a function during effect analysis.
 #[derive(Clone, Debug)]
-struct FunctionEffectBody {
-    body: Vec<Stmt>,
+struct FunctionEffectBody<'a> {
+    body: &'a [Stmt],
     declared_never: bool,
 }
 
 /// Holds the body, class context, and never-return metadata for a static method during effect analysis.
 #[derive(Clone, Debug)]
-struct StaticMethodBody {
+struct StaticMethodBody<'a> {
     context: ClassEffectContext,
-    body: Vec<Stmt>,
+    body: &'a [Stmt],
     declared_never: bool,
 }
 
-/// Maps names to scalar constants during constant propagation.
+/// Holds callable summaries and dispatch metadata shared by optimizer passes.
+#[derive(Clone)]
+struct CallableEffectAnalysis {
+    function_effects: Rc<HashMap<String, Effect>>,
+    static_method_effects: Rc<HashMap<String, Effect>>,
+    instance_method_effects: Rc<HashMap<String, Effect>>,
+    instance_dispatch_metadata: Rc<InstanceDispatchMetadata>,
+}
+
+impl CallableEffectAnalysis {
+    /// Computes the conservative callable summaries once for a post-typecheck program.
+    fn from_program(program: &[Stmt]) -> Self {
+        let (function_effects, static_method_effects, instance_method_effects) =
+            compute_program_callable_effects(program);
+        Self {
+            function_effects,
+            static_method_effects,
+            instance_method_effects,
+            instance_dispatch_metadata: Rc::new(collect_instance_dispatch_metadata(program)),
+        }
+    }
+}
 
 /// Installs function, static method, instance method, and class-dispatch summaries for the
 /// closure's duration, then restores the previous state.
-fn with_callable_effects<R>(
-    function_effects: HashMap<String, Effect>,
-    static_method_effects: HashMap<String, Effect>,
-    instance_method_effects: HashMap<String, Effect>,
-    instance_dispatch_metadata: InstanceDispatchMetadata,
+fn with_callable_effect_analysis<R>(
+    analysis: &CallableEffectAnalysis,
     f: impl FnOnce() -> R,
 ) -> R {
     ACTIVE_FUNCTION_EFFECTS.with(|function_slot| {
         ACTIVE_STATIC_METHOD_EFFECTS.with(|static_slot| {
             ACTIVE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
                 ACTIVE_INSTANCE_DISPATCH_METADATA.with(|metadata_slot| {
-                    let previous_functions = function_slot.replace(Some(function_effects));
-                    let previous_static_methods = static_slot.replace(Some(static_method_effects));
+                    let previous_functions =
+                        function_slot.replace(Some(Rc::clone(&analysis.function_effects)));
+                    let previous_static_methods =
+                        static_slot.replace(Some(Rc::clone(&analysis.static_method_effects)));
                     let previous_instance_methods =
-                        instance_slot.replace(Some(instance_method_effects));
-                    let previous_metadata =
-                        metadata_slot.replace(Some(instance_dispatch_metadata));
+                        instance_slot.replace(Some(Rc::clone(&analysis.instance_method_effects)));
+                    let previous_metadata = metadata_slot
+                        .replace(Some(Rc::clone(&analysis.instance_dispatch_metadata)));
                     let result = f();
                     metadata_slot.replace(previous_metadata);
                     instance_slot.replace(previous_instance_methods);
@@ -310,6 +524,24 @@ fn with_callable_effects<R>(
             })
         })
     })
+}
+
+/// Installs one-off callable summaries for focused optimizer tests and helpers.
+#[cfg(test)]
+fn with_callable_effects<R>(
+    function_effects: HashMap<String, Effect>,
+    static_method_effects: HashMap<String, Effect>,
+    instance_method_effects: HashMap<String, Effect>,
+    instance_dispatch_metadata: InstanceDispatchMetadata,
+    f: impl FnOnce() -> R,
+) -> R {
+    let analysis = CallableEffectAnalysis {
+        function_effects: Rc::new(function_effects),
+        static_method_effects: Rc::new(static_method_effects),
+        instance_method_effects: Rc::new(instance_method_effects),
+        instance_dispatch_metadata: Rc::new(instance_dispatch_metadata),
+    };
+    with_callable_effect_analysis(&analysis, f)
 }
 
 /// Installs a class effect context for instance dispatch analysis, then restores it.
@@ -338,318 +570,4 @@ fn with_callable_alias_effects<R>(
 /// Returns the currently active callable alias effect map, or an empty map if none is set.
 fn current_callable_alias_effects() -> HashMap<String, Effect> {
     ACTIVE_CALLABLE_ALIAS_EFFECTS.with(|slot| slot.borrow().clone().unwrap_or_default())
-}
-
-/// Computes the effect for every function, static method, and concrete instance method in the
-/// program. Uses a fixed-point iteration: effects start as PURE and are refined by examining
-/// bodies, accounting for nested calls and closed-world override sets.
-fn compute_program_callable_effects(
-    program: &[Stmt],
-) -> (
-    HashMap<String, Effect>,
-    HashMap<String, Effect>,
-    HashMap<String, Effect>,
-) {
-    let mut function_bodies = HashMap::new();
-    collect_program_function_bodies(program, &mut function_bodies);
-    let mut static_method_bodies = HashMap::new();
-    collect_program_static_method_bodies(program, &mut static_method_bodies);
-    let mut instance_method_bodies = HashMap::new();
-    collect_program_instance_method_bodies(program, &mut instance_method_bodies);
-    let instance_dispatch_metadata = collect_instance_dispatch_metadata(program);
-
-    let mut function_effects: HashMap<String, Effect> = function_bodies
-        .keys()
-        .cloned()
-        .map(|name| (name, Effect::PURE))
-        .collect();
-    let mut static_method_effects: HashMap<String, Effect> = static_method_bodies
-        .keys()
-        .cloned()
-        .map(|name| (name, Effect::PURE))
-        .collect();
-    let mut instance_method_effects: HashMap<String, Effect> = instance_method_bodies
-        .keys()
-        .cloned()
-        .map(|name| (name, Effect::PURE))
-        .collect();
-
-    loop {
-        let function_snapshot = function_effects.clone();
-        let static_method_snapshot = static_method_effects.clone();
-        let instance_method_snapshot = instance_method_effects.clone();
-        let mut changed = false;
-
-        ACTIVE_FUNCTION_EFFECTS.with(|function_slot| {
-            ACTIVE_STATIC_METHOD_EFFECTS.with(|static_slot| {
-                ACTIVE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
-                    ACTIVE_INSTANCE_DISPATCH_METADATA.with(|metadata_slot| {
-                        let previous_functions = function_slot.replace(Some(function_snapshot));
-                        let previous_static_methods =
-                            static_slot.replace(Some(static_method_snapshot));
-                        let previous_instance_methods =
-                            instance_slot.replace(Some(instance_method_snapshot));
-                        let previous_metadata =
-                            metadata_slot.replace(Some(instance_dispatch_metadata.clone()));
-
-                        for (name, function) in &function_bodies {
-                            let effect = never_declared_effect(
-                                function.declared_never,
-                                block_effect(&function.body),
-                            );
-                            if function_effects.get(name).copied() != Some(effect) {
-                                function_effects.insert(name.clone(), effect);
-                                changed = true;
-                            }
-                        }
-
-                        for (name, method) in &static_method_bodies {
-                            let effect =
-                                with_class_effect_context(Some(method.context.clone()), || {
-                                    block_effect(&method.body)
-                                });
-                            let effect = never_declared_effect(method.declared_never, effect);
-                            if static_method_effects.get(name).copied() != Some(effect) {
-                                static_method_effects.insert(name.clone(), effect);
-                                changed = true;
-                            }
-                        }
-
-                        for (name, method) in &instance_method_bodies {
-                            let effect =
-                                with_class_effect_context(Some(method.context.clone()), || {
-                                    block_effect(&method.body)
-                                });
-                            let effect = never_declared_effect(method.declared_never, effect);
-                            if instance_method_effects.get(name).copied() != Some(effect) {
-                                instance_method_effects.insert(name.clone(), effect);
-                                changed = true;
-                            }
-                        }
-
-                        metadata_slot.replace(previous_metadata);
-                        instance_slot.replace(previous_instance_methods);
-                        static_slot.replace(previous_static_methods);
-                        function_slot.replace(previous_functions);
-                    })
-                });
-            });
-        });
-
-        if !changed {
-            return (
-                function_effects,
-                static_method_effects,
-                instance_method_effects,
-            );
-        }
-    }
-}
-
-/// Collects all top-level and namespace-scoped function bodies into `out` for effect analysis.
-fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, FunctionEffectBody>) {
-    for stmt in stmts {
-        match &stmt.kind {
-            StmtKind::FunctionDecl {
-                name,
-                body,
-                return_type,
-                ..
-            } => {
-                out.insert(
-                    name.clone(),
-                    FunctionEffectBody {
-                        body: body.clone(),
-                        declared_never: is_never_return_type(return_type),
-                    },
-                );
-            }
-            StmtKind::NamespaceBlock { body, .. } => collect_program_function_bodies(body, out),
-            _ => {}
-        }
-    }
-}
-
-/// Collects all static method bodies in classes into `out` for effect analysis.
-fn collect_program_static_method_bodies(
-    stmts: &[Stmt],
-    out: &mut HashMap<String, StaticMethodBody>,
-) {
-    for stmt in stmts {
-        match &stmt.kind {
-            StmtKind::ClassDecl {
-                name,
-                extends,
-                methods,
-                ..
-            } => {
-                let context = ClassEffectContext {
-                    class_name: name.clone(),
-                    parent_name: extends.as_ref().map(|parent| parent.as_str().to_string()),
-                };
-                for method in methods {
-                    if method.is_static && method.has_body {
-                        out.insert(
-                            method_effect_key(name, &method.name),
-                            StaticMethodBody {
-                                context: context.clone(),
-                                body: method.body.clone(),
-                                declared_never: is_never_return_type(&method.return_type),
-                            },
-                        );
-                    }
-                }
-            }
-            StmtKind::NamespaceBlock { body, .. } => collect_program_static_method_bodies(body, out),
-            _ => {}
-        }
-    }
-}
-
-/// Collects all concrete instance method bodies in classes into `out` for effect analysis.
-fn collect_program_instance_method_bodies(
-    stmts: &[Stmt],
-    out: &mut HashMap<String, StaticMethodBody>,
-) {
-    for stmt in stmts {
-        match &stmt.kind {
-            StmtKind::ClassDecl {
-                name,
-                extends,
-                methods,
-                ..
-            } => {
-                let context = ClassEffectContext {
-                    class_name: name.clone(),
-                    parent_name: extends.as_ref().map(|parent| parent.as_str().to_string()),
-                };
-                for method in methods {
-                    if !method.is_static && method.has_body {
-                        out.insert(
-                            method_effect_key(name, &method.name),
-                            StaticMethodBody {
-                                context: context.clone(),
-                                body: method.body.clone(),
-                                declared_never: is_never_return_type(&method.return_type),
-                            },
-                        );
-                    }
-                }
-            }
-            StmtKind::NamespaceBlock { body, .. } => {
-                collect_program_instance_method_bodies(body, out)
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Collects class hierarchy, method modifiers, and direct property facts for effect resolution.
-fn collect_instance_dispatch_metadata(stmts: &[Stmt]) -> InstanceDispatchMetadata {
-    let mut metadata = InstanceDispatchMetadata {
-        has_dynamic_class_barrier: crate::ir_lower::body_contains_eval_call(stmts),
-        ..InstanceDispatchMetadata::default()
-    };
-    collect_instance_dispatch_metadata_into(stmts, &mut metadata);
-    metadata
-}
-
-/// Recursively adds class declarations from one statement block to dispatch metadata.
-fn collect_instance_dispatch_metadata_into(
-    stmts: &[Stmt],
-    metadata: &mut InstanceDispatchMetadata,
-) {
-    for stmt in stmts {
-        match &stmt.kind {
-            StmtKind::ClassDecl {
-                name,
-                extends,
-                is_abstract,
-                is_final,
-                trait_uses,
-                properties,
-                methods,
-                ..
-            } => {
-                let private_methods = methods
-                    .iter()
-                    .filter(|method| {
-                        !method.is_static
-                            && matches!(
-                                method.visibility,
-                                crate::parser::ast::Visibility::Private
-                            )
-                    })
-                    .map(|method| php_symbol_key(&method.name))
-                    .collect();
-                let final_methods = methods
-                    .iter()
-                    .filter(|method| !method.is_static && method.is_final)
-                    .map(|method| php_symbol_key(&method.name))
-                    .collect();
-                let method_visibilities = methods
-                    .iter()
-                    .filter(|method| !method.is_static)
-                    .map(|method| (php_symbol_key(&method.name), method.visibility.clone()))
-                    .collect();
-                let direct_properties = properties
-                    .iter()
-                    .filter(|property| !property.is_static)
-                    .map(|property| {
-                        (
-                            property.name.clone(),
-                            PropertyReadMetadata {
-                                declaring_class: name.clone(),
-                                visibility: property.visibility.clone(),
-                                typed: property.type_expr.is_some(),
-                                hooked: property.hooks.requires_get(),
-                            },
-                        )
-                    })
-                    .collect();
-                let has_magic_get = methods.iter().any(|method| {
-                    !method.is_static && php_symbol_key(&method.name) == "__get"
-                });
-                metadata.classes.insert(
-                    name.clone(),
-                    InstanceClassMetadata {
-                        parent_name: extends.as_ref().map(|parent| parent.as_str().to_string()),
-                        is_abstract: *is_abstract,
-                        is_final: *is_final,
-                        has_trait_uses: !trait_uses.is_empty(),
-                        private_methods,
-                        final_methods,
-                        method_visibilities,
-                        properties: direct_properties,
-                        has_magic_get,
-                    },
-                );
-            }
-            StmtKind::NamespaceBlock { body, .. } => {
-                collect_instance_dispatch_metadata_into(body, metadata);
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Builds the map key for a method effect entry, using PHP symbol keying for the method name.
-fn method_effect_key(class_name: &str, method_name: &str) -> String {
-    format!("{class_name}::{}", php_symbol_key(method_name))
-}
-
-/// Returns true if the type expression is `Never`.
-fn is_never_return_type(return_type: &Option<TypeExpr>) -> bool {
-    matches!(return_type, Some(TypeExpr::Never))
-}
-
-/// Adjusts an effect when the callable has a `never` return type. A `never` function is
-/// considered to have side effects because it exits abruptly (e.g., via exit/die or an
-/// infinite loop) and the PHP-visible control flow never continues past it.
-fn never_declared_effect(declared_never: bool, effect: Effect) -> Effect {
-    if declared_never {
-        effect.with_side_effects()
-    } else {
-        effect
-    }
 }

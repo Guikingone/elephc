@@ -2,7 +2,7 @@
 title: "array_diff()"
 description: "Computes the difference of arrays."
 sidebar:
-  order: 6
+  order: 7
 ---
 
 ## array_diff()
@@ -25,12 +25,6 @@ Computes the difference of arrays.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_diff.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_diff.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

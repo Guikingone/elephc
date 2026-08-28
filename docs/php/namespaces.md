@@ -35,7 +35,14 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 ## Name resolution rules
 - Unqualified class names honor `use` aliases, otherwise resolve relative to current namespace
 - Functions/constants: `use function`/`use const` aliases first, then current namespace, then global fallback
-- Fully-qualified `\Lib\Tool` always refers to global canonical name
+- Qualified names (containing `\` but not starting with one) have their **first segment** expanded
+  through the class/namespace import table — the plain `use` table — whether the name denotes a
+  class, a function, or a constant. With `use App\Math as M;`, all of `M\double(5)`,
+  `new M\Thing()`, `M\Thing::method()`, `$x instanceof M\Thing` and `M\FOO` resolve into
+  `App\Math`. Only the first segment is substituted, and `use function` / `use const` aliases do
+  not participate (they apply to unqualified names only), matching PHP
+- Fully-qualified `\Lib\Tool` always refers to global canonical name; a leading `\` suppresses
+  alias expansion, so `\M\double()` is *not* rewritten
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity
@@ -258,6 +265,8 @@ If `$autoload` is `false`, no compile-time load is forced; the call returns whet
 | `spl_object_hash($obj)` | PHP's 32-character rendering of that same handle — 16 zero-padded hex digits followed by 16 zeros, so handle `1` is `"00000000000000010000000000000000"` |
 | `get_class($obj)` | Resolves to the argument's static type name. Inside a method called with no argument, returns the current class context |
 | `get_parent_class($obj)` | Returns the parent class name from `ctx.classes[name].parent`, or empty string when the class has no parent |
+| `get_object_vars($obj)` | Returns the object's accessible properties as a `name => value` associative array, respecting the calling scope like PHP: every property from inside the class, public ones from outside. Dynamic (`stdClass`/`#[AllowDynamicProperties]`) properties are included. For the all-property, mangled-key projection use `(array)$obj` — see [Types](types.md) |
+| `get_class_methods()` / `get_class_vars()` / `get_called_class()` | Available under `eval()` only; not yet supported in ahead-of-time compilation (see the generated [built-in function index](builtins.md) for per-function availability) |
 | `class_implements($object_or_class, bool $autoload = true)` | Returns an associative `interface => interface` array for a class/object, including inherited parent interfaces. When the argument names an interface, returns that interface's parent interfaces |
 | `class_parents($object_or_class, bool $autoload = true)` | Returns an associative `parent => parent` array, starting with the immediate parent and then ancestors |
 | `class_uses($object_or_class, bool $autoload = true)` | Returns an associative `trait => trait` array for traits used directly by the class or trait declaration. Parent class traits and traits imported by those traits are not included, matching PHP |
@@ -338,12 +347,14 @@ used as a class constant, a default parameter value, a `match` subject or an arr
 key all reach the same object. Covered by the LAZY ENUM CASE MATERIALIZATION block
 in `tests/var_dump_object_tests.rs`.
 
-Under `--web` the slots are per-process BSS: a prefork worker gets a private copy
-the moment it writes one, the parent never runs user code before forking, and
-requests are served serially inside a worker, so no slot is ever raced.
-`__rt_web_reset` clears every slot between requests, which keeps the pre-existing
-per-request lifecycle — the handler prologue used to re-run the eager initializers
-and overwrite each slot every request, so a case object never spanned two requests.
+Under `--web` the slots are per-process BSS. In default `worker` isolation the
+prefork worker owns them; `pool` gives each persistent handler child its own
+copy; `request` gives each disposable child a forked copy. A process executes
+only one PHP handler at a time, so no slot is raced even when isolated modes run
+several handler processes concurrently. `__rt_web_reset` clears every slot
+between requests, which keeps the pre-existing per-request lifecycle — the
+handler prologue used to re-run the eager initializers and overwrite each slot
+every request, so a case object never spanned two requests.
 
 **Residual divergence — a discarded pure call that would have materialized a
 case.** A call whose result is unused and whose body has no observable effect is
@@ -468,10 +479,27 @@ define("PI", 3.14159);
 | `PATHINFO_EXTENSION` | int | 4 |
 | `PATHINFO_FILENAME` | int | 8 |
 | `PATHINFO_ALL` | int | 15 |
+| `PHP_URL_SCHEME` | int | 0 |
+| `PHP_URL_HOST` | int | 1 |
+| `PHP_URL_PORT` | int | 2 |
+| `PHP_URL_USER` | int | 3 |
+| `PHP_URL_PASS` | int | 4 |
+| `PHP_URL_PATH` | int | 5 |
+| `PHP_URL_QUERY` | int | 6 |
+| `PHP_URL_FRAGMENT` | int | 7 |
 | `FNM_NOESCAPE` | int | Target-specific libc/PHP value |
 | `FNM_PATHNAME` | int | Target-specific libc/PHP value |
 | `FNM_PERIOD` | int | 4 |
 | `FNM_CASEFOLD` | int | 16 |
+| `STR_PAD_RIGHT` | int | 1 — `str_pad()`'s default padding mode |
+| `STR_PAD_LEFT` | int | 0 |
+| `STR_PAD_BOTH` | int | 2 |
+| `COUNT_NORMAL` | int | 0 — `count()`'s default mode |
+| `COUNT_RECURSIVE` | int | 1 |
+| `PHP_ROUND_HALF_UP` | int | 1 — `round()`'s default mode |
+| `PHP_ROUND_HALF_DOWN` | int | 2 |
+| `PHP_ROUND_HALF_EVEN` | int | 3 |
+| `PHP_ROUND_HALF_ODD` | int | 4 |
 
 ## Superglobals
 
@@ -479,6 +507,20 @@ define("PI", 3.14159);
 |---|---|---|
 | `$argc` | `int` | Number of CLI arguments |
 | `$argv` | `array(string)` | CLI argument values |
+| `$_SERVER` | `array(string => mixed)` | Request/environment data. Populated with real request data under `--web`; in a CLI binary it is seeded as an **empty** array (PHP's CLI SAPI populates ~67 entries — a divergence in content, not in type) |
+| `$_GET` | `array(string => mixed)` | Query parameters (`--web`); empty array in CLI builds |
+| `$_POST` | `array(string => mixed)` | Form/body parameters (`--web`); empty array in CLI builds |
+| `$_COOKIE` | `array(string => mixed)` | Request cookies (`--web`); empty array in CLI builds |
+| `$_FILES` | `array(string => mixed)` | Uploaded files (`--web`); empty array in CLI builds |
+| `$_ENV` | `array(string => mixed)` | Empty array in CLI builds (read the environment with `getenv()`) |
+| `$_REQUEST` | `array(string => mixed)` | Empty array in CLI builds |
+| `$_SESSION` | `array(string => mixed)` | Exists only after `session_start()` — `isset($_SESSION)` is `false` before it, exactly as in PHP |
+
+In a CLI (non-`--web`) binary, each of the seven request superglobals is created
+only when the source actually **spells** its name — a program that never mentions
+one pays nothing for it — matching what `php -n` defines (`isset($_ENV)` and
+`isset($_REQUEST)` answer `true` there; only `$_SESSION` is absent until
+`session_start()`).
 
 ## Comments
 ```php

@@ -2,7 +2,7 @@
 title: "array_key_first()"
 description: "Gets the first key of an array."
 sidebar:
-  order: 19
+  order: 20
 ---
 
 ## array_key_first()
@@ -24,12 +24,6 @@ Gets the first key of an array.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

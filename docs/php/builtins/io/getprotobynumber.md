@@ -2,7 +2,7 @@
 title: "getprotobynumber()"
 description: "Gets the protocol name associated with the given protocol number."
 sidebar:
-  order: 187
+  order: 194
 ---
 
 ## getprotobynumber()
@@ -24,12 +24,6 @@ Gets the protocol name associated with the given protocol number.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/getprotobynumber.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/getprotobynumber.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -2,7 +2,7 @@
 title: "ob_end_flush()"
 description: "Flushes (sends) the contents of the active output buffer and turns it off."
 sidebar:
-  order: 193
+  order: 200
 ---
 
 ## ob_end_flush()
@@ -23,12 +23,6 @@ Flushes (sends) the contents of the active output buffer and turns it off.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/ob_end_flush.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_end_flush.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

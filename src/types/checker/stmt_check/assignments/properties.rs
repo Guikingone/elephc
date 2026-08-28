@@ -37,6 +37,13 @@ pub(super) fn check_property_assign(
     if let PhpType::Object(class_name) = &obj_ty {
         check_object_property_write(checker, object, class_name, property, value, &val_ty, span)?;
         refine_object_property_type(checker, class_name, property, &val_ty);
+    } else if let Some(class_name) = checker.union_single_object_class(&obj_ty) {
+        // A factory-style `Object|false` receiver still targets the one object
+        // class when the runtime value is an object. Validate writes against that
+        // class so readonly/visibility/type rules are not silently bypassed merely
+        // because the success value has not yet been narrowed with instanceof.
+        check_object_property_write(checker, object, &class_name, property, value, &val_ty, span)?;
+        refine_object_property_type(checker, &class_name, property, &val_ty);
     }
     if let PhpType::Pointer(Some(class_name)) = &obj_ty {
         check_pointer_property_write(checker, class_name, property, &val_ty, span)?;
@@ -232,6 +239,14 @@ fn check_object_property_write(
             .unwrap_or(PhpType::Int);
         let readonly_non_null_coalesce_keep =
             null_coalesce_property_keeps_non_null(object, property, value, &expected_ty);
+        let internal_pdo_statement_initializer = checker
+            .current_method
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case("__elephcInitialize"))
+            && class_info
+                .property_declaring_classes
+                .get(property)
+                .is_some_and(|owner| owner.trim_start_matches('\\').eq_ignore_ascii_case("PDOStatement"));
         if class_info.readonly_properties.contains(property)
             && !(checker.current_class.as_deref()
                 == class_info
@@ -239,12 +254,14 @@ fn check_object_property_write(
                     .get(property)
                     .map(String::as_str)
                 && checker.current_method.as_deref() == Some("__construct"))
+            && !internal_pdo_statement_initializer
             && !readonly_non_null_coalesce_keep
         {
             // PHP raises this as a catchable `Error` at runtime instead of a
             // compile-time rejection. Record the throw site so EIR lowering
             // emits the throw sequence, and let lowering proceed.
-            checker.throw_access_sites.insert(
+            crate::types::checker::record_throw_access_site(
+                &mut checker.throw_access_sites,
                 span,
                 crate::types::ThrowAccessInfo {
                     span,
@@ -488,8 +505,15 @@ fn check_pointer_property_write(
             ));
         }
     } else if let Some(field_ty) = checker.packed_field_type(class_name, property) {
+        // A Mixed value is admitted into an `int` field because lowering emits a strict
+        // runtime narrowing there (int tag → raw payload, anything else → TypeError). This
+        // is what lets int arithmetic — typed Mixed for its overflow-to-float promotion —
+        // feed packed fields without either a false compile error or a silent truncation.
+        let guarded_mixed_int =
+            field_ty == PhpType::Int && matches!(val_ty, PhpType::Mixed);
         if &field_ty != val_ty
             && !matches!((&field_ty, val_ty), (PhpType::Bool, PhpType::False))
+            && !guarded_mixed_int
         {
             return Err(CompileError::new(
                 span,

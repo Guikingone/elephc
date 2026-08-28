@@ -2,7 +2,7 @@
 title: "array_find()"
 description: "Returns the first element satisfying a predicate callback, or null."
 sidebar:
-  order: 12
+  order: 13
 ---
 
 ## array_find()
@@ -25,12 +25,6 @@ Returns the first element satisfying a predicate callback, or null.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

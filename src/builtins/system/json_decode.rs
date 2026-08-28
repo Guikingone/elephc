@@ -9,27 +9,18 @@
 //!   argument type, and that depth/flags are integers. Type errors are reported at
 //!   the offending argument's span (not the call span).
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::system::json_support;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "json_decode",
-    area: System,
-    params: [
-        json: Str,
-        associative: Bool = DefaultSpec::Null,
-        depth: Int = DefaultSpec::Int(512),
-        flags: Int = DefaultSpec::Int(0),
-    ],
-    returns: Mixed,
+    contract: "json_decode",
     check: check,
     semantics: crate::builtins::semantics::with_argument_lowering(
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::JsonDecode),
         crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode,
     ),
-    summary: "Decodes a JSON string.",
 }
 
 /// Validates the json argument is string-compatible, the associative argument is

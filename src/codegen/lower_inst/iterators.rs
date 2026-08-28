@@ -118,20 +118,12 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
         initialize_dynamic_iterable_iterator(ctx, offset, by_ref, source)?;
         return Ok(());
     }
-    if let IteratorSourceKind::Object {
-        class_name,
-        aggregate_class_name: None,
-    } = &source_kind
-    {
-        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object(class_name.clone()));
-    }
-    if let IteratorSourceKind::Interface {
-        interface_name,
-        aggregate_class_name: None,
-    } = &source_kind
-    {
-        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object(interface_name.clone()));
-    }
+    // -- the loop's reference on an object source is taken by EIR lowering, not here --
+    // `IterStart` used to `incref` an `Object`/`Interface` source so the object stayed
+    // alive for the whole loop, but nothing ever emitted the matching `decref`: every
+    // `foreach` over an Iterator (a `Generator` included) leaked the object and every
+    // heap block it owned. `lower_foreach` now wraps a borrowed object source in an
+    // `Op::Acquire`, which the loop's existing exit/`LoopCleanup` release paths balance.
     let initial_cursor = match &source_kind {
         IteratorSourceKind::Indexed { .. } => -1,
         IteratorSourceKind::Hash => 0,
@@ -921,10 +913,14 @@ fn resolve_dynamic_object_iterator_source(
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, keep_original)); // keep direct Iterator objects when IteratorAggregate dispatch misses
+            ctx.emitter.instruction(
+                &format!("cbz {}, {}", result_reg, keep_original)
+            );                                                                  // keep direct Iterator objects when IteratorAggregate dispatch misses
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // keep direct Iterator objects when IteratorAggregate dispatch misses
+            ctx.emitter.instruction(
+                &format!("test {}, {}", result_reg, result_reg)
+            );                                                                  // keep direct Iterator objects when IteratorAggregate dispatch misses
             ctx.emitter.instruction(&format!("je {}", keep_original));          // skip source replacement when getIterator() was not resolved
         }
     }
@@ -1105,7 +1101,9 @@ fn lower_object_iter_next(
             ctx.emitter.instruction(&format!("b.eq {}", first_label));          // skip next() before the first valid() probe
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", started_reg, started_reg)); // check whether this object iterator has already yielded once
+            ctx.emitter.instruction(
+                &format!("test {}, {}", started_reg, started_reg)
+            );                                                                  // check whether this object iterator has already yielded once
             ctx.emitter.instruction(&format!("je {}", first_label));            // skip next() before the first valid() probe
         }
     }
@@ -1135,7 +1133,9 @@ fn lower_interface_iter_next(
             ctx.emitter.instruction(&format!("b.eq {}", first_label));          // skip next() before the first valid() probe
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", started_reg, started_reg)); // check whether this interface iterator has already yielded once
+            ctx.emitter.instruction(
+                &format!("test {}, {}", started_reg, started_reg)
+            );                                                                  // check whether this interface iterator has already yielded once
             ctx.emitter.instruction(&format!("je {}", first_label));            // skip next() before the first valid() probe
         }
     }
@@ -1286,7 +1286,9 @@ pub(super) fn emit_interface_dispatch_call(
             if slot == 0 {
                 ctx.emitter.instruction("ldr x11, [x11]");                      // load first interface method implementation pointer
             } else {
-                ctx.emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8)); // load selected interface method implementation pointer
+                ctx.emitter.instruction(
+                    &format!("ldr x11, [x11, #{}]", slot * 8)
+                );                                                              // load selected interface method implementation pointer
             }
             ctx.emitter.instruction("blr x11");                                 // call resolved interface method implementation
             ctx.emitter.instruction(&format!("b {}", local_done));              // skip defensive missing-interface fallback
@@ -1314,7 +1316,9 @@ pub(super) fn emit_interface_dispatch_call(
             if slot == 0 {
                 ctx.emitter.instruction("mov r11, QWORD PTR [r11]");            // load first interface method implementation pointer
             } else {
-                ctx.emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", slot * 8)); // load selected interface method implementation pointer
+                ctx.emitter.instruction(
+                    &format!("mov r11, QWORD PTR [r11 + {}]", slot * 8)
+                );                                                              // load selected interface method implementation pointer
             }
             ctx.emitter.instruction("call r11");                                // call resolved interface method implementation
             ctx.emitter.instruction(&format!("jmp {}", local_done));            // skip defensive missing-interface fallback
@@ -1742,24 +1746,42 @@ fn load_current_array_value_aarch64(
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
+            ctx.emitter.instruction(
+                &format!("add {}, {}, #24", array_reg, array_reg)
+            );                                                                  // skip the indexed-array header to reach element payloads
+            ctx.emitter.instruction(
+                &format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, index_reg)
+            );                                                                  // load the selected pointer-sized indexed-array element
         }
         PhpType::Float => {
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach float payloads
-            ctx.emitter.instruction(&format!("ldr d0, [{}, {}, lsl #3]", array_reg, index_reg)); // load the selected indexed-array float element
+            ctx.emitter.instruction(
+                &format!("add {}, {}, #24", array_reg, array_reg)
+            );                                                                  // skip the indexed-array header to reach float payloads
+            ctx.emitter.instruction(
+                &format!("ldr d0, [{}, {}, lsl #3]", array_reg, index_reg)
+            );                                                                  // load the selected indexed-array float element
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            ctx.emitter.instruction(&format!("lsl {}, {}, #4", index_reg, index_reg)); // scale the string-array offset by pointer-plus-length slot size
-            ctx.emitter.instruction(&format!("add {}, {}, {}", array_reg, array_reg, index_reg)); // move to the selected string slot within the indexed array
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header before loading the string slot
+            ctx.emitter.instruction(
+                &format!("lsl {}, {}, #4", index_reg, index_reg)
+            );                                                                  // scale the string-array offset by pointer-plus-length slot size
+            ctx.emitter.instruction(
+                &format!("add {}, {}, {}", array_reg, array_reg, index_reg)
+            );                                                                  // move to the selected string slot within the indexed array
+            ctx.emitter.instruction(
+                &format!("add {}, {}, #24", array_reg, array_reg)
+            );                                                                  // skip the indexed-array header before loading the string slot
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach refcounted payloads
-            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, index_reg)); // load the selected refcounted indexed-array element
+            ctx.emitter.instruction(
+                &format!("add {}, {}, #24", array_reg, array_reg)
+            );                                                                  // skip the indexed-array header to reach refcounted payloads
+            ctx.emitter.instruction(
+                &format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, index_reg)
+            );                                                                  // load the selected refcounted indexed-array element
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -1787,24 +1809,38 @@ fn load_current_array_value_x86_64(
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
-            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
+            ctx.emitter.instruction(
+                &format!("lea {}, [{} + 24]", array_reg, array_reg)
+            );                                                                  // skip the indexed-array header to reach element payloads
+            ctx.emitter.instruction(
+                &format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, index_reg)
+            );                                                                  // load the selected pointer-sized indexed-array element
         }
         PhpType::Float => {
-            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach float payloads
-            ctx.emitter.instruction(&format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, index_reg)); // load the selected indexed-array float element
+            ctx.emitter.instruction(
+                &format!("lea {}, [{} + 24]", array_reg, array_reg)
+            );                                                                  // skip the indexed-array header to reach float payloads
+            ctx.emitter.instruction(
+                &format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, index_reg)
+            );                                                                  // load the selected indexed-array float element
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             ctx.emitter.instruction(&format!("shl {}, 4", index_reg));          // scale the string-array offset by pointer-plus-length slot size
-            ctx.emitter.instruction(&format!("add {}, {}", array_reg, index_reg)); // move to the selected string slot within the indexed array
+            ctx.emitter.instruction(
+                &format!("add {}, {}", array_reg, index_reg)
+            );                                                                  // move to the selected string slot within the indexed array
             ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the string slot
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach refcounted payloads
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, index_reg)); // load the selected refcounted indexed-array element
+            ctx.emitter.instruction(
+                &format!("lea {}, [{} + 24]", array_reg, array_reg)
+            );                                                                  // skip the indexed-array header to reach refcounted payloads
+            ctx.emitter.instruction(
+                &format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, index_reg)
+            );                                                                  // load the selected refcounted indexed-array element
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(

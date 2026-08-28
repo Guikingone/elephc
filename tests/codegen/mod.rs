@@ -37,12 +37,31 @@ mod include_paths;
 mod magic_constants;
 mod strings;
 mod io;
+mod mysqli;
+mod mysqli_mysql;
 mod pdo;
+#[cfg(feature = "pdo-dblib")]
+mod pdo_dblib;
+#[cfg(feature = "pdo-firebird")]
+mod pdo_firebird;
+#[cfg(feature = "pdo-odbc")]
+mod pdo_odbc;
+#[cfg(feature = "pdo-informix")]
+mod pdo_informix;
+#[cfg(feature = "pdo-ibm")]
+mod pdo_ibm;
+#[cfg(feature = "pdo-sqlsrv")]
+mod pdo_sqlsrv;
+#[cfg(feature = "pdo-oci")]
+mod pdo_oci;
+#[cfg(feature = "pdo-cubrid")]
+mod pdo_cubrid;
 mod pdo_mysql;
 mod pdo_pgsql;
 mod image;
 mod arrays;
 mod calendar;
+mod call_counters;
 mod callables;
 mod system;
 mod json;
@@ -65,4 +84,6 @@ mod iterators;
 mod spl;
 mod generators;
 mod dead_strip;
+mod locals_retype;
+mod stack_guard;
 mod zval;

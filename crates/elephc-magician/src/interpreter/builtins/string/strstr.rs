@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the strstr hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "strstr",
+    contract: "strstr",
     area: String,
-    params: [haystack, needle, before_needle = EvalBuiltinDefaultValue::Bool(false)],
     direct: Strstr,
     values: Strstr,
 }

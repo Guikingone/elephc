@@ -149,15 +149,56 @@ impl Checker {
                         .filter(|(_, _, _, is_ref)| *is_ref)
                         .map(|(name, _, _, _)| name.clone())
                         .collect();
+                    // Every parameter is bound unconditionally on entry, so all of them are
+                    // recorded at binding depth 0 (a missing entry means "seeded, not bound
+                    // here", which is not kill/retype eligible).
+                    let method_param_names: Vec<String> = method
+                        .params
+                        .iter()
+                        .map(|(name, _, _, _)| name.clone())
+                        .chain(method.variadic.iter().cloned())
+                        .collect();
+                    // A parameter with a declared type hint is a contract: never kill/retype
+                    // eligible inside the body, in either mode.
+                    let method_typed_params: Vec<String> = method
+                        .params
+                        .iter()
+                        .filter(|(_, type_ann, _, _)| type_ann.is_some())
+                        .map(|(name, _, _, _)| name.clone())
+                        .chain(
+                            method
+                                .variadic
+                                .iter()
+                                .filter(|_| method.variadic_type.is_some())
+                                .cloned(),
+                        )
+                        .collect();
                     let mut method_errors = Vec::new();
-                    self.with_local_storage_context(method_ref_params, |checker| {
-                        for s in &method.body {
-                            if let Err(error) = checker.check_stmt(s, &mut method_env) {
-                                method_errors.extend(error.flatten());
+                    // The storage this frame already holds on entry: the parameters. `$this`,
+                    // the superglobals and the seeded globals `method_env` also carries are not
+                    // this frame's own storage, and none of them is markable anyway.
+                    let pre_bound_own_storage: std::collections::HashMap<String, PhpType> =
+                        method_param_names
+                            .iter()
+                            .filter_map(|name| {
+                                method_env.get(name).map(|ty| (name.clone(), ty.clone()))
+                            })
+                            .collect();
+                    self.with_local_storage_context(
+                        method_ref_params,
+                        method_param_names,
+                        method_typed_params,
+                        pre_bound_own_storage,
+                        &method.body,
+                        |checker| {
+                            for s in &method.body {
+                                if let Err(error) = checker.check_stmt(s, &mut method_env) {
+                                    method_errors.extend(error.flatten());
+                                }
                             }
-                        }
-                        Ok(())
-                    })?;
+                            Ok(())
+                        },
+                    )?;
                     let method_has_errors = !method_errors.is_empty();
                     pass_errors.extend(method_errors);
 
@@ -247,6 +288,14 @@ impl Checker {
     /// it always throws/exits/loops). `Never` combined with a body that *does* contain
     /// return statements produces a compile error. Generic array hints are passed
     /// through as-is to preserve inference.
+    ///
+    /// A method body containing `yield` is a generator: calling it produces a
+    /// `Generator` object regardless of what the body's `return` statements say, so
+    /// generator detection short-circuits the whole inference/validation chain the
+    /// same way the free-function path in `functions::resolution::signature` does.
+    /// Without that short-circuit an unhinted generator method infers `void` (the
+    /// body has no value return) and a `: Generator` hint trips the
+    /// "must return a value on every path" coverage check.
     fn update_method_return_type(
         &mut self,
         class: &FlattenedClass,
@@ -276,7 +325,20 @@ impl Checker {
             Some(widest)
         };
         let inferred_return = raw_inferred.clone().unwrap_or(PhpType::Void);
-        let effective_return = if let Some(type_ann) = method.return_type.as_ref() {
+        let effective_return = if crate::types::checker::yield_validation::body_contains_yield(
+            &method.body,
+        ) {
+            match self.generator_method_return_type(class, method) {
+                Ok(generator_ty) => generator_ty,
+                Err(error) => {
+                    pass_errors.extend(error.flatten());
+                    self.current_class = None;
+                    self.current_method = None;
+                    self.current_method_is_static = false;
+                    return;
+                }
+            }
+        } else if let Some(type_ann) = method.return_type.as_ref() {
             match self.resolve_declared_return_type_hint(
                 type_ann,
                 method.span,
@@ -366,6 +428,39 @@ impl Checker {
             &callable_return_sigs,
             &callable_array_return_sigs,
         );
+    }
+
+    /// Resolves the return type of a method whose body contains `yield`.
+    ///
+    /// The result is always `Generator`, because that is the object PHP hands back when
+    /// the generator method is called. A declared return hint is still resolved and
+    /// validated: hints that accept a `Generator` (`Generator`, `Traversable`,
+    /// `iterable`, `mixed`, …) pass through, anything else is reported as an
+    /// incompatible return type. Unlike the non-generator path there is no
+    /// return-coverage check — a generator body legitimately has no `return` at all.
+    fn generator_method_return_type(
+        &mut self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+    ) -> Result<PhpType, CompileError> {
+        let generator_ty = PhpType::Object("Generator".to_string());
+        if let Some(type_ann) = method.return_type.as_ref() {
+            let declared = self.resolve_declared_return_type_hint(
+                type_ann,
+                method.span,
+                &format!("Method '{}::{}'", class.name, method.name),
+            )?;
+            if !self.generator_return_type_accepts(&declared) {
+                self.require_compatible_return_type(
+                    &declared,
+                    &generator_ty,
+                    true,
+                    method.span,
+                    &format!("Method '{}::{}' return type", class.name, method.name),
+                )?;
+            }
+        }
+        Ok(generator_ty)
     }
 
     /// Updates callable-return metadata for one checked method body.

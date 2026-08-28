@@ -15,6 +15,9 @@ use super::*;
 /// Intersects multiple constant environments, retaining only variable assignments
 /// that are identical across every path. Returns an empty map if no paths are provided.
 ///
+/// Agreement is decided by `PropagatedValue::same_constant`, not `PartialEq`, so paths that
+/// assign `0.0` and `-0.0` do not merge: `echo` prints `0` for one and `-0` for the other.
+///
 /// - `paths`: Vector of constant environments from different control-flow paths
 /// - Returns: A merged environment where each variable must have the same value in all input paths
 pub(crate) fn merge_constant_env_paths(mut paths: Vec<ConstantEnv>) -> ConstantEnv {
@@ -24,7 +27,11 @@ pub(crate) fn merge_constant_env_paths(mut paths: Vec<ConstantEnv>) -> ConstantE
 
     first
         .into_iter()
-        .filter(|(name, value)| paths.iter().all(|path| path.get(name) == Some(value)))
+        .filter(|(name, value)| {
+            paths
+                .iter()
+                .all(|path| path.get(name).is_some_and(|known| known.same_constant(value)))
+        })
         .collect()
 }
 
@@ -299,9 +306,21 @@ pub(crate) fn merge_try_constant_env_paths(
     }
 
     if block_may_throw(try_body) {
+        // A catch runs from an arbitrary point INSIDE the try body, so it starts
+        // with every variable that body may write unknown — not with the values
+        // they held before the `try`. Handing it `incoming_env` folded them back
+        // to those, and the merge then carried the wrong constant out past the
+        // whole statement: with a `try` that always throws, the catch path is
+        // the ONLY path, so its env became the exit env unopposed.
+        //
+        // The same reasoning, and the same set, as the env the catch bodies are
+        // propagated in; this is the second place that had to be told.
+        let mut catch_env = incoming_env.clone();
+        crate::optimize::propagate::invalidation::block_invalidation(try_body)
+            .apply(&mut catch_env);
         for catch in catches {
             if matches!(block_terminal_effect(&catch.body), TerminalEffect::FallsThrough) {
-                fallthrough_paths.push(simulate_catch_constant_env(catch, incoming_env.clone()));
+                fallthrough_paths.push(simulate_catch_constant_env(catch, catch_env.clone()));
             }
         }
     }

@@ -14,12 +14,41 @@ trade-offs.
 
 - **AST optimizer** — PHP-preserving rewrites expressed over syntax: constant
   folding, constant propagation, control-flow pruning and normalization, and
-  dead-code elimination. Always on; not behind a flag. See
+  dead-code elimination, followed by conservative whole-program declaration
+  reachability that removes unused functions, classes, and methods before EIR
+  lowering. Dynamic lookup and Reflection widen its keep-set, while the
+  prelude-backed `--with-pdo`, `--with-mysqli`, `--with-tz`, and `--with-image`
+  requests, `--with-eval`, and every `#[Export]` function are roots. Always on; not behind a flag. See
   [The Optimizer](../internals/the-optimizer.md).
 - **EIR optimization passes** — transformations that need value identity, basic
   blocks, or dominance, which the AST cannot express well. Run by a fixed-point
   pass driver after lowering. Controlled by `--ir-opt`. See
   [The EIR Design](../internals/the-ir.md#optimization-passes).
+
+Declaration reachability favors correctness over minimum size. Runtime-computed
+functions, methods, classes, callables, aliases, and Reflection may therefore
+retain a wider declaration family than the eventual runtime value needs. On
+macOS, linker atom splitting remains limited to the runtime object: generated
+user metadata and address-taken callable labels can rely on one contiguous user
+object, so user declarations are removed by the AST pass instead of by
+`.subsections_via_symbols`.
+
+Callback-consuming AOT builtins expose their callback slots through structural
+shared-contract metadata, independently of the PHP parameter name and its broad
+storage type. Registry validation rejects unknown or duplicate callback slots, and
+registry-wide tests pin the complete current set and require every conventional
+`$callback` parameter to resolve through structural metadata or a callable type.
+Mixed callback parameters with other names remain explicit semantic metadata because
+their role cannot be inferred from the PHP storage type alone.
+
+Operations that invoke PHP protocols implicitly, including `foreach`, `count()`,
+object offset access, `json_encode()`, and iterator helpers, keep the corresponding
+protocol methods behaviorally reachable. Known receiver classes produce
+class-qualified edges; opaque receivers widen only those protocol method names,
+and recursive JSON encoding conservatively keeps `jsonSerialize` by name.
+Declared array/scalar locals and positive `is_array()` guards avoid treating an array-only path as object dispatch.
+Attributes on reachable declarations are scanned at every supported location,
+including fixed and variadic parameters.
 
 ## EIR optimization passes
 
@@ -104,9 +133,24 @@ You can see the effect with [`--emit-ir`](output-and-diagnostics.md#--emit-ir):
 `$x = $argc; echo $x;` forwards the load so the `echo` reads the stored value and
 the `load_local` becomes a `nop`.
 
+### Immutable local loads
+
+The third registered pass marks `load_local` instructions that read a
+proven-immutable concrete integer slot as pure, so later passes (CSE, LICM) may
+deduplicate or move them. A slot qualifies when it is a read-only incoming
+parameter (such as `main`'s `$argc`) or has a single entry-block store that
+dominates every load. The pass changes only effect metadata, never values.
+
+### Checked-integer sinking
+
+The fourth registered pass specializes a boxed checked-arithmetic operation
+(`ICheckedAdd`/`ICheckedSub`/`ICheckedMul`) to its `IChecked*ToInt` form when
+every use of its result observes only the integer payload, removing the
+transient boxed `Mixed` allocation without changing overflow semantics.
+
 ### Constant folding
 
-The third registered pass folds operations whose operands are all compile-time
+The fifth registered pass folds operations whose operands are all compile-time
 constants into a single constant, in place. It covers integer arithmetic
 (`iadd`, `isub`, `imul`), bitwise ops, in-range shifts, unary `ineg`/`ibit_not`,
 float `fadd`/`fsub`/`fmul`/`fneg`, signed integer comparisons (`icmp`), and the
@@ -130,7 +174,7 @@ the three `imul`s eliminated.
 
 ### Common subexpression elimination
 
-The fourth registered pass removes a pure computation when an identical one is
+The sixth registered pass removes a pure computation when an identical one is
 already available on every path to it, redirecting its uses to the earlier
 value. It does both per-block and cross-block elimination in one dominator-tree
 value-numbering traversal: a scoped table maps each pure instruction's
@@ -156,7 +200,7 @@ dead operands that dead-instruction elimination then removes.
 
 ### Loop-invariant code motion
 
-The fifth registered pass moves a pure computation whose operands do not change
+The seventh registered pass moves a pure computation whose operands do not change
 across a loop out of the loop body and into the loop's preheader, so it runs once
 instead of every iteration. It builds the loop forest on the dominator tree, then
 for each loop grows an invariant set to a fixed point: an instruction is invariant
@@ -178,7 +222,7 @@ as SSA across loops.
 
 ### Dead instruction elimination
 
-The sixth registered pass computes CFG liveness and neutralizes unused
+The eighth registered pass computes CFG liveness and neutralizes unused
 result-producing instructions whose effect metadata says they are pure. This
 cleans up dead values exposed by earlier EIR rewrites. For example, identity
 folding can turn `$argc + 0` into `$argc`; dead-instruction elimination then
@@ -199,7 +243,7 @@ elephc --emit-ir --no-ir-opt app.php
 
 ### Dead store elimination
 
-The seventh registered pass removes `store_local` writes whose value is never read
+The ninth registered pass removes `store_local` writes whose value is never read
 before the slot is overwritten or the function exits. It computes backward,
 CFG-aware liveness over local slots (a `load_local` makes a slot live, a
 `store_local` kills it) so a dead store is dropped even when the overwrite is in a
@@ -215,7 +259,7 @@ left untouched to keep reference counting and aliasing semantics intact.
 
 ### Branch simplification
 
-The eighth registered pass prunes the control-flow graph three ways:
+The tenth registered pass prunes the control-flow graph three ways:
 
 - **Constant-condition folding** — a `cond_br` whose condition is a constant
   (`const_bool`, non-zero `const_i64`, or `const_null`) becomes an unconditional

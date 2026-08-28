@@ -37,7 +37,7 @@ code should guard failed opens before using the handle.
 | `fseek()` | `fseek(resource $handle, $offset [, $whence]): int` | Seek a stream. User wrappers route through `stream_seek()`. |
 | `ftell()` | `ftell(resource $handle): int` | Return the current stream position. User wrappers route through `stream_tell()`. |
 | `rewind()` | `rewind(resource $handle): bool` | Seek to the start of the stream. |
-| `fgetcsv()` | `fgetcsv(resource $handle [, $sep]): array` | Read and parse one CSV line. User wrappers are read through `stream_read()`. |
+| `fgetcsv()` | `fgetcsv(resource $handle [, $sep]): array\|false` | Read and parse one CSV line, or `false` at end of file — the arm that terminates the manual's `while (($row = fgetcsv($h)) !== false)` loop; an empty CSV line still returns an array. User wrappers are read through `stream_read()`. |
 | `fputcsv()` | `fputcsv(resource $handle, $fields [, $sep]): int` | Format and write one CSV line. User wrappers are written through `stream_write()`. |
 | `readline()` | `readline([$prompt]): string` | Read a line from standard input. |
 | `readfile()` | `readfile($filename): int\|false` | Open a path or wrapper URL, stream it to stdout, and return copied bytes; returns `false` when open fails. |
@@ -130,6 +130,13 @@ Whole-archive compression is supported on tar-based `PharData`: `compress(Phar::
 and `compress(Phar::BZ2)` write a sibling `.tar.gz` / `.tar.bz2` and return a fresh
 `PharData` for it, while `decompress()` writes the plain `.tar` back; the compressed
 archives are read transparently (and are interchangeable with the PHP interpreter).
+When reading a whole-archive gzip or bzip2 wrapper, Elephc limits decompressed output
+to the smaller of 1024x the compressed size and 64 MiB. The same 1024x ratio and
+64 MiB absolute ceiling apply independently to every compressed native PHAR or ZIP
+entry. Native PHAR, tar, and ZIP lookup scan and authenticate the container but materialize
+only the requested entry, so unrelated payloads are not copied or decompressed. These
+Elephc-specific safety ceilings intentionally diverge
+from PHP: PHP may accept a highly expanding or larger archive that Elephc rejects.
 Per-entry compression for native PHAR / zip stays on `compressFiles()` /
 `decompressFiles()`.
 
@@ -139,7 +146,14 @@ applies a hash signature, and `setSignatureAlgorithm(Phar::OPENSSL, $privateKey)
 with RSA-SHA1 using a PEM private key (PKCS#1 or PKCS#8). Native PHARs store the signature
 in their trailer; tar and zip phars store it in a `.phar/signature.bin` control entry. The
 resulting signature is verifiable by the PHP interpreter (for OpenSSL, place the matching
-public key in `<archive>.pubkey`). `getSignature()` returns `['hash' => <uppercase hex>,
+public key in `<archive>.pubkey`; signing does not create this sidecar). Elephc also
+requires that sidecar when opening an
+OpenSSL-signed archive: reads, entry listings, metadata access, mutations, compression,
+and `getSignature()` fail closed when the key is missing, malformed, or does not verify
+the archive. PEM public keys may use SubjectPublicKeyInfo (`BEGIN PUBLIC KEY`) or PKCS#1
+(`BEGIN RSA PUBLIC KEY`) encoding. APIs that receive archive bytes without a filesystem
+path cannot locate a sidecar and therefore reject OpenSSL-signed input.
+`getSignature()` returns `['hash' => <uppercase hex>,
 'hash_type' => 'MD5'|'SHA-1'|'SHA-256'|'SHA-512'|'OpenSSL']`.
 
 Metadata persistence covers the same scalar+array subset as
@@ -224,7 +238,7 @@ milestones, `$message`, `$message_code`, and `$bytes_max` are deferred.
 | `stream_bucket_new()` | `stream_bucket_new(resource $stream, string $data): object` | Create a stdClass-backed bucket with public `data` and `datalen` properties. |
 | `stream_bucket_make_writeable()` | `stream_bucket_make_writeable(resource $brigade): object\|null` | Pop the next bucket from a brigade. |
 | `stream_bucket_append()` | `stream_bucket_append(resource $brigade, object $bucket): void` | Push a bucket to the end of a brigade. |
-| `stream_bucket_prepend()` | `stream_bucket_prepend(resource $brigade, object $bucket): void` | Accepted for source compatibility; v1 currently appends like `stream_bucket_append()` because bucket-brigade front insertion is not lowered separately yet. |
+| `stream_bucket_prepend()` | `stream_bucket_prepend(resource $brigade, object $bucket): void` | Push a bucket to the beginning of a brigade. |
 
 `zlib.deflate` and `gzcompress()` use system `libz`. `bzip2.compress`,
 `bzip2.decompress`, and `compress.bzip2://` use `libbz2`. `convert.iconv.*`
@@ -261,6 +275,12 @@ Supported wrapper methods include `stream_open`, `stream_read`, `stream_write`,
 `stream_stat`, `stream_lock`, `stream_truncate`, `stream_metadata`,
 `stream_set_option`, `stream_cast`, `url_stat`, and the directory methods
 `dir_opendir`, `dir_readdir`, `dir_rewinddir`, and `dir_closedir`.
+
+`url_stat` is consulted by the whole stat family — `stat()`, `lstat()`,
+`file_exists()`, `filesize()`, `filemtime()`, `is_file()`, `is_dir()`,
+`is_readable()`, `is_writable()`, `is_writeable()`, and `is_executable()` — each
+handing the wrapper the same `STREAM_URL_STAT_*` flag values reference PHP
+passes. See [System & I/O](system-and-io.md) for the per-builtin semantics.
 
 Wrapper methods should declare return types that match their PHP contracts.
 `stream_stat()` and `url_stat()` are exceptions: declare them without a return
@@ -303,12 +323,21 @@ wrapper exposes glob matches through the same directory-stream API.
 
 | Function | Signature | Description |
 |---|---|---|
-| `get_resource_type()` | `get_resource_type(resource $handle): string` | Return `"stream"` for every resource elephc produces. |
+| `get_resource_type()` | `get_resource_type(resource $handle): string` | Return `"stream"` for every OPEN resource elephc produces, and `"Unknown"` once the handle has been closed. |
 | `get_resource_id()` | `get_resource_id(resource $handle): int` | Return the numeric id shown in `Resource id #N`. |
 | `stream_isatty()` | `stream_isatty(resource $stream): bool` | Report whether the stream is connected to an interactive terminal. |
 | `stream_is_local()` | `stream_is_local(resource\|string $stream): bool` | Return `true` for local streams. |
 | `stream_supports_lock()` | `stream_supports_lock(resource $stream): bool` | Return `true` when a stream supports `flock()`. |
 | `stream_get_meta_data()` | `stream_get_meta_data(resource $stream): array` | Return metadata keys `timed_out`, `blocked`, `eof`, `unread_bytes`, `stream_type`, `wrapper_type`, `mode`, `seekable`, and `uri`. |
+
+Closing a handle changes its reported type but not its id. After `fclose()`,
+`pclose()` or `closedir()`, `get_resource_type($handle)` returns `"Unknown"` and
+`var_dump($handle)` prints `resource(N) of type (Unknown)` — matching PHP 8.5.6,
+which renames every closed resource that way regardless of what it was. The id
+`N` is unchanged, `get_resource_id()` still answers it, and `"$handle"` still
+renders `Resource id #N`, because php-src leaves `zend_resource.handle` alone on
+close. elephc still reports the single open type name `"stream"`; PHP's further
+names (`"stream-context"`, `"stream filter"`) are not distinguished yet.
 
 `stream_get_meta_data()` derives `eof`, `seekable`, `blocked`, and `mode` from
 the live descriptor. `stream_type` is `"STDIO"` for seekable streams and

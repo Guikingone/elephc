@@ -75,7 +75,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::Module;
-use crate::names::enum_case_symbol;
+use crate::names::{enum_case_symbol, join_php_symbol};
 use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo};
 
 use super::context::FunctionContext;
@@ -107,22 +107,18 @@ const X86_64_SAVED: [&str; 9] = [
 
 /// Returns the materializer symbol for one enum case of a PURE enum.
 ///
-/// Format: `_enum_init_<mangled_enum>_<mangled_case>`. Reuses `enum_case_symbol`'s
-/// mangling so the two symbols always agree on how a name was escaped.
+/// Format: `_enum_init_<enum>_<case>`. Uses the same injective `join_php_symbol()` encoding as
+/// `enum_case_symbol()` so the two symbols always agree on how a name was escaped.
 fn enum_case_init_symbol(enum_name: &str, case_name: &str) -> String {
-    format!("_enum_init{}", &enum_case_symbol(enum_name, case_name)[10..])
+    join_php_symbol("_enum_init", &[enum_name, case_name])
 }
 
 /// Returns the whole-enum materializer symbol used by BACKED enums.
 ///
-/// Format: `_enum_init_all_<mangled_enum>_<mangled_first_case>` — derived from the
-/// first case so it needs no separate mangling helper and cannot collide with a
-/// per-case symbol.
+/// Format: `_enum_init_all_<enum>_<first_case>` — derived from the first case so it needs no
+/// separate mangling helper and cannot collide with a per-case symbol.
 fn enum_init_all_symbol(enum_name: &str, first_case: &str) -> String {
-    format!(
-        "_enum_init_all{}",
-        &enum_case_symbol(enum_name, first_case)[10..]
-    )
+    join_php_symbol("_enum_init_all", &[enum_name, first_case])
 }
 
 /// Returns the materializer to call before reading `enum_name::case_name`, or
@@ -337,10 +333,11 @@ fn emit_materializer_prologue(emitter: &mut Emitter, symbol: &str, what: &str) {
                     emitter.instruction(&format!(
                         "stp {}, {}, [sp, #-{}]!",
                         lo, hi, AARCH64_SAVE_AREA
-                    )); // open the caller-saved save area and store the first pair
+                    ));                                                         // open the caller-saved save area and store the first pair
                 } else {
-                    emitter.instruction(&format!("stp {}, {}, [sp, #{}]", lo, hi, index * 16));
-                    // preserve one more caller-saved integer pair
+                    emitter.instruction(
+                        &format!("stp {}, {}, [sp, #{}]", lo, hi, index * 16)
+                    );                                                          // preserve one more caller-saved integer pair
                 }
             }
         }
@@ -375,10 +372,11 @@ fn emit_materializer_epilogue(emitter: &mut Emitter, done: &str) {
                     emitter.instruction(&format!(
                         "ldp {}, {}, [sp], #{}",
                         lo, hi, AARCH64_SAVE_AREA
-                    )); // restore the first pair and close the caller-saved save area
+                    ));                                                         // restore the first pair and close the caller-saved save area
                 } else {
-                    emitter.instruction(&format!("ldp {}, {}, [sp, #{}]", lo, hi, index * 16));
-                    // restore one more caller-saved integer pair
+                    emitter.instruction(
+                        &format!("ldp {}, {}, [sp, #{}]", lo, hi, index * 16)
+                    );                                                          // restore one more caller-saved integer pair
                 }
             }
         }
@@ -455,7 +453,7 @@ fn emit_enum_object_allocation(emitter: &mut Emitter, class_id: u64, property_co
             emitter.instruction(&format!(
                 "mov r10, 0x{:x}",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            )); // materialize the x86_64 object heap kind word
+            ));                                                                 // materialize the x86_64 object heap kind word
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the heap header before the enum singleton payload
             emitter.instruction("call __rt_object_handle_acquire");             // bind the new object to its PHP object handle
             emitter.instruction(&format!("mov r10, {}", class_id));             // materialize the enum class id
@@ -529,14 +527,14 @@ mod tests {
     #[test]
     fn materializer_symbols_track_the_slot_mangling() {
         let slot = enum_case_symbol("App\\Suit", "Hearts");
-        assert_eq!(slot, "_enum_case_App_N_Suit_Hearts");
+        assert_eq!(slot, "_enum_case___App_N_Suit___Hearts");
         assert_eq!(
             enum_case_init_symbol("App\\Suit", "Hearts"),
-            "_enum_init_App_N_Suit_Hearts"
+            "_enum_init___App_N_Suit___Hearts"
         );
         assert_eq!(
             enum_init_all_symbol("App\\Suit", "Hearts"),
-            "_enum_init_all_App_N_Suit_Hearts"
+            "_enum_init_all___App_N_Suit___Hearts"
         );
     }
 

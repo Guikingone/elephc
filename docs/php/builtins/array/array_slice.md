@@ -2,13 +2,13 @@
 title: "array_slice()"
 description: "Extracts a slice of an array."
 sidebar:
-  order: 37
+  order: 38
 ---
 
 ## array_slice()
 
 ```php
-function array_slice(array $array, int $offset, int $length = null): array
+function array_slice(array $array, int $offset, int $length = null, bool $preserve_keys = false): array
 ```
 
 Extracts a slice of an array.
@@ -17,6 +17,7 @@ Extracts a slice of an array.
 - `$array` (`array`)
 - `$offset` (`int`)
 - `$length` (`int`), default `null`, optional
+- `$preserve_keys` (`bool`), default `false`, optional
 
 **Returns**: `array`
 
@@ -26,12 +27,6 @@ Extracts a slice of an array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_slice.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_slice.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

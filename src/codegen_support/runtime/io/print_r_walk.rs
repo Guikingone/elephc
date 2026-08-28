@@ -25,8 +25,10 @@
 //!   entries, 0 for a top-level Mixed value).
 //! - Scalars render PHP-style with no type wrapper: int/float as decimals,
 //!   strings raw, bool true as `1` and bool false / null as the empty string.
-//! - Nested objects (tag 6) are rendered as the bare `Array` header only; full
-//!   `ClassName Object` dumps need class metadata the runtime walker lacks.
+//! - Nested objects (tag 6) hand off to `__rt_print_r_object` in
+//!   `codegen_support::runtime::objects::print_r_object`, which owns the whole
+//!   `ClassName Object\n(\n ... )\n` frame (and the enum header) the same way the
+//!   tag-4/5 branches own the array frame.
 //! - The AArch64 path is shared by macOS and Linux ARM64 (`emitter.syscall(4)`
 //!   maps to the platform write number); the `_linux_x86_64` paths are SysV.
 
@@ -308,7 +310,9 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_pr_val_arr");                                // recurse into the indexed walker
     emitter.instruction("cmp x0, #5");                                          // tag 5 = hash
     emitter.instruction("b.eq __rt_pr_val_hash");                               // recurse into the hash walker
-    emitter.instruction("b __rt_pr_val_done");                                  // tag 6 object / 8 null → render nothing
+    emitter.instruction("cmp x0, #6");                                          // tag 6 = object
+    emitter.instruction("b.eq __rt_pr_val_obj");                                // recurse into the object walker
+    emitter.instruction("b __rt_pr_val_done");                                  // tag 8 null → render nothing
 
     emitter.label("__rt_pr_val_int");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the integer payload
@@ -354,6 +358,13 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_print_r_hash");                                // recurse into the hash walker
     emitter.instruction("b __rt_pr_val_done");                                  // value rendered
 
+    emitter.label("__rt_pr_val_obj");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // nested object pointer
+    emitter.instruction("cbz x0, __rt_pr_val_done");                            // defensive: a null instance renders nothing
+    emitter.instruction("ldr x1, [sp, #16]");                                   // base = the nested paren indent
+    emitter.instruction("bl __rt_print_r_object");                              // recurse into the object walker
+    emitter.instruction("b __rt_pr_val_done");                                  // value rendered
+
     emitter.label("__rt_pr_val_mixed");
     emitter.instruction("ldr x0, [sp, #0]");                                    // boxed Mixed cell pointer
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0=inner tag, x1=lo, x2=hi
@@ -394,7 +405,9 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_pr_val_arr_x86");                              // recurse into the indexed walker
     emitter.instruction("cmp rax, 5");                                          // tag 5 = hash
     emitter.instruction("je __rt_pr_val_hash_x86");                             // recurse into the hash walker
-    emitter.instruction("jmp __rt_pr_val_done_x86");                            // tag 6 object / 8 null → render nothing
+    emitter.instruction("cmp rax, 6");                                          // tag 6 = object
+    emitter.instruction("je __rt_pr_val_obj_x86");                              // recurse into the object walker
+    emitter.instruction("jmp __rt_pr_val_done_x86");                            // tag 8 null → render nothing
 
     emitter.label("__rt_pr_val_int_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the integer payload
@@ -441,6 +454,14 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // nested hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // base = the nested paren indent
     emitter.instruction("call __rt_print_r_hash");                              // recurse into the hash walker
+    emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
+
+    emitter.label("__rt_pr_val_obj_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // nested object pointer
+    emitter.instruction("test rdi, rdi");                                       // defensive null-instance check
+    emitter.instruction("jz __rt_pr_val_done_x86");                             // a null instance renders nothing
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // base = the nested paren indent
+    emitter.instruction("call __rt_print_r_object");                            // recurse into the object walker
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
 
     emitter.label("__rt_pr_val_mixed_x86");

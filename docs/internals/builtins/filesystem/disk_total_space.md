@@ -2,7 +2,7 @@
 title: "disk_total_space() — internals"
 description: "Compiler internals for disk_total_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 113
+  order: 120
 ---
 
 ## `disk_total_space()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/disk_total_space.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/disk_total_space.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:544](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L544) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -23,9 +23,9 @@ sidebar:
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function disk_total_space(string $directory): float
+function disk_total_space(string $directory): mixed
 ```
 
 ## What the type checker enforces
@@ -49,6 +49,8 @@ function disk_total_space(string $directory): float
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/disk_total_space.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/disk_total_space.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

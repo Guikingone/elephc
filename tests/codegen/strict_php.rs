@@ -17,26 +17,11 @@ use crate::support::*;
 /// Compiles `source` through the CLI with `--strict-php`, runs the binary, and
 /// returns its stdout. Panics if compilation or the run fails.
 fn compile_strict_cli_and_run(source: &str) -> String {
-    compile_strict_cli_and_run_with_native(source, false)
-}
-
-/// Compiles and runs strict PHP with a verified managed-PCRE2 eval dependency.
-fn compile_strict_cli_and_run_with_managed_pcre2(source: &str) -> String {
-    compile_strict_cli_and_run_with_native(source, true)
-}
-
-/// Compiles and runs one strict-PHP fixture with optional managed-PCRE2 setup.
-fn compile_strict_cli_and_run_with_native(source: &str, managed_pcre2: bool) -> String {
     let dir = make_cli_test_dir("elephc_cli_strict");
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).unwrap();
 
-    let mut command = if managed_pcre2 {
-        elephc_cli_command_with_managed_pcre2(&dir)
-    } else {
-        elephc_cli_command(&dir)
-    };
-    let compile_out = command
+    let compile_out = elephc_cli_command(&dir)
         .args(["--strict-php"])
         .arg(&php_path)
         .output()
@@ -112,6 +97,32 @@ echo ptr_get(41);
 "#,
     );
     assert_eq!(out, "42");
+}
+
+/// Verifies every call form dispatches a strict-hidden extension builtin name to the user
+/// function that shadows it, so callable strings cannot pick a different target than a
+/// direct call.
+///
+/// The five forms are a direct call, a variable holding the name, `call_user_func()` with
+/// that variable, `call_user_func()` with the literal name, and a first-class callable.
+/// `ptr_is_null` is an extension builtin `--strict-php` hides, so only the user function is
+/// visible here and all five must answer `7`. Pinned on its own so the rule does not depend
+/// on the mixed PHP/LFC include-graph fixture in `tests/codegen/lfc.rs`.
+#[test]
+fn test_strict_php_user_shadowed_extension_name_dispatches_the_same_from_every_call_form() {
+    let out = compile_strict_cli_and_run(
+        r#"<?php
+function ptr_is_null(int $value): int { return $value + 7; }
+echo ptr_is_null(0), ":";
+$name = "ptr_is_null";
+echo $name(0), ":";
+echo call_user_func($name, 0), ":";
+echo call_user_func("ptr_is_null", 0), ":";
+$callable = ptr_is_null(...);
+echo $callable(0);
+"#,
+    );
+    assert_eq!(out, "7:7:7:7:7");
 }
 
 /// Verifies `function_exists()` reports extension builtins as missing under
@@ -220,7 +231,7 @@ fn compile_strict_cli_and_run_expect_failure(source: &str) -> String {
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).unwrap();
 
-    let compile_out = elephc_cli_command_with_managed_pcre2(&dir)
+    let compile_out = elephc_cli_command(&dir)
         .arg("--strict-php")
         .arg(&php_path)
         .output()
@@ -281,7 +292,7 @@ echo eval('$b = buffer_new(4); return buffer_len($b);');
 /// under strict mode: extension builtins report as missing, PHP builtins stay.
 #[test]
 fn test_strict_php_eval_introspection_matches_aot_surface() {
-    let out = compile_strict_cli_and_run_with_managed_pcre2(
+    let out = compile_strict_cli_and_run(
         r#"<?php
 $code = '$n = ' . $argc . ';
 $r = function_exists("buffer_new") ? "bufnew-yes" : "bufnew-no";
@@ -298,7 +309,7 @@ echo eval($code);
 /// flag, so the eval gating is strictly opt-in.
 #[test]
 fn test_default_mode_eval_introspection_keeps_extensions() {
-    let out = compile_cli_file_and_run_with_managed_pcre2(
+    let out = compile_cli_file_and_run(
         r#"<?php
 $code = '$n = ' . $argc . ';
 $r = function_exists("buffer_new") ? "bufnew-yes" : "bufnew-no";
@@ -316,7 +327,7 @@ echo eval($code);
 /// through to the AOT native-function table, matching the PHP interpreter.
 #[test]
 fn test_strict_php_eval_calls_user_shadowed_extension_name() {
-    let out = compile_strict_cli_and_run_with_managed_pcre2(
+    let out = compile_strict_cli_and_run(
         r#"<?php
 function ptr_get(int $x): int { return $x + 1; }
 $code = 'return ptr_get(' . (40 + $argc) . ');';

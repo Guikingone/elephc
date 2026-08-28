@@ -2,7 +2,7 @@
 title: "array_merge()"
 description: "Merges the elements of two arrays."
 sidebar:
-  order: 23
+  order: 24
 ---
 
 ## array_merge()
@@ -24,12 +24,6 @@ Merges the elements of two arrays.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_merge.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_merge.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

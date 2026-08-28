@@ -9,7 +9,7 @@
 //! Key details:
 //! - Fields are consumed by optimizer, codegen, and linker setup; keep additions explicit and phase-owned.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Target;
 use crate::errors::{CompileError, CompileWarning};
@@ -87,22 +87,154 @@ pub struct CheckResult {
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point array-local storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: LoopStorageTypes,
+    /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
+    /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
+    pub string_incdec_locals: HashSet<(String, String)>,
+    /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local
+    /// NAMES killed at that position, so EIR lowering abandons the old frame slot (after releasing
+    /// its value) instead of null-storing into it.
+    ///
+    /// The name is not decoration, it is half the key. A `Span` carries line/col and NOTHING
+    /// about which file they are in, and include resolution splices every included file's AST
+    /// into one program without rebasing line numbers, so line 4 column 1 of `main.php` and of
+    /// `lib.php` are the SAME `Span`. Lowering must therefore check that the decision it found
+    /// is about the variable in front of it; without that check a retype recorded in one file
+    /// re-binds an unrelated same-position assignment in another (measured: a conditional
+    /// `$w = …` in an included file lost its whole binding, printing `|s` where PHP prints
+    /// `a1|s`).
+    ///
+    /// The value is a SET, exactly like [`CheckResult::mixed_storage_store_sites`], because two
+    /// DIFFERENT locals can be killed at the same (line, column) in two different files. With one
+    /// name per span the later insert silently EVICTED the earlier decision; the evicted site then
+    /// fell back to the pre-feature null store, which widens the abandoned slot to boxed `Mixed`
+    /// while every read already lowered above it keeps its narrower IR type — measured as `Fatal
+    /// error: heap memory exhausted` on a loop of `string` reads where PHP prints its sum.
+    ///
+    /// The name does NOT make the key unique: the same NAME at the same line and column in two
+    /// files is still one key for two sites, and that shape was measured printing `|s` where PHP
+    /// prints `a1|5` — in a program that was a plain compile error before this feature existed.
+    /// It is not left ambiguous. `checker::binding_decision_ambiguity` counts, per role, how many
+    /// nodes each recorded key actually names and REJECTS the program when a key names more than
+    /// one, so an ambiguous decision is a compile error and never a silent re-bind. Giving `Span`
+    /// file identity would remove the ambiguity outright, and every span-keyed map here would
+    /// want it.
+    pub local_bind_kill_sites: HashMap<Span, HashSet<String>>,
+    /// The statement-form assignments the checker re-bound to a fresh binding of an incompatible
+    /// type, as span -> the SET of local NAMES re-bound at that position, so EIR lowering mints a
+    /// new slot there. Read by `crate::ir_lower` alongside `local_bind_kill_sites`, and keyed the
+    /// same way for the same reasons — see that field.
+    pub local_retype_sites: HashMap<Span, HashSet<String>>,
+    /// Every statement-form assignment to a local the checker's syntactic pre-scan marked as
+    /// whole-frame boxed `Mixed` storage (a branch-divergently assigned local), as span -> the SET
+    /// of local NAMES boxed at that position, so EIR lowering declares the slot boxed before the
+    /// FIRST store instead of inferring it from the first stored value.
+    ///
+    /// Keyed like the other two decision maps and for the same reason — see
+    /// `local_bind_kill_sites` — and checked by `checker::binding_decision_ambiguity` against the
+    /// same statement-form-assignment tally the retype decisions use, because both roles name
+    /// exactly that node kind.
+    ///
+    /// The value is a SET because two DIFFERENT locals can be marked at the same (line, column) in
+    /// two different files, and a `Span` cannot tell them apart. With one name per span the later
+    /// body's decision evicted the earlier one silently — the evicted local dropped out of
+    /// [`CheckResult::mixed_storage_local_names`] while the checker still typed it `Mixed`, and the
+    /// compiler panicked (`strlen cannot lower checked operand type Int`) on valid PHP. Same-NAME
+    /// collisions remain genuinely ambiguous and are still rejected by the ambiguity pass.
+    pub mixed_storage_store_sites: HashMap<Span, HashSet<String>>,
+}
+
+impl CheckResult {
+    /// Every span carrying a local-binding decision: kills, retypes and mixed-storage stores.
+    ///
+    /// Handed to the post-typecheck optimizer. These decisions are keyed BY SPAN and EIR lowering
+    /// consults them by span, so any pass that CLONES an AST node would hand one decision to two
+    /// syntactic sites — and abandoning a binding is not idempotent. The invariant is therefore on
+    /// the OPTIMIZER as a whole: no pass may clone a node carrying one of these spans, and a pass
+    /// that clones must consult this set and veto itself. Two passes clone today and both are
+    /// guarded through `optimize::control::binding_decisions` — DCE's tail-sinking
+    /// (`optimize::control::dce`) and the single-case switch rewrite reached from the prune and
+    /// normalize phases (`optimize::control::switch::prune_switch_stmt`), which materializes a
+    /// `switch` default body into both branches of a synthesized `if`.
+    ///
+    /// The mixed-storage store sites are included even though their consumer — declaring the slot
+    /// `Mixed` when the local has none yet, and storing at `Mixed` rather than at the value's own
+    /// type — IS idempotent under duplication (the second clone finds the slot already declared,
+    /// and substitutes the same type). They are kept singular anyway because
+    /// the ambiguity check that runs in the checker counts the nodes of the ORIGINAL program: a
+    /// pass that cloned one of these statements afterwards would create a second site for a key
+    /// that check already cleared, and "the decision names exactly one node" is the invariant the
+    /// two halves of this feature are built on. The cost is one lost tail-sink per boxed local,
+    /// plus one un-rewritten single-case switch per boxed local assigned in a `default` body.
+    pub fn local_binding_decision_spans(&self) -> HashSet<Span> {
+        self.local_bind_kill_sites
+            .keys()
+            .chain(self.local_retype_sites.keys())
+            .chain(self.mixed_storage_store_sites.keys())
+            .copied()
+            .collect()
+    }
+
+    /// Every local NAME the mixed-storage marking compiled as boxed `mixed` frame storage.
+    ///
+    /// Handed to the post-typecheck constant propagator, which must not replace a read of one of
+    /// these with a literal: the local is bound `mixed` for its whole frame and EIR lowering
+    /// stores and reads it through that one type, so a literal of a concrete type hands lowering a
+    /// view the checker never approved. See `optimize::binding_decisions`.
+    ///
+    /// This is the NAMES, not the spans, because the consumer is name-keyed. It is also a
+    /// program-wide union rather than per-body: the AST passes have no body identity to key on,
+    /// and over-approximating only costs constant propagation on a name some other body boxed.
+    pub fn mixed_storage_local_names(&self) -> HashSet<String> {
+        self.mixed_storage_store_sites
+            .values()
+            .flatten()
+            .cloned()
+            .collect()
+    }
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).
 /// Returns `Ok(CheckResult)` on success, or `Err(CompileError)` if type checking fails.
 /// The `CheckResult` carries the resolved type environment, function signatures, class
 /// metadata, warnings, and any required native libraries for linking.
+/// Delegates to `check_with_options` with default `CheckOptions`.
 #[allow(dead_code)]
 pub fn check(program: &Program) -> Result<CheckResult, CompileError> {
-    checker::check_types(program, Target::detect_host())
+    check_with_options(program, checker::CheckOptions::default())
+}
+
+/// Runs type checking using the host platform with explicit `CheckOptions`
+/// (e.g. `--strict-locals`). Returns `Ok(CheckResult)` on success, or
+/// `Err(CompileError)` if type checking fails.
+#[allow(dead_code)]
+pub fn check_with_options(
+    program: &Program,
+    options: checker::CheckOptions,
+) -> Result<CheckResult, CompileError> {
+    checker::check_types_with_options(program, Target::detect_host(), options)
 }
 
 /// Runs type checking targeting a specific platform (e.g., Linux instead of the host macOS).
 /// Returns `Ok(CheckResult)` on success, or `Err(CompileError)` if type checking fails.
 /// The target affects FFI metadata, required library resolution, and platform-specific type behavior.
+/// Delegates to `check_with_target_and_options` with default `CheckOptions`.
+///
+/// No longer called by the compile pipeline directly (it now threads `CheckOptions`
+/// via `check_with_target_and_options`), so this is dead code outside of tests.
+#[allow(dead_code)]
 pub fn check_with_target(program: &Program, target: Target) -> Result<CheckResult, CompileError> {
-    checker::check_types(program, target)
+    check_with_target_and_options(program, target, checker::CheckOptions::default())
+}
+
+/// Runs type checking targeting a specific platform with explicit `CheckOptions`
+/// (e.g. `--strict-locals`). Returns `Ok(CheckResult)` on success, or
+/// `Err(CompileError)` if type checking fails.
+pub fn check_with_target_and_options(
+    program: &Program,
+    target: Target,
+    options: checker::CheckOptions,
+) -> Result<CheckResult, CompileError> {
+    checker::check_types_with_options(program, target, options)
 }
 
 #[cfg(test)]

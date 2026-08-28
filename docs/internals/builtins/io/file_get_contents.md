@@ -2,7 +2,7 @@
 title: "file_get_contents() — internals"
 description: "Compiler internals for file_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 168
+  order: 175
 ---
 
 ## `file_get_contents()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/file_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/file_get_contents.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:544](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L544) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,16 +39,18 @@ sidebar:
 ## Signature summary
 
 ```php
-function file_get_contents(string $filename): mixed
+function file_get_contents(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–5 arguments (4 optional).
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

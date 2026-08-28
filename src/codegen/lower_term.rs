@@ -194,11 +194,15 @@ fn lower_switch(
         abi::emit_load_int_immediate(ctx.emitter, case_reg, case.value);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_reg)); // compare switch scrutinee with the case value
+                ctx.emitter.instruction(
+                    &format!("cmp {}, {}", result_reg, case_reg)
+                );                                                              // compare switch scrutinee with the case value
                 ctx.emitter.instruction(&format!("b.eq {}", branch_label));     // branch to the matching switch case
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_reg)); // compare switch scrutinee with the case value
+                ctx.emitter.instruction(
+                    &format!("cmp {}, {}", result_reg, case_reg)
+                );                                                              // compare switch scrutinee with the case value
                 ctx.emitter.instruction(&format!("je {}", branch_label));       // branch to the matching switch case
             }
         }
@@ -392,22 +396,81 @@ mod tests {
         assert!(asm.contains("stur x0, [x29, #-8]"), "{asm}");
     }
 
-    /// Verifies conditional branch arguments use per-edge copy stubs.
+    /// Verifies conditional branch arguments use per-edge copy stubs: both edges get their own
+    /// emitted stub label and both branches target the labels that were actually emitted.
+    ///
+    /// The assertions are structural on purpose. Label ids come from a module-wide counter, so
+    /// pinning literal numbers would make this fixture break whenever unrelated label allocation
+    /// shifts rather than when edge lowering regresses.
     #[test]
     fn cond_br_arguments_emit_edge_copy_stubs() {
         let asm = generate_cond_branch_arg_main_asm(Target::new(Platform::Linux, Arch::X86_64));
 
-        assert!(asm.contains("_eir_main_cond_then_args_0:"), "{asm}");
-        assert!(asm.contains("_eir_main_cond_else_args_1:"), "{asm}");
+        let then_edge = find_numbered_label(&asm, "_eir_main_cond_then_args");
+        let else_edge = find_numbered_label(&asm, "_eir_main_cond_else_args");
+        assert_ne!(then_edge, else_edge, "{asm}");
+        assert!(branches_to(&asm, &then_edge), "{asm}");
+        assert!(branches_to(&asm, &else_edge), "{asm}");
     }
 
-    /// Verifies switch case and default arguments use per-edge copy stubs.
+    /// Verifies switch case and default arguments use per-edge copy stubs, with the case compare
+    /// and the default fallthrough branching to the labels that were actually emitted.
+    ///
+    /// Structural for the same reason as `cond_br_arguments_emit_edge_copy_stubs()`.
     #[test]
     fn switch_arguments_emit_edge_copy_stubs() {
         let asm = generate_switch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
 
-        assert!(asm.contains("_eir_main_switch_case_args_0:"), "{asm}");
-        assert!(asm.contains("_eir_main_switch_default_args_1:"), "{asm}");
+        let case_edge = find_numbered_label(&asm, "_eir_main_switch_case_args");
+        let default_edge = find_numbered_label(&asm, "_eir_main_switch_default_args");
+        assert_ne!(case_edge, default_edge, "{asm}");
+        assert!(branches_to(&asm, &case_edge), "{asm}");
+        assert!(branches_to(&asm, &default_edge), "{asm}");
+    }
+
+    /// Returns the one emitted assembly label named `<prefix>_<digits>`.
+    ///
+    /// Panics unless exactly one such label definition exists, so a fixture that stops emitting an
+    /// edge stub (or emits it twice) still fails loudly without depending on the counter value.
+    fn find_numbered_label(asm: &str, prefix: &str) -> String {
+        let matches: Vec<&str> = asm
+            .lines()
+            .filter_map(|line| line.strip_suffix(':'))
+            .filter(|name| {
+                // Block labels carry the platform's assembler-local prefix (`L` on Mach-O,
+                // `.L` on ELF) so they stay out of the symbol table; the stem follows it.
+                // Match on the stem but keep the full name — branches target the full label.
+                let stem = name
+                    .strip_prefix(".L")
+                    .or_else(|| name.strip_prefix('L'))
+                    .unwrap_or(name);
+                stem.strip_prefix(prefix)
+                    .and_then(|rest| rest.strip_prefix('_'))
+                    .is_some_and(|digits| {
+                        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+            })
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected exactly one '{prefix}_<n>:' label, found {matches:?} in:\n{asm}"
+        );
+        matches[0].to_string()
+    }
+
+    /// Returns true when some instruction other than the label definition branches to `label`.
+    ///
+    /// Matches the label as a whole operand word so it stays mnemonic- and target-agnostic
+    /// (`jne`/`jmp` on x86_64, `b.eq`/`b` on ARM64).
+    fn branches_to(asm: &str, label: &str) -> bool {
+        let definition = format!("{label}:");
+        asm.lines()
+            .filter(|line| line.trim() != definition)
+            .any(|line| {
+                line.split_whitespace()
+                    .any(|word| word.trim_end_matches(',') == label)
+            })
     }
 
     /// Verifies throw terminators publish `_exc_value` and call the exception unwinder.

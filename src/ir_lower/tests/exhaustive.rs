@@ -140,6 +140,10 @@ fn dummy_check_result() -> CheckResult {
         throw_access_sites: HashMap::new(),
         builtin_call_types: HashMap::new(),
         loop_storage_types: HashMap::new(),
+        string_incdec_locals: Default::default(),
+        local_bind_kill_sites: Default::default(),
+        local_retype_sites: Default::default(),
+        mixed_storage_store_sites: Default::default(),
     }
 }
 
@@ -171,6 +175,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         is_readonly_class: false,
         allow_dynamic_properties: true,
         constants: HashMap::new(),
+        constant_deprecations: HashMap::new(),
         constant_types: HashMap::new(),
         constant_visibilities: Default::default(),
         final_constants: Default::default(),

@@ -2,7 +2,7 @@
 title: "is_subclass_of() — internals"
 description: "Compiler internals for is_subclass_of(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 87
+  order: 94
 ---
 
 ## `is_subclass_of()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/is_subclass_of.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/is_subclass_of.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:544](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L544) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,6 +49,8 @@ function is_subclass_of(mixed $object_or_class, string $class, bool $allow_strin
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/is_subclass_of.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/is_subclass_of.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `callable-or-reflection`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

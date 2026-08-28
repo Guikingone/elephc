@@ -38,7 +38,14 @@ impl LocalSlotAnalysis {
         let mut stored_slots = HashSet::new();
         let mut ever_ref_cell_slots = initially_ref_cell_slots.clone();
         for inst in &function.instructions {
-            if inst.op == Op::StoreLocal {
+            // `ZeroLocalSlot` counts as a store because it carries the same OWNERSHIP claim.
+            // It is emitted only by the abandon of a local binding, which releases the slot's
+            // occupant immediately before it — so the frame must own that occupant, exactly as
+            // it must for a slot an ordinary `StoreLocal` overwrites. Reading it as a non-store
+            // dropped the prologue retain on a by-value parameter the abandon then released
+            // (`function f($a, int $n) { unset($a); … }` over-released the CALLER's box, and the
+            // returned string came back as heap-debug poison bytes).
+            if matches!(inst.op, Op::StoreLocal | Op::ZeroLocalSlot) {
                 if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
                     stored_slots.insert(slot);
                 }
@@ -630,7 +637,7 @@ mod tests {
     fn dynamic_release_emits_aarch64_representation_guard() {
         let asm = dynamic_release_asm(Target::new(Platform::Linux, Arch::AArch64));
 
-        assert!(asm.contains("cbnz x0, _eir_main_raw_local_cleanup_done"), "{asm}");
+        assert!(asm.contains("cbnz x0, .L_eir_main_raw_local_cleanup_done"), "{asm}");
     }
 
     /// Verifies x86_64 cleanup guards skip raw release when the runtime slot is a cell.
@@ -639,7 +646,7 @@ mod tests {
         let asm = dynamic_release_asm(Target::new(Platform::Linux, Arch::X86_64));
 
         assert!(asm.contains("test rax, rax"), "{asm}");
-        assert!(asm.contains("jne _eir_main_raw_local_cleanup_done"), "{asm}");
+        assert!(asm.contains("jne .L_eir_main_raw_local_cleanup_done"), "{asm}");
     }
 
     /// Builds a conditional promotion followed by deferred cleanup for one target.

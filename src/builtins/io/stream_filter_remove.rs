@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_filter_remove",
-    area: Io,
-    params: [stream_filter: Mixed],
-    returns: Bool,
+    contract: "stream_filter_remove",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamFilterRemove,
     ),
-    summary: "Removes a filter from a stream.",
-    php_manual: "function.stream-filter-remove",
 }
 
 /// Validates the argument is a stream resource and returns `Bool`.

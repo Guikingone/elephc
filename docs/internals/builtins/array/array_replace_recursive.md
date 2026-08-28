@@ -2,7 +2,7 @@
 title: "array_replace_recursive() — internals"
 description: "Compiler internals for array_replace_recursive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 33
+  order: 34
 ---
 
 ## `array_replace_recursive()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_replace_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_replace_recursive.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:544](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L544) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

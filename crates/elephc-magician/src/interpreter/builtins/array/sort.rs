@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "sort",
+    contract: "sort",
     area: Array,
-    params: [array: by_ref],
-    by_ref: [array],
     direct: none,
     values: ArrayMutating,
 }
@@ -68,14 +66,18 @@ pub(in crate::interpreter) fn eval_array_sort_replacement(
         "shuffle" => return eval_array_shuffle_replacement(array, values),
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
-    entries.sort_by(|left, right| {
-        let order = eval_array_sort_key_cmp(&left.sort_key, &right.sort_key);
-        if matches!(name, "arsort" | "krsort" | "rsort") {
-            order.reverse()
-        } else {
-            order
-        }
-    });
+    if matches!(name, "ksort" | "krsort") {
+        eval_array_regular_key_sort_entries(&mut entries, name == "krsort", values)?;
+    } else {
+        entries.sort_by(|left, right| {
+            let order = eval_array_sort_key_cmp(&left.sort_key, &right.sort_key);
+            if matches!(name, "arsort" | "rsort") {
+                order.reverse()
+            } else {
+                order
+            }
+        });
+    }
 
     if matches!(
         name,
@@ -84,6 +86,30 @@ pub(in crate::interpreter) fn eval_array_sort_replacement(
         return eval_array_preserve_key_sort_result(entries, values);
     }
     eval_array_reindex_sort_result(entries, values)
+}
+
+/// Stably orders eval array keys through the runtime's native key comparator.
+///
+/// Using the runtime comparison keeps `SORT_REGULAR` behavior aligned with AOT
+/// for mixed integer/non-numeric-string keys instead of imposing a tag rank.
+pub(in crate::interpreter) fn eval_array_regular_key_sort_entries(
+    entries: &mut [EvalArraySortEntry],
+    descending: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for pass in 0..entries.len() {
+        let upper = entries.len().saturating_sub(pass + 1);
+        for index in 0..upper {
+            let comparison = values.regular_key_compare(
+                entries[index].source_key,
+                entries[index + 1].source_key,
+            )?;
+            if (descending && comparison < 0) || (!descending && comparison > 0) {
+                entries.swap(index, index + 1);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Builds a shuffled, reindexed replacement array for `shuffle()`.

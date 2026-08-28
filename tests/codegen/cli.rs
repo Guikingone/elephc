@@ -10,6 +10,421 @@
 
 use crate::support::*;
 
+/// A top-level-only program still produces one exact `{main}` frame when run
+/// through the real compile/control-channel/monitor pipeline.
+#[test]
+fn test_cli_monitor_profiles_a_top_level_only_program() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_main_only");
+    fs::write(
+        dir.join("top.php"),
+        "<?php\n$sum = 0; for ($i = 0; $i < 200000; $i = $i + 1) { $sum = ($sum + $i) % 100003; } echo $sum;\n",
+    )
+    .expect("failed to write the top-level monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "top.php",
+            "--out",
+            "top.prof.json",
+            "--save",
+            "top.exact.json",
+        ])
+        .output()
+        .expect("failed to run exact top-level monitor");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "top-level monitor should succeed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(stdout.contains("exact profile"), "{stdout}");
+    assert!(stdout.contains("{main}"), "the exact root is missing: {stdout}");
+
+    let raw = fs::read_to_string(dir.join("top.prof.json"))
+        .expect("top-level monitor should write its Speedscope export");
+    let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+    assert!(
+        doc["shared"]["frames"]
+            .as_array()
+            .expect("frames")
+            .iter()
+            .any(|frame| frame["name"] == "{main}"),
+        "the export must preserve the exact root: {raw}"
+    );
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("top.exact.json")).expect("saved exact graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    assert_eq!(nodes.len(), 1, "a top-level-only run has one frame: {exact}");
+    assert_eq!(nodes[0]["name"], "{main}");
+    assert_eq!(nodes[0]["call_count"], 1, "root must enter and exit once");
+    assert!(
+        exact["edges"].as_array().expect("exact edges").is_empty(),
+        "the root must not call itself: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// End-to-end `elephc monitor`: compiles a busy fixture, activates exact
+/// instrumentation through the control channel, and writes a two-view
+/// Speedscope document whose frames are PHP names — not EIR block labels or
+/// runtime helpers in the folded view.
+///
+/// The export matters as much as the table. `--out` and `--pprof` were once
+/// wired only to the sampled capture, so when the exact profile became the
+/// default they wrote nothing at all — silently, including for the CI
+/// regression gate, which is documented as `--out` a baseline and `--baseline`
+/// it back. A test that only read the table would not have noticed.
+#[test]
+fn test_cli_monitor_writes_php_level_speedscope_profile() {
+    let dir = make_cli_test_dir("elephc_cli_monitor");
+    // The hot function is RECURSIVE on purpose: a self-recursive body cannot be
+    // fully inlined away, so its frame is guaranteed in the samples — the test
+    // must not depend on the best-effort inlined-frame recovery, whose address
+    // bucketing varies run to run.
+    fs::write(
+        dir.join("busy.php"),
+        "<?php\nfunction burn(int $depth) { $n = 0; for ($i = 0; $i < 2000000; $i = $i + 1) { $n = ($n + $i) % 1000003; } if ($depth > 0) { $n = ($n + burn($depth - 1)) % 1000003; } return $n; }\necho burn(4);\n",
+    )
+    .expect("failed to write the monitor fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "busy.php",
+            "--out",
+            "busy.prof.json",
+            "--save",
+            "busy.exact.json",
+        ])
+        .output()
+        .expect("failed to run elephc monitor");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "monitor should succeed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("exact profile") && stdout.contains("{main}") && stdout.contains("burn"),
+        "the exact table should contain its root and the PHP function: {stdout}"
+    );
+
+    let raw = fs::read_to_string(dir.join("busy.prof.json"))
+        .expect("monitor should write the speedscope file");
+    let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+    let profiles = doc["profiles"].as_array().expect("profiles array");
+    assert_eq!(profiles.len(), 2, "one folded view and one why view");
+    for profile in profiles {
+        let weights: u64 = profile["weights"]
+            .as_array()
+            .expect("weights")
+            .iter()
+            .map(|w| w.as_u64().expect("integer weight"))
+            .sum();
+        assert_eq!(
+            weights,
+            profile["endValue"].as_u64().expect("endValue"),
+            "weights must partition the profile total"
+        );
+    }
+    let frames = doc["shared"]["frames"].as_array().expect("frames");
+    // `burn` may still appear as `burn (inlined)` for partially inlined
+    // shallow calls; either spelling proves the PHP-level attribution worked.
+    assert!(
+        frames
+            .iter()
+            .any(|f| f["name"].as_str().is_some_and(|n| n.starts_with("burn"))),
+        "frames should carry the demangled PHP name: {raw}"
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|f| f["name"].as_str().is_some_and(|n| n.contains("eir_"))),
+        "no EIR block label may leak into the profile: {raw}"
+    );
+
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("busy.exact.json")).expect("saved exact graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let burn = nodes.iter().position(|node| node["name"] == "burn").unwrap();
+    assert_eq!(nodes[main]["call_count"], 1, "root must enter exactly once");
+    assert!(
+        exact["edges"].as_array().expect("exact edges").iter().any(|edge| {
+            edge["from"] == main && edge["to"] == burn && edge["count"] == 1
+        }),
+        "the ordinary call must be attributed from {{main}} to burn: {exact}"
+    );
+    assert!(
+        !exact["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| edge["to"] == main),
+        "no function may be misattributed as calling the root: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Shutdown output handlers and object destructors remain children of the
+/// exact `{main}` frame instead of becoming disconnected graph roots.
+#[test]
+fn test_cli_monitor_keeps_shutdown_callbacks_under_main() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_shutdown_callbacks");
+    fs::write(
+        dir.join("shutdown.php"),
+        r#"<?php
+function shutdown_handler(string $contents, int $phase): string {
+    $n = 0;
+    for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    if ($phase < 0) { echo $n; }
+    return $contents;
+}
+class CleanupProbe {
+    public function __destruct() {
+        $n = 0;
+        for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    }
+}
+$probe = new CleanupProbe();
+ob_start(shutdown_handler(...));
+echo "profiled\n";
+"#,
+    )
+    .expect("failed to write the shutdown monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "shutdown.php",
+            "--out",
+            "shutdown.prof.json",
+            "--save",
+            "shutdown.exact.json",
+        ])
+        .output()
+        .expect("failed to monitor shutdown callbacks");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "shutdown monitor should succeed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("shutdown.exact.json")).expect("saved shutdown graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let edges = exact["edges"].as_array().expect("exact edges");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let handler = nodes
+        .iter()
+        .position(|node| node["name"] == "shutdown_handler")
+        .unwrap();
+    let destructor = nodes
+        .iter()
+        .position(|node| node["name"] == "CleanupProbe::__destruct")
+        .unwrap();
+    for child in [handler, destructor] {
+        assert!(
+            edges.iter().any(|edge| {
+                edge["from"] == main && edge["to"] == child && edge["count"] == 1
+            }),
+            "shutdown PHP work must remain below {{main}}: {exact}"
+        );
+    }
+    assert!(
+        nodes[main]["inclusive"].as_u64().unwrap()
+            > nodes[main]["exclusive"].as_u64().unwrap(),
+        "the root must subtract shutdown callees from self time: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Runs one clean language-level termination fixture and verifies that monitor
+/// receives the complete exact graph despite bypassed generated epilogues.
+fn assert_clean_language_exit_profile(tag: &str, source: &str) {
+    let dir = make_cli_test_dir(tag);
+    fs::write(
+        dir.join("exit.php"),
+        source,
+    )
+    .expect("failed to write the clean-exit monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "exit.php",
+            "--out",
+            "exit.prof.json",
+            "--save",
+            "exit.exact.json",
+        ])
+        .output()
+        .expect("failed to monitor a clean language exit");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "a clean language exit should publish a profile\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("exit.exact.json")).expect("saved exit graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let child = nodes
+        .iter()
+        .position(|node| node["name"] == "before_exit")
+        .unwrap();
+    assert_eq!(nodes[main]["call_count"], 1);
+    assert!(
+        exact["edges"].as_array().expect("exact edges").iter().any(|edge| {
+            edge["from"] == main && edge["to"] == child && edge["count"] == 1
+        }),
+        "the clean exit must publish the complete rooted graph: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `exit(0)` closes and publishes the active exact stack even though normal
+/// generated function and main epilogues are bypassed.
+#[test]
+fn test_cli_monitor_profiles_a_clean_language_exit() {
+    assert_clean_language_exit_profile(
+        "elephc_cli_monitor_exit_zero",
+        r#"<?php
+function before_exit(): int {
+    $n = 0;
+    for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    return $n;
+}
+$value = before_exit();
+if ($value < 0) { echo $value; }
+exit(0);
+"#,
+    );
+}
+
+/// The zero-argument `die()` lowering publishes the same rooted exact graph as
+/// the status-bearing `exit(0)` path.
+#[test]
+fn test_cli_monitor_profiles_clean_die_without_status() {
+    assert_clean_language_exit_profile(
+        "elephc_cli_monitor_die_no_status",
+        r#"<?php
+function before_exit(): int {
+    $n = 0;
+    for ($i = 0; $i < 10000; $i = $i + 1) { $n = $n + $i; }
+    return $n;
+}
+$value = before_exit();
+if ($value < 0) { echo $value; }
+die();
+"#,
+    );
+}
+
+/// An uncaught generated PHP error bypasses every ordinary epilogue just like
+/// `exit()`, so it must still close and publish the exact root and live callee.
+#[test]
+fn test_cli_monitor_profiles_an_uncaught_codegen_error() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_uncaught_codegen_error");
+    // The negative-value recursive branch keeps the failing function out of the
+    // inliner while `$argc` still takes the direct uncaught path at runtime.
+    fs::write(
+        dir.join("uncaught.php"),
+        r#"<?php
+function fail_uncaught(int $value): int {
+    if ($value < 0) { return fail_uncaught(-$value); }
+    return intdiv($value, $value - $value);
+}
+fail_uncaught($argc);
+"#,
+    )
+    .expect("failed to write the uncaught-error monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "uncaught.php",
+            "--out",
+            "uncaught.prof.json",
+            "--save",
+            "uncaught.exact.json",
+        ])
+        .output()
+        .expect("failed to monitor an uncaught generated error");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "an uncaught generated error should still publish a profile\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let exact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("uncaught.exact.json"))
+            .expect("saved uncaught-error graph"),
+    )
+    .expect("valid exact graph");
+    let nodes = exact["nodes"].as_array().expect("exact nodes");
+    let main = nodes.iter().position(|node| node["name"] == "{main}").unwrap();
+    let failing = nodes
+        .iter()
+        .position(|node| node["name"] == "fail_uncaught")
+        .unwrap();
+    assert_eq!(nodes[main]["call_count"], 1);
+    assert!(
+        exact["edges"].as_array().expect("exact edges").iter().any(|edge| {
+            edge["from"] == main && edge["to"] == failing && edge["count"] == 1
+        }),
+        "the uncaught error must publish the complete rooted graph: {exact}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies both compiler version flags print the Cargo package version and exit successfully.
+#[test]
+fn test_cli_version_flags_report_package_version() {
+    let dir = make_cli_test_dir("elephc_cli_version");
+    let expected = format!("elephc {}\n", env!("CARGO_PKG_VERSION"));
+
+    for flag in ["--version", "-V"] {
+        let output = elephc_cli_command(&dir)
+            .arg(flag)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run elephc {flag}: {error}"));
+        assert!(output.status.success(), "elephc {flag} should succeed");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+        assert!(output.stderr.is_empty(), "elephc {flag} should not write stderr");
+    }
+
+    let help = elephc_cli_command(&dir)
+        .arg("--help")
+        .output()
+        .expect("failed to run elephc --help");
+    assert!(help.status.success(), "elephc --help should succeed");
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(stdout.contains(&format!("Version: {}", env!("CARGO_PKG_VERSION"))));
+    assert!(stdout.contains("-V, --version"));
+    assert!(stdout.contains("name `{main}` for the top-level root"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies native help is handled before project discovery and bare native is a usage error.
 #[test]
 fn test_cli_native_help_and_bare_usage() {
@@ -251,6 +666,105 @@ echo "ok";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// The teardown calls in main's epilogue must run on an aligned stack (x86_64).
+///
+/// System V AMD64 wants `rsp` 16-byte aligned AT the call. After `leave`, `rsp`
+/// holds its entry value — already 8 past alignment — so every call emitted
+/// after the frame restore is off by 8. The hand-written runtime helpers
+/// tolerate that; compiled Rust does not, because an aligned SSE store to a
+/// stack temporary faults.
+///
+/// It cost a CI shard on linux-x86_64 alone: `main` ran, printed its output, and
+/// died in the profiler's exit dump — the last call before the exit syscall and
+/// the first one made of Rust. AArch64 keeps `sp` aligned by construction, so
+/// the same commit was green there and the failure looked like a profiler bug
+/// for an afternoon.
+///
+/// Read from the assembly because that is where the property lives, and because
+/// this host cannot execute the architecture that has it.
+#[test]
+fn test_cli_x86_64_epilogue_aligns_before_its_teardown_calls() {
+    let dir = make_cli_test_dir("elephc_cli_x86_epilogue_align");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php\nfunction f(int $n): int { return $n + 1; }\necho f(1);\n").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "--target", "linux-x86_64", "--emit-asm"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit x86_64 assembly");
+    assert!(
+        output.status.success(),
+        "cross-target --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("expected target assembly output");
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+
+    // Anchor on the teardown calls themselves, walk BACK to the frame restore
+    // that precedes them, and require the realignment in between. Scanning
+    // forward from `leave` and stopping at the first alignment was the version
+    // that asserted nothing at all — it never reached a call.
+    let teardown = lines
+        .iter()
+        .position(|line| line.starts_with("call elephc_probe_dump")
+            || line.starts_with("call elephc_instr_dump"))
+        .expect("a monitored build must emit its exit dump");
+    let restore = lines[..teardown]
+        .iter()
+        .rposition(|line| *line == "leave")
+        .expect("the exit dump follows main's frame restore");
+    let between = &lines[restore + 1..teardown];
+    assert!(
+        between.iter().any(|line| line.starts_with("and rsp, -16")),
+        "`{}` is called after `leave` with no realignment between them, so it \
+         runs 8 bytes off the alignment the ABI promises it. Between:\n{}",
+        lines[teardown],
+        between.join("\n")
+    );
+    assert!(
+        !between.iter().any(|line| line.starts_with("call ")),
+        "nothing may be called between the frame restore and the realignment"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies cross-target `--emit-asm` stops before preparing a host-incompatible runtime object.
+#[test]
+fn test_cli_emit_asm_does_not_require_target_assembler() {
+    let dir = make_cli_test_dir("elephc_cli_emit_cross_target_asm");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'cross-target';").unwrap();
+
+    let target = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "linux-aarch64"
+    } else {
+        "linux-x86_64"
+    };
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg(target)
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run cross-target elephc CLI with --emit-asm");
+
+    assert!(
+        output.status.success(),
+        "cross-target elephc --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dir.join("main.s").exists(), "expected target assembly output");
+    assert!(
+        !dir.join("main.o").exists() && !dir.join("main").exists(),
+        "cross-target --emit-asm must not assemble or link"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies plain `--web` assembly keeps the compact auto-start core while
 /// pruning public session APIs and callable-handler machinery that user code
 /// does not reference.
@@ -287,6 +801,175 @@ fn test_cli_web_prunes_unused_session_surface_from_assembly() {
     assert!(
         !asm.contains("__ElephcCallableSessionHandler"),
         "plain web assembly must not emit legacy callable-handler dispatch"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies compile-time web isolation selects one bridge symbol and leaves the default
+/// assembly byte-identical to an explicit `worker` selection.
+#[test]
+fn test_cli_web_isolation_selects_entry_symbol_at_compile_time() {
+    let dir = make_cli_test_dir("elephc_cli_web_isolation_symbols");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let compile = |flags: &[&str]| {
+        let output = elephc_cli_command(&dir)
+            .args(flags)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile web-isolation fixture");
+        assert!(
+            output.status.success(),
+            "web-isolation compile failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read_to_string(dir.join("main.s")).expect("failed to read web-isolation assembly")
+    };
+
+    let default_worker = compile(&["--web"]);
+    let explicit_worker = compile(&["--web", "--web-isolation=worker"]);
+    assert_eq!(
+        default_worker, explicit_worker,
+        "plain --web must emit exactly the explicit worker entry path"
+    );
+    assert!(default_worker.contains("elephc_web_run"));
+    assert!(!default_worker.contains("elephc_web_run_pool"));
+    assert!(!default_worker.contains("elephc_web_run_request"));
+
+    let pool = compile(&["--web", "--web-isolation=pool"]);
+    assert!(pool.contains("elephc_web_run_pool"));
+    assert!(!pool.contains("elephc_web_run_request"));
+
+    let request = compile(&["--web", "--web-isolation=request"]);
+    assert!(request.contains("elephc_web_run_request"));
+    assert!(!request.contains("elephc_web_run_pool"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies web-isolation is rejected without web mode and reports invalid model names.
+#[test]
+fn test_cli_web_isolation_validation_errors_are_focused() {
+    let dir = make_cli_test_dir("elephc_cli_web_isolation_errors");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let without_web = elephc_cli_command(&dir)
+        .arg("--web-isolation=pool")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run web-isolation validation fixture");
+    assert!(!without_web.status.success());
+    assert!(
+        String::from_utf8_lossy(&without_web.stderr).contains("--web-isolation requires --web"),
+        "unexpected missing-web diagnostic: {}",
+        String::from_utf8_lossy(&without_web.stderr)
+    );
+
+    let invalid = elephc_cli_command(&dir)
+        .args(["--web", "--web-isolation=banana"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to run invalid web-isolation fixture");
+    assert!(!invalid.status.success());
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr)
+            .contains("expected worker|pool|request"),
+        "unexpected invalid-mode diagnostic: {}",
+        String::from_utf8_lossy(&invalid.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--with-pdo` roots the complete injected PDO group even without source-level PDO use.
+#[test]
+fn test_with_pdo_keeps_unreferenced_pdo_function() {
+    let dir = make_cli_test_dir("elephc_cli_with_pdo_reachability");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-pdo")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile forced PDO assembly");
+    assert!(
+        output.status.success(),
+        "elephc --with-pdo --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read PDO assembly");
+    let symbol = elephc::names::function_symbol("pdo_drivers");
+    assert!(
+        asm.contains(&format!(".globl {symbol}\n")),
+        "--with-pdo must keep unreferenced PDO declarations"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--with-crypto` force-links the bridge without force-injecting the hash prelude.
+#[test]
+fn test_with_crypto_does_not_force_hash_prelude() {
+    let dir = make_cli_test_dir("elephc_cli_with_crypto_reachability");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-crypto")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile forced crypto assembly");
+    assert!(
+        output.status.success(),
+        "elephc --with-crypto --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read crypto assembly");
+    let hash_init = elephc::names::function_symbol("hash_init");
+    assert!(
+        !asm.contains(&format!(".globl {hash_init}\n")),
+        "--with-crypto must not inject the source-level hash prelude"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--with-eval` keeps user declarations available to opaque runtime source.
+#[test]
+fn test_with_eval_keeps_unreferenced_user_declaration() {
+    let dir = make_cli_test_dir("elephc_cli_with_eval_reachability");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php function runtime_only(): string { return 'eval'; } echo 'ok';",
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-eval")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile forced eval assembly");
+    assert!(
+        output.status.success(),
+        "elephc --with-eval --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read eval assembly");
+    let symbol = elephc::names::function_symbol("runtime_only");
+    assert!(
+        asm.contains(&format!(".globl {symbol}\n")),
+        "--with-eval must keep unreferenced user declarations"
     );
 
     let _ = fs::remove_dir_all(&dir);
@@ -727,6 +1410,406 @@ echo 1 + 2;
     assert!(
         asm.contains(".loc 1 2 "),
         "expected a .loc directive for PHP line 2: {asm}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--debug-info` survives a source path that carries assembler string
+/// metacharacters. A `\` used to be spliced into `.file`/`.asciz` unescaped, so
+/// the assembler rejected the module outright; combined with `"` it terminated
+/// the directive string early and let the rest of the path be assembled as
+/// directives. The full compile must now succeed and the program must run.
+#[test]
+fn test_cli_debug_info_escapes_metacharacters_in_source_path() {
+    let dir = make_cli_test_dir("elephc_cli_debug_info_escapes");
+    // A backslash alone broke the assembler; `\"` was the directive-injection
+    // vector. Both are legal filename bytes on every supported target.
+    let php_path = dir.join("bs\\la\"sh.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function greet(): void { echo "escaped\n"; }
+greet();
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--debug-info")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI with --debug-info");
+
+    assert!(
+        output.status.success(),
+        "elephc --debug-info failed for a path with `\\` and `\"`: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("bs\\la\"sh.s")).expect("failed to read assembly");
+    let file_line = asm.lines().next().expect("assembly is empty");
+    assert!(
+        file_line.contains("bs\\\\la\\\"sh.php\""),
+        "source path must be escaped inside the .file string: {file_line}"
+    );
+    assert!(
+        asm.contains(".asciz \"") && asm.contains("bs\\\\la\\\"sh.php\""),
+        "source path must be escaped inside the compile-unit DW_AT_name too"
+    );
+    for line in asm.lines() {
+        assert!(
+            !line.starts_with(".globl bs") && !line.trim_start().starts_with("sh.php"),
+            "path bytes leaked out of their directive: {line}"
+        );
+    }
+
+    let run = std::process::Command::new(dir.join("bs\\la\"sh"))
+        .output()
+        .expect("failed to run the compiled binary");
+    assert!(run.status.success(), "compiled binary did not run");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "escaped\n");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Lists the symbol names `nm` reports from a linked binary's symbol table.
+/// A fully stripped executable yields an empty list: `nm` either prints
+/// nothing, reports "no symbols", or exits non-zero depending on the platform,
+/// and all three shapes collapse to "no names" here.
+fn symbol_table_names(binary: &Path) -> Vec<String> {
+    let output = Command::new("nm")
+        .arg(binary)
+        .output()
+        .expect("failed to run nm on the compiled binary");
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.contains("no symbols"))
+        .filter_map(|line| line.split_whitespace().last().map(str::to_string))
+        .collect()
+}
+
+/// Verifies linked executables are stripped of their symbol table by default
+/// and that `--keep-symbols` retains it (runtime helper names become visible).
+#[test]
+fn test_cli_executables_strip_symbols_by_default_and_keep_symbols_retains_them() {
+    let dir = make_cli_test_dir("elephc_cli_strip");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1 + 2;").unwrap();
+
+    let stripped_build = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc for the default (stripped) build");
+    assert!(
+        stripped_build.status.success(),
+        "default build failed: {}",
+        String::from_utf8_lossy(&stripped_build.stderr)
+    );
+    let stripped_names = symbol_table_names(&dir.join("main"));
+    assert!(
+        !stripped_names.iter().any(|name| name.contains("__rt_")),
+        "default build must not keep runtime helper names in its symbol table: {:?}",
+        stripped_names
+    );
+
+    let kept_build = elephc_cli_command(&dir)
+        .arg("--keep-symbols")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc --keep-symbols");
+    assert!(
+        kept_build.status.success(),
+        "--keep-symbols build failed: {}",
+        String::from_utf8_lossy(&kept_build.stderr)
+    );
+    let kept_names = symbol_table_names(&dir.join("main"));
+    assert!(
+        kept_names.iter().any(|name| name.contains("__rt_")),
+        "--keep-symbols must retain runtime helper names in the symbol table"
+    );
+    assert!(
+        kept_names.len() > stripped_names.len(),
+        "--keep-symbols must keep strictly more symbols ({}) than the stripped default ({})",
+        kept_names.len(),
+        stripped_names.len()
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Returns the `incl` percentage the exact profile reports for `name`.
+///
+/// The table prints one row per function as `<name> <bar> incl <n>%  self …`.
+/// Parsing the number rather than matching a literal keeps the assertion about
+/// the attribution instead of about the formatting.
+#[cfg(test)]
+fn exact_incl_percent(report: &str, name: &str) -> f64 {
+    for line in report.lines() {
+        let mut fields = line.split_whitespace();
+        if fields.next() != Some(name) {
+            continue;
+        }
+        let Some(index) = line.find("incl") else {
+            continue;
+        };
+        let after = &line[index + 4..];
+        let Some(percent) = after.split('%').next() else {
+            continue;
+        };
+        if let Ok(value) = percent.trim().parse::<f64>() {
+            return value;
+        }
+    }
+    panic!("the profile has no row for `{name}`:\n{report}");
+}
+
+/// A suspended coroutine is not charged for what its consumer does.
+///
+/// The only test on this branch that runs with the profiler ACTIVE. Every other
+/// check of the attribution is either a unit test driving `State` directly — which
+/// cannot see the emitted hooks — or the dormant-output test above, which asserts
+/// the profiler stays quiet and so is blind to what it says when it speaks.
+///
+/// `yield` and `Fiber::suspend` switch stacks rather than returning, so the body's
+/// frame used to stay open across everything the consumer did next: it became the
+/// caller of that work and the owner of its cost. Measured before the fix, a
+/// generator body that ran 23 µs reported **99.8%** of the program's inclusive
+/// time, and the call graph carried an edge from it to a function the loop called
+/// and the generator never did. A delegating generator reported 52.6% for the same
+/// reason on the `yield from` half.
+///
+/// The thresholds are deliberately loose. The gap being asserted is three orders
+/// of magnitude — a coroutine that runs microseconds against a consumer that runs
+/// milliseconds — so anything under 10% passes and every shape of the defect
+/// lands far above it.
+#[test]
+fn test_cli_monitor_does_not_charge_a_coroutine_for_its_consumer() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_coroutine");
+    fs::write(
+        dir.join("coro.php"),
+        "<?php\n\
+         function heavy(int $rounds): int { $n = 0; for ($i = 0; $i < $rounds; $i++) { $n += $i; } return $n; }\n\
+         function inner(): iterable { yield 1; yield 2; }\n\
+         function outer(): iterable { yield 0; yield from inner(); }\n\
+         function body(): int { Fiber::suspend(1); return 7; }\n\
+         function drain(): int {\n\
+         $t = 0;\n\
+         foreach (outer() as $v) { $t += heavy(120000); }\n\
+         $f = new Fiber('body');\n\
+         $f->start();\n\
+         $t += heavy(120000);\n\
+         $f->resume(0);\n\
+         return $t + $f->getReturn();\n\
+         }\n\
+         echo drain();\n",
+    )
+    .expect("failed to write the coroutine fixture");
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "coro.php"])
+        .output()
+        .expect("failed to compile the coroutine fixture");
+    assert!(
+        compile.status.success(),
+        "compile failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let watched = elephc_cli_command(&dir)
+        .args(["monitor", "./coro", "--dot", "coro.dot"])
+        .output()
+        .expect("failed to run elephc monitor");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&watched.stdout),
+        String::from_utf8_lossy(&watched.stderr)
+    );
+
+    assert!(
+        exact_incl_percent(&report, "heavy") > 90.0,
+        "the consumer's own work should dominate:\n{report}"
+    );
+    for coroutine in ["outer", "inner", "body"] {
+        let share = exact_incl_percent(&report, coroutine);
+        assert!(
+            share < 10.0,
+            "`{coroutine}` was charged {share}% of the program while suspended:\n{report}"
+        );
+    }
+
+    // The edge is the other half: a suspended coroutine that keeps its frame is
+    // read as the CALLER of whatever the consumer does next, so the graph gains
+    // an edge that does not exist. `drain` is what calls `heavy`.
+    let graph = fs::read_to_string(dir.join("coro.dot")).expect("monitor wrote no graph");
+    let node_of = |name: &str| -> Option<String> {
+        graph.lines().find_map(|line| {
+            let (id, rest) = line.trim().split_once(" [label=\"")?;
+            rest.starts_with(name).then(|| id.to_string())
+        })
+    };
+    let heavy = node_of("heavy").expect("the graph has no `heavy` node");
+    for coroutine in ["outer", "inner", "body"] {
+        if let Some(node) = node_of(coroutine) {
+            assert!(
+                !graph.contains(&format!("{node} -> {heavy}")),
+                "the graph says `{coroutine}` calls `heavy`, which it never does:\n{graph}"
+            );
+        }
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A coroutine resumed with a pending exception gets its frame back before its
+/// own handler runs.
+///
+/// `__rt_fiber_suspend` does not always return to the suspension site. Three
+/// paths leave without returning — `Fiber::suspend()` outside a fiber, a live
+/// `unserialize()`, and a `Fiber::throw()`/`Generator::throw()` delivered on
+/// resume — and all three reach PHP handlers. The second half of the bracket at
+/// the suspension site is skipped, so the activation stayed parked while its own
+/// `catch` ran.
+///
+/// The edge is what says it: `body`'s handler calls `heavy`, so `body → heavy`
+/// is the true edge. With the activation still parked, `heavy` entered on a
+/// stack whose top was the CONSUMER, and the graph read `drive → heavy` — a call
+/// `drive` never makes. Asserting an edge that must EXIST, where the sibling
+/// test asserts ones that must not.
+///
+/// The third path is the one real async code hits; the first two are error
+/// paths that reach the same helper and are covered by the same hook.
+#[test]
+fn test_cli_monitor_restores_a_coroutine_resumed_into_a_throw() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_fiber_throw");
+    fs::write(
+        dir.join("ft.php"),
+        "<?php\n\
+         function heavy(int $rounds): int { $n = 0; for ($i = 0; $i < $rounds; $i++) { $n += $i; } return $n; }\n\
+         function body(): int {\n\
+         $t = 0;\n\
+         try { Fiber::suspend(1); } catch (RuntimeException $e) { $t += heavy(300000); }\n\
+         return $t;\n\
+         }\n\
+         function drive(): int {\n\
+         $f = new Fiber('body');\n\
+         $f->start();\n\
+         $f->throw(new RuntimeException('x'));\n\
+         return $f->getReturn();\n\
+         }\n\
+         echo drive();\n",
+    )
+    .expect("failed to write the fiber-throw fixture");
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "ft.php"])
+        .output()
+        .expect("failed to compile the fiber-throw fixture");
+    assert!(
+        compile.status.success(),
+        "compile failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let watched = elephc_cli_command(&dir)
+        .args(["monitor", "./ft", "--dot", "ft.dot"])
+        .output()
+        .expect("failed to run elephc monitor");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&watched.stdout),
+        String::from_utf8_lossy(&watched.stderr)
+    );
+    assert!(
+        report.contains("44999850000"),
+        "the program's own answer changed, so the hooks are not transparent:\n{report}"
+    );
+
+    let graph = fs::read_to_string(dir.join("ft.dot")).expect("monitor wrote no graph");
+    let node_of = |name: &str| -> String {
+        graph
+            .lines()
+            .find_map(|line| {
+                let (id, rest) = line.trim().split_once(" [label=\"")?;
+                rest.starts_with(name).then(|| id.to_string())
+            })
+            .unwrap_or_else(|| panic!("the graph has no `{name}` node:\n{graph}"))
+    };
+    let (body, drive, heavy) = (node_of("body"), node_of("drive"), node_of("heavy"));
+    assert!(
+        graph.contains(&format!("{body} -> {heavy}")),
+        "the handler's work was not attributed to the coroutine that ran it:\n{graph}"
+    );
+    assert!(
+        !graph.contains(&format!("{drive} -> {heavy}")),
+        "the graph says `drive` calls `heavy`, which only holds while `body` is \
+         still parked:\n{graph}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// End-to-end `--with-monitoring`: a binary that carries the tooling is silent
+/// until asked, and reports fully when `monitor` asks.
+///
+/// Both halves matter. The silence is the property that makes the capability
+/// safe to ship — a program that starts emitting profiler output on its own
+/// stderr would be a surprise its author cannot explain. And the reporting is
+/// what the capability is for. Asserting only one of them would let the other
+/// break unnoticed.
+///
+/// macOS-only: the fixture is CPU-bound so SIGPROF samples are guaranteed.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_cli_probe_embeds_in_process_sampler() {
+    let dir = make_cli_test_dir("elephc_cli_probe");
+    fs::write(
+        dir.join("burn.php"),
+        "<?php\nfunction burn(int $depth): int { $n = 0; for ($i = 0; $i < 6000000; $i = $i + 1) { $n = ($n + $i) % 1000003; } if ($depth > 0) { $n = ($n + burn($depth - 1)) % 1000003; } return $n; }\necho burn(4);\n",
+    )
+    .expect("failed to write the probe fixture");
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "burn.php"])
+        .output()
+        .expect("failed to run elephc --probe");
+    assert!(
+        compile.status.success(),
+        "probe compile failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    // Run on its own: capable, but nobody asked.
+    let alone = std::process::Command::new(dir.join("burn"))
+        .output()
+        .expect("failed to run the monitored binary");
+    assert!(alone.status.success(), "monitored binary did not run");
+    assert_eq!(String::from_utf8_lossy(&alone.stdout), "855");
+    let quiet = String::from_utf8_lossy(&alone.stderr);
+    assert!(
+        !quiet.contains("elephc-probe") && !quiet.contains("elephc-instr"),
+        "a binary nobody asked must not announce a profiler: {quiet}"
+    );
+
+    // Run through `monitor`, which asks over the control channel.
+    let watched = elephc_cli_command(&dir)
+        .args(["monitor", "./burn"])
+        .output()
+        .expect("failed to run elephc monitor");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&watched.stdout),
+        String::from_utf8_lossy(&watched.stderr)
+    );
+    assert!(
+        report.contains("burn"),
+        "the profile should name the PHP function, symbolized from the embedded table: {report}"
     );
 
     let _ = fs::remove_dir_all(&dir);

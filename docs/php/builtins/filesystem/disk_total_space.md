@@ -2,13 +2,13 @@
 title: "disk_total_space()"
 description: "Returns the total size of a filesystem or disk partition."
 sidebar:
-  order: 113
+  order: 120
 ---
 
 ## disk_total_space()
 
 ```php
-function disk_total_space(string $directory): float
+function disk_total_space(string $directory): mixed
 ```
 
 Returns the total size of a filesystem or disk partition.
@@ -16,7 +16,7 @@ Returns the total size of a filesystem or disk partition.
 **Parameters**:
 - `$directory` (`string`)
 
-**Returns**: `float`
+**Returns**: `mixed`
 
 ## Availability
 
@@ -24,12 +24,6 @@ Returns the total size of a filesystem or disk partition.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/disk_total_space.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/disk_total_space.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

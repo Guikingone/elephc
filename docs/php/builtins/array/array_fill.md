@@ -2,7 +2,7 @@
 title: "array_fill()"
 description: "Fill an array with values."
 sidebar:
-  order: 9
+  order: 10
 ---
 
 ## array_fill()
@@ -26,12 +26,6 @@ Fill an array with values.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_fill.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_fill.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

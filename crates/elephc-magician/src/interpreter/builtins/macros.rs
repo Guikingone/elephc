@@ -1,250 +1,46 @@
 //! Purpose:
-//! Declarative helpers for registering eval-side PHP builtins.
-//! The macro keeps per-builtin files compact while preserving the interpreter
-//! registry as the runtime lookup surface.
+//! Declarative helpers for joining Magician dispatch hooks to shared builtin
+//! contracts without repeating PHP-visible catalog metadata.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::<area>::<builtin>` home files.
 //!
 //! Key details:
-//! - Macro expansion submits static metadata to `inventory`.
-//! - Dispatch hooks are magician-specific enums so handlers can stay generic
+//! - Macro expansion submits only a stable shared-contract ID and eval hooks.
+//! - Dispatch hooks remain Magician-specific enums so handlers stay generic
 //!   over `RuntimeValueOps`.
 
 macro_rules! eval_builtin {
     (
-        name: $name:literal,
+        contract: $contract:literal,
         area: $area:ident,
-        params: [$($param:ident $(: $mode:ident)? $(= $default:expr)?),* $(,)?],
-        by_ref: [$($by_ref:ident),* $(,)?],
-        direct: none,
-        values: $values:ident $(,)?
+        direct: $direct:tt,
+        values: $values:tt $(,)?
     ) => {
         inventory::submit! {
-            $crate::interpreter::builtins::spec::EvalBuiltinSpec {
-                name: $name,
+            $crate::interpreter::builtins::spec::EvalBuiltinBinding {
+                id: elephc_builtin_contract::BuiltinId::from_canonical_name($contract),
                 area: $crate::interpreter::builtins::spec::EvalArea::$area,
-                param_names: &[$(eval_builtin!(@name_str $param)),*],
-                params: &[
-                    $(
-                        $crate::interpreter::builtins::spec::EvalParamSpec {
-                            name: eval_builtin!(@name_str $param),
-                            default: eval_builtin!(@default $($default)?),
-                            by_ref: eval_builtin!(@param_by_ref $($mode)?),
-                        },
-                    )*
-                ],
-                variadic: None,
-                by_ref_params: &[$(eval_builtin!(@name_str $by_ref)),*],
-                required_param_count: None,
-                direct: None,
-                values: Some($crate::interpreter::builtins::spec::EvalValuesHook::$values),
+                direct: eval_builtin!(@direct $direct),
+                values: eval_builtin!(@values $values),
                 home_file: file!(),
             }
         }
     };
 
-    (
-        name: $name:literal,
-        area: $area:ident,
-        params: [$($param:ident $(: $mode:ident)? $(= $default:expr)?),* $(,)?],
-        by_ref: [$($by_ref:ident),* $(,)?],
-        direct: $direct:ident,
-        values: $values:ident $(,)?
-    ) => {
-        inventory::submit! {
-            $crate::interpreter::builtins::spec::EvalBuiltinSpec {
-                name: $name,
-                area: $crate::interpreter::builtins::spec::EvalArea::$area,
-                param_names: &[$(eval_builtin!(@name_str $param)),*],
-                params: &[
-                    $(
-                        $crate::interpreter::builtins::spec::EvalParamSpec {
-                            name: eval_builtin!(@name_str $param),
-                            default: eval_builtin!(@default $($default)?),
-                            by_ref: eval_builtin!(@param_by_ref $($mode)?),
-                        },
-                    )*
-                ],
-                variadic: None,
-                by_ref_params: &[$(eval_builtin!(@name_str $by_ref)),*],
-                required_param_count: None,
-                direct: Some($crate::interpreter::builtins::spec::EvalDirectHook::$direct),
-                values: Some($crate::interpreter::builtins::spec::EvalValuesHook::$values),
-                home_file: file!(),
-            }
-        }
-    };
-
-    (
-        name: $name:literal,
-        area: $area:ident,
-        params: [$($param:ident $(: $mode:ident)? $(= $default:expr)?),* $(,)?],
-        variadic: $variadic:ident,
-        by_ref: [$($by_ref:ident),* $(,)?],
-        direct: none,
-        values: $values:ident $(,)?
-    ) => {
-        inventory::submit! {
-            $crate::interpreter::builtins::spec::EvalBuiltinSpec {
-                name: $name,
-                area: $crate::interpreter::builtins::spec::EvalArea::$area,
-                param_names: &[$(eval_builtin!(@name_str $param),)* eval_builtin!(@name_str $variadic)],
-                params: &[
-                    $(
-                        $crate::interpreter::builtins::spec::EvalParamSpec {
-                            name: eval_builtin!(@name_str $param),
-                            default: eval_builtin!(@default $($default)?),
-                            by_ref: eval_builtin!(@param_by_ref $($mode)?),
-                        },
-                    )*
-                ],
-                variadic: Some(eval_builtin!(@name_str $variadic)),
-                by_ref_params: &[$(eval_builtin!(@name_str $by_ref)),*],
-                required_param_count: None,
-                direct: None,
-                values: Some($crate::interpreter::builtins::spec::EvalValuesHook::$values),
-                home_file: file!(),
-            }
-        }
-    };
-
-    (
-        name: $name:literal,
-        area: $area:ident,
-        params: [$($param:ident $(= $default:expr)?),* $(,)?],
-        variadic: $variadic:ident,
-        direct: $direct:ident,
-        values: $values:ident $(,)?
-    ) => {
-        inventory::submit! {
-            $crate::interpreter::builtins::spec::EvalBuiltinSpec {
-                name: $name,
-                area: $crate::interpreter::builtins::spec::EvalArea::$area,
-                param_names: &[$(eval_builtin!(@name_str $param),)* eval_builtin!(@name_str $variadic)],
-                params: &[
-                    $(
-                        $crate::interpreter::builtins::spec::EvalParamSpec {
-                            name: eval_builtin!(@name_str $param),
-                            default: eval_builtin!(@default $($default)?),
-                            by_ref: false,
-                        },
-                    )*
-                ],
-                variadic: Some(eval_builtin!(@name_str $variadic)),
-                by_ref_params: &[],
-                required_param_count: None,
-                direct: Some($crate::interpreter::builtins::spec::EvalDirectHook::$direct),
-                values: Some($crate::interpreter::builtins::spec::EvalValuesHook::$values),
-                home_file: file!(),
-            }
-        }
-    };
-
-    (
-        name: $name:literal,
-        area: $area:ident,
-        params: [$($param:ident $(= $default:expr)?),* $(,)?],
-        required: $required:expr,
-        direct: $direct:ident,
-        values: $values:ident $(,)?
-    ) => {
-        inventory::submit! {
-            $crate::interpreter::builtins::spec::EvalBuiltinSpec {
-                name: $name,
-                area: $crate::interpreter::builtins::spec::EvalArea::$area,
-                param_names: &[$(eval_builtin!(@name_str $param)),*],
-                params: &[
-                    $(
-                        $crate::interpreter::builtins::spec::EvalParamSpec {
-                            name: eval_builtin!(@name_str $param),
-                            default: eval_builtin!(@default $($default)?),
-                            by_ref: false,
-                        },
-                    )*
-                ],
-                variadic: None,
-                by_ref_params: &[],
-                required_param_count: Some($required),
-                direct: Some($crate::interpreter::builtins::spec::EvalDirectHook::$direct),
-                values: Some($crate::interpreter::builtins::spec::EvalValuesHook::$values),
-                home_file: file!(),
-            }
-        }
-    };
-
-    (
-        name: $name:literal,
-        area: $area:ident,
-        params: [$($param:ident $(= $default:expr)?),* $(,)?],
-        direct: $direct:ident,
-        values: $values:ident $(,)?
-    ) => {
-        inventory::submit! {
-            $crate::interpreter::builtins::spec::EvalBuiltinSpec {
-                name: $name,
-                area: $crate::interpreter::builtins::spec::EvalArea::$area,
-                param_names: &[$(eval_builtin!(@name_str $param)),*],
-                params: &[
-                    $(
-                        $crate::interpreter::builtins::spec::EvalParamSpec {
-                            name: eval_builtin!(@name_str $param),
-                            default: eval_builtin!(@default $($default)?),
-                            by_ref: false,
-                        },
-                    )*
-                ],
-                variadic: None,
-                by_ref_params: &[],
-                required_param_count: None,
-                direct: Some($crate::interpreter::builtins::spec::EvalDirectHook::$direct),
-                values: Some($crate::interpreter::builtins::spec::EvalValuesHook::$values),
-                home_file: file!(),
-            }
-        }
-    };
-
-    (@default) => {
+    (@direct none) => {
         None
     };
 
-    (@default $default:expr) => {
-        Some($default)
+    (@direct $direct:ident) => {
+        Some($crate::interpreter::builtins::spec::EvalDirectHook::$direct)
     };
 
-    (@param_by_ref) => {
-        false
+    (@values none) => {
+        None
     };
 
-    (@param_by_ref by_ref) => {
-        true
-    };
-
-    (@name_str r#break) => {
-        "break"
-    };
-
-    (@name_str r#class) => {
-        "class"
-    };
-
-    (@name_str r#enum) => {
-        "enum"
-    };
-
-    (@name_str r#return) => {
-        "return"
-    };
-
-    (@name_str r#trait) => {
-        "trait"
-    };
-
-    (@name_str r#type) => {
-        "type"
-    };
-
-    (@name_str $name:ident) => {
-        stringify!($name)
+    (@values $values:ident) => {
+        Some($crate::interpreter::builtins::spec::EvalValuesHook::$values)
     };
 }

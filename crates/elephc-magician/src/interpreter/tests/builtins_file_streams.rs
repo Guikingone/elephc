@@ -365,3 +365,97 @@ return true;"#,
     assert_eq!(values.output, "5,7");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies a CLOSED eval-created stream renames its type to `Unknown`, in both
+/// `var_dump()` and `get_resource_type()`.
+///
+/// Captured from PHP 8.5.6 running the equivalent program with `php -d xdebug.mode=off`.
+/// An eval-created resource carries NO close sentinel — its payload is the key of
+/// `EvalStreamResources` and negating it would break every builtin that later resolves
+/// the handle — so the close state is read from the tables through
+/// `EvalStreamResources::is_live`. `fclose()` removes the entry and `take_next_id()`
+/// never reuses a payload, which is what makes "in no table" mean "closed".
+///
+/// The id must stay 5: php-src leaves `zend_resource.handle` alone on close, and only the
+/// NAME changes.
+#[test]
+fn execute_program_renames_a_closed_eval_stream_to_unknown() {
+    let program = parse_fragment(
+        br#"$a = fopen("php://memory", "r");
+var_dump($a);
+echo get_resource_type($a) . ":";
+fclose($a);
+var_dump($a);
+echo get_resource_type($a) . ":" . get_resource_id($a);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "resource(5) of type (stream)\nstream:resource(5) of type (Unknown)\nUnknown:5"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies a HOST resource closed by the compiled program renames to `Unknown` too.
+///
+/// This is the OTHER close representation: a host `fclose`/`pclose`/`closedir` stamps the
+/// `-id` sentinel into the Mixed box, so the cell arrives inside `eval()` carrying a
+/// NEGATIVE payload rather than a missing table entry. `FakeValue::Resource(-5)` models
+/// exactly that box.
+///
+/// The payload must be read as `as i64`, not through `i64::try_from`: the sentinel for id
+/// 5 is `0xFFFF_FFFF_FFFF_FFFB` and `try_from` rejects it outright. The id stays 5, again
+/// because php-src does not disturb the handle on close.
+#[test]
+fn execute_program_renames_a_closed_host_resource_to_unknown() {
+    let program = parse_fragment(
+        br#"var_dump($handle);
+echo get_resource_type($handle) . ":" . get_resource_id($handle);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let handle = values.alloc(FakeValue::Resource(-5));
+    scope.set("handle".to_string(), handle, ScopeCellOwnership::Borrowed);
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "resource(5) of type (Unknown)\nUnknown:5"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies an OPEN host resource still reports `stream`, so the closed test above cannot
+/// pass by renaming everything.
+///
+/// A host payload is a plain file descriptor with no sentinel and no `EvalStreamResources`
+/// entry, so it must fall through both close checks. This is the negative control for
+/// `execute_program_renames_a_closed_host_resource_to_unknown`: without it, a predicate
+/// that answered "closed" for every host payload would look correct.
+#[test]
+fn execute_program_keeps_an_open_host_resource_named_stream() {
+    let program = parse_fragment(
+        br#"var_dump($handle);
+echo get_resource_type($handle);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let handle = values.alloc(FakeValue::Resource(6));
+    scope.set("handle".to_string(), handle, ScopeCellOwnership::Borrowed);
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "resource(5) of type (stream)\nstream");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}

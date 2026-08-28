@@ -9,6 +9,8 @@
 //! Key details:
 //! - Comments and whitespace advance line metadata for `__LINE__`.
 //! - Unterminated strings or block comments return parse errors before grammar parsing.
+//! - Double-quoted literals are expanded by `super::strings` into concatenation token
+//!   streams, so one source character can yield more than one token.
 
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
@@ -20,7 +22,7 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, EvalParseError> {
 }
 
 /// Converts a UTF-8 eval source fragment into parser tokens.
-struct Lexer<'a> {
+pub(super) struct Lexer<'a> {
     source: &'a str,
     pos: usize,
     line: i64,
@@ -40,9 +42,11 @@ impl<'a> Lexer<'a> {
     fn tokenize(mut self) -> Result<Vec<Token>, EvalParseError> {
         let mut tokens = Vec::new();
         loop {
-            let token = self.next_token()?;
-            let done = *token.kind() == TokenKind::Eof;
-            tokens.push(token);
+            let batch = self.next_tokens()?;
+            let done = batch
+                .last()
+                .is_some_and(|token| *token.kind() == TokenKind::Eof);
+            tokens.extend(batch);
             if done {
                 break;
             }
@@ -50,16 +54,23 @@ impl<'a> Lexer<'a> {
         Ok(tokens)
     }
 
-    /// Reads the next token from the source.
-    fn next_token(&mut self) -> Result<Token, EvalParseError> {
+    /// Reads the next token batch from the source.
+    ///
+    /// Every source construct except a double-quoted literal yields exactly one token.
+    /// A double-quoted literal yields one `TokenKind::String` when it contains no
+    /// interpolation, and a parenthesized concatenation token stream when it does.
+    fn next_tokens(&mut self) -> Result<Vec<Token>, EvalParseError> {
         self.skip_trivia()?;
         let Some(ch) = self.peek_char() else {
-            return Ok(Token::new(TokenKind::Eof, self.line));
+            return Ok(vec![Token::new(TokenKind::Eof, self.line)]);
         };
         let line = self.line;
+        if ch == '"' {
+            return self.lex_double_quoted(line);
+        }
         let kind = match ch {
             '$' => self.lex_variable(),
-            '\'' | '"' => self.lex_string(ch),
+            '\'' => self.lex_single_quoted(),
             '0'..='9' => self.lex_number(),
             '+' => {
                 self.bump_char();
@@ -312,7 +323,7 @@ impl<'a> Lexer<'a> {
             }
             _ => Err(EvalParseError::UnexpectedToken),
         }?;
-        Ok(Token::new(kind, line))
+        Ok(vec![Token::new(kind, line)])
     }
 
     /// Reads a `$name` token.
@@ -330,7 +341,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Reads a PHP identifier body at the current byte offset.
-    fn lex_ident(&mut self) -> String {
+    pub(super) fn lex_ident(&mut self) -> String {
         let mut ident = String::new();
         while let Some(ch) = self.peek_char() {
             if !is_ident_continue(ch) {
@@ -368,13 +379,13 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Reads a single- or double-quoted string literal.
-    fn lex_string(&mut self, quote: char) -> Result<TokenKind, EvalParseError> {
+    /// Reads a single-quoted string literal, which never interpolates.
+    fn lex_single_quoted(&mut self) -> Result<TokenKind, EvalParseError> {
         self.bump_char();
         let mut out = String::new();
         while let Some(ch) = self.peek_char() {
             self.bump_char();
-            if ch == quote {
+            if ch == '\'' {
                 return Ok(TokenKind::String(out));
             }
             if ch == '\\' {
@@ -382,30 +393,12 @@ impl<'a> Lexer<'a> {
                     return Err(EvalParseError::UnterminatedString);
                 };
                 self.bump_char();
-                if quote == '\'' {
-                    match escaped {
-                        '\\' => out.push('\\'),
-                        '\'' => out.push('\''),
-                        other => {
-                            out.push('\\');
-                            out.push(other);
-                        }
-                    }
-                } else {
-                    match escaped {
-                        'n' => out.push('\n'),
-                        'r' => out.push('\r'),
-                        't' => out.push('\t'),
-                        'v' => out.push('\x0b'),
-                        'e' => out.push('\x1b'),
-                        'f' => out.push('\x0c'),
-                        '\\' => out.push('\\'),
-                        '"' => out.push('"'),
-                        '$' => out.push('$'),
-                        other => {
-                            out.push('\\');
-                            out.push(other);
-                        }
+                match escaped {
+                    '\\' => out.push('\\'),
+                    '\'' => out.push('\''),
+                    other => {
+                        out.push('\\');
+                        out.push(other);
                     }
                 }
             } else {
@@ -457,19 +450,27 @@ impl<'a> Lexer<'a> {
     }
 
     /// Returns the current char without advancing.
-    fn peek_char(&self) -> Option<char> {
+    pub(super) fn peek_char(&self) -> Option<char> {
         self.source[self.pos..].chars().next()
     }
 
     /// Returns the char after the current char without advancing.
-    fn peek_next_char(&self) -> Option<char> {
+    pub(super) fn peek_next_char(&self) -> Option<char> {
         let mut chars = self.source[self.pos..].chars();
         chars.next()?;
         chars.next()
     }
 
+    /// Returns the char `offset` positions ahead of the cursor without advancing.
+    ///
+    /// `offset` 0 is the current char, so this generalizes `peek_char`/`peek_next_char`
+    /// for the three-character lookahead that `"$obj->prop"` interpolation needs.
+    pub(super) fn peek_nth_char(&self, offset: usize) -> Option<char> {
+        self.source[self.pos..].chars().nth(offset)
+    }
+
     /// Advances by one UTF-8 char.
-    fn bump_char(&mut self) {
+    pub(super) fn bump_char(&mut self) {
         if let Some(ch) = self.peek_char() {
             self.pos += ch.len_utf8();
             if ch == '\n' {
@@ -480,7 +481,7 @@ impl<'a> Lexer<'a> {
 }
 
 /// Returns true for the first character of a PHP variable/function identifier.
-fn is_ident_start(ch: char) -> bool {
+pub(super) fn is_ident_start(ch: char) -> bool {
     ch == '_' || ch.is_ascii_alphabetic()
 }
 

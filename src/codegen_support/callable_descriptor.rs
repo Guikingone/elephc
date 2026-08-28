@@ -580,6 +580,7 @@ fn type_tag(ty: &PhpType) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
     use crate::span::Span;
 
     /// Verifies that descriptor records contain signature, environment, and invocation pointers.
@@ -624,7 +625,7 @@ mod tests {
                 "call",
             ),
         );
-        let asm = data.emit();
+        let asm = data.emit(Target::new(Platform::MacOS, Arch::AArch64));
 
         assert!(asm.contains(&format!(".globl {}\n{}:\n", descriptor, descriptor)));
         assert!(asm.contains("    .quad _call_entry\n"));
@@ -665,7 +666,7 @@ mod tests {
             CallableDescriptorInvocation::named(CallableDescriptorShape::Function, "demo"),
             Some("_call_invoker"),
         );
-        let asm = data.emit();
+        let asm = data.emit(Target::new(Platform::MacOS, Arch::AArch64));
 
         assert!(asm.contains(&format!(".globl {}\n{}:\n", descriptor, descriptor)));
         assert!(asm.contains("    .quad _call_entry\n"));

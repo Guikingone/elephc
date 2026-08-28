@@ -2,7 +2,7 @@
 title: "array_key_exists()"
 description: "Checks if the given key or index exists in the array."
 sidebar:
-  order: 18
+  order: 19
 ---
 
 ## array_key_exists()
@@ -25,12 +25,6 @@ Checks if the given key or index exists in the array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_key_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_key_exists.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

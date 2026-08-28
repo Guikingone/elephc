@@ -10,10 +10,14 @@
 //! - Tests: directly through the `rlib` crate type.
 //!
 //! Key details:
-//! - One process per prefork worker means no shared-thread state: per-worker
-//!   request/response data lives in plain process statics, not behind a mutex.
+//! - Every handler-owning process executes PHP serially, so request/response
+//!   data lives in process statics without cross-thread mutation.
 
+mod handler_broker;
+mod handler_ipc;
+mod isolated_worker;
 mod multipart;
+mod probe_route;
 mod request_state;
 mod server;
 mod session;
@@ -39,7 +43,9 @@ pub use request_state::{
 
 // Re-exported so the compiled `--web` runtime routines (`__rt_header`,
 // `__rt_http_response_code`) can link against the response-control setters.
-pub use request_state::{elephc_web_header, elephc_web_set_status};
+pub use request_state::{
+    elephc_web_handle_uncaught_exception, elephc_web_header, elephc_web_set_status,
+};
 
 // Re-exported so the compiled `--web` web prelude can link against all session
 // C-ABI bridge symbols defined in `session/` (state, file I/O, ID generation,

@@ -16,20 +16,14 @@
 use crate::builtins::semantics::{
     runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
 };
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "readline",
-    area: Io,
-    params: [prompt: Str = DefaultSpec::Null],
-    arity_error: "readline() takes 0 or 1 arguments",
-    returns: Mixed,
+    contract: "readline",
     check: check,
     semantics: readline_semantics(),
-    summary: "Reads a line from the user's terminal.",
-    php_manual: "function.readline",
 }
 
 /// Builds semantics whose EIR result matches the line reader's concrete string layout.

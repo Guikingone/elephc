@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the process-pipe open helper.
 
 eval_builtin! {
-    name: "popen",
+    contract: "popen",
     area: Filesystem,
-    params: [command, mode],
     direct: Filesystem,
     values: Filesystem,
 }

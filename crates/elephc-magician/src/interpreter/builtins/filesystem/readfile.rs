@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the streaming file output helper.
 
 eval_builtin! {
-    name: "readfile",
+    contract: "readfile",
     area: Filesystem,
-    params: [filename],
     direct: Filesystem,
     values: Filesystem,
 }

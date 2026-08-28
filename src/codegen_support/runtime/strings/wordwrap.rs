@@ -8,8 +8,10 @@
 //! Key details:
 //! - Implements PHP's algorithm: lines break at the last space at/after the wrap width; an
 //!   over-long word is left intact unless `cut_long_words` is set, in which case it is broken at
-//!   the width. Existing `\n` bytes reset the current line length. Output is appended to the
-//!   `_concat_buf` / `_concat_off` globals as a heap-backed, refcount-compatible PHP string.
+//!   the width. Existing `\n` bytes reset the current line length.
+//! - The worst-case `textlen * (1 + break_len)` result is reserved through
+//!   `__rt_concat_reserve` before the first store, so long inputs fall back to heap storage
+//!   instead of running off the end of the 64 KiB concat scratch buffer.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -23,8 +25,10 @@ use crate::codegen_support::platform::Arch;
 /// Output registers (ARM64): x1=result ptr, x2=result len.
 /// Output registers (x86_64): rax=result ptr, rdx=result len.
 ///
-/// Uses globals `_concat_buf` / `_concat_off` for output; the result is a heap-backed
-/// refcount-compatible PHP string written into the concat buffer.
+/// Reserves the worst-case `textlen * (1 + break_len)` result through `__rt_concat_reserve`
+/// (concat scratch while it fits, owned heap storage otherwise) and finishes through
+/// `__rt_concat_publish`. Clobbers every caller-saved register, because the reservation can
+/// reach `__rt_heap_alloc`; a wrapped size bound reports PHP's allocation-overflow fatal.
 pub fn emit_wordwrap(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_wordwrap_linux_x86_64(emitter);
@@ -57,11 +61,13 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
     emitter.instruction("mov x26, #-1");                                        // x26 = lastspace index (-1 = no space on line yet)
     emitter.instruction("mov x27, #0");                                         // x27 = current scan index
 
-    // -- compute output destination in the concat buffer --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x28, x11, x10");                                   // x28 = output write pointer = buf + offset
+    // -- reserve the worst-case wrapped result before writing anything --
+    emitter.instruction("add x9, x23, #1");                                     // worst case is one break string inserted after every source byte
+    emitter.instruction("umulh x10, x20, x9");                                  // capture the high half of the textlen * (1 + break length) product
+    emitter.instruction("cbnz x10, __rt_wordwrap_size_overflow");               // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("mul x0, x20, x9");                                     // compute the worst-case wrapped result size
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the wrapped result
+    emitter.instruction("mov x28, x0");                                         // x28 = output write pointer at the reserved payload start
     emitter.instruction("str x28, [sp, #0]");                                   // save the result start pointer for the final length
 
     // -- main scan loop --
@@ -144,13 +150,10 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
     emitter.instruction("add x9, x19, x25");                                    // source = base + laststart
     emitter.instruction("bl __rt_wordwrap_cpy");                                // copy the trailing line to output
 
-    // -- finalize result pointer/length and publish the new concat offset --
+    // -- finalize result pointer/length and publish the written bytes --
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = result start pointer
     emitter.instruction("sub x2, x28, x1");                                     // x2 = result length = end - start
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat offset
-    emitter.instruction("add x10, x10, x2");                                    // advance it by the wrapped length
-    emitter.instruction("str x10, [x9]");                                       // publish the updated concat offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
 
     // -- restore callee-saved registers and return --
     emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore x19, x20
@@ -173,6 +176,10 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_wordwrap_cpy_loop");                         // continue until all bytes are copied
     emitter.label("__rt_wordwrap_cpy_ret");
     emitter.instruction("ret");                                                 // return to the wrapping loop
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_wordwrap_size_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 }
 
 /// Emits the x86_64 Linux implementation of the word-aware `__rt_wordwrap` runtime helper.
@@ -211,11 +218,13 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r13, r13");                                        // r13 = laststart = 0
     emitter.instruction("mov r14, -1");                                         // r14 = lastspace = -1 (no space on line yet)
 
-    // -- compute the output destination in the concat buffer --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the current concat-buffer write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_concat_buf");
-    emitter.instruction("lea r15, [r11 + r10]");                                // r15 = output write pointer = buf + offset
+    // -- reserve the worst-case wrapped result before writing anything --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // reload the break-string length before deriving the worst-case expansion factor
+    emitter.instruction("add rax, 1");                                          // worst case is one break string inserted after every source byte
+    emitter.instruction("imul rax, QWORD PTR [rbp - 56]");                      // compute the worst-case wrapped result size as textlen * (1 + break length)
+    emitter.instruction("jo __rt_wordwrap_size_overflow_x86_64");               // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the wrapped result
+    emitter.instruction("mov r15, rax");                                        // r15 = output write pointer at the reserved payload start
     emitter.instruction("mov QWORD PTR [rbp - 64], r15");                       // save the result start pointer for the final length
 
     // -- main scan loop --
@@ -306,14 +315,11 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rbx + r13]");                                // source = base + laststart
     emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the trailing line to output
 
-    // -- finalize result pointer/length and publish the new concat offset --
+    // -- finalize result pointer/length and publish the written bytes --
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // rax = result start pointer
     emitter.instruction("mov rdx, r15");                                        // rdx = output end pointer
     emitter.instruction("sub rdx, rax");                                        // rdx = result length = end - start
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the current concat offset
-    emitter.instruction("add r10, rdx");                                        // advance it by the wrapped length
-    emitter.instruction("mov QWORD PTR [rsi], r10");                            // publish the updated concat offset
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
 
     // -- restore callee-saved registers and return --
     emitter.instruction("add rsp, 64");                                         // release the spill slots
@@ -339,4 +345,8 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_wordwrap_cpy_loop_x86_64");                   // continue until all bytes are copied
     emitter.label("__rt_wordwrap_cpy_ret_x86_64");
     emitter.instruction("ret");                                                 // return to the wrapping loop
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_wordwrap_size_overflow_x86_64");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline reachable from every caller
 }

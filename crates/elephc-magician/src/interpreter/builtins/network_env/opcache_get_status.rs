@@ -44,10 +44,6 @@ mod state;
 
 use state::opcache_cache_enabled;
 
-/// The `PHP_VERSION_ID` the eval interpreter reports for OPcache state. Fixed to the
-/// newest maintained profile (8.5), matching the native default target.
-const EVAL_OPCACHE_PHP_VERSION_ID: u32 = 80500;
-
 /// Returns whether `name` (already lowercased and unqualified) is the OPcache status
 /// function, so `function_exists` reports it as existing even though it is not a
 /// PHP-visible eval builtin.
@@ -77,7 +73,7 @@ pub(in crate::interpreter) fn eval_opcache_get_status_call(
 pub(in crate::interpreter) fn eval_opcache_get_status_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let enabled = opcache_cache_enabled(EVAL_OPCACHE_PHP_VERSION_ID, false);
+    let enabled = opcache_cache_enabled(crate::eval_php_profile::eval_php_version_id(), false);
     // Disabled cache (the eval/CLI default) → `false`, the complete correct result.
     // An enabled status array is only reachable on the native `--web` prelude, never in
     // eval, so there is nothing else to build here.

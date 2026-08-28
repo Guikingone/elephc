@@ -2,7 +2,7 @@
 title: "array_merge_recursive()"
 description: "Recursively merges two arrays, combining scalar collisions into lists."
 sidebar:
-  order: 24
+  order: 25
 ---
 
 ## array_merge_recursive()
@@ -24,12 +24,6 @@ Recursively merges two arrays, combining scalar collisions into lists.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

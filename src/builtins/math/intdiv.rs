@@ -11,13 +11,8 @@
 
 
 builtin! {
-    name: "intdiv",
-    area: Math,
-    params: [num1: Int, num2: Int],
-    returns: Int,
+    contract: "intdiv",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Intdiv,
     ),
-    summary: "Integer division.",
-    php_manual: "https://www.php.net/manual/en/function.intdiv.php",
 }

@@ -2,7 +2,7 @@
 title: "clamp()"
 description: "Clamps a value to be within a specified range."
 sidebar:
-  order: 260
+  order: 283
 ---
 
 ## clamp()
@@ -26,12 +26,6 @@ Clamps a value to be within a specified range.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/clamp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/clamp.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -1,7 +1,7 @@
 //! Purpose:
 //! Fixed-point driver for mutating EIR transformation passes. Runs the
-//! registered passes over each function repeatedly until none reports a change,
-//! re-validating the function after every pass in debug/test builds.
+//! applicable registered passes over each function repeatedly until none reports
+//! a change, re-validating the function after every pass that runs in debug/test builds.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` via `optimize_module`, after AST-to-EIR
@@ -17,19 +17,21 @@
 //!   (or expose calls) so the next round can inline more. The first round
 //!   reproduces the previous "inline once, then optimize" behavior; later rounds
 //!   only add optimization, never change semantics.
-//! - Validation after each pass and the per-function non-convergence panic are
-//!   gated on `debug_assertions`, so they are active in `cargo build`/`cargo test`
-//!   and compile out of `--release`. In release, hitting either iteration cap
-//!   simply stops and proceeds with the current IR.
+//! - Validation after each applicable pass and the per-function non-convergence
+//!   panic are gated on `debug_assertions`, so they are active in `cargo build`/
+//!   `cargo test` and compile out of `--release`. In release, hitting either
+//!   iteration cap simply stops and proceeds with the current IR.
 
 use crate::ir::{DataPool, Function, Module};
 
 use super::branch_simplify::BranchSimplify;
+use super::checked_int_sink::CheckedIntSink;
 use super::const_fold::ConstFold;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
 use super::dead_store::DeadStore;
 use super::identity_arith::IdentityArith;
+use super::immutable_local_loads::ImmutableLocalLoads;
 use super::licm::Licm;
 use super::peephole::Peephole;
 
@@ -53,6 +55,14 @@ pub trait IrPass {
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     fn name(&self) -> &'static str;
 
+    /// Returns whether this pass can possibly transform the current function.
+    /// The default keeps existing passes unconditional; candidate-driven passes
+    /// override it to avoid both their analysis and post-pass validation when no
+    /// relevant opcode or storage shape exists.
+    fn is_applicable(&self, _function: &Function) -> bool {
+        true
+    }
+
     /// Runs the pass over one function, returning true if it changed the IR.
     /// `data` is the module's shared literal pool, used by passes that materialize
     /// new constants (e.g. peephole string-literal concat folding interns the
@@ -61,26 +71,27 @@ pub trait IrPass {
 }
 
 /// Builds the ordered set of transformation passes run on every function:
-/// identity arithmetic folding, peephole rewrites, constant folding,
-/// common-subexpression elimination, loop-invariant code motion, dead
-/// instruction elimination, dead store elimination, and branch simplification.
+/// identity arithmetic folding, peephole rewrites, immutable-local discovery,
+/// checked-arithmetic int-sink specialization, constant folding, common-subexpression
+/// elimination, loop-invariant code motion, dead instruction elimination, dead store
+/// elimination, and branch simplification.
 /// The cross-function small-function inliner is not a member here; it runs as a
 /// module-level phase in `optimize_module`, interleaved with these passes.
 ///
-/// Constant folding runs after peephole so the scalar load/store forwarding has
-/// already moved constants stored to local slots onto their `load_local` uses,
-/// exposing constant-operand operations for it to fold. CSE then runs after
-/// folding so it deduplicates pure computations over the already-canonicalized
-/// constants (the constants themselves are left for the backend to
-/// rematerialize). LICM then hoists loop-invariant pure computations into loop
+/// Constant folding runs after peephole and the two issue-623 passes: immutable
+/// scalar local loads become pure operands, and checked operations observed only
+/// through integer sinks become allocation-free `IChecked*ToInt` computations.
+/// CSE can then deduplicate those computations using canonical immutable loads,
+/// while LICM can move both the loads and their dependent arithmetic into loop
 /// preheaders. The redundant or relocated instructions these leave behind are
 /// cleaned up by dead instruction elimination, and any folded branch condition is
-/// collapsed by branch simplification — all converging through the fixed-point
-/// loop.
+/// collapsed by branch simplification — all converging through the fixed-point loop.
 fn default_passes() -> Vec<Box<dyn IrPass>> {
     vec![
         Box::new(IdentityArith),
         Box::new(Peephole),
+        Box::new(ImmutableLocalLoads),
+        Box::new(CheckedIntSink),
         Box::new(ConstFold),
         Box::new(Cse),
         Box::new(Licm),
@@ -99,8 +110,18 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
 /// inliner and the function passes feed each other: inlined bodies expose new
 /// constants/dead code, and the simplified functions expose new (smaller) inline
 /// candidates. The first round reproduces the prior "inline once, then optimize"
-/// behavior; later rounds only optimize further, never changing semantics, so the
-/// result is identical with `--ir-opt` on or off except for performance.
+/// behavior; later rounds only optimize further.
+///
+/// Producing the same answer with `--ir-opt` on and off is the CONTRACT here,
+/// not a proven property, and `--ir-opt=off` is the way to find out which of the
+/// two a program is getting. It has been broken: dead-store elimination treated
+/// a block that throws out of the middle of a `try` as reaching only the block
+/// its `br` named, so stores the catch could still observe were neutralized and
+/// the handler read a slot nothing had written — a different answer every run,
+/// and only with the passes on. The rule that a `may_throw` instruction and a
+/// `throw` terminator both reach the handler lives in `dead_store`; any future
+/// pass whose analysis walks `cfg::successors` inherits the same blind spot,
+/// because that CFG is built from terminators and has no exception edges at all.
 ///
 /// Inside each round the module is destructured so the function tables and the
 /// shared literal `data` pool are borrowed disjointly. The combined process
@@ -156,9 +177,9 @@ pub fn optimize_module(module: &mut Module) {
 
 /// Runs the given passes over one function to a fixed point, returning whether the
 /// function was modified at all (so the module-level loop can detect convergence).
-/// After each pass, in debug/test builds, the function is re-validated and any
-/// malformed IR panics naming the offending pass. Non-convergence within the cap
-/// panics in debug and stops (keeping current IR) in release.
+/// After each pass that runs, in debug/test builds, the function is re-validated
+/// and any malformed IR panics naming the offending pass. Non-convergence within
+/// the cap panics in debug and stops (keeping current IR) in release.
 pub fn run_function_passes(
     function: &mut Function,
     passes: &[Box<dyn IrPass>],
@@ -168,6 +189,9 @@ pub fn run_function_passes(
     for _ in 0..MAX_PASS_ITERATIONS {
         let mut changed = false;
         for pass in passes {
+            if !pass.is_applicable(function) {
+                continue;
+            }
             let pass_changed = pass.run(function, data);
             #[cfg(debug_assertions)]
             if let Err(error) = crate::ir::validate_function(function) {

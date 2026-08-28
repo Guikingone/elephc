@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the scalar stat helper.
 
 eval_builtin! {
-    name: "fileperms",
+    contract: "fileperms",
     area: Filesystem,
-    params: [filename],
     direct: Filesystem,
     values: Filesystem,
 }

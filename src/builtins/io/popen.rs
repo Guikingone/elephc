@@ -16,16 +16,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "popen",
-    area: Io,
-    params: [command: Str, mode: Str],
-    returns: Mixed,
+    contract: "popen",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Popen,
     ),
-    summary: "Opens process file pointer.",
-    php_manual: "function.popen",
 }
 
 /// Returns `Union(stream_resource, Bool)` for the pipe open result.

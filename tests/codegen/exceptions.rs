@@ -9,6 +9,23 @@
 
 use crate::support::*;
 
+/// Verifies a Throwable owns a dynamically concatenated message after the source
+/// temporary is released and unrelated catch-block strings reuse scratch storage.
+#[test]
+fn test_dynamic_exception_message_is_persisted() {
+    let out = compile_and_run(
+        r#"<?php
+$suffix = "payload";
+try {
+    throw new Error("dynamic:" . $suffix);
+} catch (Throwable $e) {
+    echo get_class($e) . "|" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "Error|dynamic:payload");
+}
+
 /// Verifies exception try catch same function.
 #[test]
 fn test_exception_try_catch_same_function() {
@@ -138,13 +155,21 @@ try {
 
 /// Verifies the full Throwable API surface on a caught Exception: getMessage,
 /// getCode, getFile, getLine, getTrace, getTraceAsString, getPrevious, and
-/// __toString all return expected values. File/line reflect the throw site.
+/// __toString all return expected values.
+///
+/// `getFile()` is compared against `__FILE__` rather than to a literal: both resolve through the
+/// same canonicalization, and the test's script lives in a temp directory whose name changes on
+/// every run. `getLine()` is `1` because the whole probe is one line — and it is the line of the
+/// `new`, which is what PHP records; the two coincide here only because they are the same line.
+///
+/// `getTrace()`/`getTraceAsString()` stay empty: elephc keeps no call stack to render, where
+/// reference PHP would report `#0 {main}`.
 #[test]
 fn test_builtin_throwable_catch_exposes_standard_api() {
     let out = compile_and_run(
-        "<?php try { throw new Exception(\"caught\", 42); } catch (Throwable $e) { echo $e->getMessage(); echo \":\"; echo $e->getCode(); echo \":\"; echo $e->getFile(); echo \":\"; echo $e->getLine(); echo \":\"; echo count($e->getTrace()); echo \":\"; echo $e->getTraceAsString(); echo \":\"; echo $e->getPrevious() === null ? \"none\" : \"some\"; echo \":\"; echo $e->__toString(); }",
+        "<?php try { throw new Exception(\"caught\", 42); } catch (Throwable $e) { echo $e->getMessage(); echo \":\"; echo $e->getCode(); echo \":\"; echo $e->getFile() === __FILE__ ? \"file\" : \"BAD(\" . $e->getFile() . \")\"; echo \":\"; echo $e->getLine(); echo \":\"; echo count($e->getTrace()); echo \":\"; echo $e->getTraceAsString(); echo \":\"; echo $e->getPrevious() === null ? \"none\" : \"some\"; echo \":\"; echo $e->__toString(); }",
     );
-    assert_eq!(out, "caught:42::0:0::none:caught");
+    assert_eq!(out, "caught:42:file:1:0::none:caught");
 }
 
 /// Tests a user-defined interface (AppThrowable) that extends Throwable and an
@@ -311,10 +336,12 @@ fn test_exception_throw_in_finally_overrides_prior_exception() {
 /// Verifies exception uncaught reports fatal error.
 #[test]
 fn test_exception_uncaught_reports_fatal_error() {
-    // Throws an exception with no enclosing try-catch. Verifies the compiler
-    // reports a "Fatal error: uncaught exception" rather than silently ignoring it.
+    // Throws an exception with no enclosing try-catch. The diagnostic names the CLASS, and
+    // carries no `": "` because the message is empty — reference PHP 8.5.6 prints exactly
+    // `Fatal error: Uncaught Exception in <file>:<line>` here, and elephc emits everything up
+    // to that suffix (there is no throw-site origin to report; see issue #660).
     let err = compile_and_run_expect_failure("<?php throw new Exception();");
-    assert!(err.contains("Fatal error: uncaught exception"), "{err}");
+    assert!(err.contains("Fatal error: Uncaught Exception"), "{err}");
 }
 
 /// Verifies exception with properties.
@@ -545,10 +572,15 @@ fn test_private_method_access_uncaught_is_fatal() {
         "<?php class C { private function secret() {} } $c = new C(); $c->secret();",
     );
     assert!(!output.success, "expected a fatal exit");
+    // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
+    // STDOUT: PHP writes its uncaught report there, and elephc now matches — measured by capturing
+    // the two streams into separate files, where stderr came back empty.
     assert!(
-        output.stderr.contains("Fatal error: uncaught exception"),
-        "expected a fatal diagnostic on stderr, got: {}",
-        output.stderr
+        output
+            .stdout
+            .contains("Fatal error: Uncaught Error: Call to private method C::secret() from global scope"),
+        "expected a fatal diagnostic naming the class and message, got: {}",
+        output.stdout
     );
 }
 
@@ -559,10 +591,14 @@ fn test_readonly_property_write_uncaught_is_fatal() {
         "<?php class Box { public readonly int $x; public function __construct() { $this->x = 1; } } $b = new Box(); $b->x = 2;",
     );
     assert!(!output.success, "expected a fatal exit");
+    // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
+    // See above: the report is on stdout.
     assert!(
-        output.stderr.contains("Fatal error: uncaught exception"),
-        "expected a fatal diagnostic on stderr, got: {}",
-        output.stderr
+        output
+            .stdout
+            .contains("Fatal error: Uncaught Error: Cannot modify readonly property Box::$x"),
+        "expected a fatal diagnostic naming the class and message, got: {}",
+        output.stdout
     );
 }
 
@@ -706,4 +742,298 @@ fn test_nullable_throwable_get_message_via_previous() {
         "<?php function show(?Throwable $t): string { return $t === null ? 'null' : $t->getMessage(); } $inner = new ValueError('inner'); $outer = new Exception('outer', 0, $inner); echo show($outer->getPrevious());",
     );
     assert_eq!(out, "inner");
+}
+
+/// Verifies exception edges preserve register-allocated values that remain live
+/// into a catch block under enough pressure to require spills.
+#[test]
+fn test_exception_catch_preserves_live_values_after_register_allocation() {
+    let out = compile_and_run(
+        r#"<?php
+function throw_under_pressure(int $value): int {
+    if ($value > 0) { throw new Exception("expected"); }
+    return $value;
+}
+function preserve_live_values(int $seed): int {
+    $v01 = $seed + 1;  $v02 = $seed + 2;
+    $v03 = $seed + 3;  $v04 = $seed + 4;
+    $v05 = $seed + 5;  $v06 = $seed + 6;
+    $v07 = $seed + 7;  $v08 = $seed + 8;
+    $v09 = $seed + 9;  $v10 = $seed + 10;
+    $v11 = $seed + 11; $v12 = $seed + 12;
+    $v13 = $seed + 13; $v14 = $seed + 14;
+    $v15 = $seed + 15; $v16 = $seed + 16;
+    $v17 = $seed + 17; $v18 = $seed + 18;
+    $v19 = $seed + 19; $v20 = $seed + 20;
+    $caught = 0;
+    try { throw_under_pressure($seed); }
+    catch (Exception $error) { $caught = 1; }
+    return $v01 + $v02 + $v03 + $v04 + $v05 + $v06 + $v07 + $v08 + $v09 + $v10
+        + $v11 + $v12 + $v13 + $v14 + $v15 + $v16 + $v17 + $v18 + $v19 + $v20
+        + $caught;
+}
+echo preserve_live_values($argc);
+"#,
+    );
+    assert_eq!(out, "231");
+}
+
+// --- PHP 8 arithmetic errors (`DivisionByZeroError` / `ArithmeticError`) ---
+
+/// Verifies `%` by zero throws a catchable `DivisionByZeroError` with php-src's wording.
+///
+/// elephc used to return `0`, so no `catch` clause could ever observe the error. The divisor
+/// comes from `$argc - 1` so the constant folders cannot evaluate it at compile time.
+#[test]
+fn test_modulo_by_zero_throws_division_by_zero_error() {
+    let out = compile_and_run(
+        r#"<?php
+$z = $argc - 1;
+try { echo 1 % $z; } catch (DivisionByZeroError $e) { echo get_class($e), ':', $e->getMessage(); }
+echo '|';
+$a = 7;
+try { $a %= $z; } catch (DivisionByZeroError $e) { echo 'compound:', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "DivisionByZeroError:Modulo by zero|compound:Modulo by zero"
+    );
+}
+
+/// Verifies `/` by zero throws a catchable `DivisionByZeroError` for int and float operands.
+///
+/// PHP throws for `1/0`, `1.0/0`, `1/0.0`, `0/0`, and `-1.0/0.0` alike — the IEEE `INF`/`NaN`
+/// result is only reachable through `fdiv()`. elephc used to hand back `INF`.
+#[test]
+fn test_division_by_zero_throws_for_int_and_float_operands() {
+    let out = compile_and_run(
+        r#"<?php
+$z = $argc - 1;
+$zf = 0.0 * $argc;
+try { echo 1 / $z; } catch (DivisionByZeroError $e) { echo 'i:', $e->getMessage(); }
+echo '|';
+try { echo 1.0 / $zf; } catch (DivisionByZeroError $e) { echo 'f:', $e->getMessage(); }
+echo '|';
+try { echo 1 / $zf; } catch (DivisionByZeroError $e) { echo 'if:', $e->getMessage(); }
+echo '|';
+try { echo $zf / $zf; } catch (DivisionByZeroError $e) { echo 'ff:', $e->getMessage(); }
+echo '|';
+try { echo -1.0 / $zf; } catch (DivisionByZeroError $e) { echo 'nf:', $e->getMessage(); }
+echo '|';
+$b = 7;
+try { $b /= $z; } catch (DivisionByZeroError $e) { echo 'compound:', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "i:Division by zero|f:Division by zero|if:Division by zero|\
+         ff:Division by zero|nf:Division by zero|compound:Division by zero"
+    );
+}
+
+/// Verifies the arithmetic `DivisionByZeroError` is a real `ArithmeticError`/`Throwable`.
+#[test]
+fn test_division_by_zero_error_matches_parent_handlers() {
+    let out = compile_and_run(
+        r#"<?php
+$z = $argc - 1;
+try { echo 1 % $z; } catch (ArithmeticError $e) { echo 'arithmetic'; }
+echo '|';
+try { echo 1 / $z; } catch (Error $e) { echo 'error'; }
+echo '|';
+try { echo 1 % $z; } catch (Throwable $e) { echo get_class($e); }
+echo '|';
+try { echo intdiv(1, $z); } catch (DivisionByZeroError $e) { echo 'intdiv:', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "arithmetic|error|DivisionByZeroError|intdiv:Division by zero"
+    );
+}
+
+/// Verifies a negative shift count throws a catchable `ArithmeticError` for `<<` and `>>`.
+///
+/// The hardware shift masks the count, so `1 << -1` used to evaluate to `PHP_INT_MIN`.
+#[test]
+fn test_negative_shift_count_throws_arithmetic_error() {
+    let out = compile_and_run(
+        r#"<?php
+$neg = -1 * $argc;
+try { echo (1 * $argc) << $neg; } catch (ArithmeticError $e) { echo get_class($e), ':', $e->getMessage(); }
+echo '|';
+try { echo (1 * $argc) >> $neg; } catch (ArithmeticError $e) { echo 'shr:', $e->getMessage(); }
+echo '|';
+$c = 5;
+try { $c <<= $neg; } catch (ArithmeticError $e) { echo 'compound:', $e->getMessage(); }
+echo '|';
+try { echo (1 * $argc) << $neg; } catch (Throwable $e) { echo get_class($e); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "ArithmeticError:Bit shift by negative number|\
+         shr:Bit shift by negative number|\
+         compound:Bit shift by negative number|ArithmeticError"
+    );
+}
+
+/// Verifies non-zero divisors and non-negative shift counts keep working after the guards.
+#[test]
+fn test_arithmetic_guards_do_not_disturb_normal_operands() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+echo 7 % 3, '|', (7 * $n) % (3 * $n), '|', 8 / 2, '|', (7.5 * $n) / (2.5 * $n);
+echo '|', intdiv(7, 2), '|', fdiv(1, 0), '|', (1 * $n) << (3 * $n), '|', (-8 * $n) >> (1 * $n);
+"#,
+    );
+    assert_eq!(out, "1|1|4|3|3|INF|8|-4");
+}
+
+/// The caught exception shadows whatever its name held before the `try`.
+///
+/// A catch binds its variable from the handler's first statement. The constant
+/// environment the handler is walked in is derived from the try body's writes,
+/// so a body that never touches that name left the incoming value standing — and
+/// the handler then read the Throwable as that value. Substituting a string for
+/// an exception does not even reach a wrong answer: it stops the compile at
+/// `method call receiver for PHP type Str`.
+///
+/// The exit-path simulation had always removed the binding. Two walks over the
+/// same block that disagree about what is live in it can only be right in one.
+#[test]
+fn test_a_catch_binding_shadows_the_name_it_reuses() {
+    let out = compile_and_run(
+        r#"<?php
+function shadowed(): string {
+    $e = 'stale';
+    try { throw new RuntimeException('fresh'); }
+    catch (RuntimeException $e) { return $e->getMessage(); }
+}
+function untouched(): string {
+    $keep = 'kept';
+    try { throw new RuntimeException('x'); }
+    catch (RuntimeException $e) { return $keep; }
+}
+echo shadowed(), '|', untouched();
+"#,
+    );
+    // The second half is the other direction: a name the try body cannot write
+    // and the catch does not bind still folds, so the fix stays a rule about the
+    // BINDING rather than a blanket clear of the handler's environment.
+    assert_eq!(out, "fresh|kept");
+}
+
+/// A value written inside a `try` survives into the `catch`.
+///
+/// It did not. Every write the try body made was discarded the moment the
+/// exception was caught, and the catch — and everything after the statement —
+/// read what the variable held BEFORE the `try`. Silently: no diagnostic, no
+/// crash, just an answer PHP disagrees with, in one of the most ordinary shapes
+/// there is (accumulate in a try, adjust in the catch).
+///
+/// Two independent causes, both about a catch being entered from the MIDDLE of
+/// the try body: the AST constant propagation walked the catch in the
+/// environment from before the `try`, and the exit environment merged that same
+/// stale path out past the whole statement.
+#[test]
+fn test_a_write_inside_a_try_survives_the_catch() {
+    let out = compile_and_run(
+        r#"<?php
+function accumulate(): int {
+    $t = 0;
+    try {
+        $t += 5;
+        throw new RuntimeException('x');
+    } catch (RuntimeException $e) {
+        $t += 7;
+    }
+    return $t;
+}
+function read_in_catch(): int {
+    $t = 0;
+    try { $t = 5; throw new RuntimeException('x'); }
+    catch (RuntimeException $e) { return $t; }
+    return -1;
+}
+function read_after(): string {
+    $s = 'a';
+    try { $s = 'bb'; throw new RuntimeException('x'); }
+    catch (RuntimeException $e) { }
+    return $s;
+}
+echo accumulate(), '|', read_in_catch(), '|', read_after();
+"#,
+    );
+    assert_eq!(out, "12|5|bb");
+}
+
+/// A store made before a throwing CALL is not dead because a later store
+/// overwrites it.
+///
+/// Dead-store elimination walks a CFG built from terminators, and a `may_throw`
+/// instruction is not one — so the block that throws out of the middle of a
+/// `try` looked like it reached only the block its `br` named, and `$t = 9`
+/// looked like it overwrote `$t = 5` on the only path there was. Both earlier
+/// stores were neutralized to `nop`, and the catch fell through to a load of a
+/// slot nothing had written: the function returned a different value on every
+/// run, being whatever the frame's stack happened to hold.
+///
+/// The string case is here because it was RIGHT while the int case was wrong —
+/// refcounted locals are zero-initialized and scalars are not, so the same
+/// defect surfaced as a stale value in one and as an address in the other.
+#[test]
+fn test_a_store_before_a_throwing_call_is_not_dead() {
+    let out = compile_and_run(
+        r#"<?php
+function boom(): void { throw new RuntimeException('x'); }
+function overwritten_after_the_call(): int {
+    $t = 0;
+    try { $t = 5; boom(); $t = 9; }
+    catch (RuntimeException $e) { }
+    return $t;
+}
+function overwritten_after_a_literal_throw(): int {
+    $t = 0;
+    try { $t = 5; $z = 1; throw new RuntimeException('x'); $t = 9; }
+    catch (RuntimeException $e) { }
+    return $t;
+}
+function strings_too(): string {
+    $t = 'before';
+    try { $t = 'inside'; boom(); $t = 'after'; }
+    catch (RuntimeException $e) { }
+    return $t;
+}
+echo overwritten_after_the_call(), '|', overwritten_after_a_literal_throw(), '|', strings_too();
+"#,
+    );
+    assert_eq!(out, "5|5|inside");
+}
+
+/// The try body's stores stay dead when nothing in it can throw.
+///
+/// The guard that keeps the two above correct must not become "never eliminate a
+/// store in a function with a `try`". A block that cannot reach a handler still
+/// gets the ordinary treatment, which is what says the fix is a rule about
+/// exception edges rather than a switch that turns the pass off.
+#[test]
+fn test_a_try_that_cannot_throw_still_allows_dead_stores() {
+    let out = compile_and_run(
+        r#"<?php
+function boom(): void { throw new RuntimeException('x'); }
+function overwritten(): int {
+    $t = 0;
+    $t = 5;
+    $t = 9;
+    try { boom(); }
+    catch (RuntimeException $e) { }
+    return $t;
+}
+echo overwritten();
+"#,
+    );
+    assert_eq!(out, "9");
 }

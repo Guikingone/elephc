@@ -65,6 +65,42 @@ pub(crate) fn publish_elephc_crypto_function_pointers(emitter: &mut Emitter) {
     }
 }
 
+/// Publishes the symmetric-cipher bridge entries used by the OpenSSL runtime helpers.
+///
+/// Keeping these entries separate from the hash publisher prevents ordinary hash calls
+/// from referencing cipher symbols while preserving late binding for the shared runtime.
+pub(crate) fn publish_elephc_cipher_function_pointers(emitter: &mut Emitter) {
+    const ENTRIES: &[(&str, &str)] = &[
+        (
+            "elephc_crypto_cipher_iv_length",
+            "_elephc_crypto_cipher_iv_length_fn",
+        ),
+        (
+            "elephc_crypto_cipher_methods",
+            "_elephc_crypto_cipher_methods_fn",
+        ),
+        ("elephc_crypto_encrypt", "_elephc_crypto_encrypt_fn"),
+        ("elephc_crypto_decrypt", "_elephc_crypto_decrypt_fn"),
+    ];
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            for (c_name, slot) in ENTRIES {
+                let extern_sym = emitter.target.extern_symbol(c_name);
+                abi::emit_extern_symbol_address(emitter, "x9", &extern_sym);
+                abi::emit_symbol_address(emitter, "x10", slot);
+                emitter.instruction("str x9, [x10]");                           // publish the elephc-crypto cipher entry into its runtime slot
+            }
+        }
+        Arch::X86_64 => {
+            for (c_name, slot) in ENTRIES {
+                let extern_sym = emitter.target.extern_symbol(c_name);
+                abi::emit_extern_symbol_address(emitter, "r9", &extern_sym);
+                abi::emit_store_reg_to_symbol(emitter, "r9", slot, 0);          // publish the elephc-crypto cipher entry into its runtime slot
+            }
+        }
+    }
+}
+
 /// Emits a catchable `\ValueError` for the unknown-algorithm paths of `hash()`
 /// and `hash_hmac()`.
 ///
@@ -137,6 +173,7 @@ fn emit_throw_value_error_aarch64(
     emitter.instruction(&format!("mov x9, #{}", message_len));                  // load static ValueError message length
     emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
     emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active exception object
@@ -164,6 +201,7 @@ fn emit_throw_value_error_x86_64(
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static ValueError message pointer
     emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static ValueError message length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0); // publish the active exception object
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing

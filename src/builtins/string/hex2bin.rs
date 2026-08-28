@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "hex2bin",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "hex2bin",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::HexToBin),
         crate::ir::Effects::MAY_WARN,
     ),
-    summary: "Decodes a hexadecimal string back into its binary representation.",
-    php_manual: "https://www.php.net/manual/en/function.hex2bin.php",
 }

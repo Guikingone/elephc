@@ -26,35 +26,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from registry import AREAS, slug  # noqa: E402
 
 
-USER_TEMPLATE = """---
+USER_FRONTMATTER_TEMPLATE = """---
 title: "{name}()"
 description: "{short_description}"
 sidebar:
   order: {order}
----
-
-## {name}()
-
-```php
-{signature}
-```
-
-{description}
-
-{parameters_section}
-
-{return_section}
-
-{availability_section}
-
-{examples_section}
-
-{notes_section}
-
-{see_also_section}
-
-{internals_link}
-"""
+---"""
 
 INTERNALS_TEMPLATE = """---
 title: "{name}() — internals"
@@ -166,9 +143,7 @@ def _return_section(b: dict) -> str:
 
 def _examples_section(b: dict) -> str:
     if not b.get("examples"):
-        return (
-            "_No examples yet — check `examples/` and `showcases/` for usage patterns._\n"
-        )
+        return "_No examples yet — check `examples/` and `showcases/` for usage patterns._"
     blocks = ["**Examples**:"]
     for ex in b["examples"]:
         blocks.append(ex)
@@ -209,9 +184,17 @@ def _runtime_helpers_section(b: dict) -> str:
             "- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains."
         )
     elif not helpers:
-        lines.append(
-            "_Compiler-resident lowering; no registry-backed typed runtime target applies._"
-        )
+        route = (b.get("aot") or {}).get("kind")
+        if route == "prelude":
+            lines.append("_Implemented by an injected elephc-PHP prelude._")
+        elif route == "language-construct":
+            lines.append("_Lowered by a dedicated compiler language-construct path._")
+        elif route == "dedicated-syntax":
+            lines.append("_Lowered through a dedicated AST/EIR syntax node._")
+        elif route == "none":
+            lines.append("_No compiled lowering: this surface is intentionally eval-only._")
+        else:
+            lines.append("_No registry-backed typed runtime target applies._")
     if helpers:
         lines.append("- **Concrete helpers referenced directly by this lowering**:")
     for h in helpers:
@@ -223,7 +206,14 @@ def _semantic_descriptor_section(b: dict) -> str:
     """Render the backend-neutral registry fields shared by compiler consumers."""
     semantics = b.get("semantics")
     if not semantics:
-        return "_Compiler-resident construct; this name is intentionally outside the builtin registry._"
+        route = (b.get("aot") or {}).get("kind")
+        descriptions = {
+            "language-construct": "Shared contract with a dedicated compiler language-construct implementation.",
+            "dedicated-syntax": "Shared contract lowered through dedicated compiler syntax.",
+            "prelude": "Shared contract implemented by an injected elephc-PHP prelude.",
+            "none": "Shared contract intentionally unsupported by the AOT backend.",
+        }
+        return descriptions.get(route, "Shared contract without a registry semantic descriptor.")
     validation = semantics.get("validation") or {}
     ownership = semantics.get("ownership") or {}
     callable_policy = semantics.get("callable") or {}
@@ -263,16 +253,56 @@ def _github_url_with_line(repo_root: Path, file_path: str, line: int) -> str:
     return f"https://github.com/illegalstudio/elephc/blob/main/{rel}#L{line}"
 
 
+def _backend_signature_call(name: str, support: dict) -> str:
+    """Render one backend support block as a PHP-like call signature."""
+    params: list[str] = []
+    for param in support.get("params") or []:
+        php_type = param.get("type") or "mixed"
+        by_ref = "&" if param.get("by_ref") else ""
+        rendered = f"{php_type} {by_ref}${param['name']}"
+        if param.get("optional"):
+            default = param.get("default")
+            rendered += f" = {'null' if default is None else default}"
+        params.append(rendered)
+    if support.get("variadic"):
+        params.append(f"mixed ...${support['variadic']}")
+    return f"{name}({', '.join(params)})"
+
+
 def _availability_section(b: dict) -> str:
     """Two-line support matrix: compiled (AOT) vs eval() interpreter."""
     lines = ["## Availability", ""]
-    if b.get("eval_only"):
+    aot = b.get("aot") or {"supported": not b.get("eval_only"), "kind": "unknown"}
+    if not aot.get("supported"):
+        reason = aot.get("unsupported_reason")
+        suffix = f" (`{reason}`)" if reason else ""
         lines.append(
             "- **Compiled (AOT)**: not available — compiled programs cannot "
-            "call this builtin yet."
+            f"call this builtin{suffix}."
         )
     else:
-        lines.append("- **Compiled (AOT)**: supported by the Elephc code generator.")
+        route = aot.get("kind")
+        if route == "registry":
+            lines.append("- **Compiled (AOT)**: supported by the Elephc code generator.")
+        else:
+            route_text = {
+            "language-construct": "a dedicated compiler language-construct path",
+            "dedicated-syntax": "a dedicated AST/EIR syntax path",
+            "prelude": "the compiler-injected hash prelude",
+            }.get(route, "the Elephc compiler")
+            lines.append(f"- **Compiled (AOT)**: supported through {route_text}.")
+        if aot.get("signature_override_reason"):
+            lines.append(
+                "- **AOT signature compatibility**: "
+                f"`{aot['signature_override_reason']}` — compiled code accepts the "
+                "signature shown above; eval may expose the broader canonical signature."
+            )
+            eval_support = b.get("eval") or {}
+            if eval_support.get("supported"):
+                lines.append(
+                    "- **Effective eval signature**: "
+                    f"`{_backend_signature_call(b['name'], eval_support)}`."
+                )
     ev = b.get("eval") or {}
     if ev.get("supported"):
         kind = ev.get("kind")
@@ -321,9 +351,29 @@ def _eval_internals_section(b: dict) -> str:
     hooks = ev.get("hooks") or []
     lines = [
         f"- **Declaration**: [`{home}`](https://github.com/illegalstudio/elephc/blob/main/{home}) (`eval_builtin!`)",
-        "- **Dispatch hooks**: "
-        + (", ".join(f"`{h}`" for h in hooks) or "_none_"),
     ]
+    execution = ev.get("execution")
+    runtime_builtin_id = ev.get("runtime_builtin_id")
+    if execution == "shared-runtime":
+        lines.append(
+            f"- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId({runtime_builtin_id})`)."
+        )
+    elif execution == "hybrid-adapter":
+        lines.append(
+            f"- **Execution**: generated-runtime ABI (`RuntimeBuiltinId({runtime_builtin_id})`) with a Magician fallback adapter."
+        )
+    elif execution == "interpreter-adapter":
+        lines.append("- **Execution**: Magician interpreter adapter.")
+    if ev.get("adapter_reason"):
+        lines.append(f"- **Adapter reason**: `{ev['adapter_reason']}`.")
+    if ev.get("signature_override_reason"):
+        lines.append(
+            f"- **Eval signature compatibility**: `{ev['signature_override_reason']}`."
+        )
+    lines.append(
+        "- **Dispatch hooks**: "
+        + (", ".join(f"`{h}`" for h in hooks) or "_none_ (shared runtime dispatch)"),
+    )
     by_ref = [p["name"] for p in (ev.get("params") or []) if p.get("by_ref")]
     if by_ref:
         lines.append(
@@ -337,14 +387,14 @@ def _eval_internals_section(b: dict) -> str:
 
 
 def _internals_link(b: dict) -> str:
-    """Cross-link to the internals page for this builtin, if it has been lowered.
+    """Cross-link to the internals page for this builtin.
 
-    The link is built relative to the current user-page path
-    (docs/php/builtins/<area>/<name>.md) → the internals page lives at
-    docs/internals/builtins/<area>/<name>.md.
+    Internals pages are emitted for every catalog builtin — including
+    constructs with no AOT lowering (aot kind none / language-construct /
+    dedicated-syntax) — so the link always resolves. It is built relative to
+    the current user-page path (docs/php/builtins/<area>/<name>.md) → the
+    internals page lives at docs/internals/builtins/<area>/<name>.md.
     """
-    if not b["lowering"].get("codegen_file"):
-        return ""
     name = b["name"]
     # From docs/php/builtins/<area>/<name>.md → docs/internals/builtins/<area>/<name>.md
     # requires three .. to climb out of php/builtins/<area>/, then descend.
@@ -353,36 +403,43 @@ def _internals_link(b: dict) -> str:
     if name.startswith("__elephc_"):
         target = f"../../../internals/builtins/_internal/{slug(name)}.md"
     return (
-        f"\n## Internals\n\n"
+        f"## Internals\n\n"
         f"For how `{name}` is implemented in the compiler, see "
-        f"[the internals page]({target}).\n"
+        f"[the internals page]({target})."
     )
+
+
+def _join_sections(*sections: str) -> str:
+    """Join non-empty page sections with one canonical blank line."""
+    return "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
 
 
 def render_user(b: dict, order: int, repo_root: Path) -> str:
     _ = repo_root  # reserved for future cross-repo links
     area_lower = b['area'].lower()
     article = "an" if area_lower[0] in "aeiou" else "a"
-    rendered = USER_TEMPLATE.format(
+    frontmatter = USER_FRONTMATTER_TEMPLATE.format(
         name=b["name"],
         short_description=_short_description(b).replace('"', '\\"'),
-        area=b["area"],
         order=order,
-        signature=_signature_line(b),
-        description=b.get("description")
-        or f"`{b['name']}()` is {article} {area_lower} builtin supported by Elephc. "
-           "Behavior matches the PHP manual unless noted below.",
-        parameters_section=_parameters_section(b),
-        return_section=_return_section(b),
-        availability_section=_availability_section(b),
-        examples_section=_examples_section(b),
-        notes_section=_notes_section(b),
-        see_also_section=_see_also_section(b),
-        internals_link=_internals_link(b),
     )
-    # Empty optional sections can stack trailing blank lines. Keep generated
-    # pages canonical with exactly one final newline.
-    return rendered.rstrip() + "\n"
+    description = b.get("description") or (
+        f"`{b['name']}()` is {article} {area_lower} builtin supported by Elephc. "
+        "Behavior matches the PHP manual unless noted below."
+    )
+    return _join_sections(
+        frontmatter,
+        f"## {b['name']}()",
+        f"```php\n{_signature_line(b)}\n```",
+        description,
+        _parameters_section(b),
+        _return_section(b),
+        _availability_section(b),
+        _examples_section(b),
+        _notes_section(b),
+        _see_also_section(b),
+        _internals_link(b),
+    )
 
 
 def render_internals(b: dict, order: int, repo_root: Path) -> str:
@@ -506,7 +563,7 @@ def _index_table_rows(builtins: list[dict], link_prefix: str = ".") -> list[str]
             link = f"{link_prefix}/_internal/{slug(b['name'])}.md"
         else:
             link = f"{link_prefix}/{area_folder}/{slug(b['name'])}.md"
-        aot = "—" if b.get("eval_only") else "✓"
+        aot = "✓" if (b.get("aot") or {}).get("supported", not b.get("eval_only")) else "—"
         ev = "✓" if (b.get("eval") or {}).get("supported") else "—"
         rows.append(
             f"| [`{b['name']}()`]({link}) | `{sig}` | `{b['sig']['return_type']}` "
@@ -540,6 +597,11 @@ def render_master_index(builtins: list[dict]) -> str:
     """Render the master builtins index at docs/php/builtins.md."""
     relevant = [b for b in builtins if not b["is_internal"]]
     relevant.sort(key=lambda b: (b["area"], b["name"]))
+    # Link the per-area index pages so they are reachable from the master index.
+    areas = sorted({b["area"] for b in relevant})
+    category_line = " · ".join(
+        f"[{area}](./builtins/{area.lower()}.md)" for area in areas
+    )
     lines = [
         "---",
         'title: "Builtins"',
@@ -549,6 +611,8 @@ def render_master_index(builtins: list[dict]) -> str:
         "---",
         "",
         "## Builtins",
+        "",
+        f"Browse by category: {category_line}",
         "",
         "| Function | Signature | Returns | AOT | eval() |",
         "|---|---|---|:-:|:-:|",
@@ -619,9 +683,9 @@ def main() -> int:
 def _clean_output_tree(root: Path) -> None:
     """Remove generated .md files and area subfolders so a --force render starts fresh.
 
-    Keeps any hand-written top-level .md files (e.g. a manually curated README) and
-    ignores non-.md entries. This prevents stale case variants of area folders on
-    case-insensitive filesystems.
+    Removes every top-level Markdown file and generated area directory while leaving
+    non-Markdown files untouched. This prevents stale area variants on case-insensitive
+    filesystems before the canonical tree is recreated.
     """
     if not root.exists():
         return

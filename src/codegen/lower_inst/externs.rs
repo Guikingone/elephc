@@ -75,7 +75,7 @@ pub(super) fn lower_extern_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
 
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &c_param_types, 0);
-    let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
+    let overflow_bytes = abi::materialize_outgoing_c_abi_args(ctx.emitter, &assignments);
     let symbol = ctx.emitter.target.extern_symbol(&decl.name);
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
@@ -337,9 +337,11 @@ fn emit_stateful_extern_callback_trampoline(
     ctx: &mut FunctionContext<'_>,
     callback_sig: &FunctionSig,
 ) {
-    let slot_name = ctx.next_label("extern_callback_descriptor");
+    // A `.comm` slot is a real (non-local) symbol; an assembler-local name would leave
+    // the reference undefined.
+    let slot_name = ctx.next_global_label("extern_callback_descriptor");
     let slot_label = ctx.data.add_comm(slot_name, 8);
-    let trampoline_label = ctx.next_label("extern_callback_trampoline");
+    let trampoline_label = ctx.next_global_label("extern_callback_trampoline");
     let done_label = ctx.next_label("extern_callback_trampoline_done");
     let trampoline = DeferredExternCallbackTrampoline {
         label: trampoline_label.clone(),

@@ -15,17 +15,12 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "file_put_contents",
-    area: Io,
-    params: [filename: Str, data: Str],
-    returns: Int,
+    contract: "file_put_contents",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::FilePutContents,
     ),
     requirements: crate::builtins::semantics::file_put_contents_requirements,
-    summary: "Writes data to a file.",
-    php_manual: "function.file-put-contents",
 }
 
 /// Returns `Int` and records the PHAR libraries the write may need.

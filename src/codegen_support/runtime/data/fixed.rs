@@ -9,17 +9,30 @@
 //! - Fixed symbols are cached across compilations, so only target-independent runtime data belongs here.
 
 use super::{
+    ALLOC_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
-    HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, MB_STRLEN_UNKNOWN_ENCODING_MSG,
+    HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
+    MB_STRLEN_UNKNOWN_ENCODING_MSG,
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
-    OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OB_WARN_BAD_CALLBACK_GENERIC,
+    OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
+    OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
-    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
+    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
+    SPRINTF_ARRAY_TO_STRING_WARNING, SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX,
+    SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX, SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX,
+    SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
+    STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
+    UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
+    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
 };
 use super::super::system;
+use crate::codegen_support::data_section::comm_directive;
+use crate::codegen_support::runtime::strings::{
+    B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
+};
 use crate::codegen_support::platform::Target;
 use crate::types::checker::builtins::{
     all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
@@ -42,52 +55,114 @@ use crate::types::checker::builtins::{
 pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
-    out.push_str(".comm _concat_buf, 65536, 3\n");
-    out.push_str(".comm _concat_off, 8, 3\n");
+    out.push_str(&comm_directive("_concat_buf", 65536, target));
+    out.push_str(&comm_directive("_concat_off", 8, target));
+    out.push_str(&comm_directive("_unser_depth", 8, target));
+    out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
+    out.push_str(&comm_directive("_unser_allowed_mode", 8, target));
+    out.push_str(&comm_directive("_unser_allowed_list", 8, target));
+    out.push_str(&comm_directive("_unser_allowed_list_mixed", 8, target));
+    out.push_str(&comm_directive("_unser_active", 8, target));
+    out.push_str(&comm_directive("_unser_context", 8, target));
+    out.push_str(".globl _unser_allowed_classes_key\n_unser_allowed_classes_key:\n    .ascii \"allowed_classes\"\n");
+    out.push_str(&format!(
+        ".globl _unser_options_type_prefix\n_unser_options_type_prefix:\n    .ascii {UNSER_OPTIONS_TYPE_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_allowed_classes_policy_prefix\n_unser_allowed_classes_policy_prefix:\n    .ascii {UNSER_ALLOWED_CLASSES_POLICY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_allowed_classes_entry_prefix\n_unser_allowed_classes_entry_prefix:\n    .ascii {UNSER_ALLOWED_CLASSES_ENTRY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _object_not_array_prefix\n_object_not_array_prefix:\n    .ascii {OBJECT_NOT_ARRAY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _object_not_array_suffix\n_object_not_array_suffix:\n    .ascii {OBJECT_NOT_ARRAY_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_object_string_error_prefix\n_unser_object_string_error_prefix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_object_string_error_suffix\n_unser_object_string_error_suffix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_type_given_suffix\n_unser_type_given_suffix:\n    .ascii {UNSER_TYPE_GIVEN_SUFFIX:?}\n"
+    ));
+    for (label, name) in [
+        ("_unser_type_int", "int"),
+        ("_unser_type_string", "string"),
+        ("_unser_type_float", "float"),
+        ("_unser_type_bool", "bool"),
+        ("_unser_type_array", "array"),
+        ("_unser_type_object", "object"),
+        ("_unser_type_null", "null"),
+        ("_unser_type_resource", "resource"),
+        ("_unser_type_unknown", "unknown"),
+    ] {
+        out.push_str(&format!(
+            ".globl {label}\n{label}:\n    .ascii {name:?}\n"
+        ));
+    }
+    out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
+    out.push_str(&format!(
+        ".globl _diag_sprintf_array_to_string\n_diag_sprintf_array_to_string:\n    .ascii {SPRINTF_ARRAY_TO_STRING_WARNING:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _diag_sprintf_object_numeric_prefix\n_diag_sprintf_object_numeric_prefix:\n    .ascii {SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _diag_sprintf_object_to_int_suffix\n_diag_sprintf_object_to_int_suffix:\n    .ascii {SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _diag_sprintf_object_to_float_suffix\n_diag_sprintf_object_to_float_suffix:\n    .ascii {SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX:?}\n"
+    ));
+    out.push_str(".globl _incomplete_class_property_name\n_incomplete_class_property_name:\n    .ascii \"__PHP_Incomplete_Class_Name\"\n");
     // print_r($value, true) return-mode capture state. _print_r_mode is a flag
     // (0 = write to stdout, 1 = append to _print_r_buf) consulted by
     // __rt_stdout_write and __rt_pr_write; _print_r_off tracks the accumulated
     // byte count; _print_r_buf is the 64 KiB accumulation buffer finalized by
     // __rt_pr_finish into an owned heap string. Only non-zero during an active
     // print_r return-mode rendering, so non-print_r output is unaffected.
-    out.push_str(".comm _print_r_mode, 8, 3\n");
-    out.push_str(".comm _print_r_off, 8, 3\n");
-    out.push_str(".comm _print_r_buf, 65536, 3\n");
+    out.push_str(&comm_directive("_print_r_mode", 8, target));
+    out.push_str(&comm_directive("_print_r_off", 8, target));
+    out.push_str(&comm_directive("_print_r_buf", 65536, target));
     // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
     // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
     // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel
     // arrays (heap buffer base pointer, used bytes, capacity) indexed by level-1.
     // Buffers are heap-allocated by __rt_ob_start, grown by __rt_ob_append, and
     // written to the terminal sink by __rt_ob_flush_all at process exit.
-    out.push_str(".comm _ob_level, 8, 3\n");
-    out.push_str(".comm _ob_ptrs, 512, 3\n");
-    out.push_str(".comm _ob_lens, 512, 3\n");
-    out.push_str(".comm _ob_caps, 512, 3\n");
+    out.push_str(&comm_directive("_ob_level", 8, target));
+    out.push_str(&comm_directive("_ob_ptrs", 512, target));
+    out.push_str(&comm_directive("_ob_lens", 512, target));
+    out.push_str(&comm_directive("_ob_caps", 512, target));
     // Per-level output-buffer metadata (parallel to _ob_ptrs, indexed by level-1):
     // the user-handler invocation stub + env word (stub 0 = default handler; env
     // is a retained callable-descriptor pointer for AOT handlers or a magician
     // registry id for eval handlers), the persisted handler display name
     // (ptr/len), the auto-flush chunk size, the ob_start() flags word, and the
     // started flag (set at the first handler invocation; feeds PHP started bits).
-    out.push_str(".comm _ob_handler_stubs, 512, 3\n");
-    out.push_str(".comm _ob_handler_envs, 512, 3\n");
-    out.push_str(".comm _ob_name_ptrs, 512, 3\n");
-    out.push_str(".comm _ob_name_lens, 512, 3\n");
-    out.push_str(".comm _ob_chunk_sizes, 512, 3\n");
-    out.push_str(".comm _ob_flags, 512, 3\n");
-    out.push_str(".comm _ob_started, 512, 3\n");
+    out.push_str(&comm_directive("_ob_handler_stubs", 512, target));
+    out.push_str(&comm_directive("_ob_handler_envs", 512, target));
+    out.push_str(&comm_directive("_ob_name_ptrs", 512, target));
+    out.push_str(&comm_directive("_ob_name_lens", 512, target));
+    out.push_str(&comm_directive("_ob_chunk_sizes", 512, target));
+    out.push_str(&comm_directive("_ob_flags", 512, target));
+    out.push_str(&comm_directive("_ob_started", 512, target));
     // _ob_in_handler: non-zero while a user output handler runs. Output produced
     // inside a handler is discarded (PHP behavior) via the __rt_stdout_write and
     // __rt_pr_write branches, and ob_start() inside a handler is a fatal error.
-    out.push_str(".comm _ob_in_handler, 8, 3\n");
+    out.push_str(&comm_directive("_ob_in_handler", 8, target));
     // _ob_flushing: re-entry guard for the process-exit drain. A user handler
     // running during __rt_ob_flush_all may call exit() again; the guard makes
     // the nested drain a no-op instead of an infinite loop.
-    out.push_str(".comm _ob_flushing, 8, 3\n");
+    out.push_str(&comm_directive("_ob_flushing", 8, target));
     // _elephc_eval_ob_handler_fn: installed Rust callback (magician) that runs
     // an eval-registered ob_start() handler: fn(id, buf, len, phase) -> Mixed
     // result cell pointer (0 = pass-through). Called via __rt_ob_eval_trampoline.
-    out.push_str(".comm _elephc_eval_ob_handler_fn, 8, 3\n");
+    out.push_str(&comm_directive("_elephc_eval_ob_handler_fn", 8, target));
     // "Closure::__invoke": PHP display name for closure / first-class-callable
     // output handlers in ob_get_status()/ob_list_handlers().
     out.push_str(&format!(
@@ -95,7 +170,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ));
     // ob_implicit_flush() stored flag. Semantically inert in elephc: terminal
     // writes are unbuffered syscalls, so implicit flushing is always on.
-    out.push_str(".comm _ob_implicit_flush, 8, 3\n");
+    out.push_str(&comm_directive("_ob_implicit_flush", 8, target));
     // ob_get_status()/ob_list_handlers() string constants: PHP's default handler
     // name and the status-array key strings read by __rt_ob_get_status.
     out.push_str(&format!(
@@ -146,21 +221,22 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // index, keys excluded) plus a pointer->index map of already-serialized objects
     // (parallel arrays, linear scan) so a repeated object emits r:<index>. unserialize:
     // a registry of created value boxes indexed by the same pre-order counter so r:<N>
-    // resolves to the existing value. Capacity bounds the per-call object/value count;
-    // overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
-    out.push_str(".comm _ser_value_counter, 8, 3\n");
-    out.push_str(".comm _ser_obj_count, 8, 3\n");
-    out.push_str(".comm _ser_obj_ptrs, 524288, 3\n");
-    out.push_str(".comm _ser_obj_idxs, 524288, 3\n");
-    out.push_str(".comm _unser_count, 8, 3\n");
-    out.push_str(".comm _unser_values, 524288, 3\n");
-    out.push_str(".comm _strtotime_clock, 8, 3\n");
+    // resolves to the existing value. Reentrant calls snapshot the used prefix plus their
+    // policy/depth fields through _unser_context. Capacity bounds the per-call object/value
+    // count; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
+    out.push_str(&comm_directive("_ser_value_counter", 8, target));
+    out.push_str(&comm_directive("_ser_obj_count", 8, target));
+    out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
+    out.push_str(&comm_directive("_ser_obj_idxs", 524288, target));
+    out.push_str(&comm_directive("_unser_count", 8, target));
+    out.push_str(&comm_directive("_unser_values", 524288, target));
+    out.push_str(&comm_directive("_strtotime_clock", 8, target));
     // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
     // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
     // "UTC" literal returned in that default case.
-    out.push_str(".comm _php_tz_env, 264, 3\n");
-    out.push_str(".comm _php_default_tz_len, 8, 3\n");
-    out.push_str(".comm _php_tz_save, 264, 3\n");
+    out.push_str(&comm_directive("_php_tz_env", 264, target));
+    out.push_str(&comm_directive("_php_default_tz_len", 8, target));
+    out.push_str(&comm_directive("_php_tz_save", 264, target));
     out.push_str(".globl _php_tz_utc\n");
     out.push_str("_php_tz_utc:\n");
     out.push_str("    .ascii \"UTC\"\n");
@@ -186,17 +262,90 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ] {
         out.push_str(&format!(".globl _lt_k_{key}\n_lt_k_{key}:\n    .ascii \"{key}\"\n"));
     }
-    out.push_str(".comm _global_argc, 8, 3\n");
-    out.push_str(".comm _global_argv, 8, 3\n");
-    out.push_str(".comm _exc_handler_top, 8, 3\n");
-    out.push_str(".comm _exc_call_frame_top, 8, 3\n");
-    out.push_str(".comm _exc_value, 8, 3\n");
-    out.push_str(".comm _fiber_current, 8, 3\n");
-    out.push_str(".comm _fiber_main_saved_sp, 8, 3\n");
-    out.push_str(".comm _fiber_main_saved_exc, 8, 3\n");
-    out.push_str(".comm _fiber_main_saved_call_frame, 8, 3\n");
-    out.push_str(".comm _elephc_eval_dynamic_object_destruct_fn, 8, 3\n");
-    out.push_str(".comm _rt_diag_suppression, 8, 3\n");
+    out.push_str(&comm_directive("_global_argc", 8, target));
+    out.push_str(&comm_directive("_global_argv", 8, target));
+    out.push_str(&comm_directive("_exc_handler_top", 8, target));
+    out.push_str(&comm_directive("_exc_call_frame_top", 8, target));
+    out.push_str(&comm_directive("_exc_value", 8, target));
+    out.push_str(&comm_directive("_fiber_current", 8, target));
+    out.push_str(&comm_directive("_fiber_main_saved_sp", 8, target));
+    out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));
+    out.push_str(&comm_directive("_fiber_main_saved_call_frame", 8, target));
+    // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
+    // execution context that is running right now: every compiled function prologue does an
+    // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow
+    // when it is below. Zero (the .comm default) disables the guard, so a program that never
+    // runs __rt_stack_limit_init keeps the pre-guard behavior. _stack_limit_main remembers
+    // the OS-thread floor so __rt_fiber_switch can restore it when control leaves a fiber
+    // stack; while a fiber runs, _stack_limit holds that fiber's own floor instead.
+    out.push_str(&comm_directive("_stack_limit", 8, target));
+    out.push_str(&comm_directive("_stack_limit_main", 8, target));
+    out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
+    // elephc_probe_route_fn: a function-pointer slot the sampling probe fills at init
+    // (with elephc_probe_set_route) and the --web bridge reads to tag samples by route.
+    // Zero unless --probe linked the probe, so route tagging is pay-for-use with no
+    // compile coupling and no dlsym (the symbol lives in the always-linked core runtime).
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_route_fn"), 8, target));
+    // elephc_probe_rearm_fn: filled with elephc_probe_rearm under --probe; the
+    // --web bridge calls it to re-arm the profiling timer in each worker, which
+    // the post-fork disarm (that protects exec'd children) turned off.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_rearm_fn"), 8, target));
+    // elephc_probe_verify_fn: verifies a signed X-Elephc-Query header against the
+    // embedded build key, so turning profiling on stays a privileged act.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_verify_fn"), 8, target));
+    // elephc_instr_throw_fn: filled with elephc_instr_throw under monitoring; the
+    // single throw helper calls it so the profiler learns that an exception
+    // unwound, and when. Without it the frames an exception passed through could
+    // only be closed when the CATCHER exits, which charged the handler's work to
+    // whatever threw. Null in a binary without the capability, where the helper
+    // pays one load and a branch on a path taken only by throws.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_throw_fn"), 8, target));
+    // elephc_instr_unpark_fn: filled with elephc_instr_unpark under monitoring.
+    // The suspend helper calls it on the three paths that leave without returning
+    // to the suspension site — `Fiber::suspend()` outside a fiber, a live
+    // `unserialize()`, and a pending `Fiber::throw()` delivered on resume — so the
+    // activation is back on the profiler's stack before the handler runs. Null in
+    // a binary without the capability, where those paths pay one load and a
+    // branch, and only when they are already raising.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_unpark_fn"), 8, target));
+    // elephc_monitor_active: 1 once this process has been asked to profile —
+    // written by the probe's init, read by the exact profiler's, which runs after
+    // it. One check, in one place: repeating it would consume the control
+    // channel's marker twice and the second reader would see nothing.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_monitor_active"), 8, target));
+    // elephc_probe_allocs_ptr: the ADDRESS of `_gc_allocs`, published under
+    // --probe so the sampler can read the allocation counter without declaring
+    // that symbol itself. `_gc_allocs` is spelled with a hardcoded underscore
+    // everywhere it is emitted, which is self-consistent while only assembly
+    // names it; a Rust crate resolving it directly would break every ELF link.
+    // Handing over a pointer keeps that name inside the assembly.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_allocs_ptr"), 8, target));
+    // elephc_instr_io_fn: a function-pointer slot filled with elephc_instr_io
+    // under --instrument, else zero. I/O builtins (PDO queries) read it and call
+    // through it when non-null, so the exact profiler can count queries per
+    // function — pay-for-use, no dlsym, no coupling to the instrument crate.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_io_fn"), 8, target));
+    // elephc_instr_query_fn: companion slot filled with elephc_instr_query under
+    // --instrument, else zero. The PDO bridge reads it and reports each query's
+    // SQL text (normalized) so the exact profiler can list distinct statements
+    // and their execution counts — the N+1 view. Pay-for-use, like the io slot.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_query_fn"), 8, target));
+    // elephc_instr_wait_fn: third companion slot, filled with elephc_instr_wait
+    // under --instrument. The PDO bridge times the actual driver call and
+    // reports the nanoseconds through it, which separates recorded DB wait from
+    // each function's remaining wall time. Zero (inert) in a normal binary.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_wait_fn"), 8, target));
+    // elephc_instr_trace_fn: fourth companion slot, filled with
+    // elephc_instr_trace_begin under --instrument. The web bridge calls it at
+    // the start of every request with the inbound W3C `traceparent`, so a
+    // profile slice carries the identity of the distributed trace it belongs
+    // to. Zero (inert) in a normal binary.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_trace_fn"), 8, target));
+    // elephc_instr_request_fn: brackets one request's profile under
+    // --web --instrument, so a dormant production binary can profile a single
+    // request on demand instead of every request or none.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_request_fn"), 8, target));
+    out.push_str(&comm_directive("_rt_diag_suppression", 8, target));
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
     // write(1, …) syscall; non-zero (set only by the --web bridge) routes it to
@@ -204,15 +353,30 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // low byte is used, but the 8-byte/align-3 house style keeps it word-aligned.
     // The symbol is mangled per-target so the bridge's `extern "C"` declaration
     // resolves to it on every platform (see emit_runtime_data_fixed docs).
-    out.push_str(&format!(
-        ".comm {}, 8, 3\n",
-        target.extern_symbol("elephc_web_capture")
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_web_capture"),
+        8,
+        target,
     ));
-    out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
-    out.push_str(".comm _heap_off, 8, 3\n");
-    out.push_str(".comm _heap_free_list, 8, 3\n");
-    out.push_str(".comm _heap_small_bins, 32, 3\n");
-    out.push_str(".comm _heap_debug_enabled, 8, 3\n");
+    out.push_str(&comm_directive("_heap_buf", heap_size, target));
+    out.push_str(&comm_directive("_heap_off", 8, target));
+    out.push_str(&comm_directive("_heap_free_list", 8, target));
+    out.push_str(&comm_directive("_heap_small_bins", 32, target));
+    out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
+    out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
+    // Generation-safe buffer descriptor registry. Public Buffer values are
+    // scalar `(generation << 32) | index` handles, never heap pointers: slot
+    // reuse increments generation so stale aliases cannot access a new payload.
+    // Index zero is reserved as the invalid/null handle; the descriptor free
+    // list is static metadata and therefore does not consume user heap space.
+    out.push_str(&comm_directive(
+        "_buffer_registry",
+        (crate::codegen_support::runtime::buffers::BUFFER_REGISTRY_CAPACITY + 1)
+            * crate::codegen_support::runtime::buffers::BUFFER_DESCRIPTOR_SIZE,
+        target,
+    ));
+    out.push_str(&comm_directive("_buffer_registry_free", 8, target));
+    out.push_str(".globl _buffer_registry_next\n_buffer_registry_next:\n    .quad 1\n");
     // PHP object-handle pool. `_obj_handle_index` is a DIRECT-MAPPED side table
     // holding one u32 handle per 16-byte granule of `_heap_buf`: two live heap
     // blocks can never share a granule because the smallest block is 16 header
@@ -223,15 +387,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // released handles php-src reuses from; its depth can never exceed the number
     // of distinct handles, which is bounded by the peak live-object count, which is
     // bounded by `heap_size / 24`. See `runtime::objects::handles`.
-    out.push_str(&format!(
-        ".comm _obj_handle_index, {}, 3\n",
-        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 4
+    out.push_str(&comm_directive(
+        "_obj_handle_index",
+        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 4,
+        target,
     ));
-    out.push_str(&format!(
-        ".comm _obj_handle_free, {}, 3\n",
-        crate::codegen_support::runtime::object_handle_free_slots(heap_size) * 4
+    out.push_str(&comm_directive(
+        "_obj_handle_free",
+        crate::codegen_support::runtime::object_handle_free_slots(heap_size) * 4,
+        target,
     ));
-    out.push_str(".comm _obj_handle_free_top, 8, 3\n");
+    out.push_str(&comm_directive("_obj_handle_free_top", 8, target));
     // PHP RESOURCE ids. A SEPARATE numbering space from the object handles above —
     // php-src keeps `zend_resource.handle` and `zend_object.handle` in two unrelated
     // lists, so `resource(5)` and `object(C)#5` can and do coexist. The table maps a
@@ -241,29 +407,31 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // resource payloads are not heap-block addresses: descriptors are tiny integers
     // and bridge handles come from the C allocator, so neither has a granule to index.
     // Occupancy lives in the value word (id 0 = empty slot; minted ids start at 5).
-    out.push_str(&format!(
-        ".comm _resource_id_keys, {}, 3\n",
-        crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8
+    out.push_str(&comm_directive(
+        "_resource_id_keys",
+        crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8,
+        target,
     ));
-    out.push_str(&format!(
-        ".comm _resource_id_vals, {}, 3\n",
-        crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8
+    out.push_str(&comm_directive(
+        "_resource_id_vals",
+        crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8,
+        target,
     ));
-    out.push_str(".comm _gc_collecting, 8, 3\n");
-    out.push_str(".comm _gc_release_suppressed, 8, 3\n");
-    out.push_str(".comm _json_last_error, 8, 3\n");
-    out.push_str(".comm _json_active_flags, 8, 3\n");
-    out.push_str(".comm _json_active_depth, 8, 3\n");
-    out.push_str(".comm _json_indent_depth, 8, 3\n");
-    out.push_str(".comm _json_depth_limit, 8, 3\n");
-    out.push_str(".comm _json_validate_idx, 8, 3\n");
-    out.push_str(".comm _json_validate_ptr, 8, 3\n");
-    out.push_str(".comm _json_validate_len, 8, 3\n");
-    out.push_str(".comm _json_decode_assoc, 8, 3\n");
-    out.push_str(".comm _json_error_source_ptr, 8, 3\n");
-    out.push_str(".comm _json_error_location_active, 8, 3\n");
-    out.push_str(".comm _json_error_line, 8, 3\n");
-    out.push_str(".comm _json_error_column, 8, 3\n");
+    out.push_str(&comm_directive("_gc_collecting", 8, target));
+    out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
+    out.push_str(&comm_directive("_json_last_error", 8, target));
+    out.push_str(&comm_directive("_json_active_flags", 8, target));
+    out.push_str(&comm_directive("_json_active_depth", 8, target));
+    out.push_str(&comm_directive("_json_indent_depth", 8, target));
+    out.push_str(&comm_directive("_json_depth_limit", 8, target));
+    out.push_str(&comm_directive("_json_validate_idx", 8, target));
+    out.push_str(&comm_directive("_json_validate_ptr", 8, target));
+    out.push_str(&comm_directive("_json_validate_len", 8, target));
+    out.push_str(&comm_directive("_json_decode_assoc", 8, target));
+    out.push_str(&comm_directive("_json_error_source_ptr", 8, target));
+    out.push_str(&comm_directive("_json_error_location_active", 8, target));
+    out.push_str(&comm_directive("_json_error_line", 8, target));
+    out.push_str(&comm_directive("_json_error_column", 8, target));
     // `_obj_handle_next` is the never-used PHP object-handle cursor. PHP's first
     // object is `#1`, so the pool starts at 1 and handle 0 is reserved to mean
     // "this block never acquired a handle".
@@ -281,9 +449,25 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
     out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
     out.push_str(".globl _heap_dbg_free_list_msg\n_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
-    out.push_str(".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
+    out.push_str(&format!(
+        ".globl _stack_err_msg\n_stack_err_msg:\n    .ascii {:?}\n",
+        STACK_OVERFLOW_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii {:?}\n",
+        ARRAY_ALLOC_SIZE_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _range_size_err_msg\n_range_size_err_msg:\n    .ascii {:?}\n",
+        RANGE_SIZE_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _buffer_alloc_size_msg\n_buffer_alloc_size_msg:\n    .ascii {:?}\n",
+        BUFFER_ALLOC_SIZE_MSG
+    ));
     out.push_str(".globl _buffer_bounds_msg\n_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
     out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
+    out.push_str(".globl _buffer_registry_exhausted_msg\n_buffer_registry_exhausted_msg:\n    .ascii \"Fatal error: buffer registry exhausted\\n\"\n");
     out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
@@ -292,8 +476,32 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _ptr_null_err_msg\n_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
     out.push_str(".globl _ptr_read_string_len_err_msg\n_ptr_read_string_len_err_msg:\n    .ascii \"Fatal error: ptr_read_string() length must be non-negative\\n\"\n");
     out.push_str(&format!(
+        ".globl _alloc_overflow_msg\n_alloc_overflow_msg:\n    .ascii {:?}\n",
+        ALLOC_OVERFLOW_MSG
+    ));
+    out.push_str(&format!(
         ".globl _str_repeat_times_msg\n_str_repeat_times_msg:\n    .ascii {:?}\n",
         STR_REPEAT_TIMES_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _sprintf_width_msg\n_sprintf_width_msg:\n    .ascii {:?}\n",
+        SPRINTF_WIDTH_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _sprintf_overflow_msg\n_sprintf_overflow_msg:\n    .ascii {:?}\n",
+        SPRINTF_OVERFLOW_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _sprintf_argcount_msg\n_sprintf_argcount_msg:\n    .ascii {:?}\n",
+        SPRINTF_ARGCOUNT_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _sprintf_unknown_spec_msg\n_sprintf_unknown_spec_msg:\n    .ascii {:?}\n",
+        SPRINTF_UNKNOWN_SPEC_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _iconv_strpos_offset_msg\n_iconv_strpos_offset_msg:\n    .ascii {:?}\n",
+        ICONV_STRPOS_OFFSET_MSG
     ));
     out.push_str(&format!(
         ".globl _hash_unknown_algo_msg\n_hash_unknown_algo_msg:\n    .ascii {:?}\n",
@@ -412,9 +620,34 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _uncaught_exc_msg\n_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
+    // PHP prefixes the report with a newline UNCONDITIONALLY — measured against 8.5 on a script
+    // that writes nothing at all before throwing, where the output still begins with "\n".
+    out.push_str(".globl _uncaught_exc_prefix\n_uncaught_exc_prefix:\n    .ascii \"\\nFatal error: Uncaught \"\n");
+    out.push_str(".globl _uncaught_exc_sep\n_uncaught_exc_sep:\n    .ascii \": \"\n");
+    out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
+    out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
+    out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
+    // Printed only when `__rt_exception_matches` walks into the "metadata never emitted"
+    // sentinel, which no correct build should reach — see that helper for why it aborts there
+    // instead of answering "no match".
+    out.push_str(&format!(
+        ".globl {symbol}\n{symbol}:\n    .ascii {message:?}\n",
+        symbol = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE_SYMBOL,
+        message = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE,
+    ));
     out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Fatal error: Class name must be a valid object or a string\\n\"\n");
     out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
     out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");
+    out.push_str(".globl _swr_bad_proto_msg\n_swr_bad_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\n\"\n");
+    out.push_str(".globl _swr_dup_proto_msg\n_swr_dup_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Protocol is already defined.\\n\"\n");
+    // -- php-src's unreachable-seek warning fragments, shared with `__rt_file_get_contents_range` --
+    // The helper derives its `__rt_concat` length immediates from the same table, so the bytes
+    // here and the immediates there can never drift apart.
+    for (label, message) in
+        crate::codegen_support::runtime::io::FILE_GET_CONTENTS_SEEK_MESSAGES
+    {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     out.push_str(".globl _diag_define_already_defined_msg\n_diag_define_already_defined_msg:\n    .ascii \"Warning: define(): Constant already defined\\n\"\n");
     out.push_str(".globl _diag_undefined_array_key_prefix\n_diag_undefined_array_key_prefix:\n    .ascii \"Warning: Undefined array key \"\n");
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
@@ -434,6 +667,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     for (label, message) in crate::codegen_support::runtime::arrays::ARRAY_FLIP_SKIPPED_MESSAGES {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
+    // -- php-src's array_count_values() skipped-entry warning, shared with its runtime emitter --
+    // The emitter derives its `write()` length from the same table, so the bytes here and the
+    // immediate there can never drift apart.
+    for (label, message) in
+        crate::codegen_support::runtime::arrays::ARRAY_COUNT_VALUES_SKIPPED_MESSAGES
+    {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     // -- PHP 8.5's NAN-to-bool coercion warning, shared with `__rt_warn_nan_coerced_bool` --
     // Emitted for every profile even though only 8.5 call sites reference it: the literal is
     // 50 bytes of `.data` and keeping it unconditional means the runtime `.data` layout does
@@ -448,122 +689,167 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _fiber_msg_throw_not_suspended\n_fiber_msg_throw_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
     out.push_str(".globl _fiber_msg_not_terminated\n_fiber_msg_not_terminated:\n    .ascii \"Cannot get fiber return value: The fiber has not returned\"\n");
     out.push_str(".globl _fiber_msg_suspend_outside\n_fiber_msg_suspend_outside:\n    .ascii \"Cannot suspend outside of a fiber\"\n");
+    out.push_str(".globl _fiber_msg_suspend_unserialize\n_fiber_msg_suspend_unserialize:\n    .ascii \"Cannot suspend a fiber while unserialize() is active\"\n");
     out.push_str(".globl _fiber_msg_unsupported_callable\n_fiber_msg_unsupported_callable:\n    .ascii \"Fiber callable is not supported by this compiler\"\n");
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
-    out.push_str(&emit_builtin_callable_data());
-    out.push_str(".comm _gc_allocs, 8, 3\n");
-    out.push_str(".comm _gc_frees, 8, 3\n");
-    out.push_str(".comm _gc_live, 8, 3\n");
-    out.push_str(".comm _gc_peak, 8, 3\n");
-    out.push_str(".comm _cstr_buf, 4096, 3\n");
-    out.push_str(".comm _cstr_buf2, 4096, 3\n");
-    out.push_str(".comm _eof_flags, 256, 3\n");
-    out.push_str(".comm _popen_files, 2048, 3\n");
-    out.push_str(".comm _dir_handles, 2048, 3\n");
+    out.push_str(&emit_builtin_callable_data(target));
+    out.push_str(&comm_directive("_gc_allocs", 8, target));
+    out.push_str(&comm_directive("_gc_frees", 8, target));
+    out.push_str(&comm_directive("_gc_live", 8, target));
+    out.push_str(&comm_directive("_gc_peak", 8, target));
+    out.push_str(&comm_directive("_cstr_buf", 4096, target));
+    out.push_str(&comm_directive("_cstr_buf2", 4096, target));
+    out.push_str(&comm_directive("_eof_flags", 256, target));
+    out.push_str(&comm_directive("_popen_files", 2048, target));
+    out.push_str(&comm_directive("_dir_handles", 2048, target));
     // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
     // a heap-allocated glob_state struct (pathv ptr + pathc + index + the
     // libc glob_t whose lifetime globfree() needs at closedir time). The
     // readdir/closedir/rewinddir helpers probe this table first; a non-zero
     // entry routes them through the glob iterator instead of the libc DIR*.
-    out.push_str(".comm _glob_handles, 2048, 3\n");
-    out.push_str(".comm _stream_read_filters, 256, 3\n");
-    out.push_str(".comm _stream_write_filters, 256, 3\n");
-    out.push_str(".comm _stream_filter_buf, 65536, 3\n");
+    out.push_str(&comm_directive("_glob_handles", 2048, target));
+    out.push_str(&comm_directive("_stream_read_filters", 256, target));
+    out.push_str(&comm_directive("_stream_write_filters", 256, target));
+    out.push_str(&comm_directive("_stream_filter_buf", 65536, target));
     // 64KB scratch used by length-growing stream filters (convert.base64-encode,
     // convert.quoted-printable-encode). The filter encodes into the scratch and
     // then memcpy()s back into the caller's buffer, capping input at 49152 bytes
     // so the 4/3 base64 expansion still fits the scratch.
-    out.push_str(".comm _stream_grow_scratch, 65536, 3\n");
-    out.push_str(".comm _zstream_handles, 2048, 3\n");
-    out.push_str(".comm _zlib_fwrite_fn, 8, 3\n");
-    out.push_str(".comm _zlib_close_fn, 8, 3\n");
-    out.push_str(".comm _phar_zlib_inflate_init2_fn, 8, 3\n");
-    out.push_str(".comm _phar_zlib_inflate_fn, 8, 3\n");
-    out.push_str(".comm _phar_zlib_inflate_end_fn, 8, 3\n");
+    out.push_str(&comm_directive("_stream_grow_scratch", 65536, target));
+    out.push_str(&comm_directive("_zstream_handles", 2048, target));
+    out.push_str(&comm_directive("_zlib_fwrite_fn", 8, target));
+    out.push_str(&comm_directive("_zlib_close_fn", 8, target));
+    out.push_str(&comm_directive("_phar_zlib_inflate_init2_fn", 8, target));
+    out.push_str(&comm_directive("_phar_zlib_inflate_fn", 8, target));
+    out.push_str(&comm_directive("_phar_zlib_inflate_end_fn", 8, target));
     out.push_str(".globl _zlib_version\n_zlib_version:\n    .asciz \"1\"\n");
     // bzip2.compress write-filter state: per-fd bz_stream pointer table
     // (_bzstream_handles, indexed by fd) plus the indirect fn-pointer slots the
     // shared runtime calls through so non-bzip2 programs never link -lbz2.
-    out.push_str(".comm _bzstream_handles, 2048, 3\n");
-    out.push_str(".comm _bz2_fwrite_fn, 8, 3\n");
-    out.push_str(".comm _bz2_close_fn, 8, 3\n");
-    out.push_str(".comm _phar_bz2_decompress_fn, 8, 3\n");
+    out.push_str(&comm_directive("_bzstream_handles", 2048, target));
+    out.push_str(&comm_directive("_bz2_fwrite_fn", 8, target));
+    out.push_str(&comm_directive("_bz2_close_fn", 8, target));
+    out.push_str(&comm_directive("_phar_bz2_decompress_fn", 8, target));
     // convert.iconv.* WRITE-filter state: per-fd iconv_t descriptor table
     // (_iconv_handles) plus the indirect fn-pointer slots the shared runtime
     // calls through so it never names libc iconv (which needs -liconv on macOS).
-    out.push_str(".comm _iconv_handles, 2048, 3\n");
-    out.push_str(".comm _iconv_fwrite_fn, 8, 3\n");
-    out.push_str(".comm _iconv_close_fn, 8, 3\n");
-    out.push_str(".comm _ftp_resp_buf, 4096, 3\n");
-    out.push_str(".comm _ftp_data_addr, 64, 3\n");
+    out.push_str(&comm_directive("_iconv_handles", 2048, target));
+    out.push_str(&comm_directive("_iconv_fwrite_fn", 8, target));
+    out.push_str(&comm_directive("_iconv_close_fn", 8, target));
+    out.push_str(&comm_directive("_ftp_resp_buf", 4096, target));
+    out.push_str(&comm_directive("_ftp_data_addr", 64, target));
     // _ftp_use_tls: set to 1 by fopen("ftps://...") before __rt_ftp_open is
     // invoked. The handshake helper interprets it as "perform AUTH TLS on the
     // control connection, PBSZ 0 + PROT P after USER/PASS, and elephc-tls-
     // attach the PASV data connection". Reset to 0 at the end of __rt_ftp_open
     // so subsequent plain ftp:// opens are not contaminated.
-    out.push_str(".comm _ftp_use_tls, 8, 3\n");
-    out.push_str(".comm _http_resp_buf, 1048576, 3\n");
+    out.push_str(&comm_directive("_ftp_use_tls", 8, target));
+    out.push_str(&comm_directive("_http_resp_buf", 1048576, target));
     // https:// goes through indirect function pointers so only programs that
     // actually open https URLs reference elephc-tls (and pull in -lelephc_tls
     // at link time); other programs keep the runtime libc-only.
-    out.push_str(".comm _elephc_tls_connect_fn, 8, 3\n");
+    out.push_str(&comm_directive("_elephc_tls_connect_fn", 8, target));
     // _elephc_tls_connect_insecure_fn: same shape as _elephc_tls_connect_fn
     // but dispatched when the caller has set ssl.verify_peer = false on the
     // stream context. The runtime picks one over the other at https_open
     // time so non-TLS programs still don't link elephc-tls.
-    out.push_str(".comm _elephc_tls_connect_insecure_fn, 8, 3\n");
+    out.push_str(&comm_directive("_elephc_tls_connect_insecure_fn", 8, target));
     // _elephc_tls_connect_cafile_fn: dispatched when the caller has set
     // ssl.cafile on the stream context. Same late-binding pattern; takes two
     // extra args (cafile path ptr/len) that the secure/insecure variants ignore.
-    out.push_str(".comm _elephc_tls_connect_cafile_fn, 8, 3\n");
+    out.push_str(&comm_directive("_elephc_tls_connect_cafile_fn", 8, target));
     // _elephc_tls_connect_capath_fn / _peer_name_fn: dispatched for ssl.capath
     // (a directory of CA certs) and ssl.peer_name (verify the cert for a name
     // other than the connection host). Same late-binding/extra-args pattern.
-    out.push_str(".comm _elephc_tls_connect_capath_fn, 8, 3\n");
-    out.push_str(".comm _elephc_tls_connect_peer_name_fn, 8, 3\n");
-    out.push_str(".comm _elephc_tls_write_fn, 8, 3\n");
-    out.push_str(".comm _elephc_tls_read_fn, 8, 3\n");
-    out.push_str(".comm _elephc_tls_close_fn, 8, 3\n");
+    out.push_str(&comm_directive("_elephc_tls_connect_capath_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_connect_peer_name_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_write_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_read_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_close_fn", 8, target));
     // _elephc_tls_attach_fd_fn: indirect pointer to elephc_tls_attach_fd,
     // used by stream_socket_enable_crypto to promote an existing TCP fd to
     // a TLS session without re-establishing the TCP connection. Same
     // late-binding pattern as the other tls fn slots so non-TLS programs
     // do not pull in elephc-tls at link time.
-    out.push_str(".comm _elephc_tls_attach_fd_fn, 8, 3\n");
+    out.push_str(&comm_directive("_elephc_tls_attach_fd_fn", 8, target));
     // _elephc_tls_attach_fd_client_cert_fn / _elephc_tls_connect_client_cert_fn:
     // mutual-TLS variants dispatched when the stream context carries both
     // ssl.local_cert and ssl.local_pk. The attach variant is used by
     // stream_socket_enable_crypto; both take the extra cert/key path ptr/len
     // pairs that the non-client-cert variants ignore. Same late-binding pattern.
-    out.push_str(".comm _elephc_tls_attach_fd_client_cert_fn, 8, 3\n");
-    out.push_str(".comm _elephc_tls_connect_client_cert_fn, 8, 3\n");
+    out.push_str(&comm_directive("_elephc_tls_attach_fd_client_cert_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_connect_client_cert_fn", 8, target));
     // _elephc_crypto_hash_fn: indirect pointer to elephc_crypto_hash, published
     // only at a hash() call site so the shared runtime __rt_hash can call through
     // it without the runtime itself naming elephc-crypto. Programs that never
     // call hash() leave the slot null and do not pull in -lelephc_crypto.
-    out.push_str(".comm _elephc_crypto_hash_fn, 8, 3\n");
+    // _elephc_iconv_call_fn / _elephc_iconv_release_fn: indirect pointers to the iconv
+    // bridge, published only at an iconv*() call site so the shared runtime never names
+    // elephc-iconv. Programs that never call one leave the slots null and do not pull in
+    // -lelephc_iconv.
+    out.push_str(&comm_directive("_elephc_iconv_call_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_iconv_release_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_crypto_hash_fn", 8, target));
     // _elephc_crypto_hmac_fn: indirect pointer to elephc_crypto_hmac, published
     // only at a hash_hmac() call site so the shared runtime __rt_hash_hmac can call
     // through it without the runtime itself naming elephc-crypto. Programs that never
     // call hash_hmac() leave the slot null and do not pull in -lelephc_crypto.
-    out.push_str(".comm _elephc_crypto_hmac_fn, 8, 3\n");
+    out.push_str(&comm_directive("_elephc_crypto_hmac_fn", 8, target));
     // Incremental HashContext entry slots, published by hash_init/update/final/copy.
-    out.push_str(".comm _elephc_crypto_init_fn, 8, 3\n");
-    out.push_str(".comm _elephc_crypto_update_fn, 8, 3\n");
-    out.push_str(".comm _elephc_crypto_final_fn, 8, 3\n");
-    out.push_str(".comm _elephc_crypto_clone_fn, 8, 3\n");
+    out.push_str(&comm_directive("_elephc_crypto_init_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_crypto_update_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_crypto_final_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_crypto_clone_fn", 8, target));
     // _elephc_crypto_free_fn: indirect pointer to elephc_crypto_free, published
     // at hash_init/hash_copy call sites and used by __rt_hash_ctx_free so the
     // shared runtime can release unfinalized HashContext handles without naming
     // elephc-crypto directly.
-    out.push_str(".comm _elephc_crypto_free_fn, 8, 3\n");
+    out.push_str(&comm_directive("_elephc_crypto_free_fn", 8, target));
     // _elephc_crypto_is_finalized_fn: indirect pointer to elephc_crypto_is_finalized.
     // __rt_hash_update / __rt_hash_final / __rt_hash_copy ask through it whether the
     // incoming context was already consumed by a previous hash_final(), which is the
     // condition PHP 8 answers with a TypeError. A null slot means the bridge is not
     // linked, in which case the guards skip the question exactly like every other
     // elephc-crypto call in this family.
-    out.push_str(".comm _elephc_crypto_is_finalized_fn, 8, 3\n");
+    out.push_str(&comm_directive("_elephc_crypto_is_finalized_fn", 8, target));
+    // Symmetric-cipher bridge slots. OpenSSL call sites publish these separately
+    // from the hash family so hash-only programs never reference cipher symbols.
+    out.push_str(&comm_directive(
+        "_elephc_crypto_cipher_iv_length_fn",
+        8,
+        target,
+    ));
+    out.push_str(&comm_directive(
+        "_elephc_crypto_cipher_methods_fn",
+        8,
+        target,
+    ));
+    out.push_str(&comm_directive("_elephc_crypto_encrypt_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_crypto_decrypt_fn", 8, target));
+    // BCMath bridge slots are published only by `bc*` call sites. Shared runtime
+    // helpers call through these slots so unrelated programs never reference the
+    // optional elephc-bcmath archive.
+    for slot in [
+        "_elephc_bcmath_add_fn",
+        "_elephc_bcmath_sub_fn",
+        "_elephc_bcmath_mul_fn",
+        "_elephc_bcmath_div_fn",
+        "_elephc_bcmath_mod_fn",
+        "_elephc_bcmath_divmod_fn",
+        "_elephc_bcmath_pow_fn",
+        "_elephc_bcmath_powmod_fn",
+        "_elephc_bcmath_sqrt_fn",
+        "_elephc_bcmath_comp_fn",
+        "_elephc_bcmath_get_scale_fn",
+        "_elephc_bcmath_set_scale_fn",
+        "_elephc_bcmath_ceil_fn",
+        "_elephc_bcmath_floor_fn",
+        "_elephc_bcmath_round_fn",
+        "_elephc_bcmath_last_error_fn",
+        "_elephc_bcmath_free_fn",
+    ] {
+        out.push_str(&comm_directive(slot, 8, target));
+    }
     // _elephc_phar_extract_url_fn: indirect pointer to the elephc-phar bridge
     // reader. Dynamic phar:// paths publish it before calling the runtime
     // reader; literal phar:// paths are still decoded at compile time.
@@ -625,24 +911,24 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // fd up to 256; the runtime fread/fwrite/fclose paths consult this
     // table and route through the elephc-tls helpers when an entry is
     // non-zero, falling back to read/write/close syscalls otherwise.
-    out.push_str(".comm _tls_sessions, 2048, 3\n");
+    out.push_str(&comm_directive("_tls_sessions", 2048, target));
     // _stream_chunk_size: per-fd read/write chunk size set by
     // stream_set_chunk_size, indexed by raw fd up to 256 (8 bytes each). A zero
     // entry means "unset" and reports PHP's default of 8192. stream_set_chunk_size
     // returns the previous value (the PHP-observable contract); the size does not
     // currently change read granularity (reads return identical data).
-    out.push_str(".comm _stream_chunk_size, 2048, 3\n");
+    out.push_str(&comm_directive("_stream_chunk_size", 2048, target));
     // _stream_connect_host: per-fd transport host string (ptr, len) captured by
     // stream_socket_client so stream_socket_enable_crypto can default the TLS
     // SNI / peer-name to the connection host when no ssl.peer_name context
     // option is set. 256 fds * 16 bytes (ptr + len). A zero len means "unset".
-    out.push_str(".comm _stream_connect_host, 4096, 3\n");
+    out.push_str(&comm_directive("_stream_connect_host", 4096, target));
     // _stream_notification_callback: the callable descriptor pointer for the
     // stream context's `notification` option, captured at codegen time by
     // stream_context_create / stream_context_set_params. __rt_http_open fires
     // it at the CONNECT, COMPLETED, and FAILURE transfer milestones. Zero when
     // no notification callback is registered (the fire shim is then a no-op).
-    out.push_str(".comm _stream_notification_callback, 8, 3\n");
+    out.push_str(&comm_directive("_stream_notification_callback", 8, target));
     // _tls_peer_name_default: hardcoded peer-name buffer used as the SNI
     // hint when stream_socket_enable_crypto is called without a context
     // peer_name. v1 limitation — production TLS needs real peer-name
@@ -723,12 +1009,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // zero-length string null-fallback (out-of-bounds indexed read / assoc miss
     // on a Str-typed array). len 0 means no bytes are ever read; the valid
     // pointer keeps any echo/strlen path that still loads the pointer safe.
-    out.push_str(".comm _empty_str, 1, 1\n");
+    out.push_str(&comm_directive("_empty_str", 1, target));
     // _url_stat_matched: set to 1 by __rt_user_wrapper_url_stat when a path's
     // scheme matches a registered userspace wrapper, 0 otherwise. The path-based
     // stat builtins (file_exists/is_file/filesize) read it after the call to
     // decide between the wrapper's url_stat() result and the real filesystem.
-    out.push_str(".comm _url_stat_matched, 1, 1\n");
+    out.push_str(&comm_directive("_url_stat_matched", 1, target));
     out.push_str(
         ".globl _socket_key_str\n_socket_key_str:\n    .ascii \"socket\"\n",
     );
@@ -762,25 +1048,25 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     //                                0 = fail-open behavior (default in PHP).
     //   _http_active_max_redirects : count of remaining hops for
     //                                follow_location loops (0 disables).
-    out.push_str(".comm _http_active_ignore_errors, 8, 3\n");
-    out.push_str(".comm _http_active_max_redirects, 8, 3\n");
-    out.push_str(".comm _http_active_timeout_seconds, 8, 3\n");
+    out.push_str(&comm_directive("_http_active_ignore_errors", 8, target));
+    out.push_str(&comm_directive("_http_active_max_redirects", 8, target));
+    out.push_str(&comm_directive("_http_active_timeout_seconds", 8, target));
     // Proxy override for __rt_http_open: when non-zero, used as the TCP
     // connect target instead of the host extracted from the URL. Value
     // shape is "tcp://proxyhost:port" — the same format
     // __rt_stream_socket_client expects.
-    out.push_str(".comm _http_active_proxy_ptr, 8, 3\n");
-    out.push_str(".comm _http_active_proxy_len, 8, 3\n");
+    out.push_str(&comm_directive("_http_active_proxy_ptr", 8, target));
+    out.push_str(&comm_directive("_http_active_proxy_len", 8, target));
     // Host info written by __rt_http_build_request and consumed by
     // __rt_http_open when [http][follow_location] triggers an internal
     // redirect — we rebuild the request with the saved host + the
     // Location-header path.
-    out.push_str(".comm _http_active_host_ptr, 8, 3\n");
-    out.push_str(".comm _http_active_host_len, 8, 3\n");
+    out.push_str(&comm_directive("_http_active_host_ptr", 8, target));
+    out.push_str(&comm_directive("_http_active_host_len", 8, target));
     // 2 KiB scratch for the Location header's path component on
     // relative redirects (covers the vast majority of API redirects).
-    out.push_str(".comm _http_redirect_path_buf, 2048, 3\n");
-    out.push_str(".comm _http_redirect_path_len, 8, 3\n");
+    out.push_str(&comm_directive("_http_redirect_path_buf", 2048, target));
+    out.push_str(&comm_directive("_http_redirect_path_len", 8, target));
     out.push_str(
         ".globl _http_request_fulluri_key_str\n_http_request_fulluri_key_str:\n    .ascii \"request_fulluri\"\n",
     );
@@ -814,7 +1100,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // PHP int (19 ascii digits) + "REST " (5) + "\r\n" (2) = 26 bytes, so
     // 64 leaves generous headroom for future extensions (auth, custom
     // commands).
-    out.push_str(".comm _ftp_cmd_scratch, 64, 3\n");
+    out.push_str(&comm_directive("_ftp_cmd_scratch", 64, target));
 
     // Bucket-brigade property keys used by __rt_user_filter_brigade_invoke
     // to build and walk brigade-shaped argument data when the user's
@@ -842,26 +1128,26 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // `__rt_http_build_request` and consumed by `__rt_http_open` via
     // the http_stream lowering when context options can override the
     // default method.
-    out.push_str(".comm _http_req_scratch, 8192, 3\n");
-    out.push_str(".comm _fgc_url_addr, 512, 3\n");
-    out.push_str(".comm _fgc_url_retr, 2048, 3\n");
+    out.push_str(&comm_directive("_http_req_scratch", 8192, target));
+    out.push_str(&comm_directive("_fgc_url_addr", 512, target));
+    out.push_str(&comm_directive("_fgc_url_retr", 2048, target));
     out.push_str(".globl _fgc_url_slash\n_fgc_url_slash:\n    .ascii \"/\"\n");
-    out.push_str(".comm _https_resp_buf, 1048576, 3\n");
-    out.push_str(".comm _fsockopen_addr, 512, 3\n");
+    out.push_str(&comm_directive("_https_resp_buf", 1048576, target));
+    out.push_str(&comm_directive("_fsockopen_addr", 512, target));
     // _user_wrappers: USER_WRAPPER_REGISTRATIONS_CAP = 64 scheme→class
     // registrations, each entry 32 bytes (protocol_ptr/len + class_ptr/len).
     // Slot is free when protocol_ptr is null. 64 × 32 = 2048 bytes.
-    out.push_str(".comm _user_wrappers, 2048, 3\n");
+    out.push_str(&comm_directive("_user_wrappers", 2048, target));
     // _user_wrapper_handles: USER_WRAPPER_HANDLES_CAP = 256 active stream-handle
     // slots, each storing the wrapper object pointer keyed by synthetic fd
     // `USER_WRAPPER_FD_BASE + slot_index`. Slot is free when the stored pointer
     // is null. 256 slots × 8 bytes = 2048 bytes.
-    out.push_str(".comm _user_wrapper_handles, 2048, 3\n");
+    out.push_str(&comm_directive("_user_wrapper_handles", 2048, target));
     // _user_wrapper_drain_buf: 1 MiB accumulation buffer for the codegen-level
     // feof-gated read loop emitted by stream_get_contents on a wrapper fd.
     // Each fread chunk is copied here, building one contiguous result. Drains
     // larger than 1 MiB are truncated (v1).
-    out.push_str(".comm _user_wrapper_drain_buf, 1048576, 3\n");
+    out.push_str(&comm_directive("_user_wrapper_drain_buf", 1048576, target));
     // phar:// write stream state. _phar_write_out is the 1 MiB in-memory
     // payload buffer (template prefix + entry content); _phar_write_len is the
     // bytes used; _phar_write_tpl_len locates the entry payload. The path and
@@ -869,39 +1155,39 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // read-modify-write bridge. The url ptr/len pair keeps a runtime-built
     // phar:// URL alive until fclose() can route it through the URL bridge.
     // Fallback only: one stream at a time; synthetic fd 0x50000000.
-    out.push_str(".comm _phar_write_out, 1048576, 3\n");
-    out.push_str(".comm _phar_write_len, 8, 3\n");
-    out.push_str(".comm _phar_write_tpl_len, 8, 3\n");
-    out.push_str(".comm _phar_write_path_ptr, 8, 3\n");
-    out.push_str(".comm _phar_write_path_len, 8, 3\n");
-    out.push_str(".comm _phar_write_entry_ptr, 8, 3\n");
-    out.push_str(".comm _phar_write_entry_len, 8, 3\n");
-    out.push_str(".comm _phar_write_url_ptr, 8, 3\n");
-    out.push_str(".comm _phar_write_url_len, 8, 3\n");
+    out.push_str(&comm_directive("_phar_write_out", 1048576, target));
+    out.push_str(&comm_directive("_phar_write_len", 8, target));
+    out.push_str(&comm_directive("_phar_write_tpl_len", 8, target));
+    out.push_str(&comm_directive("_phar_write_path_ptr", 8, target));
+    out.push_str(&comm_directive("_phar_write_path_len", 8, target));
+    out.push_str(&comm_directive("_phar_write_entry_ptr", 8, target));
+    out.push_str(&comm_directive("_phar_write_entry_len", 8, target));
+    out.push_str(&comm_directive("_phar_write_url_ptr", 8, target));
+    out.push_str(&comm_directive("_phar_write_url_len", 8, target));
     // _stream_open_opened_path_scratch: 16-byte scratch backing the 5th
     // `?string &$opened_path` parameter of stream_open. The runtime passes
     // its address so wrappers that follow the PHP-faithful signature can
     // safely write to it; elephc v1 zeroes the slot before each call and
     // does not read the value back.
-    out.push_str(".comm _stream_open_opened_path_scratch, 16, 3\n");
+    out.push_str(&comm_directive("_stream_open_opened_path_scratch", 16, target));
     // _user_filter_registry: 128 (filter_name, class_name) registrations,
     // each entry 32 bytes (filter_name_ptr/len + class_name_ptr/len). Slot
     // is free when filter_name_ptr is null. User filter IDs are slot_index
     // + USER_FILTER_ID_BASE (128) so they don't collide with the existing
     // u8 built-in filter IDs (1..=4). 128 × 32 = 4096 bytes.
-    out.push_str(".comm _user_filter_registry, 4096, 3\n");
+    out.push_str(&comm_directive("_user_filter_registry", 4096, target));
     // _user_filter_instances: one wrapper-class instance per attached
     // filter, keyed by (fd, direction). Slot = _user_filter_instances[fd*2
     // + dir] where dir=0 is read, dir=1 is write. Slot is null when no
     // user filter is attached. 256 fds × 2 dirs × 8 B = 4096 bytes.
-    out.push_str(".comm _user_filter_instances, 4096, 3\n");
+    out.push_str(&comm_directive("_user_filter_instances", 4096, target));
     // _stream_context_options: pointer to the current stream-context
     // options hash (nested array of `wrapper => option => value`).
     // stream_context_create() stores its options arg here; consumers
     // (http://, ftp://, fopen 4th arg) read it back through
     // __rt_hash_get. v1 limitation: only one active context at a time —
     // a fresh stream_context_create overwrites the slot.
-    out.push_str(".comm _stream_context_options, 8, 3\n");
+    out.push_str(&comm_directive("_stream_context_options", 8, target));
     // var_dump body literals (rodata): per-element prefix/suffix bytes used by
     // the array/hash walkers. NONE of them carry a leading indent: every
     // var_dump line is padded by `__rt_vd_pad`, which writes `_vd_indent`
@@ -931,7 +1217,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // _vd_indent: current var_dump line indentation, in spaces. The var_dump
     // builtin sets it to 2 around a top-level array body and back to 0 after;
     // `__rt_var_dump_value` bumps it by 2 across each nested container walk.
-    out.push_str(".comm _vd_indent, 8, 3\n");
+    out.push_str(&comm_directive("_vd_indent", 8, target));
     // var_dump object delimiters: `object(` + class name + `)#` + the PHP object
     // handle + ` (` + initialized property count + `) {\n` opens an object on its
     // value line; the shared `_vd_brace_close` closes it. The handle is the same
@@ -951,8 +1237,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // object body by `__rt_var_dump_value`'s tag-6 branch. 256 entries × 8 B.
     // The capacity MUST match `VD_SEEN_CAPACITY` in `runtime::io::var_dump_object`:
     // a lookup that reaches the cap reports recursion, which is what bounds the walk.
-    out.push_str(".comm _vd_seen, 2048, 3\n");
-    out.push_str(".comm _vd_seen_n, 8, 3\n");
+    out.push_str(&comm_directive("_vd_seen", 2048, target));
+    out.push_str(&comm_directive("_vd_seen_n", 8, target));
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
     // newline, the `1` rendered for boolean true, and a 64-space pad used by
@@ -964,6 +1250,23 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _pr_arrow\n_pr_arrow:\n    .ascii \"] => \"\n");
     out.push_str(".globl _pr_nl\n_pr_nl:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _pr_one\n_pr_one:\n    .ascii \"1\"\n");
+    // print_r object literals: the header suffix PHP writes after the class name
+    // (`C Object`, and `C Enum` / `C Enum:int` / `C Enum:string` for an enum case),
+    // and the ` *RECURSION*` marker a revisited instance renders instead of a body.
+    // The marker deliberately carries NO newline — the entry line terminator is
+    // written by whichever walker opened the `[key] => ` line, exactly like PHP.
+    out.push_str(".globl _pr_object_suffix\n_pr_object_suffix:\n    .ascii \" Object\\n\"\n");
+    out.push_str(".globl _pr_enum_suffix\n_pr_enum_suffix:\n    .ascii \" Enum\\n\"\n");
+    out.push_str(".globl _pr_enum_int_suffix\n_pr_enum_int_suffix:\n    .ascii \" Enum:int\\n\"\n");
+    out.push_str(".globl _pr_enum_str_suffix\n_pr_enum_str_suffix:\n    .ascii \" Enum:string\\n\"\n");
+    out.push_str(".globl _pr_recursion\n_pr_recursion:\n    .ascii \" *RECURSION*\"\n");
+    // var_dump enum literals: PHP renders an enum case as `enum(Class::Case)`
+    // instead of an object body, so the three fragments bracket the class name
+    // (from `_class_name_entries`) and the case name (from the instance's `name`
+    // property slot).
+    out.push_str(".globl _vd_enum_prefix\n_vd_enum_prefix:\n    .ascii \"enum(\"\n");
+    out.push_str(".globl _vd_enum_sep\n_vd_enum_sep:\n    .ascii \"::\"\n");
+    out.push_str(".globl _vd_enum_close\n_vd_enum_close:\n    .ascii \")\\n\"\n");
     out.push_str(".globl _pr_spaces\n_pr_spaces:\n    .ascii \"                                                                \"\n");
     out.push_str(".globl _ftp_user_cmd\n_ftp_user_cmd:\n    .ascii \"USER anonymous\\x0d\\n\"\n");
     out.push_str(".globl _ftp_pass_cmd\n_ftp_pass_cmd:\n    .ascii \"PASS anonymous@\\x0d\\n\"\n");
@@ -976,15 +1279,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _ftp_auth_tls_cmd\n_ftp_auth_tls_cmd:\n    .ascii \"AUTH TLS\\x0d\\n\"\n");
     out.push_str(".globl _ftp_pbsz_cmd\n_ftp_pbsz_cmd:\n    .ascii \"PBSZ 0\\x0d\\n\"\n");
     out.push_str(".globl _ftp_prot_p_cmd\n_ftp_prot_p_cmd:\n    .ascii \"PROT P\\x0d\\n\"\n");
-    out.push_str(".comm _recvfrom_addr_ptr, 8, 3\n");
-    out.push_str(".comm _recvfrom_addr_len, 8, 3\n");
-    out.push_str(".comm _accept_peer_ptr, 8, 3\n");
-    out.push_str(".comm _accept_peer_len, 8, 3\n");
-    out.push_str(".comm _protoent_buf, 32768, 3\n");
+    out.push_str(&comm_directive("_recvfrom_addr_ptr", 8, target));
+    out.push_str(&comm_directive("_recvfrom_addr_len", 8, target));
+    out.push_str(&comm_directive("_accept_peer_ptr", 8, target));
+    out.push_str(&comm_directive("_accept_peer_len", 8, target));
+    out.push_str(&comm_directive("_protoent_buf", 32768, target));
     out.push_str(".globl _etc_protocols_path\n_etc_protocols_path:\n    .asciz \"/etc/protocols\"\n");
-    out.push_str(".comm _servent_buf, 1048576, 3\n");
+    out.push_str(&comm_directive("_servent_buf", 1048576, target));
     out.push_str(".globl _etc_services_path\n_etc_services_path:\n    .asciz \"/etc/services\"\n");
-    out.push_str(".comm _principal_lookup_buf, 4096, 3\n");
+    out.push_str(&comm_directive("_principal_lookup_buf", 4096, target));
     out.push_str(".globl _etc_passwd_path\n_etc_passwd_path:\n    .asciz \"/etc/passwd\"\n");
     out.push_str(".globl _etc_group_path\n_etc_group_path:\n    .asciz \"/etc/group\"\n");
     out.push_str(".globl _principal_lookup_read_mode\n_principal_lookup_read_mode:\n    .asciz \"r\"\n");
@@ -999,18 +1302,37 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _heap_dbg_clean_label\n_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
     out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
+    out.push_str(".globl _resource_type_stream\n_resource_type_stream:\n    .ascii \"stream\"\n");
+    out.push_str(".globl _resource_type_unknown\n_resource_type_unknown:\n    .ascii \"Unknown\"\n");
     out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
     out.push_str(".globl _fmt_star_e\n_fmt_star_e:\n    .asciz \"%.*e\"\n");
     out.push_str(".globl _fmt_star_f\n_fmt_star_f:\n    .asciz \"%.*f\"\n");
+    // PHP's own default `ucwords()` separator set, `" \t\r\n\f\v"`. It is a byte SET rather
+    // than a substring, and the backend hands this symbol to `__rt_ucwords` whenever the
+    // optional `$separators` argument is omitted, so the default and an explicitly written
+    // `" \t\r\n\f\v"` take exactly the same code path.
+    out.push_str(
+        ".globl _ucwords_default_seps\n_ucwords_default_seps:\n    .byte 32, 9, 13, 10, 12, 11\n",
+    );
     out.push_str(".globl _b64_encode_tbl\n_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
     out.push_str(".globl _b64_decode_tbl\n_b64_decode_tbl:\n");
 
-    let mut decode_tbl = vec![0u8; 256];
+    // php-src's `base64_reverse_table`, transposed from its signed `short` entries onto
+    // unsigned bytes: an alphabet character keeps its 0-63 sextet value, `-1` (skippable
+    // whitespace) becomes `B64_DECODE_SKIP`, and `-2` (everything else, including `=`)
+    // becomes `B64_DECODE_INVALID`. `__rt_base64_decode` needs the two rejection classes
+    // apart: whitespace is dropped in BOTH modes, while any other stray byte is dropped in
+    // the lax mode and makes `$strict = true` return `false`. Encoding both as 0 — the old
+    // table's behavior — is what silently decoded `"SGVs bG8="` to garbage.
+    let mut decode_tbl = vec![B64_DECODE_INVALID; 256];
     for (i, &c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
         .iter()
         .enumerate()
     {
         decode_tbl[c as usize] = i as u8;
+    }
+    for &c in B64_DECODE_WHITESPACE {
+        decode_tbl[c as usize] = B64_DECODE_SKIP;
     }
 
     out.push_str("    .byte ");
@@ -1053,6 +1375,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _pathinfo_key_basename\n_pathinfo_key_basename:\n    .ascii \"basename\"\n");
     out.push_str(".globl _pathinfo_key_extension\n_pathinfo_key_extension:\n    .ascii \"extension\"\n");
     out.push_str(".globl _pathinfo_key_filename\n_pathinfo_key_filename:\n    .ascii \"filename\"\n");
+    out.push_str(".globl _parse_url_key_scheme\n_parse_url_key_scheme:\n    .ascii \"scheme\"\n");
+    out.push_str(".globl _parse_url_key_host\n_parse_url_key_host:\n    .ascii \"host\"\n");
+    out.push_str(".globl _parse_url_key_port\n_parse_url_key_port:\n    .ascii \"port\"\n");
+    out.push_str(".globl _parse_url_key_user\n_parse_url_key_user:\n    .ascii \"user\"\n");
+    out.push_str(".globl _parse_url_key_pass\n_parse_url_key_pass:\n    .ascii \"pass\"\n");
+    out.push_str(".globl _parse_url_key_path\n_parse_url_key_path:\n    .ascii \"path\"\n");
+    out.push_str(".globl _parse_url_key_query\n_parse_url_key_query:\n    .ascii \"query\"\n");
+    out.push_str(".globl _parse_url_key_fragment\n_parse_url_key_fragment:\n    .ascii \"fragment\"\n");
+    out.push_str(&format!(
+        ".globl _parse_url_component_error_prefix\n_parse_url_component_error_prefix:\n    .ascii {:?}\n",
+        "parse_url(): Argument #2 ($component) must be a valid URL component identifier, "
+    ));
+    out.push_str(".globl _parse_url_component_error_suffix\n_parse_url_component_error_suffix:\n    .ascii \" given\"\n");
     out.push_str(".globl _meta_key_timed_out\n_meta_key_timed_out:\n    .ascii \"timed_out\"\n");
     out.push_str(".globl _meta_key_blocked\n_meta_key_blocked:\n    .ascii \"blocked\"\n");
     out.push_str(".globl _meta_key_eof\n_meta_key_eof:\n    .ascii \"eof\"\n");
@@ -1087,7 +1422,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
 /// holding the total count, and `_callable_builtin_table` containing
 /// pointer/length pairs for each builtin. Used by the `is_callable()` runtime
 /// routine and callable-invoke paths.
-fn emit_builtin_callable_data() -> String {
+fn emit_builtin_callable_data(target: Target) -> String {
     let mut out = String::new();
     let strict_builtins = supported_builtin_function_names_for_profile(true);
     let mut builtins = all_supported_builtin_function_names();
@@ -1108,7 +1443,7 @@ fn emit_builtin_callable_data() -> String {
         ".globl _callable_builtin_strict_count\n_callable_builtin_strict_count:\n",
     );
     out.push_str(&format!("    .quad {}\n", strict_builtins.len()));
-    out.push_str(".comm _callable_strict_profile, 8, 3\n");
+    out.push_str(&comm_directive("_callable_strict_profile", 8, target));
     out.push_str(".globl _callable_builtin_table\n_callable_builtin_table:\n");
     for (idx, name) in builtins.iter().enumerate() {
         out.push_str(&format!("    .quad _callable_builtin_name_{}\n", idx));
@@ -1144,4 +1479,160 @@ fn emit_spl_autoload_extensions_data() -> String {
     out.push_str("_spl_autoload_exts_len:\n");
     out.push_str(&format!("    .quad {}\n", default.len()));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Arch, Platform};
+
+    /// Every common symbol the runtime data section declares must carry an alignment operand
+    /// the target's own assembler reads as 8 bytes.
+    ///
+    /// This is a whole-section sweep rather than a spot check because the failure is silent at
+    /// assembly time and only shows up at link time, once per program rather than once per
+    /// symbol: `.comm sym, N, 3` means 8-byte alignment to Mach-O's assembler and 3-byte
+    /// alignment to GNU as. An ELF build of an under-aligned symbol assembles fine and then
+    /// fails to link with `relocation truncated to fit: R_AARCH64_LDST64_ABS_LO12_NC`, because
+    /// that relocation encodes its displacement pre-shifted by 3 and cannot name an address
+    /// that is not 8-byte aligned. `_stack_limit` took out every linux-aarch64 link this way.
+    #[test]
+    fn test_runtime_common_symbols_are_aligned_for_each_object_format() {
+        for (platform, arch, expected) in [
+            (Platform::MacOS, Arch::AArch64, "3"),
+            (Platform::Linux, Arch::AArch64, "8"),
+            (Platform::Linux, Arch::X86_64, "8"),
+        ] {
+            let target = Target::new(platform, arch);
+            let asm = emit_runtime_data_fixed(8_388_608, target);
+
+            let mut seen = 0usize;
+            for line in asm.lines().filter(|line| line.starts_with(".comm ")) {
+                seen += 1;
+                let alignment = line.rsplit(',').next().unwrap().trim();
+                assert_eq!(
+                    alignment, expected,
+                    "{:?}/{:?} emitted `{}`, whose alignment operand is not the {}-spelling \
+                     that this object format's assembler reads as 8 bytes",
+                    platform, arch, line, expected
+                );
+            }
+            assert!(
+                seen > 100,
+                "expected the fixed runtime data to declare its usual common symbols, saw {}",
+                seen
+            );
+        }
+    }
+
+    /// Pins the symbol whose under-alignment broke linux-aarch64 linking, so a future
+    /// hand-written `.comm` for it cannot regress past the sweep above.
+    #[test]
+    fn test_stack_limit_is_eight_byte_aligned_on_elf() {
+        let asm = emit_runtime_data_fixed(
+            8_388_608,
+            Target::new(Platform::Linux, Arch::AArch64),
+        );
+
+        assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
+        assert!(asm.contains(".comm _stack_limit_main, 8, 8\n"));
+    }
+
+    /// The function-pointer slots a *Rust* bridge crate resolves must be spelled with the
+    /// platform's C-ABI mangling, not a hardcoded Mach-O underscore.
+    ///
+    /// Most common symbols here are private to the emitted assembly, so their name is
+    /// self-consistent whatever it is. These six are different: `elephc-pdo` and
+    /// `elephc-web` declare them as `extern "C" { static … }`, so the linker looks for
+    /// `_name` on Mach-O and `name` on ELF. Emitting `_name` everywhere assembles fine on
+    /// both and then fails every ELF link with `undefined reference to 'elephc_probe_route_fn'`
+    /// — which is how a `--web` or PDO binary stopped linking on linux-aarch64 while every
+    /// macOS job stayed green. Same silent-until-link shape as the alignment sweep above.
+    #[test]
+    fn test_bridge_resolved_slots_use_the_platform_c_abi_mangling() {
+        // Derived from the bridge crates rather than pinned here: a hand-kept list would
+        // silently stop covering the seventh slot someone adds. Reading the sources at
+        // test time follows the same approach as the sentinel scans in `sentinels.rs`.
+        let bridge_slots = declared_bridge_slots();
+        assert!(
+            bridge_slots.len() >= 6,
+            "expected the bridge crates to declare their runtime slots, found {bridge_slots:?}"
+        );
+        for (platform, arch, prefix) in [
+            (Platform::MacOS, Arch::AArch64, "_"),
+            (Platform::Linux, Arch::AArch64, ""),
+            (Platform::Linux, Arch::X86_64, ""),
+        ] {
+            let target = Target::new(platform, arch);
+            let asm = emit_runtime_data_fixed(8_388_608, target);
+            for slot in &bridge_slots {
+                let wanted = format!(".comm {prefix}{slot}, 8, ");
+                assert!(
+                    asm.contains(&wanted),
+                    "{platform:?}/{arch:?} never declares `{wanted}…`; the bridge crate that \
+                     resolves `{slot}` will fail to link"
+                );
+                // And the other spelling must be absent, or the wrong one satisfies the link
+                // on one platform while the right one is missing on the other.
+                let unwanted = if prefix.is_empty() {
+                    format!(".comm _{slot}, ")
+                } else {
+                    format!(".comm {slot}, ")
+                };
+                assert!(
+                    !asm.contains(&unwanted),
+                    "{platform:?}/{arch:?} still declares `{unwanted}…`, the other platform's \
+                     spelling of {slot}"
+                );
+            }
+        }
+    }
+
+    /// Every `elephc_*` runtime slot a bridge crate resolves through the C ABI, read from
+    /// the crates themselves so the check cannot fall behind them.
+    ///
+    /// Matches a declaration — `static elephc_x: usize;` — and not a definition, which is
+    /// how the `#[cfg(test)]` stubs that give those crates their own zero slots
+    /// (`static elephc_instr_io_fn: usize = 0;`) stay out of the list: a crate that
+    /// defines the symbol itself constrains nothing about the runtime's spelling.
+    fn declared_bridge_slots() -> Vec<String> {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates");
+        let mut found = Vec::new();
+        collect_extern_statics(&crates, &mut found);
+        found.sort();
+        found.dedup();
+        found
+    }
+
+    /// Collects every runtime `.comm` symbol the bridge crates declare, by
+    /// reading their sources — the test that holds the emitted set and the
+    /// declared set to each other.
+    fn collect_extern_statics(dir: &std::path::Path, found: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_extern_statics(&path, found);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let Ok(body) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                for line in body.lines() {
+                    let line = line.trim();
+                    let Some(rest) = line.strip_prefix("static elephc_") else {
+                        continue;
+                    };
+                    // A declaration ends at the type; a definition carries `= …`.
+                    if line.contains('=') {
+                        continue;
+                    }
+                    if let Some((name, _)) = rest.split_once(':') {
+                        found.push(format!("elephc_{}", name.trim()));
+                    }
+                }
+            }
+        }
+    }
 }

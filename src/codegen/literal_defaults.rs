@@ -12,6 +12,10 @@
 //!   elements, empty object-typed indexed arrays, and associative-array literals
 //!   (empty, positional, or with constant integer/string keys and scalar/string/null
 //!   values) land here.
+//! - The declared PHP type selects the storage shape, and slot-shape arms must precede the
+//!   generic `Mixed`/`Union(_)` boxing arms. A null-capable int slot (`?int` under
+//!   `NullRepr::Tagged`) is an inline two-word `{payload, tag}` TaggedScalar, so it takes
+//!   `TaggedInt`/`TaggedNull` and never a boxed Mixed pointer.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{
@@ -34,6 +38,7 @@ pub(crate) enum LiteralDefaultValue {
     Null,
     NullSentinel,
     TaggedNull,
+    TaggedInt(i64),
     BoxedNull,
     BoxedInt(i64),
     BoxedBool(bool),
@@ -49,6 +54,15 @@ pub(crate) enum LiteralDefaultValue {
     },
     EmptyAssocArray {
         value_type: PhpType,
+    },
+    /// An indexed-array literal stored into a `mixed`/union slot, boxed into a Mixed cell.
+    ///
+    /// `class T { public mixed $m = []; }` had no default form at all and was refused outright,
+    /// on the STATIC path as much as the dynamic one — which is what made `ReflectionClass`,
+    /// whose `$__constants` is exactly this shape, unallocatable by the AOT `new $c` path.
+    BoxedArray {
+        elem_type: PhpType,
+        elements: Vec<LiteralArrayElement>,
     },
 }
 
@@ -104,6 +118,29 @@ pub(crate) fn literal_default_value(
             _ => Err(unsupported_literal_default(context, php_type, op_name)),
         },
         (PhpType::Str, ExprKind::StringLiteral(value)) => Ok(LiteralDefaultValue::Str(value.clone())),
+        // A null-capable int slot (`?int` / `int|null` under `NullRepr::Tagged`) is stored inline
+        // as the two-word `{payload, tag}` TaggedScalar, never as a pointer to a boxed Mixed cell.
+        // These arms must stay ahead of the `Mixed | Union(_)` boxing arms below: an `int|null`
+        // property type also matches `Union(_)`, and boxing it would write a Mixed pointer into the
+        // payload word while the tag word still reads "int", so the reader hands back the pointer
+        // as an integer.
+        (php_type, ExprKind::IntLiteral(value))
+            if php_type.codegen_repr() == PhpType::TaggedScalar =>
+        {
+            Ok(LiteralDefaultValue::TaggedInt(*value))
+        }
+        (php_type, ExprKind::Negate(inner)) if php_type.codegen_repr() == PhpType::TaggedScalar => {
+            match &inner.kind {
+                ExprKind::IntLiteral(value) => value
+                    .checked_neg()
+                    .map(LiteralDefaultValue::TaggedInt)
+                    .ok_or_else(|| unsupported_literal_default(context, php_type, op_name)),
+                _ => Err(unsupported_literal_default(context, php_type, op_name)),
+            }
+        }
+        (php_type, ExprKind::Null) if php_type.codegen_repr() == PhpType::TaggedScalar => {
+            Ok(LiteralDefaultValue::TaggedNull)
+        }
         (PhpType::Mixed | PhpType::Union(_), ExprKind::StringLiteral(value)) => {
             Ok(LiteralDefaultValue::BoxedStr(value.clone()))
         }
@@ -126,10 +163,22 @@ pub(crate) fn literal_default_value(
             ExprKind::FloatLiteral(value) => Ok(LiteralDefaultValue::BoxedFloat(-value)),
             _ => Err(unsupported_literal_default(context, php_type, op_name)),
         },
-        (php_type, ExprKind::Null) if php_type.codegen_repr() == PhpType::TaggedScalar => {
-            Ok(LiteralDefaultValue::TaggedNull)
-        }
         (PhpType::Mixed | PhpType::Union(_), ExprKind::Null) => Ok(LiteralDefaultValue::BoxedNull),
+        // An array literal in a `mixed`/union slot boxes the array the way the scalar arms above
+        // box their payloads — `emit_box_current_value_as_mixed` already handles `Array` on both
+        // architectures, so only the recognition was missing. Elements are typed `Mixed` because
+        // the slot is: a later `$t->m[] = "s"` must not find an `array<int>` underneath.
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::ArrayLiteral(items)) => {
+            let elem_type = PhpType::Mixed;
+            let elements = items
+                .iter()
+                .map(|item| literal_array_element(context, &elem_type, &item.kind, op_name))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::BoxedArray {
+                elem_type,
+                elements,
+            })
+        }
         (PhpType::Void | PhpType::Never, ExprKind::Null) => Ok(LiteralDefaultValue::NullSentinel),
         (PhpType::Void | PhpType::Never, _) => Ok(LiteralDefaultValue::NullSentinel),
         (PhpType::Object(_), ExprKind::Null) => Ok(LiteralDefaultValue::Null),
@@ -240,10 +289,14 @@ pub(crate) fn emit_boxed_float_literal_to_result(ctx: &mut FunctionContext<'_>, 
     abi::emit_symbol_address(ctx.emitter, scratch, &label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}]", float_reg, scratch)); // load the boxed float literal default through the symbol scratch register
+            ctx.emitter.instruction(
+                &format!("ldr {}, [{}]", float_reg, scratch)
+            );                                                                  // load the boxed float literal default through the symbol scratch register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)); // load the boxed float literal default through the symbol scratch register
+            ctx.emitter.instruction(
+                &format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)
+            );                                                                  // load the boxed float literal default through the symbol scratch register
         }
     }
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
@@ -278,6 +331,14 @@ pub(crate) fn emit_boxed_null_literal_to_result(ctx: &mut FunctionContext<'_>) {
 /// Emits PHP null as an inline tagged scalar literal default.
 pub(crate) fn emit_tagged_null_literal_to_result(ctx: &mut FunctionContext<'_>) {
     crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+}
+
+/// Emits a non-null integer literal default as an inline tagged scalar: the immediate lands in
+/// the integer result register (the payload word) and the int runtime tag in the adjacent tag
+/// register, which is exactly the `{payload, tag}` pair a `?int` slot is read back through.
+pub(crate) fn emit_tagged_int_literal_to_result(ctx: &mut FunctionContext<'_>, value: i64) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), value);
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
 }
 
 /// Emits an indexed-array literal default into the canonical result register.

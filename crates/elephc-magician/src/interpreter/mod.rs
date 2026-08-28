@@ -33,9 +33,9 @@ mod output_handlers;
 mod throwables;
 
 use crate::context::{
-    ElephcEvalContext, ElephcEvalExecutionScope, EvalArrayReferenceKey, EvalReferenceTarget,
-    EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget, NativeCallableDefault,
-    NativeCallableSignature, NativeFunction,
+    ElephcEvalContext, ElephcEvalExecutionScope, EvalArrayCursor, EvalArrayReferenceKey,
+    EvalReferenceTarget, EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget,
+    NativeCallableDefault, NativeCallableSignature, NativeFunction,
 };
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
@@ -290,6 +290,25 @@ pub fn execute_context_method_call_outcome(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
     match eval_method_call_result(object, method, args, context, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
+/// Converts one boxed value through eval's PHP string-context semantics.
+///
+/// Dynamic objects dispatch their eval-declared `__toString()` implementation, while an
+/// exception raised by that method is returned as an uncaught throwable outcome for the C ABI.
+pub fn execute_context_string_outcome(
+    context: &mut ElephcEvalContext,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    match eval_string_context_value(value, context, values) {
         Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()

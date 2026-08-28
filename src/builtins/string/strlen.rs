@@ -20,10 +20,7 @@ use crate::ir::{Immediate, IrType, Op};
 use crate::types::PhpType;
 
 builtin! {
-    name: "strlen",
-    area: String,
-    params: [string: Str],
-    returns: Int,
+    contract: "strlen",
     semantics: BuiltinSemantics {
         validation: BuiltinValidation::Shared(validate),
         result_type: BuiltinResultType::Declared,
@@ -39,8 +36,6 @@ builtin! {
         ),
         lowering: BuiltinLowering::Eir(lower),
     },
-    summary: "Returns the length of a string.",
-    php_manual: "function.strlen",
 }
 
 /// Validates the inferred `strlen` argument without depending on checker internals.

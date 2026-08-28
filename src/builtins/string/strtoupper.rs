@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "strtoupper",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "strtoupper",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::StrToUpper),
         crate::ir::Effects::PURE,
     ),
-    summary: "Converts a string to uppercase.",
-    php_manual: "https://www.php.net/manual/en/function.strtoupper.php",
 }

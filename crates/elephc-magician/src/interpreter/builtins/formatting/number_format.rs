@@ -11,17 +11,9 @@
 use super::super::super::*;
 use super::super::*;
 use super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "number_format",
+    contract: "number_format",
     area: Formatting,
-    params: [
-        num,
-        decimals = EvalBuiltinDefaultValue::Int(0),
-        decimal_separator = EvalBuiltinDefaultValue::String("."),
-        thousands_separator = EvalBuiltinDefaultValue::String(","),
-    ],
     direct: NumberFormat,
     values: NumberFormat,
 }

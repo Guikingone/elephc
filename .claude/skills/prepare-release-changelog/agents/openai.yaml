@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prepare Release Changelog"
+  short_description: "Audit merged work and draft release notes"
+  default_prompt: "Use $prepare-release-changelog to audit every PR and direct commit since the latest release and draft the changelog."

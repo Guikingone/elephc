@@ -9,9 +9,8 @@
 //!   internal stream table ids.
 
 eval_builtin! {
-    name: "stream_socket_get_name",
+    contract: "stream_socket_get_name",
     area: Filesystem,
-    params: [socket, remote],
     direct: Filesystem,
     values: Filesystem,
 }

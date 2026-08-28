@@ -2,7 +2,7 @@
 title: "shuffle()"
 description: "Shuffles an array into random order."
 sidebar:
-  order: 59
+  order: 66
 ---
 
 ## shuffle()
@@ -24,12 +24,6 @@ Shuffles an array into random order.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/shuffle.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/shuffle.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

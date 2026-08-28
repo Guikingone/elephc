@@ -6,31 +6,29 @@
 //!
 //! Key details:
 //! - A `check` hook is required because the return type depends on argument types:
-//!   any Float argument widens the result to Float; otherwise the result is Int.
-//! - `min_args: 2` enforces the legacy requirement that at least two values be provided.
+//!   the single-array form returns the array's element type, while the variadic
+//!   form widens to Float as soon as any argument is Float.
+//! - `min_args: 1` matches PHP: `min()` with no argument is an ArgumentCountError,
+//!   one argument must be an array, and two or more arguments compare the values.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "min",
-    area: Math,
-    params: [value: Mixed],
-    variadic: "values",
-    min_args: 2,
-    arity_error: "min() requires at least 2 arguments",
-    returns: Mixed,
+    contract: "min",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Min,
     ),
-    summary: "Find lowest value.",
-    php_manual: "https://www.php.net/manual/en/function.min.php",
 }
 
-/// Returns Float when any argument is Float, otherwise returns Int.
+/// Returns the array element type for the single-array form; otherwise returns Float
+/// when any argument is Float and Int in every other case.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    if cx.args.len() == 1 {
+        return super::min_max_array_element_type(cx, "min");
+    }
     let mut has_float = false;
     for arg in cx.args {
         let t = cx.checker.infer_type(arg, cx.env)?;

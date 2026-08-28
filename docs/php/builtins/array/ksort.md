@@ -1,8 +1,8 @@
 ---
 title: "ksort()"
-description: "Sorts an array by key in ascending order."
+description: "Sorts an array by key in ascending SORT_REGULAR order; PHP sort flags are not yet supported."
 sidebar:
-  order: 54
+  order: 58
 ---
 
 ## ksort()
@@ -11,7 +11,7 @@ sidebar:
 function ksort(array $array): bool
 ```
 
-Sorts an array by key in ascending order.
+Sorts an array by key in ascending SORT_REGULAR order; PHP sort flags are not yet supported.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
@@ -24,12 +24,6 @@ Sorts an array by key in ascending order.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/ksort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/ksort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

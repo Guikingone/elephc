@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ip2long",
-    area: String,
-    params: [ip: Str],
-    returns: Mixed,
+    contract: "ip2long",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Ip2long,
     ),
-    summary: "Converts a string containing an IPv4 address into a long integer.",
-    php_manual: "https://www.php.net/manual/en/function.ip2long.php",
 }
 
 /// Returns `PhpType::Union([Int, Bool])` for an `ip2long` call.

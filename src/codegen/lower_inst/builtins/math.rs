@@ -22,6 +22,7 @@ use super::{expect_operand, store_if_result};
 
 mod binary;
 mod libm;
+mod min_max_array;
 mod random;
 
 pub(crate) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
@@ -48,18 +49,14 @@ pub(crate) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             emit_float_abs(ctx);
             PhpType::Float
         }
-        PhpType::Int | PhpType::Bool => {
-            emit_int_abs(ctx);
-            PhpType::Int
-        }
+        PhpType::Int | PhpType::Bool => emit_int_abs_for_result(ctx, inst)?,
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_call_label(ctx.emitter, "__rt_abs_mixed");
             PhpType::Mixed
         }
         PhpType::TaggedScalar => {
             crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
-            emit_int_abs(ctx);
-            PhpType::Int
+            emit_int_abs_for_result(ctx, inst)?
         }
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -217,6 +214,9 @@ pub(crate) fn lower_round(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers numeric `min()` and `max()` over concrete integer-like or float operands.
+///
+/// PHP's one-argument form reduces a single array instead of comparing arguments,
+/// so it is routed to the dedicated array reduction before the variadic paths.
 pub(crate) fn lower_min_max(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -227,6 +227,9 @@ pub(crate) fn lower_min_max(
             "{} expected at least 1 arg, got 0",
             min_max_name(want_max)
         )));
+    }
+    if min_max_array::try_lower_single_array(ctx, inst, want_max)? {
+        return store_if_result(ctx, inst);
     }
     let result_ty = inst
         .result
@@ -262,7 +265,9 @@ pub(crate) fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
             ctx.emitter.ldr_lo12("d0", "x9", &label);                          // load the M_PI floating constant into the floating result register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label)); // load the M_PI floating constant into the floating result register
+            ctx.emitter.instruction(
+                &format!("movsd xmm0, QWORD PTR [rip + {}]", label)
+            );                                                                  // load the M_PI floating constant into the floating result register
         }
     }
     store_if_result(ctx, inst)
@@ -653,6 +658,7 @@ fn emit_throw_value_error_aarch64(
     ctx.emitter.instruction(&format!("mov x9, #{}", message_len));              // materialize the static ValueError message length
     ctx.emitter.instruction("str x9, [x0, #16]");                               // store the exception message length
     ctx.emitter.instruction("str xzr, [x0, #24]");                              // store the default zero exception code
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
     ctx.emitter.instruction("str xzr, [x0, #40]");                              // previous defaults to null
     abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
     ctx.emitter.instruction("str x0, [x9]");                                    // publish the active ValueError object
@@ -670,15 +676,22 @@ fn emit_throw_value_error_x86_64(
     ctx.emitter.instruction("sub rsp, 16");                                     // keep the nested heap allocation call 16-byte aligned
     ctx.emitter.instruction("mov rax, 56");                                     // request Throwable payload storage for the clamp ValueError
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the ValueError object payload
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+    ctx.emitter.instruction(
+        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+    );                                                                          // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the allocation header as a runtime object
     ctx.emitter.instruction("call __rt_object_handle_acquire");                 // bind the new object to its PHP object handle
-    ctx.emitter.instruction("mov r10, QWORD PTR [rip + _spl_value_error_class_id]"); // load ValueError's runtime class id for this program
+    ctx.emitter.instruction(
+        "mov r10, QWORD PTR [rip + _spl_value_error_class_id]"
+    );                                                                          // load ValueError's runtime class id for this program
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store the ValueError class id in the Throwable header
     ctx.emitter.instruction(&format!("lea r10, [rip + {}]", message_symbol));   // materialize the static ValueError message pointer
     ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // store the static ValueError message pointer
-    ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store the exception message length
+    ctx.emitter.instruction(
+        &format!("mov QWORD PTR [rax + 16], {}", message_len)
+    );                                                                          // store the exception message length
     ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // store the default zero exception code
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
     ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");                     // previous defaults to null
     ctx.emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");           // publish the active ValueError object
     ctx.emitter.instruction("mov rsp, rbp");                                    // release the helper frame before throwing
@@ -696,7 +709,9 @@ fn load_float_literal_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, value: f6
             ctx.emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));    // load the floating-point comparison constant through the symbol scratch register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", reg, scratch)); // load the floating-point comparison constant through the symbol scratch register
+            ctx.emitter.instruction(
+                &format!("movsd {}, QWORD PTR [{}]", reg, scratch)
+            );                                                                  // load the floating-point comparison constant through the symbol scratch register
         }
     }
 }
@@ -717,7 +732,9 @@ fn lower_float_rounding_builtin(
             ctx.emitter.instruction(&format!("{} d0, d0", aarch64_op));         // round the floating-point argument with the builtin's direction
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("roundsd xmm0, xmm0, {}", x86_round_mode)); // round the floating-point argument with the builtin's direction
+            ctx.emitter.instruction(
+                &format!("roundsd xmm0, xmm0, {}", x86_round_mode)
+            );                                                                  // round the floating-point argument with the builtin's direction
         }
     }
     store_if_result(ctx, inst)
@@ -790,6 +807,60 @@ fn emit_float_abs(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("movq xmm0, r10");                          // restore the absolute floating-point payload to the result register
         }
     }
+}
+
+/// Emits `abs()` for an integer operand already loaded in the integer result register.
+///
+/// Returns the PHP type actually materialized so the caller knows whether a boxing step is
+/// still required. When the EIR result type is `Mixed`, the overflowing input is honoured the
+/// way reference PHP does it: `abs(PHP_INT_MIN)` has no `int` value, so PHP returns
+/// `float(9.2233720368547758E+18)`. `abs($x)` for a negative `$x` is exactly `0 - $x`, so the
+/// existing checked-subtraction helper produces the boxed `int`-or-promoted-`float` result
+/// with the same overflow rule as `$a - $b`. Non-negative inputs never overflow and are boxed
+/// as plain integers.
+fn emit_int_abs_for_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<PhpType> {
+    if !matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        emit_int_abs(ctx);
+        return Ok(PhpType::Int);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let negative_label = ctx.next_label("abs_negative");
+    let done_label = ctx.next_label("abs_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(
+                &format!("tbnz {}, #63, {}", result_reg, negative_label)
+            );                                                                  // negative inputs need the overflow-checked negation
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(
+                &format!("test {}, {}", result_reg, result_reg)
+            );                                                                  // inspect the sign of the integer operand
+            ctx.emitter.instruction(&format!("js {}", negative_label));         // negative inputs need the overflow-checked negation
+        }
+    }
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&negative_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // pass the negative operand as the checked-subtraction right operand
+            ctx.emitter.instruction("mov x0, #0");                              // abs(x) for x < 0 is 0 - x
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the negative operand as the checked-subtraction right operand
+            ctx.emitter.instruction("mov rdi, 0");                              // abs(x) for x < 0 is 0 - x
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_int_sub_checked");
+    ctx.emitter.label(&done_label);
+    Ok(PhpType::Mixed)
 }
 
 /// Emits absolute value for the loaded integer result.

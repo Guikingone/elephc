@@ -12,16 +12,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "zval_free",
-    area: Pointers,
-    params: [zval: Mixed],
-    returns: Void,
+    contract: "zval_free",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ZvalFree,
     ),
-    summary: "Frees a PHP zval pointer allocated by `zval_pack`.",
-    extension: true,
 }
 
 /// Validates the zval pointer argument and returns `PhpType::Void`.

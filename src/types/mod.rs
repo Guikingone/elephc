@@ -14,6 +14,8 @@ pub mod checker;
 pub mod traits;
 /// Array key type inference, normalization, and PHP integer/string coercion rules.
 mod array_keys;
+/// Array storage-representation conversions shared by checking and lowering.
+mod array_storage;
 /// PHP array extension integer constants.
 pub(crate) mod array_constants;
 /// Call argument planning: named, positional, and spread semantics.
@@ -30,6 +32,12 @@ pub(crate) mod error_constants;
 mod ffi;
 /// JSON literal constant type inference.
 pub(crate) mod json_constants;
+/// PHP math integer constants (`PHP_ROUND_HALF_*` rounding modes).
+pub(crate) mod math_constants;
+/// OpenSSL option constants shared by checker and codegen.
+pub(crate) mod openssl_constants;
+/// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
+pub(crate) mod param_binding;
 /// PHP type model and type environment for tracking variable types.
 mod model;
 /// Preg/PCRE flag constants shared by checker and codegen.
@@ -44,7 +52,9 @@ mod schema;
 pub(crate) mod session_constants;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
+pub(crate) mod iconv_constants;
 pub(crate) mod stream_constants;
+pub(crate) mod string_constants;
 /// Type checker diagnostics and warnings.
 mod warnings;
 
@@ -53,13 +63,19 @@ pub(crate) use array_keys::{
     normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
 };
+pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{
     collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,
 };
 pub(crate) use result::LoopStorageTypes;
-pub use result::{check_with_target, CheckResult, ThrowAccessInfo, ThrowAccessKind};
+pub use checker::CheckOptions;
+// `check_with_target` is superseded by `check_with_target_and_options` on the
+// production compile path; it stays public for tests that don't need `CheckOptions`.
+#[allow(unused_imports)]
+pub use result::check_with_target;
+pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
@@ -79,6 +95,16 @@ pub fn check(
     program: &crate::parser::ast::Program,
 ) -> Result<CheckResult, crate::errors::CompileError> {
     result::check(program)
+}
+
+/// Type checks the program on the host platform with explicit `CheckOptions`
+/// (e.g. `--strict-locals`). See `check` for the default-options behavior.
+#[allow(dead_code)]
+pub fn check_with_options(
+    program: &crate::parser::ast::Program,
+    options: CheckOptions,
+) -> Result<CheckResult, crate::errors::CompileError> {
+    result::check_with_options(program, options)
 }
 
 /// Returns the stable checker/EIR scope key for a closure nested at `span`.

@@ -41,9 +41,6 @@
 //! - Compile-failure assertions filter stderr through `elephc_diagnostics` because the system
 //!   linker (GNU `ld` on Linux) emits warnings macOS does not.
 
-#[path = "support/managed_pcre2.rs"]
-mod managed_pcre2_support;
-
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -78,24 +75,10 @@ fn elephc_bin() -> String {
 
 /// Runs the compiler on `source` with extra flags and returns its raw output.
 fn compile_raw(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> std::process::Output {
-    compile_raw_with_fixture(dir, source, stem, flags, false)
-}
-
-/// Runs the compiler with optional managed-PCRE2 project configuration.
-fn compile_raw_with_fixture(
-    dir: &Path,
-    source: &str,
-    stem: &str,
-    flags: &[&str],
-    managed_pcre2: bool,
-) -> std::process::Output {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
-    if managed_pcre2 {
-        managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, dir);
-    }
     cmd.current_dir(dir);
     cmd.args(flags).arg(&php);
     cmd.output().expect("failed to spawn elephc")
@@ -104,17 +87,6 @@ fn compile_raw_with_fixture(
 /// Compiles `source` to a plain executable with extra compiler flags and returns its path.
 fn compile_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> PathBuf {
     let output = compile_raw(dir, source, stem, flags);
-    assert_successful_compile(dir, stem, output)
-}
-
-/// Compiles a managed-PCRE2 project with extra compiler flags and returns its path.
-fn compile_with_managed_pcre2(
-    dir: &Path,
-    source: &str,
-    stem: &str,
-    flags: &[&str],
-) -> PathBuf {
-    let output = compile_raw_with_fixture(dir, source, stem, flags, true);
     assert_successful_compile(dir, stem, output)
 }
 
@@ -149,18 +121,6 @@ fn run_binary(bin: &Path) -> String {
 fn run_for_profile(prefix: &str, source: &str, profile: &str) -> String {
     let dir = make_test_dir(prefix);
     let bin = compile_with_flags(&dir, source, "probe", &["--php-version", profile]);
-    run_binary(&bin)
-}
-
-/// Compiles and runs a managed-PCRE2 fixture for one `--php-version` profile.
-fn run_for_profile_with_managed_pcre2(prefix: &str, source: &str, profile: &str) -> String {
-    let dir = make_test_dir(prefix);
-    let bin = compile_with_managed_pcre2(
-        &dir,
-        source,
-        "probe",
-        &["--php-version", profile],
-    );
     run_binary(&bin)
 }
 
@@ -229,7 +189,7 @@ fn stop_server(server: &mut std::process::Child, addr: &str) {
         .status();
 }
 
-/// Sends one HTTP/1.1 GET with `Connection: close` and returns the full raw response text.
+/// Sends one HTTP/1.1 GET and returns the response with any complete chunked body decoded.
 fn http_get(addr: &str, path: &str) -> String {
     let mut stream = TcpStream::connect(addr).unwrap();
     stream
@@ -249,7 +209,52 @@ fn http_get(addr: &str, path: &str) -> String {
             Err(_) => break,
         }
     }
-    String::from_utf8_lossy(&response).into_owned()
+    normalize_complete_http_response(String::from_utf8_lossy(&response).into_owned())
+}
+
+/// Decodes a complete chunked response body while preserving the response headers.
+fn normalize_complete_http_response(response: String) -> String {
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return response;
+    };
+    let is_chunked = headers.lines().any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+        name.eq_ignore_ascii_case("transfer-encoding")
+            && value
+                .split(',')
+                .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
+    });
+    if !is_chunked {
+        return response;
+    }
+    let Some(decoded) = decode_complete_chunked_body(body.as_bytes()) else {
+        return response;
+    };
+    format!("{headers}\r\n\r\n{}", String::from_utf8_lossy(&decoded))
+}
+
+/// Decodes one complete HTTP chunk stream and rejects truncated or malformed framing.
+fn decode_complete_chunked_body(mut body: &[u8]) -> Option<Vec<u8>> {
+    let mut decoded = Vec::new();
+    loop {
+        let size_end = body.windows(2).position(|window| window == b"\r\n")?;
+        let size_line = std::str::from_utf8(&body[..size_end]).ok()?;
+        let size_text = size_line.split(';').next()?.trim();
+        let size = usize::from_str_radix(size_text, 16).ok()?;
+        body = &body[size_end + 2..];
+        if size == 0 {
+            return body.starts_with(b"\r\n").then_some(decoded);
+        }
+        let chunk = body.get(..size)?;
+        body = body.get(size..)?;
+        if !body.starts_with(b"\r\n") {
+            return None;
+        }
+        decoded.extend_from_slice(chunk);
+        body = &body[2..];
+    }
 }
 
 /// The probe every constant test uses: one pipe-separated line per surface.
@@ -737,9 +742,10 @@ echo $opcache, "|", PHP_VERSION, "|", $opcache === PHP_VERSION ? "agree" : "DISA
 
 /// `eval()` sees the same version surface the compiled code does on the default profile.
 ///
-/// The eval interpreter is a separate crate with no access to `--php-version`, so it reports the
-/// default (8.5) profile. On a default-profile binary that is identical to native, which is what
-/// this asserts; `EVAL_PHP_VERSION` in the magician documents the divergence for other profiles.
+/// The eval interpreter is a separate crate that cannot read `--php-version` itself, so the
+/// compiler forwards the profile to it through `__elephc_eval_set_php_version_id`. This pins
+/// the default; `eval_follows_a_non_default_profile` pins that the forwarding is what makes it
+/// true, rather than the bridge's own default happening to agree.
 #[test]
 fn eval_sees_the_same_version_surface_on_the_default_profile() {
     let source = r#"<?php
@@ -747,9 +753,30 @@ eval('echo PHP_VERSION, "|", PHP_VERSION_ID, "|", PHP_MAJOR_VERSION, "|", PHP_MI
       "|", PHP_RELEASE_VERSION, "|", PHP_EXTRA_VERSION, "|", PHP_SAPI, "|", phpversion(), "\n";
 var_dump(phpversion("json"), phpversion("nope_xyz"));');
 "#;
-    let out = run_for_profile_with_managed_pcre2("elephc_eval_version", source, "8.5");
+    let out = run_for_profile("elephc_eval_version", source, "8.5");
     assert_eq!(
         out,
         "8.5.0|80500|8|5|0||cli|8.5.0\nstring(5) \"8.5.0\"\nbool(false)\n"
     );
+}
+
+/// `eval()` reports the profile the BINARY was compiled for, not the bridge's own default.
+///
+/// This is the assertion the default-profile test cannot make. The eval interpreter ships as an
+/// archive linked into the produced binary and defaults to the newest profile, so a `8.5`
+/// expectation is satisfied whether or not the compiler forwards anything. Compiling at `8.2`
+/// and demanding `8.2.0` is what distinguishes a working bridge from a coincidence.
+///
+/// `PHP_MAJOR_VERSION`, `PHP_RELEASE_VERSION` and `PHP_EXTRA_VERSION` stay `8`, `0` and empty:
+/// they are invariant across every maintained profile, which is why the bridge does not carry
+/// them.
+#[test]
+fn eval_follows_a_non_default_profile() {
+    let source = r#"<?php
+eval('echo PHP_VERSION, "|", PHP_VERSION_ID, "|", PHP_MAJOR_VERSION, "|", PHP_MINOR_VERSION,
+      "|", PHP_RELEASE_VERSION, "|", PHP_EXTRA_VERSION, "|", phpversion(), "\n";');
+echo PHP_VERSION, "|", PHP_VERSION_ID, "|", phpversion(), "\n";
+"#;
+    let out = run_for_profile("elephc_eval_version_82", source, "8.2");
+    assert_eq!(out, "8.2.0|80200|8|2|0||8.2.0\n8.2.0|80200|8.2.0\n");
 }

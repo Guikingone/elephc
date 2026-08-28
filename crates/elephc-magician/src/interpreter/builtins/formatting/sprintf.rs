@@ -13,10 +13,8 @@ use super::super::super::*;
 use super::*;
 
 eval_builtin! {
-    name: "sprintf",
+    contract: "sprintf",
     area: Formatting,
-    params: [format],
-    variadic: values,
     direct: Sprintf,
     values: Sprintf,
 }
@@ -32,19 +30,20 @@ pub(in crate::interpreter) fn eval_builtin_sprintf(
     for arg in args {
         evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_sprintf_result(&evaluated_args, values)
+    eval_sprintf_result(&evaluated_args, context, values)
 }
 
 /// Formats `sprintf()` arguments and returns the resulting PHP string.
 pub(in crate::interpreter) fn eval_sprintf_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some((format, format_args)) = evaluated_args.split_first() else {
         return Err(EvalStatus::RuntimeFatal);
     };
     let format = values.string_bytes(*format)?;
-    let output = eval_sprintf_bytes(&format, format_args, values)?;
+    let output = eval_sprintf_bytes(&format, format_args, context, values)?;
     values.string_bytes_value(&output)
 }
 
@@ -52,6 +51,7 @@ pub(in crate::interpreter) fn eval_sprintf_result(
 pub(in crate::interpreter) fn eval_sprintf_bytes(
     format: &[u8],
     args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<u8>, EvalStatus> {
     let mut output = Vec::new();
@@ -79,7 +79,7 @@ pub(in crate::interpreter) fn eval_sprintf_bytes(
             return Err(EvalStatus::RuntimeFatal);
         };
         arg_index += 1;
-        let bytes = eval_format_sprintf_arg(spec, arg, values)?;
+        let bytes = eval_format_sprintf_arg(spec, arg, context, values)?;
         output.extend_from_slice(&bytes);
     }
     Ok(output)

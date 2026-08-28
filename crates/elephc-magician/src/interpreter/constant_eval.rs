@@ -75,6 +75,26 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
     name: &str,
 ) -> Option<EvalPredefinedConstant> {
     match name.trim_start_matches('\\') {
+        "ICONV_MIME_DECODE_STRICT" => {
+            Some(EvalPredefinedConstant::Int(EVAL_ICONV_MIME_DECODE_STRICT))
+        }
+        "ICONV_MIME_DECODE_CONTINUE_ON_ERROR" => Some(EvalPredefinedConstant::Int(
+            EVAL_ICONV_MIME_DECODE_CONTINUE_ON_ERROR,
+        )),
+        // The runtime iconv provider is fixed by the platform: Apple ships GNU libiconv,
+        // and elephc's Linux support targets glibc.
+        "ICONV_IMPL" => Some(EvalPredefinedConstant::String(
+            elephc_iconv::implementation_name(cfg!(target_os = "macos")),
+        )),
+        "ICONV_VERSION" => Some(EvalPredefinedConstant::String(elephc_iconv::ICONV_VERSION)),
+        "PHP_URL_SCHEME" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_SCHEME)),
+        "PHP_URL_HOST" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_HOST)),
+        "PHP_URL_PORT" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_PORT)),
+        "PHP_URL_USER" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_USER)),
+        "PHP_URL_PASS" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_PASS)),
+        "PHP_URL_PATH" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_PATH)),
+        "PHP_URL_QUERY" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_QUERY)),
+        "PHP_URL_FRAGMENT" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_FRAGMENT)),
         "PATHINFO_DIRNAME" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_DIRNAME)),
         "PATHINFO_BASENAME" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_BASENAME)),
         "PATHINFO_EXTENSION" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_EXTENSION)),
@@ -88,11 +108,23 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "LOCK_EX" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_EX)),
         "LOCK_UN" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_UN)),
         "LOCK_NB" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_NB)),
+        "OPENSSL_RAW_DATA" => Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_RAW_DATA)),
+        "OPENSSL_ZERO_PADDING" => Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_ZERO_PADDING)),
+        "OPENSSL_DONT_ZERO_PAD_KEY" => {
+            Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_DONT_ZERO_PAD_KEY))
+        }
         "ARRAY_FILTER_USE_VALUE" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_VALUE)),
         "ARRAY_FILTER_USE_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_BOTH)),
         "ARRAY_FILTER_USE_KEY" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_KEY)),
+        "STR_PAD_LEFT" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_LEFT)),
+        "STR_PAD_RIGHT" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_RIGHT)),
+        "STR_PAD_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_BOTH)),
         "COUNT_NORMAL" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_NORMAL)),
         "COUNT_RECURSIVE" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_RECURSIVE)),
+        "PHP_ROUND_HALF_UP" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_UP)),
+        "PHP_ROUND_HALF_DOWN" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_DOWN)),
+        "PHP_ROUND_HALF_EVEN" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_EVEN)),
+        "PHP_ROUND_HALF_ODD" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_ODD)),
         "PREG_SPLIT_NO_EMPTY" => Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_NO_EMPTY)),
         "PREG_SPLIT_DELIM_CAPTURE" => {
             Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_DELIM_CAPTURE))
@@ -150,13 +182,19 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
         "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
         // The PHP version surface. The compiler bakes these per compilation from
-        // `--php-version` / `--web` (`codegen_support::prescan::collect_constants`); the eval
-        // interpreter has no access to either flag and reports the default profile — see the
-        // `EVAL_PHP_*` constants for the divergence this implies.
-        "PHP_VERSION" => Some(EvalPredefinedConstant::String(EVAL_PHP_VERSION)),
-        "PHP_VERSION_ID" => Some(EvalPredefinedConstant::Int(EVAL_PHP_VERSION_ID)),
+        // `--php-version` / `--web` (`codegen_support::prescan::collect_constants`) and forwards
+        // the profile to this interpreter through `__elephc_eval_set_php_version_id`, so the
+        // three profile-dependent entries answer whatever the binary was compiled for.
+        "PHP_VERSION" => Some(EvalPredefinedConstant::String(
+            crate::eval_php_profile::eval_php_version_string(),
+        )),
+        "PHP_VERSION_ID" => Some(EvalPredefinedConstant::Int(i64::from(
+            crate::eval_php_profile::eval_php_version_id(),
+        ))),
         "PHP_MAJOR_VERSION" => Some(EvalPredefinedConstant::Int(EVAL_PHP_MAJOR_VERSION)),
-        "PHP_MINOR_VERSION" => Some(EvalPredefinedConstant::Int(EVAL_PHP_MINOR_VERSION)),
+        "PHP_MINOR_VERSION" => Some(EvalPredefinedConstant::Int(
+            crate::eval_php_profile::eval_php_minor_version(),
+        )),
         "PHP_RELEASE_VERSION" => Some(EvalPredefinedConstant::Int(EVAL_PHP_RELEASE_VERSION)),
         "PHP_EXTRA_VERSION" => Some(EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION)),
         "PHP_SAPI" => Some(EvalPredefinedConstant::String(EVAL_PHP_SAPI)),

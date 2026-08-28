@@ -56,21 +56,24 @@ jobs:
 
           echo "Found successful Build & Test check: ${CHECK_URL}"
 
-  build:
-    name: Build macOS ARM64
+  prepare:
+    name: Bump version on main
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
-    runs-on: macos-14  # Apple Silicon runner
+    runs-on: ubuntu-latest
     needs:
       - verify-ci
+    outputs:
+      # The bump commit every build job checks out, so all three targets build
+      # the same patched tree without re-applying (or racing to push) the
+      # version bump themselves.
+      sha: ${{ steps.bump.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set version from tag and commit
+      - name: Set version from tag and push bump to main
+        id: bump
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           export VERSION
@@ -108,54 +111,124 @@ jobs:
           git add Cargo.toml Cargo.lock
           git commit -m "chore: bump version to ${VERSION}" || true
           git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target }}
+    if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
+    runs-on: ${{ matrix.runner }}
+    needs:
+      - verify-ci
+      - prepare
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14  # Apple Silicon runner
+          # Linux release builds run on ubuntu-22.04 (glibc 2.35) rather than
+          # the ubuntu-24.04 generation CI tests on, so the published binaries
+          # also run on older distros (Ubuntu 22.04, Debian 12, RHEL 9, ...).
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
         run: cargo build --release
 
+      - name: Verify release binary version
+        run: |
+          EXPECTED="elephc ${GITHUB_REF_NAME#v}"
+          ACTUAL="$(target/release/elephc --version)"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Release version mismatch: expected '${EXPECTED}', got '${ACTUAL}'."
+            exit 1
+          fi
+          echo "Verified release binary version: ${ACTUAL}"
+
+      # Every bridge in `BRIDGES` (src/linker/bridges.rs), in that order. A bridge
+      # missing here ships a compiler that refuses the flag it advertises;
+      # `every_bridge_staticlib_ships_in_the_release_tarball` fails the build
+      # rather than letting the two lists drift again.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-magician
 
       - name: Strip binary
         run: strip target/release/elephc
 
-      - name: Get version
-        id: version
-        run: echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-
       - name: Create tarball
         run: |
           cd target/release
-          tar czf elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz \
+          TARBALL="elephc-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+          tar czf "$TARBALL" \
             elephc \
             libelephc_tls.a \
             libelephc_pdo.a \
             libelephc_crypto.a \
+            libelephc_bcmath.a \
+            libelephc_iconv.a \
             libelephc_phar.a \
             libelephc_tz.a \
             libelephc_image.a \
-            libelephc_web.a
-          shasum -a 256 elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz > elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
+            libelephc_probe.a \
+            libelephc_instr.a \
+            libelephc_web.a \
+            libelephc_magician.a
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$TARBALL" > "$TARBALL.sha256"
+          else
+            shasum -a 256 "$TARBALL" > "$TARBALL.sha256"
+          fi
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            target/release/elephc-*.tar.gz
+            target/release/elephc-*.tar.gz.sha256
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            target/release/elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz
-            target/release/elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
+          files: dist/*
 
       - name: Update Homebrew tap
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${GITHUB_REF_NAME}"
           VERSION_NUM="${VERSION#v}"
           TARBALL="elephc-${VERSION}-aarch64-apple-darwin.tar.gz"
-          SHA256=$(cat target/release/${TARBALL}.sha256 | awk '{print $1}')
+          SHA256=$(awk '{print $1}' "dist/${TARBALL}.sha256")
           URL="https://github.com/illegalstudio/elephc/releases/download/${VERSION}/${TARBALL}"
 
           # Clone tap repo
-          git clone https://x-access-token:${TAP_TOKEN}@github.com/illegalstudio/homebrew-tap.git /tmp/homebrew-tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/illegalstudio/homebrew-tap.git" /tmp/homebrew-tap
           mkdir -p /tmp/homebrew-tap/Formula
 
           # Generate formula
@@ -176,10 +249,15 @@ jobs:
               lib.install "libelephc_tls.a"
               lib.install "libelephc_pdo.a"
               lib.install "libelephc_crypto.a"
+              lib.install "libelephc_bcmath.a"
+              lib.install "libelephc_iconv.a"
               lib.install "libelephc_phar.a"
               lib.install "libelephc_tz.a"
               lib.install "libelephc_image.a"
+              lib.install "libelephc_probe.a"
+              lib.install "libelephc_instr.a"
               lib.install "libelephc_web.a"
+              lib.install "libelephc_magician.a"
             end
 
             test do
@@ -203,6 +281,11 @@ jobs:
               (testpath/"hash.php").write('<?php echo hash("sha256", "abc");')
               system bin/"elephc", "hash.php"
               assert_equal "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", shell_output("#{testpath}/hash")
+
+              # Exercise the exact-decimal BCMath bridge.
+              (testpath/"bcmath.php").write('<?php echo bcadd("1.25", "2.50", 2);')
+              system bin/"elephc", "bcmath.php"
+              assert_equal "3.75", shell_output("#{testpath}/bcmath")
 
               # Exercise the PHAR bridge from the Homebrew lib/ layout.
               (testpath/"phar.php").write('<?php file_put_contents("phar://brew.phar/entry.txt", "phar-ok"); \$p = "brew.phar"; echo file_get_contents("phar://" . \$p . "/entry.txt");')

@@ -132,8 +132,7 @@ pub fn emit_extern_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &st
             emitter.ldr_got_lo12(dest, dest, symbol); // resolve the GOT entry into the actual extern symbol address
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, QWORD PTR {}@GOTPCREL[rip]", dest, symbol));
-            // materialize the extern symbol address through the ELF GOTPCREL slot
+            emitter.instruction(&format!("mov {}, QWORD PTR {}@GOTPCREL[rip]", dest, symbol)); // materialize the extern symbol address through the ELF GOTPCREL slot
         }
     }
 }
@@ -163,7 +162,11 @@ pub fn emit_store_reg_to_extern_symbol(
     symbol: &str,
     byte_offset: usize,
 ) {
-    let scratch = symbol_scratch_reg(emitter);
+    let scratch = match (emitter.target.arch, reg) {
+        (Arch::AArch64, "x9") => "x10",
+        (Arch::X86_64, "r11") => "r10",
+        _ => symbol_scratch_reg(emitter),
+    };
     emit_extern_symbol_address(emitter, scratch, symbol);
     emit_store_to_address(emitter, reg, scratch, byte_offset);
 }
@@ -204,32 +207,29 @@ pub fn emit_load_symbol_to_reg(emitter: &mut Emitter, reg: &str, symbol: &str, b
             if byte_offset == 0 {
                 emitter.instruction(&format!("ldr {}, [x9]", reg));             // load the symbol payload directly from its base address
             } else {
-                emitter.instruction(&format!("ldr {}, [x9, #{}]", reg, byte_offset));
-                // load the symbol payload from the requested byte offset
+                emitter.instruction(&format!("ldr {}, [x9, #{}]", reg, byte_offset)); // load the symbol payload from the requested byte offset
             }
         }
         Arch::X86_64 => {
             let scratch = symbol_scratch_reg(emitter);
             if byte_offset == 0 {
                 if is_float_register(reg) {
-                    emitter.instruction(&format!("movsd {}, QWORD PTR [rip + {}]", reg, symbol));
-                // load the floating-point symbol payload through RIP-relative addressing
+                    emitter.instruction(&format!("movsd {}, QWORD PTR [rip + {}]", reg, symbol)); // load the floating-point symbol payload through RIP-relative addressing
                 } else {
-                    emitter.instruction(&format!("mov {}, QWORD PTR [rip + {}]", reg, symbol));
-                    // load the integer or pointer symbol payload through RIP-relative addressing
+                    emitter.instruction(&format!("mov {}, QWORD PTR [rip + {}]", reg, symbol)); // load the integer or pointer symbol payload through RIP-relative addressing
                 }
             } else {
                 emit_symbol_address(emitter, scratch, symbol);
                 if is_float_register(reg) {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // load the floating-point symbol payload from a non-zero byte offset
                         "movsd {}, QWORD PTR [{} + {}]",
                         reg, scratch, byte_offset
-                    )); // load the floating-point symbol payload from a non-zero byte offset
+                    ));
                 } else {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // load the integer or pointer symbol payload from a non-zero byte offset
                         "mov {}, QWORD PTR [{} + {}]",
                         reg, scratch, byte_offset
-                    )); // load the integer or pointer symbol payload from a non-zero byte offset
+                    ));
                 }
             }
         }
@@ -272,32 +272,29 @@ pub fn emit_store_reg_to_symbol(
             if byte_offset == 0 {
                 emitter.instruction(&format!("str {}, [x9]", reg));             // store the register payload directly into the symbol base slot
             } else {
-                emitter.instruction(&format!("str {}, [x9, #{}]", reg, byte_offset));
-                // store the register payload into the requested symbol byte offset
+                emitter.instruction(&format!("str {}, [x9, #{}]", reg, byte_offset)); // store the register payload into the requested symbol byte offset
             }
         }
         Arch::X86_64 => {
             let scratch = symbol_scratch_reg(emitter);
             if byte_offset == 0 {
                 if is_float_register(reg) {
-                    emitter.instruction(&format!("movsd QWORD PTR [rip + {}], {}", symbol, reg));
-                // store the floating-point payload directly into RIP-relative symbol storage
+                    emitter.instruction(&format!("movsd QWORD PTR [rip + {}], {}", symbol, reg)); // store the floating-point payload directly into RIP-relative symbol storage
                 } else {
-                    emitter.instruction(&format!("mov QWORD PTR [rip + {}], {}", symbol, reg));
-                    // store the integer or pointer payload directly into RIP-relative symbol storage
+                    emitter.instruction(&format!("mov QWORD PTR [rip + {}], {}", symbol, reg)); // store the integer or pointer payload directly into RIP-relative symbol storage
                 }
             } else {
                 emit_symbol_address(emitter, scratch, symbol);
                 if is_float_register(reg) {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // store the floating-point payload into a non-zero symbol byte offset
                         "movsd QWORD PTR [{} + {}], {}",
                         scratch, byte_offset, reg
-                    )); // store the floating-point payload into a non-zero symbol byte offset
+                    ));
                 } else {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // store the integer or pointer payload into a non-zero symbol byte offset
                         "mov QWORD PTR [{} + {}], {}",
                         scratch, byte_offset, reg
-                    )); // store the integer or pointer payload into a non-zero symbol byte offset
+                    ));
                 }
             }
         }
@@ -320,8 +317,7 @@ pub fn emit_store_zero_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offse
                 if byte_offset == 0 {
                     emitter.instruction("mov QWORD PTR [r11], 0");              // zero the symbol base slot through the GOT-resolved address
                 } else {
-                    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", byte_offset));
-                    // zero the requested symbol byte offset through the GOT-resolved address
+                    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", byte_offset)); // zero the requested symbol byte offset through the GOT-resolved address
                 }
                 emitter.instruction("pop r11");                                 // restore the borrowed GOT scratch register after the zero store
             }
@@ -335,12 +331,10 @@ pub fn emit_store_zero_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offse
         Arch::X86_64 => {
             let scratch = symbol_scratch_reg(emitter);
             if byte_offset == 0 {
-                emitter.instruction(&format!("mov QWORD PTR [rip + {}], 0", symbol));
-            // zero the symbol base slot through RIP-relative addressing
+                emitter.instruction(&format!("mov QWORD PTR [rip + {}], 0", symbol)); // zero the symbol base slot through RIP-relative addressing
             } else {
                 emit_symbol_address(emitter, scratch, symbol);
-                emitter.instruction(&format!("mov QWORD PTR [{} + {}], 0", scratch, byte_offset));
-                // zero the requested symbol byte offset through the computed address
+                emitter.instruction(&format!("mov QWORD PTR [{} + {}], 0", scratch, byte_offset)); // zero the requested symbol byte offset through the computed address
             }
         }
     }
@@ -359,8 +353,7 @@ pub fn emit_store_imm_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offset
             if byte_offset == 0 {
                 emitter.instruction("str x10, [x9]");                           // store the immediate payload into the symbol base slot
             } else {
-                emitter.instruction(&format!("str x10, [x9, #{}]", byte_offset));
-                // store the immediate payload into the requested symbol byte offset
+                emitter.instruction(&format!("str x10, [x9, #{}]", byte_offset)); // store the immediate payload into the requested symbol byte offset
             }
         }
         Arch::X86_64 => {
@@ -403,8 +396,7 @@ pub fn emit_cmp_reg_to_symbol(emitter: &mut Emitter, reg: &str, symbol: &str) {
                 emitter.instruction(&format!("cmp {}, QWORD PTR [{}]", reg, scratch)); // compare the register payload against the GOT-resolved symbol payload
                 emitter.instruction(&format!("pop {}", scratch));               // restore the borrowed GOT scratch register (pop leaves flags intact)
             } else {
-                emitter.instruction(&format!("cmp {}, QWORD PTR [rip + {}]", reg, symbol));
-                // compare the register payload against the RIP-relative symbol payload
+                emitter.instruction(&format!("cmp {}, QWORD PTR [rip + {}]", reg, symbol)); // compare the register payload against the RIP-relative symbol payload
             }
         }
     }
@@ -430,8 +422,7 @@ pub fn emit_dec_symbol(emitter: &mut Emitter, symbol: &str) {
                 emitter.instruction("dec QWORD PTR [r11]");                     // decrement the counter through the GOT-resolved address
                 emitter.instruction("pop r11");                                 // restore the borrowed GOT scratch register after the decrement
             } else {
-                emitter.instruction(&format!("dec QWORD PTR [rip + {}]", symbol));
-                // decrement the counter through RIP-relative addressing
+                emitter.instruction(&format!("dec QWORD PTR [rip + {}]", symbol)); // decrement the counter through RIP-relative addressing
             }
         }
     }
@@ -515,8 +506,7 @@ pub fn emit_store_result_to_symbol(
                     emitter.instruction("str x0, [sp, #-16]!");                 // preserve the incoming heap pointer while decreffing the previous symbol payload
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("push {}", int_result_reg(emitter)));
-                    // preserve the incoming heap pointer while decreffing the previous symbol payload
+                    emitter.instruction(&format!("push {}", int_result_reg(emitter))); // preserve the incoming heap pointer while decreffing the previous symbol payload
                 }
             }
             emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
@@ -526,8 +516,7 @@ pub fn emit_store_result_to_symbol(
                     emitter.instruction("ldr x0, [sp], #16");                   // restore the incoming heap pointer after decreffing the previous payload
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("pop {}", int_result_reg(emitter)));
-                    // restore the incoming heap pointer after decreffing the previous payload
+                    emitter.instruction(&format!("pop {}", int_result_reg(emitter))); // restore the incoming heap pointer after decreffing the previous payload
                 }
             }
         }

@@ -135,6 +135,7 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
 /// Checks both compiler-resident names and the builtin registry. Registry entries
 /// flagged as `internal` are excluded from the PHP-visible set, and `--strict-php`
 /// additionally excludes extension builtins.
+#[cfg(test)]
 pub(crate) fn is_php_visible_builtin_function(name: &str) -> bool {
     is_php_visible_builtin_function_for_profile(name, crate::strict_php::is_enabled())
 }

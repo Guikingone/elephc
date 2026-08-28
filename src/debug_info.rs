@@ -19,10 +19,17 @@
 //!   silently dropped). All of it is hand-encoded here, the same way
 //!   `-g`-enabled assemblers do it.
 //! - Markers only appear in the text section, which keeps `.loc` legal.
+//! - Every value spliced into assembly text is attacker-influenced (the source
+//!   path and the working directory come from the invocation). Quoted operands
+//!   go through `escape_asm_string()`, and the one unquoted operand (a
+//!   subprogram entry symbol) is validated by `is_plain_asm_symbol()`; an
+//!   unescaped `\` or `"` in a path would otherwise terminate the directive
+//!   string early and let the rest of the path be assembled as directives.
 
 use std::fmt::Write as _;
 
 use crate::codegen::platform::Platform;
+use crate::codegen_support::runtime::data::instanceof::escaped_bytes;
 
 /// One `@fn`..`@endfn` region collected during injection, used to emit its
 /// `DW_TAG_subprogram`: the PHP-level name, the entry symbol (`DW_AT_low_pc`),
@@ -40,7 +47,7 @@ pub fn inject_line_directives(asm: &str, source_path: &str, platform: Platform) 
     let mut out = String::with_capacity(asm.len() + asm.len() / 4);
     out.push_str(&format!(
         ".file 1 \"{}\"\n",
-        source_path.replace('"', "\\\"")
+        escape_asm_string(source_path)
     ));
 
     let mut subprograms: Vec<SubprogramInfo> = Vec::new();
@@ -57,10 +64,18 @@ pub fn inject_line_directives(asm: &str, source_path: &str, platform: Platform) 
             continue;
         }
         if let Some(marker) = line.split("@fn ").nth(1) {
+            // Compiler-generated bodies (`_class_propinit_*`, …) have no user-written PHP
+            // source; a DW_TAG_subprogram for them only buries the real functions — they
+            // were 47 of the 54 subprograms a small program emitted.
+            if marker.contains("synthetic=1") {
+                continue;
+            }
             if let (Some(name), Some(symbol)) =
                 (marker_value(marker, "name"), marker_value(marker, "symbol"))
             {
-                open = Some((name.to_string(), symbol.to_string()));
+                if is_plain_asm_symbol(symbol) {
+                    open = Some((name.to_string(), symbol.to_string()));
+                }
             }
             continue;
         }
@@ -164,9 +179,36 @@ Lelephc_debug_cu_start:
     out
 }
 
-/// Escapes a value for use inside a double-quoted assembler string.
+/// Escapes a value for use inside a double-quoted assembler string literal.
+///
+/// Delegates to the shared `escaped_bytes()` encoder that already backs the
+/// runtime `.ascii` data section, so `.file` and every `.asciz` emitted here
+/// obey one escaping contract: `\` and `"` are backslash-escaped, newline and
+/// tab use their short forms, and every other byte outside printable ASCII
+/// (carriage return, NUL, UTF-8 continuation bytes) becomes a 3-digit octal
+/// escape. Both GNU `as` and the LLVM integrated assembler decode all of those
+/// back to the original bytes, so the DWARF payload is byte-exact.
+///
+/// This is a security boundary, not cosmetics: a path containing `\"` would
+/// otherwise close the directive string early and let the remainder of the path
+/// be assembled as directives.
 fn escape_asm_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+    escaped_bytes(value.as_bytes())
+}
+
+/// Returns whether `symbol` is a plain assembler symbol name, safe to splice
+/// into the unquoted `.quad <symbol>` operands of a `DW_TAG_subprogram`.
+///
+/// Entry symbols are mangled by codegen down to `[A-Za-z0-9_$.]`, so anything
+/// else means a malformed or forged `@fn` marker. Such a region is skipped the
+/// same way a malformed `@src` marker is: debug-info injection must never fail a
+/// build the plain path would accept, and it must never emit an operand that the
+/// assembler could read as extra syntax.
+fn is_plain_asm_symbol(symbol: &str) -> bool {
+    !symbol.is_empty()
+        && symbol
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b'.'))
 }
 
 /// Parses a numeric `key=value` token from a marker tail, returning `None` for
@@ -239,5 +281,95 @@ _php_foo:
         let out = inject_line_directives(asm, "a.php", Platform::MacOS);
         assert!(!out.contains(".loc"), "{out}");
         assert!(out.contains("    ret\n"), "{out}");
+    }
+
+    /// Verifies the assembler-string escaper covers every byte class that could
+    /// terminate or reinterpret a quoted directive operand: backslash, double
+    /// quote, newline, carriage return, tab, NUL, and non-ASCII UTF-8 bytes.
+    /// Ordinary path characters must survive verbatim so normal builds are
+    /// byte-identical to the pre-hardening output.
+    #[test]
+    fn escapes_every_assembler_string_metacharacter() {
+        assert_eq!(escape_asm_string("plain/path-1_2.php"), "plain/path-1_2.php");
+        assert_eq!(escape_asm_string("bs\\lash"), "bs\\\\lash");
+        assert_eq!(escape_asm_string("q\"uote"), "q\\\"uote");
+        assert_eq!(escape_asm_string("a\nb"), "a\\nb");
+        assert_eq!(escape_asm_string("a\tb"), "a\\tb");
+        assert_eq!(escape_asm_string("a\rb"), "a\\015b");
+        assert_eq!(escape_asm_string("a\0b"), "a\\000b");
+        assert_eq!(escape_asm_string("é"), "\\303\\251");
+        // The historical breakout: `\` was left raw while `"` became `\"`, so the
+        // pair rendered as an escaped backslash followed by a real closing quote.
+        assert_eq!(escape_asm_string("a\\\";"), "a\\\\\\\";");
+    }
+
+    /// Verifies a source path carrying assembler metacharacters cannot escape
+    /// any quoted directive: the `.file` header, the compile unit `DW_AT_name`,
+    /// and the whole module must stay one directive per line. Regression test
+    /// for the `--debug-info` source-path directive injection.
+    #[test]
+    fn source_path_cannot_break_out_of_quoted_directives() {
+        let path = "sec/a\\\"; .globl pwned; pwned = 7; #\nb\t.php";
+        let out = inject_line_directives(ASM, path, Platform::Linux);
+
+        assert_eq!(
+            out.lines().next().unwrap(),
+            ".file 1 \"sec/a\\\\\\\"; .globl pwned; pwned = 7; #\\nb\\t.php\""
+        );
+        assert!(
+            out.contains(".asciz \"sec/a\\\\\\\"; .globl pwned; pwned = 7; #\\nb\\t.php\""),
+            "{out}"
+        );
+        for line in out.lines() {
+            assert!(
+                !line.starts_with(".globl pwned"),
+                "path bytes reached the assembler as a directive: {out}"
+            );
+        }
+        // Every quoted directive must keep an even number of unescaped quotes,
+        // which is what stops the remainder of the line from being assembled.
+        for line in out.lines().filter(|line| line.contains('"')) {
+            let mut quotes = 0usize;
+            let mut escaped = false;
+            for byte in line.bytes() {
+                match (escaped, byte) {
+                    (true, _) => escaped = false,
+                    (false, b'\\') => escaped = true,
+                    (false, b'"') => quotes += 1,
+                    _ => {}
+                }
+            }
+            assert_eq!(quotes % 2, 0, "unbalanced quotes in `{line}`: {out}");
+        }
+    }
+
+    /// Verifies a namespaced PHP function name (which legitimately contains
+    /// backslashes) is escaped inside its `DW_AT_name` string instead of being
+    /// emitted raw.
+    #[test]
+    fn escapes_namespaced_subprogram_name() {
+        let asm = "    # @fn name=App\\Deep\\greet symbol=_fn_App_N_Deep_N_greet\n\
+                   _fn_App_N_Deep_N_greet:\n    ret\n    # @endfn name=App\\Deep\\greet\n";
+        let out = inject_line_directives(asm, "a.php", Platform::Linux);
+        assert!(out.contains(".asciz \"App\\\\Deep\\\\greet\""), "{out}");
+        assert!(out.contains(".quad _fn_App_N_Deep_N_greet"), "{out}");
+    }
+
+    /// Verifies an `@fn` marker whose entry symbol is not a plain assembler
+    /// symbol is dropped: `.quad` takes an unquoted expression, so a forged
+    /// symbol would otherwise splice raw syntax into `.debug_info`.
+    #[test]
+    fn skips_subprogram_with_non_symbol_entry() {
+        let asm = "    # @fn name=foo symbol=_ok;.globl_pwned\n_ok:\n    ret\n    # @endfn name=foo\n";
+        let out = inject_line_directives(asm, "a.php", Platform::Linux);
+        assert!(!out.contains(".quad"), "{out}");
+        assert!(!out.contains("Lelephc_fend_0"), "{out}");
+        assert!(out.contains("    ret\n"), "{out}");
+
+        assert!(is_plain_asm_symbol("_fn_App_N_Deep_N_greet"));
+        assert!(is_plain_asm_symbol("l_.str$1"));
+        assert!(!is_plain_asm_symbol(""));
+        assert!(!is_plain_asm_symbol("_ok;.globl x"));
+        assert!(!is_plain_asm_symbol("_ok\"x"));
     }
 }

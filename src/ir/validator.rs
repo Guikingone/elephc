@@ -272,12 +272,18 @@ fn validate_instruction_result(
 }
 
 /// Validates that non-refinable opcodes carry their canonical effect set.
+/// `load_local` additionally admits exactly `PURE`, which is attached only after
+/// the immutable-local pass proves that the named scalar slot cannot change.
 fn validate_instruction_effects(
     inst_id: InstId,
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
     let expected = inst.op.default_effects();
-    if !inst.op.allows_effect_refinement() && inst.effects != expected {
+    let immutable_local_refinement = inst.op == Op::LoadLocal && inst.effects.is_pure();
+    if !inst.op.allows_effect_refinement()
+        && !immutable_local_refinement
+        && inst.effects != expected
+    {
         return Err(ValidationError::EffectMismatch {
             inst: inst_id,
             expected,
@@ -305,14 +311,18 @@ fn validate_instruction_immediate(
         | EvalStaticMethodCall
         | EnumBackingStringToInt
         | EnumBackingMixedToInt
+        | PackedFieldMixedToInt
+        | ReturnBoundaryMixedToInt
         | PropInitialized
+        | StaticPropInitialized
         | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
         }),
-        LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
+        LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
+        | ReleaseLocalRefCell
         | ReleaseLocalSlot | BindRefCellPtr
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
@@ -323,11 +333,14 @@ fn validate_instruction_immediate(
         EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
-        ICmp | FCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
+        ICmp | FCmp | PhpRelCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
             matches!(imm, Imm::CmpPredicate(_))
         }),
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
             matches!(imm, Imm::MixedNumericOp(_))
+        }),
+        StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
+            matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
             matches!(imm, Imm::CastTarget(_))
@@ -418,15 +431,20 @@ fn validate_opcode_rules(
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
-        ICheckedAdd | ICheckedSub | ICheckedMul => {
+        ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt | ICheckedSubToInt
+        | ICheckedMulToInt | ICheckedPow => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
         MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
+        // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
+        // the arity is pinned here; the backend dispatches on the operand's EIR type.
+        StrIncDec => check_count(inst_id, inst, 1, "1"),
         INeg | IBitNot => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),
         ICmp => check_binary(function, inst_id, inst, IrType::I64, "I64"),
         FCmp => check_binary(function, inst_id, inst, IrType::F64, "F64"),
+        PhpRelCmp => check_count(inst_id, inst, 2, "2"),
         IToF => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         IToStr => check_unary_any(
             function,
@@ -460,7 +478,8 @@ fn validate_opcode_rules(
         | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
         ThrowError => check_count(inst_id, inst, 0, "0"),
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
-        UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell
+        UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell
+        | ReleaseLocalRefCell
         | ReleaseLocalSlot => {
             check_count(inst_id, inst, 0, "0")
         }
@@ -470,6 +489,9 @@ fn validate_opcode_rules(
         | WriteStrStdout | VarDump | PrintR | ThrowException | GeneratorReturn
         | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
+        }
+        ReleaseUnlessAliases => {
+            check_count(inst_id, inst, 2, "2")
         }
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
         | MixedCastString => {
@@ -497,6 +519,23 @@ fn validate_opcode_rules(
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
+        // The fetch-for-write element read is emitted from exactly one site (a by-reference
+        // `foreach` source, issue #580) and writes the copy-on-write split back into the
+        // receiver's element slot, so its operand shape is pinned tighter than the shared read
+        // arm above: an indexed receiver and an already int-coerced key, never a runtime-tagged
+        // one.
+        ArrayGetForWrite => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
+        }
+        // The hash counterpart of the fetch-for-write read, emitted from the same single site.
+        // Its key stays in whatever form `hash_get` accepts (string or integer) rather than being
+        // int-coerced, because the hash lookup normalizes the key itself.
+        HashGetForWrite => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)")
+        }
         LoadArrayElemRefCell => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
@@ -517,6 +556,27 @@ fn validate_opcode_rules(
         | HashCloneShallow => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
+        // `SlotDetach` is the one array op that accepts either storage: it nulls `container[key]`
+        // on an indexed array (via `__rt_array_set_refcounted`) or on a hash (via `__rt_hash_set`).
+        // This rule is not optional — the match ends in `_ => Ok(())`, so an unlisted op would be
+        // validated by *accepting anything*, including a malformed operand list.
+        SlotDetach => {
+            check_count(inst_id, inst, 2, "2")?;
+            let container = inst.operands[0];
+            let actual = function
+                .value(container)
+                .ok_or(ValidationError::UnknownValue(container))?
+                .ir_type;
+            match actual {
+                IrType::Heap(IrHeapKind::Array) | IrType::Heap(IrHeapKind::Hash) => Ok(()),
+                _ => Err(ValidationError::OperandTypeMismatch {
+                    inst: inst_id,
+                    operand: container,
+                    expected: "Heap(Array) or Heap(Hash)",
+                    actual,
+                }),
+            }
+        }
         IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),
         ArrayKeyExists | OffsetExists => check_count_at_least(inst_id, inst, 1, "at least 1"),
         BufferLen | BufferGet | BufferSet | BufferFree => {
@@ -524,6 +584,7 @@ fn validate_opcode_rules(
         }
         DynamicObjectNewWithoutConstructorMixed
         | PropGet
+        | PropGetForWrite
         | PropInitialized
         | PropSet
         | LoadPropRefCell
@@ -537,6 +598,14 @@ fn validate_opcode_rules(
         | InstanceOfDynamic => {
             check_count_at_least(inst_id, inst, 1, "at least 1")
         }
+        CallablePtr
+        | NormalizeCallable
+        | PdoAdapterAddr
+        | DynamicClassHasConstructor
+        | DynamicPdoStatementClassStatus
+        | DynamicPdoCalledClassStatus => check_count(inst_id, inst, 1, "1"),
+        DynamicPdoStatementConstructorCall => check_count(inst_id, inst, 3, "3"),
+        DynamicPdoStatementInitialize => check_count(inst_id, inst, 5, "5"),
         RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
         _ => Ok(()),
     }

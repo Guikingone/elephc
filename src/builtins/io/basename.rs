@@ -10,16 +10,10 @@
 //!   (`Str`) is fully determined by its declaration. The registry common path
 //!   infers arguments and enforces arity before falling back to `returns`.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "basename",
-    area: Io,
-    params: [path: Str, suffix: Str = DefaultSpec::Str("")],
-    returns: Str,
+    contract: "basename",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Basename,
     ),
-    summary: "Returns the trailing name component of a path.",
-    php_manual: "function.basename",
 }

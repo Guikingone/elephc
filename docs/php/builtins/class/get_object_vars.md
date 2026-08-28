@@ -1,26 +1,34 @@
 ---
 title: "get_object_vars()"
-description: "get_object_vars() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet."
+description: "Returns the accessible non-static properties of an object."
 sidebar:
-  order: 83
+  order: 90
 ---
 
 ## get_object_vars()
 
 ```php
-function get_object_vars(mixed $object): mixed
+function get_object_vars(mixed $object): array
 ```
 
-get_object_vars() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet.
+Returns the accessible non-static properties of an object.
 
 **Parameters**:
 - `$object` (`mixed`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 
-- **Compiled (AOT)**: not available — compiled programs cannot call this builtin yet.
+- **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_object_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_object_vars.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+**Examples**:
+
+// Full example: examples/get-object-vars/main.php
+$vars = get_object_vars($object);
+echo $vars['name'];
+
+## Internals
+
+For how `get_object_vars` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/get_object_vars.md).

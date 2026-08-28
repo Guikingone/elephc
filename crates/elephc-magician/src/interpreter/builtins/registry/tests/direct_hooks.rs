@@ -9,15 +9,15 @@
 
 use super::*;
 
-/// Verifies direct-call fallback is needed only for source-sensitive pre-dispatched builtins.
-    #[test]
-    fn declared_builtin_registry_marks_only_pre_dispatched_builtins_without_direct_hooks() {
+/// Verifies non-runtime direct-call fallback is limited to source-sensitive pre-dispatch.
+#[test]
+fn declared_builtin_registry_marks_only_pre_dispatched_adapters_without_direct_hooks() {
         let mut without_direct: Vec<&str> = eval_declared_builtin_function_names()
             .iter()
             .copied()
             .filter(|name| {
                 eval_declared_builtin_spec(name)
-                    .is_some_and(|spec| spec.direct.is_none())
+                    .is_some_and(|spec| spec.direct.is_none() && spec.runtime_builtin.is_none())
             })
             .collect();
         without_direct.sort_unstable();
@@ -33,13 +33,17 @@ use super::*;
                 "array_walk",
                 "arsort",
                 "asort",
+                "end",
                 "flock",
                 "fsockopen",
                 "krsort",
                 "ksort",
                 "natcasesort",
                 "natsort",
+                "next",
                 "pfsockopen",
+                "prev",
+                "reset",
                 "rsort",
                 "settype",
                 "shuffle",
@@ -52,4 +56,27 @@ use super::*;
                 "usort",
             ]
         );
+}
+
+/// Verifies shared runtime bindings removed hooks except for deliberate arity adapters.
+#[test]
+fn runtime_builtin_bindings_keep_only_intval_and_round_adapters() {
+    for runtime_id in elephc_builtin_contract::RuntimeBuiltinId::ALL {
+        let contract = elephc_builtin_contract::lookup_id(runtime_id.builtin_id())
+            .expect("runtime builtin contract must exist");
+        let spec = eval_raw_declared_builtin_spec(contract.name)
+            .expect("runtime builtin must have an eval binding");
+        assert_eq!(spec.runtime_builtin, Some(runtime_id));
+        if matches!(
+            runtime_id,
+            elephc_builtin_contract::RuntimeBuiltinId::Intval
+                | elephc_builtin_contract::RuntimeBuiltinId::Round
+        ) {
+            assert!(spec.direct.is_some(), "{} needs a direct adapter", spec.name);
+            assert!(spec.values.is_some(), "{} needs a values adapter", spec.name);
+        } else {
+            assert!(spec.direct.is_none(), "{} must use runtime dispatch", spec.name);
+            assert!(spec.values.is_none(), "{} must use runtime dispatch", spec.name);
+        }
     }
+}

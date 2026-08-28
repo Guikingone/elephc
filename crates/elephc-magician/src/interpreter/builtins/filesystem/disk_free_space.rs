@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the disk-space helper.
 
 eval_builtin! {
-    name: "disk_free_space",
+    contract: "disk_free_space",
     area: Filesystem,
-    params: [directory],
     direct: Filesystem,
     values: Filesystem,
 }
@@ -54,7 +53,10 @@ pub(in crate::interpreter) fn eval_builtin_disk_space(
     eval_disk_space_result(name, directory, values)
 }
 
-/// Reports available or total filesystem bytes as a PHP float, or 0.0 on failure.
+/// Reports available or total filesystem bytes as a PHP float, or `false` on failure.
+///
+/// A zero-byte result remains a successful float; path conversion or `statvfs` failure returns
+/// a boolean false cell.
 pub(in crate::interpreter) fn eval_disk_space_result(
     name: &str,
     directory: RuntimeCellHandle,
@@ -62,7 +64,7 @@ pub(in crate::interpreter) fn eval_disk_space_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let bytes = values.string_bytes(directory)?;
     let Ok(path) = CString::new(bytes) else {
-        return values.float(0.0);
+        return values.bool_value(false);
     };
     let mut stats = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
     let status = unsafe {
@@ -70,7 +72,7 @@ pub(in crate::interpreter) fn eval_disk_space_result(
         libc::statvfs(path.as_ptr(), stats.as_mut_ptr())
     };
     if status != 0 {
-        return values.float(0.0);
+        return values.bool_value(false);
     }
     let stats = unsafe {
         // `statvfs` succeeded, so libc initialized the full stat buffer.

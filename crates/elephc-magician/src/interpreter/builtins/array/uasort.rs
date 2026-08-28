@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "uasort",
+    contract: "uasort",
     area: Array,
-    params: [array: by_ref, callback],
-    by_ref: [array],
     direct: none,
     values: ArrayMutating,
 }

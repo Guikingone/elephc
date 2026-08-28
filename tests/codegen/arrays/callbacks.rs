@@ -259,7 +259,8 @@ echo ":";
 
 $name = "show_runtime";
 $walk = $name;
-array_walk([5, 6], $walk);
+$walked = [5, 6];
+array_walk($walked, $walk);
 echo ":";
 
 $name = "add_runtime";
@@ -656,7 +657,8 @@ foreach ($filtered as $value) {
 echo ":";
 echo array_reduce([1, 2], $reduce, 0);
 echo ":";
-array_walk([1, 2], $walk);
+$walked = [1, 2];
+array_walk($walked, $walk);
 echo ":";
 
 $usorted = [1, 3, 2];
@@ -816,7 +818,8 @@ foreach ($filtered as $value) {
 echo ":";
 echo array_reduce([1, 2], $reduce, 0);
 echo ":";
-array_walk([1, 2], $walk);
+$walked = [1, 2];
+array_walk($walked, $walk);
 echo ":";
 
 $usorted = [1, 3, 2];
@@ -1070,7 +1073,8 @@ foreach ($filtered as $value) {
 echo ":";
 echo array_reduce([1, 2], $reduce, 0);
 echo ":";
-array_walk([1, 2], $walk);
+$walked = [1, 2];
+array_walk($walked, $walk);
 echo ":";
 
 $usorted = [1, 3, 2];
@@ -1401,4 +1405,364 @@ echo count(array_map(function (int $n): int { return $n; }, build()));
 "#,
     );
     assert_eq!(out, "0");
+}
+
+/// Verifies an untyped arrow-function predicate passed to `array_filter` inherits the
+/// indexed array's `string` element type, so `strlen()` in its body compiles and runs.
+#[test]
+fn test_array_filter_untyped_closure_param_inherits_string_element() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["banana", "apple", "fig"];
+$r = array_filter($w, fn($v) => strlen($v) > 3);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "banana,apple");
+}
+
+/// Verifies an untyped arrow-function callback passed to `array_map` inherits the indexed
+/// array's `string` element type.
+#[test]
+fn test_array_map_untyped_closure_param_inherits_string_element() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["banana", "apple"];
+$r = array_map(fn($v) => strtoupper($v), $w);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "BANANA,APPLE");
+}
+
+// --- usort over indexed string arrays (16-byte descriptor slots) ---
+
+/// Verifies the audit repro: an untyped arrow-function comparator passed to `usort`
+/// inherits the indexed array's `string` element type and the backend reorders the
+/// 16-byte string descriptor slots through `__rt_usort_str`.
+#[test]
+fn test_usort_string_array_untyped_arrow_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+$words = ["banana", "apple"];
+usort($words, fn($a, $b) => strlen($a) <=> strlen($b));
+echo implode(",", $words);
+"#,
+    );
+    assert_eq!(out, "apple,banana");
+}
+
+/// Verifies `usort` orders a string array alphabetically through a `strcmp()` comparator.
+#[test]
+fn test_usort_string_array_strcmp_ascending() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["pear", "apple", "fig", "banana", "date"];
+usort($w, fn($a, $b) => strcmp($a, $b));
+echo implode("|", $w);
+"#,
+    );
+    assert_eq!(out, "apple|banana|date|fig|pear");
+}
+
+/// Verifies a reversed `strcmp()` comparator produces descending string order.
+#[test]
+fn test_usort_string_array_strcmp_descending() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["pear", "fig", "banana", "date"];
+usort($w, fn($a, $b) => strcmp($b, $a));
+echo implode(",", $w);
+"#,
+    );
+    assert_eq!(out, "pear,fig,date,banana");
+}
+
+/// Verifies the string sort is stable like PHP 8's `usort`: elements the comparator
+/// reports equal keep their original relative order.
+#[test]
+fn test_usort_string_array_is_stable_for_equal_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["bb", "aa", "c", "dd", "e"];
+usort($w, fn($a, $b) => strlen($a) <=> strlen($b));
+echo implode(",", $w);
+"#,
+    );
+    assert_eq!(out, "c,e,bb,aa,dd");
+}
+
+/// Verifies `usort` renumbers a string array's keys from zero, matching PHP.
+#[test]
+fn test_usort_string_array_reindexes_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["zeta", "alpha", "mid"];
+usort($w, fn($a, $b) => strcmp($a, $b));
+foreach ($w as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "0=alpha;1=mid;2=zeta;");
+}
+
+/// Verifies a single-element string array survives `usort` unchanged.
+#[test]
+fn test_usort_string_array_single_element() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["only"];
+usort($w, fn($a, $b) => strcmp($a, $b));
+echo count($w), "|", implode(",", $w);
+"#,
+    );
+    assert_eq!(out, "1|only");
+}
+
+/// Verifies an empty string array is a no-op for `usort`.
+/// Fixture: `array_pop()` empties a string array so the element type stays `string`.
+#[test]
+fn test_usort_string_array_empty() {
+    let out = compile_and_run(
+        r#"<?php
+function empties(): array { $w = ["a"]; array_pop($w); return $w; }
+$w = empties();
+usort($w, fn($a, $b) => strcmp($a, $b));
+echo count($w), "|", implode(",", $w);
+"#,
+    );
+    assert_eq!(out, "0|");
+}
+
+/// Verifies empty-string elements sort correctly, guarding the zero-length descriptor.
+#[test]
+fn test_usort_string_array_with_empty_string_element() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["", "bb", "a"];
+usort($w, fn($a, $b) => strlen($a) <=> strlen($b));
+echo "[", implode("|", $w), "]";
+"#,
+    );
+    assert_eq!(out, "[|a|bb]");
+}
+
+/// Verifies a string-literal comparator name resolves to a user function for string sorts.
+#[test]
+fn test_usort_string_array_named_function_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+function cmp_len(string $a, string $b): int { return strlen($a) <=> strlen($b); }
+$w = ["xxx", "y", "zz"];
+usort($w, 'cmp_len');
+echo implode(",", $w);
+"#,
+    );
+    assert_eq!(out, "y,zz,xxx");
+}
+
+/// Verifies a runtime string variable naming the comparator dispatches through the
+/// string-callback descriptor path for a string receiver.
+#[test]
+fn test_usort_string_array_runtime_string_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+function cmp_len(string $a, string $b): int { return strlen($a) <=> strlen($b); }
+$name = "cmp_len";
+$w = ["xxx", "y", "zz"];
+usort($w, $name);
+echo implode(",", $w);
+"#,
+    );
+    assert_eq!(out, "y,zz,xxx");
+}
+
+/// Verifies a `callable`-typed variable holding a closure sorts a string array through
+/// the descriptor-callback runtime path.
+#[test]
+fn test_usort_string_array_callable_variable_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = fn(string $a, string $b): int => strcmp($a, $b);
+$w = ["c", "a", "b"];
+usort($w, $cb);
+echo implode(",", $w);
+"#,
+    );
+    assert_eq!(out, "a,b,c");
+}
+
+/// Verifies a closure comparator with a `use` capture reaches the string sorter with its
+/// capture environment intact.
+#[test]
+fn test_usort_string_array_closure_capture_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+$dir = -1;
+$w = ["a", "c", "b"];
+usort($w, function (string $x, string $y) use ($dir): int { return $dir * strcmp($x, $y); });
+echo implode(",", $w);
+"#,
+    );
+    assert_eq!(out, "c,b,a");
+}
+
+/// Verifies a comparator with an inferred (non-`int`) return type still drives the string
+/// sort through the Mixed-return adapter.
+#[test]
+fn test_usort_string_array_untyped_return_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["bbb", "a", "cc"];
+usort($w, function (string $a, string $b) { return strlen($a) - strlen($b); });
+echo implode(",", $w);
+"#,
+    );
+    assert_eq!(out, "a,cc,bbb");
+}
+
+/// Verifies sorting a copy of a string array leaves the original untouched, exercising the
+/// copy-on-write split before the in-place slot permutation.
+#[test]
+fn test_usort_string_array_copy_on_write_split() {
+    let out = compile_and_run(
+        r#"<?php
+$words = ["banana", "apple", "cherry", "fig"];
+usort($words, fn($a, $b) => strcmp($a, $b));
+$copy = $words;
+usort($copy, fn($a, $b) => strlen($a) <=> strlen($b));
+echo implode(",", $copy), "/", implode(",", $words);
+"#,
+    );
+    assert_eq!(out, "fig,apple,banana,cherry/apple,banana,cherry,fig");
+}
+
+/// Verifies a static-method first-class callable comparator sorts a string array through
+/// the two-string callback wrapper ABI.
+#[test]
+fn test_usort_string_array_static_method_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+class Cmp { public static function byStr(string $a, string $b): int { return strcmp($a, $b); } }
+$w = ["c", "a", "b"];
+usort($w, Cmp::byStr(...));
+echo implode(",", $w);
+"#,
+    );
+    assert_eq!(out, "a,b,c");
+}
+
+/// Verifies an instance-method first-class callable comparator sorts a string array with
+/// the captured receiver reaching the method body.
+#[test]
+fn test_usort_string_array_instance_method_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+class Cmp {
+    public function __construct(private int $dir) {}
+    public function cmp(string $a, string $b): int { return $this->dir * strcmp($a, $b); }
+}
+$o = new Cmp(-1);
+$w = ["a", "c", "b", "d"];
+usort($w, $o->cmp(...));
+echo implode(",", $w);
+"#,
+    );
+    assert_eq!(out, "d,c,b,a");
+}
+
+// --- array_reduce over indexed string arrays (16-byte descriptor slots) ---
+
+/// Verifies `array_reduce()` folds an indexed string array into an integer accumulator,
+/// with the untyped arrow-function parameters typed from the array element.
+#[test]
+fn test_array_reduce_string_array_untyped_arrow_callback() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["a", "bb", "ccc"];
+echo array_reduce($w, fn($c, $v) => $c + strlen($v), 0);
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// Verifies a string-literal callback name folds a string array through the runtime helper.
+#[test]
+fn test_array_reduce_string_array_named_function_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function acc(int $c, string $v): int { return $c + strlen($v); }
+$w = ["a", "bb", "ccc"];
+echo array_reduce($w, 'acc', 0);
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// Verifies a runtime string variable naming the callback dispatches through the
+/// string-callback descriptor path for a string source array.
+#[test]
+fn test_array_reduce_string_array_runtime_string_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function acc(int $c, string $v): int { return $c + strlen($v); }
+$n = "acc";
+$w = ["a", "bb", "ccc"];
+echo array_reduce($w, $n, 0);
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// Verifies a `callable`-typed variable holding a closure folds a string array through the
+/// descriptor-callback runtime path.
+#[test]
+fn test_array_reduce_string_array_callable_variable_callback() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = fn(int $c, string $v): int => $c + strlen($v);
+$w = ["a", "bb", "ccc"];
+echo array_reduce($w, $cb, 0);
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// Verifies a closure callback with a `use` capture reaches the string-array reducer with
+/// its capture environment intact, starting from a non-zero initial accumulator.
+#[test]
+fn test_array_reduce_string_array_closure_capture_callback() {
+    let out = compile_and_run(
+        r#"<?php
+$mul = 2;
+$w = ["a", "bb", "ccc"];
+echo array_reduce($w, function (int $c, string $v) use ($mul): int { return $c + $mul * strlen($v); }, 100);
+"#,
+    );
+    assert_eq!(out, "112");
+}
+
+/// Verifies an empty string array returns the initial accumulator without calling back.
+/// Fixture: `array_pop()` empties a string array so the element type stays `string`.
+#[test]
+fn test_array_reduce_string_array_empty_returns_initial() {
+    let out = compile_and_run(
+        r#"<?php
+function empties(): array { $w = ["a"]; array_pop($w); return $w; }
+echo array_reduce(empties(), fn($c, $v) => $c + strlen($v), 7);
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies a single-element string array folds exactly once, including an empty-string
+/// element whose zero-length descriptor must still reach the callback.
+#[test]
+fn test_array_reduce_string_array_single_empty_string_element() {
+    let out = compile_and_run(
+        r#"<?php
+$w = [""];
+echo array_reduce($w, fn($c, $v) => $c + strlen($v) + 1, 0);
+"#,
+    );
+    assert_eq!(out, "1");
 }

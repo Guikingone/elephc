@@ -12,7 +12,7 @@
 //!    foreach iterator fast path.
 //!
 //! Key details:
-//!  - A `Generator` object reuses the Fiber 232-byte layout plus the
+//!  - A `Generator` object reuses the Fiber 240-byte layout plus the
 //!    generator-specific fields defined in `coro`; the helpers drive the
 //!    coroutine through `__rt_fiber_*` primitives.
 
@@ -23,7 +23,8 @@ use crate::codegen_support::emit::Emitter;
 
 /// Emits all `__rt_gen_*` runtime helpers for the current target.
 ///
-/// Emits the fiber-backed `yield` suspension primitive (`__rt_gen_suspend`)
+/// Emits the fiber-backed `yield` suspension primitive (`__rt_gen_suspend`,
+/// which falls through into its `__rt_gen_suspend_delegated` entry point)
 /// followed by the `Generator` method accessors. Both are target-aware
 /// internally.
 pub(crate) fn emit_generator_runtime(emitter: &mut Emitter) {

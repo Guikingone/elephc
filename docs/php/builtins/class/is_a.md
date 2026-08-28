@@ -2,7 +2,7 @@
 title: "is_a()"
 description: "Checks whether an object is of a given type or has it as one of its parents."
 sidebar:
-  order: 86
+  order: 93
 ---
 
 ## is_a()
@@ -26,12 +26,6 @@ Checks whether an object is of a given type or has it as one of its parents.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/is_a.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/is_a.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

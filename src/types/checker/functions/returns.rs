@@ -62,7 +62,16 @@ impl Checker {
     ) {
         match &stmt.kind {
             StmtKind::Return(Some(expr)) => {
-                if let Ok(ty) = self.infer_type(expr, env) {
+                // Prefer the type recorded while this exact statement was checked: it reflects
+                // the environment at the return site, whereas `env` here is the body's final
+                // environment and would leak a later narrowing backwards. Falls back to
+                // re-inference when nothing was recorded (e.g. an unchecked body).
+                let recorded = self
+                    .flow_typed_returns
+                    .get(&(stmt as *const Stmt as usize))
+                    .filter(|(span, _)| *span == stmt.span)
+                    .map(|(_, ty)| ty.clone());
+                if let Some(ty) = recorded.or_else(|| self.infer_type(expr, env).ok()) {
                     returns.push(ReturnInfo {
                         ty,
                         has_value: true,

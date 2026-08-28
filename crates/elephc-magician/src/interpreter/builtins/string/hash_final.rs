@@ -8,12 +8,9 @@
 //! - Direct and evaluated-argument dispatch stay in this leaf.
 //! - Finalizing consumes the hash context resource from the eval stream table.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "hash_final",
+    contract: "hash_final",
     area: String,
-    params: [context, binary = EvalBuiltinDefaultValue::Bool(false)],
     direct: HashContext,
     values: HashContext,
 }

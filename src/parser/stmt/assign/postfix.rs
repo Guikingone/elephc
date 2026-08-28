@@ -10,7 +10,9 @@
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
-use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{
+    BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX,
+};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
@@ -68,6 +70,24 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_postfix_assignment(lhs_expr, op, rhs, span).map(Some);
     }
+    // A compound write reads its element at store time too, so a right-hand side that
+    // reassigns a plain-variable index decides which element is READ as well as which is
+    // written: `$c = [10, 20]; $k = 0; $c[$k] += ($k = 1);` leaves `[10, 21]` in PHP. The
+    // desugar below embeds that read INSIDE the right-hand side, where it would still see
+    // the old index, so the right-hand side is settled into a temporary first.
+    //
+    // `??=` is deliberately excluded although it is also "not `Assign`": its right-hand
+    // side is LAZY, evaluated only when the key is absent. Hoisting it runs it every time
+    // AND before the presence check, so `$a[$slot] ??= ($slot = 0)` would test the slot the
+    // right-hand side just selected instead of the one written in the source.
+    let mut hoisted = EffectfulTargetLowerer::new(span);
+    let rhs = if matches!(op, AssignmentOperator::Compound(_))
+        && compound_rhs_can_disturb_index(&lhs_expr, &rhs)
+    {
+        hoisted.stabilize_unconditionally(rhs)
+    } else {
+        rhs
+    };
     let lhs_span = lhs_expr.span;
     if is_append {
         let stmt = match lhs_expr.kind {
@@ -131,7 +151,30 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 
-    Ok(Some(Stmt::new(stmt, span)))
+    Ok(Some(hoisted.finish_if_used(stmt, span)))
+}
+
+/// True when `target` writes an element at a plain-VARIABLE index and `rhs` can reassign
+/// that variable before the write lands.
+///
+/// A replay-safe right-hand side has no effects at all, so it can disturb nothing — which is
+/// what keeps `$counts[$k]++` and `$sums[$k] += $n` on the existing path, emitting no temporary.
+/// Every other right-hand side is settled first.
+///
+/// The gate used to also require the right-hand side to MENTION the index by name, which was
+/// unsound: `$c[$k] += (function() use (&$k) { $k = 1; return 1; })();` answered `10,11` where
+/// PHP answers `10,21`, because the mention sits in a closure the call expression does not scan.
+/// Widening it costs a temporary on shapes like `$sums[$k] += f()` and costs no correctness:
+/// PHP evaluates a compound assignment's right-hand side BEFORE reading the element, so settling
+/// it early is what the language does anyway.
+fn compound_rhs_can_disturb_index(target: &Expr, rhs: &Expr) -> bool {
+    let ExprKind::ArrayAccess { index, .. } = &target.kind else {
+        return false;
+    };
+    if !matches!(index.kind, ExprKind::Variable(_)) {
+        return false;
+    }
+    !can_replay_assignment_target(rhs)
 }
 
 /// Lowers an append through a nested array target (`$a[0][] = $value`) into a
@@ -145,7 +188,7 @@ fn lower_nested_append_assignment(
 ) -> Result<Stmt, CompileError> {
     let mut lowerer = EffectfulTargetLowerer::new(span);
     let target = lowerer.stabilize_array_target(target);
-    let temp = lowerer.next_temp_name();
+    let temp = lowerer.next_nested_append_temp_name();
     lowerer.stmts.push(Stmt::new(
         StmtKind::Assign {
             name: temp.clone(),
@@ -332,6 +375,19 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
 
+    // `self::$b[$k][] = $v` (and its `static::` / `parent::` / `Named::` siblings) is an append
+    // through a *nested* target. The trailing `[]` was stripped from the LHS tokens above, so
+    // `lhs_expr` is an `ExprKind::ArrayAccess` and the `if is_append` guard on the bare
+    // `StaticPropertyAccess` arm below — which only ever handles `self::$b[] = $v` — cannot
+    // match it. Left alone it falls into the plain `ArrayAccess` arm, which ignores `is_append`
+    // entirely and emits `StaticPropertyArrayAssign`: the append is silently dropped and the
+    // bucket is OVERWRITTEN with the single value. Route it through the same read/append/
+    // write-back desugar every other nested-append target already uses; the write-back builder
+    // (`assignment_target_store_stmt`) already supports the static-property family.
+    if is_append && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. }) {
+        return lower_nested_append_assignment(lhs_expr, value, span).map(Some);
+    }
+
     let stmt = match lhs_expr.kind {
         ExprKind::StaticPropertyAccess { receiver, property } if is_append => {
             StmtKind::StaticPropertyArrayPush {
@@ -420,6 +476,13 @@ fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Optio
             Token::LBrace => brace_depth += 1,
             Token::RBrace => brace_depth = brace_depth.saturating_sub(1),
             Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                return None;
+            }
+            // `$k = $c->i++;` is an ASSIGNMENT whose right-hand side ends in `++`, not an
+            // increment statement targeting `$k = $c->i`. Stopping at a top-level `=` hands
+            // it to the expression parser, which desugars the increment in place; without
+            // this the whole line was claimed here and rejected as an invalid target.
+            Token::Assign if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
             }
             Token::PlusPlus if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
@@ -580,7 +643,10 @@ fn lower_effectful_postfix_assignment(
 }
 
 /// Lowers discarded post-increment/decrement to the existing assignment statement forms.
-fn lower_postfix_incdec_assignment(
+///
+/// Statement position discards the operator's value, so prefix `++$obj->n;` lowers through
+/// here too: with the result unused, `++X` and `X++` are both `X += 1`.
+pub(crate) fn lower_postfix_incdec_assignment(
     lhs_expr: Expr,
     is_increment: bool,
     span: Span,
@@ -744,6 +810,24 @@ impl EffectfulTargetLowerer {
         name
     }
 
+    /// Mints the temporary that holds the bucket of a nested append, under its own reserved
+    /// prefix.
+    ///
+    /// The prefix is what lets IR lowering recognize a nested-append `Synthetic` group and
+    /// lower it as a fused, in-place append instead of the read/copy/write-back it desugars
+    /// to here. `next_temp_name`'s prefix is shared with the `.=` / `+=` desugars, which emit
+    /// the same statement shapes, so it cannot serve as that signal. PHP source cannot forge
+    /// either lock: the name is not a legal PHP identifier and `StmtKind::Synthetic` has no
+    /// surface syntax.
+    fn next_nested_append_temp_name(&mut self) -> String {
+        let name = format!(
+            "{}{}_{}_{}",
+            NESTED_APPEND_TEMP_PREFIX, self.span.line, self.span.col, self.next_temp
+        );
+        self.next_temp += 1;
+        name
+    }
+
     /// Stabilizes an array-access target, recursively stabilizing both the array base
     /// and the index. For simple array bases (Variable, This, StaticPropertyAccess),
     /// the array base is kept as-is; deeper bases are stabilized via `stabilize_array_base`.
@@ -791,5 +875,30 @@ impl EffectfulTargetLowerer {
     fn finish(mut self, final_stmt: StmtKind) -> Stmt {
         self.stmts.push(Stmt::new(final_stmt, self.span));
         Stmt::new(StmtKind::Synthetic(self.stmts), self.span)
+    }
+
+    /// Returns `final_stmt` unwrapped when nothing was hoisted, so a caller that only
+    /// SOMETIMES needs a temporary does not wrap every other statement in a `Synthetic`
+    /// group it has no use for.
+    fn finish_if_used(self, final_stmt: StmtKind, span: Span) -> Stmt {
+        if self.stmts.is_empty() {
+            return Stmt::new(final_stmt, span);
+        }
+        self.finish(final_stmt)
+    }
+
+    /// Emits `expr` into a fresh temporary and returns a reference to it, even when the
+    /// expression is replay-safe. `stabilize` exists to make an effectful expression
+    /// evaluate ONCE; this exists to make it evaluate EARLY.
+    fn stabilize_unconditionally(&mut self, expr: Expr) -> Expr {
+        let name = self.next_temp_name();
+        self.stmts.push(Stmt::new(
+            StmtKind::Assign {
+                name: name.clone(),
+                value: expr,
+            },
+            self.span,
+        ));
+        Expr::new(ExprKind::Variable(name), self.span)
     }
 }

@@ -13,3 +13,8 @@ use super::*;
 mod outer_guards;
 mod excluded_guards;
 mod composite_guards;
+mod float_guards;
+mod range_guards;
+mod relational_guards;
+mod loop_guards;
+mod foreach_guards;

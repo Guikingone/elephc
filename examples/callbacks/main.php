@@ -33,6 +33,14 @@ echo "Sorted: ";
 foreach ($sorted as $v) { echo $v . " "; }
 echo "\n";
 
+// usort over a string array: the comparator receives each element as a string
+$words = ["banana", "apple", "fig", "cherry"];
+usort($words, fn($a, $b) => strlen($a) <=> strlen($b));
+echo "Sorted words: " . implode(", ", $words) . "\n";
+
+// array_reduce over a string array: the callback folds strings into an int accumulator
+echo "Total word length: " . array_reduce($words, fn($carry, $word) => $carry + strlen($word), 0) . "\n";
+
 // array_walk: apply side-effect to each element
 echo "Walk:\n";
 $items = [10, 20, 30];
@@ -214,7 +222,8 @@ class OffsetCallbacks {
 $offsets = new OffsetCallbacks();
 echo "method callable array_reduce: " . array_reduce([1, 2], $offsets->add_offset(...), 0) . "\n";
 echo "method callable array_walk: ";
-array_walk([1, 2], $offsets->show_shifted(...));
+$walk_pair = [1, 2];
+array_walk($walk_pair, $offsets->show_shifted(...));
 echo "\n";
 
 class SelectedOffsetCallbacks {
@@ -248,7 +257,8 @@ $selected_map = array_map($use_small_offsets ? $small_offsets->map_selected(...)
 echo "selected callable array_map: " . $selected_map[0] . " " . $selected_map[1] . "\n";
 echo "selected callable array_reduce: " . array_reduce([1, 2], $use_small_offsets ? $small_offsets->add_selected(...) : $large_offsets->add_selected(...), 0) . "\n";
 echo "selected callable array_walk: ";
-array_walk([1, 2], $use_small_offsets ? $small_offsets->show_selected(...) : $large_offsets->show_selected(...));
+$walk_pair = [1, 2];
+array_walk($walk_pair, $use_small_offsets ? $small_offsets->show_selected(...) : $large_offsets->show_selected(...));
 echo "\n";
 
 class SelectedCalculator {
@@ -421,3 +431,26 @@ foreach ($identity as $value) { echo $value . " "; }
 echo "\n";
 $mixed_types = array_map(fn($value) => gettype($value), $mixed_values);
 echo "mixed array_map gettype: " . implode(", ", $mixed_types) . "\n";
+
+// A `callable` parameter also accepts a PHP callable string when the name is known at
+// compile time: a builtin, a user function, or "Class::method".
+class StaticWrapper {
+    public static function wrap(string $value): string {
+        return "<" . $value . ">";
+    }
+}
+
+function apply_callable(callable $fn, string $value): string {
+    return $fn($value);
+}
+
+echo "callable string builtin: " . apply_callable("strtoupper", "abc") . "\n";
+echo "callable string user function: " . apply_callable("callback_name_passthrough", "kept") . "\n";
+echo "callable string static method: " . apply_callable("StaticWrapper::wrap", "wrapped") . "\n";
+
+// Scalar arguments bind to declared scalar parameters using PHP's coercive rules.
+function describe_length(string $label, int $count): string {
+    return $label . "=" . $count;
+}
+
+echo "coerced arguments: " . describe_length(7, "3") . "\n";

@@ -2,13 +2,13 @@
 title: "ptr_offset()"
 description: "Returns a new pointer offset from the given pointer by the given byte count."
 sidebar:
-  order: 310
+  order: 339
 ---
 
 ## ptr_offset()
 
 ```php
-function ptr_offset(pointer $pointer, int $offset): mixed
+function ptr_offset(pointer $pointer, int $offset): pointer
 ```
 
 Returns a new pointer offset from the given pointer by the given byte count.
@@ -17,7 +17,7 @@ Returns a new pointer offset from the given pointer by the given byte count.
 - `$pointer` (`pointer`)
 - `$offset` (`int`)
 
-**Returns**: `mixed`
+**Returns**: `pointer`
 
 ## Availability
 
@@ -26,12 +26,6 @@ Returns a new pointer offset from the given pointer by the given byte count.
 - **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

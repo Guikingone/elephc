@@ -45,7 +45,21 @@ impl Checker {
                         "Exponentiation requires numeric operands",
                     ));
                 }
-                Ok(PhpType::Float)
+                // PHP's `**` is int-preserving: `2 ** 3` is `int(8)`, not `float(8)`.
+                // It only becomes a float when an operand is already a float, when the
+                // exponent is negative, or when the integer result overflows `i64` — so
+                // an int/int power is `Mixed` for the same reason `+`/`-`/`*` are.
+                if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                    Ok(PhpType::Mixed)
+                } else if lt == PhpType::Float || rt == PhpType::Float {
+                    Ok(PhpType::Float)
+                } else if let Some(literal_ty) =
+                    checked_literal_int_arithmetic_type(op, left, right)
+                {
+                    Ok(literal_ty)
+                } else {
+                    Ok(PhpType::Mixed)
+                }
             }
             BinOp::Add => {
                 if is_array_like_type(&lt) || is_array_like_type(&rt) {
@@ -373,6 +387,37 @@ impl Checker {
             }
         }
         closure_ref_params.extend(capture_refs.iter().cloned());
+        // A `use (&$x)` capture aliases the ENCLOSING body's local: the closure can outlive
+        // this statement and write through the reference, so `$x` is aliased there from here
+        // on. Recorded before entering the closure scope, which saves and restores the
+        // enclosing set.
+        for capture in capture_refs {
+            self.ref_aliased_locals.insert(capture.clone());
+        }
+        // Every closure parameter is bound unconditionally on entry, so all of them are
+        // recorded at binding depth 0. A `use ($x)` CAPTURE is deliberately absent: it is
+        // seeded into the body's environment from the enclosing frame, and a missing entry
+        // means "not bound here", which is not kill/retype eligible.
+        let closure_param_names: Vec<String> = params
+            .iter()
+            .map(|(name, _, _, _)| name.clone())
+            .chain(variadic.iter().map(|name| (*name).clone()))
+            .collect();
+        // A closure parameter with a declared type hint is a contract inside the body.
+        let typed_variadic = match &expr.kind {
+            ExprKind::Closure {
+                variadic: Some(variadic_name),
+                variadic_type: Some(_),
+                ..
+            } => Some(variadic_name.clone()),
+            _ => None,
+        };
+        let closure_typed_params: Vec<String> = params
+            .iter()
+            .filter(|(_, type_ann, _, _)| type_ann.is_some())
+            .map(|(name, _, _, _)| name.clone())
+            .chain(typed_variadic)
+            .collect();
         // Inside a closure body, `$this` is permitted even with no enclosing
         // class method: the closure may be bound to an object later. Track the
         // nesting so `infer_this_type` can allow it (as a runtime-dispatched
@@ -389,12 +434,31 @@ impl Checker {
         self.loop_storage_types
             .retain(|(scope, _), _| scope != &loop_storage_scope);
         self.current_loop_storage_scope = loop_storage_scope;
-        let body_result = self.with_local_storage_context(closure_ref_params, |checker| {
-            for stmt in body {
-                checker.check_stmt(stmt, &mut closure_sig.env)?;
-            }
-            Ok(())
-        });
+        // The storage this closure's frame ALREADY holds on entry: its by-VALUE captures, each
+        // with the type it arrives with, read from the ENCLOSING environment. Deliberately not
+        // `closure_sig.env`, which `prepare_closure_signature_context_with_param_hints` builds by
+        // cloning the whole enclosing scope — keying on that made every enclosing local look
+        // pre-bound, and silenced a FRESH closure local whose name merely collided with one.
+        // Parameters are added too, so the map means "the frame's own pre-bound storage"; the
+        // marking excludes them anyway.
+        let pre_bound_own_storage: std::collections::HashMap<String, PhpType> = captures
+            .iter()
+            .chain(params.iter().map(|(name, _, _, _)| name))
+            .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
+            .collect();
+        let body_result = self.with_local_storage_context(
+            closure_ref_params,
+            closure_param_names,
+            closure_typed_params,
+            pre_bound_own_storage,
+            body,
+            |checker| {
+                for stmt in body {
+                    checker.check_stmt(stmt, &mut closure_sig.env)?;
+                }
+                Ok(())
+            },
+        );
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;
@@ -421,6 +485,10 @@ impl Checker {
         })?;
         if var_ty != PhpType::Callable {
             if matches!(var_ty.codegen_repr(), PhpType::Str) {
+                // The callee name is only known at runtime, but PHP rejects
+                // unpacking after named arguments while compiling the call.
+                self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
+                self.record_unresolved_callee_argument_aliases(args);
                 for arg in args {
                     self.infer_type(arg, env)?;
                 }
@@ -507,6 +575,10 @@ impl Checker {
                 &format!("callable ${}", var),
             );
         }
+        // No signature is known for this callable, so the planner never runs;
+        // still apply PHP's syntactic unpack-after-named rule.
+        self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
+        self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_type(arg, env)?;
         }
@@ -535,6 +607,14 @@ impl Checker {
         }
         let callee_ty = self.infer_type(callee, env)?;
         if matches!(callee_ty.codegen_repr(), PhpType::Str) {
+            // String callables resolve at runtime; PHP still rejects unpacking
+            // after named arguments while compiling the call expression.
+            let callee_desc = match &callee.kind {
+                ExprKind::Variable(var_name) => format!("callable ${}", var_name),
+                _ => "callable expression".to_string(),
+            };
+            self.require_no_spread_after_named_args(args, &callee_desc)?;
+            self.record_unresolved_callee_argument_aliases(args);
             for arg in args {
                 self.infer_type(arg, env)?;
             }
@@ -671,6 +751,9 @@ impl Checker {
             )?;
             return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
         }
+        // Everything below this point failed to produce a signature: the return type may still be
+        // recoverable from a recorded closure shape, but the PARAMETER binding modes are not.
+        self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_type(arg, env)?;
         }
@@ -698,11 +781,15 @@ impl Checker {
     }
 
     /// Infers a runtime-selected callable-array call by checking argument expressions only.
+    ///
+    /// The `[$receiver, "method"]` pair is picked at runtime, so no signature — and no parameter
+    /// binding mode — is available: every argument is recorded as reference-aliased.
     fn infer_runtime_callable_array_call(
         &mut self,
         args: &[Expr],
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_type(arg, env)?;
         }
@@ -1083,6 +1170,19 @@ impl Checker {
 
         // No statically-known signature — fall back to syntactic return-type inference
         // (matches the unknown-callable path in infer_expr_call_type).
+        //
+        // The pipe is a call, so the unknown-callee rule applies to it too: with no signature there
+        // are no `ref_params` to consult, and the piped value is the one argument such a callee
+        // would bind. Recording it through the shared helper keeps this in step with the ordinary
+        // unresolvable-callee sites and with the branch-divergent pre-scan, whose `Pipe` arm
+        // asks the same `callee_may_bind_arguments_by_ref` helper — so the two sides agree
+        // exactly on the `Function(name)` class. Targets this path resolves through
+        // `check_pipe_known_callable_call` (`Method`/`StaticMethod` first-class callables,
+        // closures with inferred signatures) stay permissive here while the pre-scan keeps them
+        // conservative; that residual asymmetry only ever withholds a mark, never a kill/retype
+        // the pre-scan would have allowed. The KNOWN-signature paths above need nothing:
+        // `check_pipe_known_callable_call` rejects a by-reference parameter outright per the RFC.
+        self.record_unresolved_callee_argument_aliases(&synth_args);
         match &callable.kind {
             ExprKind::Closure { body, .. } => {
                 return Ok(infer_return_type_syntactic(body));
@@ -1228,7 +1328,7 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
             | PhpType::False
             | PhpType::Void
             | PhpType::Mixed
-    ) || checker.is_union_with_mixed_int_dispatch(ty)
+    ) || checker.is_union_with_mixed_numeric_dispatch(ty)
 }
 
 /// Returns `true` if `ty` is a concrete `DateTime`/`DateTimeImmutable` object, the family PHP orders
@@ -1265,9 +1365,45 @@ fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) ->
         BinOp::Add => lhs.checked_add(rhs).is_some(),
         BinOp::Sub => lhs.checked_sub(rhs).is_some(),
         BinOp::Mul => lhs.checked_mul(rhs).is_some(),
+        BinOp::Pow => int_pow_result_fits(lhs, rhs),
         _ => return None,
     };
     Some(if fits { PhpType::Int } else { PhpType::Float })
+}
+
+/// Returns whether PHP's `int ** int` keeps an integer result for these literals.
+///
+/// Mirrors `zend_pow_function_base` (and `crate::optimize::fold::ops::try_fold_int_pow`):
+/// a negative exponent is always a double, `exp == 0` and `base == 0` answer immediately,
+/// and otherwise the square-and-multiply loop reports the first `i64` multiplication that
+/// would overflow — the exact point where PHP promotes the result to a double.
+fn int_pow_result_fits(base: i64, exponent: i64) -> bool {
+    if exponent < 0 {
+        return false;
+    }
+    if exponent == 0 || base == 0 {
+        return true;
+    }
+    let (mut accumulated, mut factor, mut remaining) = (1i64, base, exponent);
+    while remaining >= 1 {
+        if remaining % 2 == 1 {
+            remaining -= 1;
+            match accumulated.checked_mul(factor) {
+                Some(product) => accumulated = product,
+                None => return false,
+            }
+        } else {
+            remaining /= 2;
+            match factor.checked_mul(factor) {
+                Some(product) => factor = product,
+                None => return false,
+            }
+        }
+        if remaining == 0 {
+            return true;
+        }
+    }
+    true
 }
 
 /// Returns `true` when an integer arithmetic expression cannot overflow.

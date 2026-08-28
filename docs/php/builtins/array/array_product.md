@@ -2,7 +2,7 @@
 title: "array_product()"
 description: "Calculate the product of values in an array."
 sidebar:
-  order: 28
+  order: 29
 ---
 
 ## array_product()
@@ -24,12 +24,6 @@ Calculate the product of values in an array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_product.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_product.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

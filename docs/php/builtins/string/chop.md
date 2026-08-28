@@ -2,7 +2,7 @@
 title: "chop()"
 description: "Alias of rtrim: strips whitespace (or other characters) from the end of a string."
 sidebar:
-  order: 364
+  order: 393
 ---
 
 ## chop()
@@ -25,12 +25,6 @@ Alias of rtrim: strips whitespace (or other characters) from the end of a string
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/chop.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/chop.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

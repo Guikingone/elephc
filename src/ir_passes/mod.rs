@@ -14,6 +14,7 @@
 
 mod allocation;
 mod branch_simplify;
+mod checked_int_sink;
 mod cfg;
 mod clobber;
 mod const_fold;
@@ -24,6 +25,7 @@ mod dominance;
 mod driver;
 mod identity_arith;
 mod inline;
+mod immutable_local_loads;
 mod intervals;
 mod licm;
 mod liveness;

@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the stream read helper.
 
 eval_builtin! {
-    name: "fread",
+    contract: "fread",
     area: Filesystem,
-    params: [stream, length],
     direct: Filesystem,
     values: Filesystem,
 }

@@ -11,6 +11,21 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
+use crate::codegen_support::runtime::UNCAUGHT_EXIT_STATUS;
+
+/// The diagnostic printed when the parent-id walk meets `-2`.
+///
+/// This is NOT a PHP-visible error, and it is deliberately not phrased as one. Reaching it means
+/// a throwable was constructed whose ancestor chain was never emitted, so the catch machinery
+/// cannot answer the question it was asked. Reporting "no match" there — which is what happened
+/// before this path existed — turns a compiler bug into a program that quietly skips its own
+/// `catch` block. Failing here is the whole point: it is what makes narrowing the throwable
+/// seeding in `crate::codegen_support::emitted_classes` a decidable change rather than a gamble.
+pub(crate) const ABSENT_MESSAGE: &str =
+    "Fatal error: elephc internal: thrown class metadata was not emitted\n";
+
+/// Symbol holding [`ABSENT_MESSAGE`], defined alongside the other fixed runtime strings.
+pub(crate) const ABSENT_MESSAGE_SYMBOL: &str = "_exc_absent_metadata_msg";
 
 /// Emits the `__rt_exception_matches` runtime helper.
 ///
@@ -45,6 +60,7 @@ pub fn emit_exception_matches(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10]");                                      // x10 = total number of emitted classes
     abi::emit_symbol_address(emitter, "x11", "_class_parent_ids");              // load page of the runtime parent-id table
     emitter.instruction("mov x12, #-1");                                        // x12 = sentinel parent id used for root classes
+    emitter.instruction("mov x14, #-2");                                        // x14 = sentinel for a class whose metadata was never emitted
 
     // -- walk parent links until we either match or hit the root --
     emitter.label("__rt_exception_matches_loop");
@@ -54,6 +70,8 @@ pub fn emit_exception_matches(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_exception_matches_no");                      // out-of-range ids cannot match any catch type safely
     emitter.instruction("lsl x13, x9, #3");                                     // scale class_id by 8 bytes per parent-id entry
     emitter.instruction("ldr x9, [x11, x13]");                                  // follow the current class's parent class_id link
+    emitter.instruction("cmp x9, x14");                                         // is this the "metadata never emitted" sentinel?
+    emitter.instruction("b.eq __rt_exception_matches_absent");                  // a broken chain is a compiler bug, not a non-matching catch
     emitter.instruction("cmp x9, x12");                                         // have we reached a class with no parent?
     emitter.instruction("b.eq __rt_exception_matches_no");                      // root reached without a match means this catch does not apply
     emitter.instruction("b __rt_exception_matches_loop");                       // continue walking up the inheritance chain
@@ -86,6 +104,14 @@ pub fn emit_exception_matches(emitter: &mut Emitter) {
     emitter.label("__rt_exception_matches_no");
     emitter.instruction("mov x0, #0");                                          // return false when the catch type does not match the thrown object
     emitter.instruction("ret");                                                 // finish the instanceof-style catch test
+
+    emitter.label("__rt_exception_matches_absent");
+    abi::emit_symbol_address(emitter, "x1", ABSENT_MESSAGE_SYMBOL);             // the diagnostic, not a PHP-visible error
+    emitter.instruction(&format!("mov x2, #{}", ABSENT_MESSAGE.len()));         // its byte length
+    emitter.instruction("mov x0, #2");                                          // fd = stderr, as every other fatal runtime path uses
+    emitter.syscall(4);                                                         // write
+    emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // exit with PHP's uncaught-throwable status
+    emitter.syscall(1);                                                         // exit
 }
 
 /// x86_64/Linux implementation of `__rt_exception_matches`.
@@ -94,7 +120,8 @@ pub fn emit_exception_matches(emitter: &mut Emitter) {
 /// Output: eax = 1 if the thrown object matches the catch target, 0 otherwise.
 ///
 /// Identical logic to the ARM64 variant but expressed in x86_64 System V ABI conventions.
-/// Uses callee-saved registers r8–r12 and follows the x86_64 unwind/cleanup ABI expectations.
+/// Uses only caller-saved scratch registers so generated callers keep their
+/// live SysV callee-saved values intact across the helper call.
 fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: exception_matches ---");
@@ -115,6 +142,8 @@ fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r8, r9");                                          // is the current class_id outside the emitted class table?
     emitter.instruction("jae __rt_exception_matches_no");                       // out-of-range ids cannot match any catch type safely
     emitter.instruction("mov r8, QWORD PTR [r10 + r8 * 8]");                    // follow the current class's parent class_id link
+    emitter.instruction("cmp r8, -2");                                          // is this the "metadata never emitted" sentinel?
+    emitter.instruction("je __rt_exception_matches_absent");                    // a broken chain is a compiler bug, not a non-matching catch
     emitter.instruction("cmp r8, r11");                                         // have we reached a class with no parent?
     emitter.instruction("je __rt_exception_matches_no");                        // root reached without a match means this catch does not apply
     emitter.instruction("jmp __rt_exception_matches_loop");                     // continue walking up the inheritance chain
@@ -131,8 +160,8 @@ fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_exception_matches_interface_loop");
     emitter.instruction("test r11, r11");                                       // are there any remaining interfaces to scan for a catch match?
     emitter.instruction("je __rt_exception_matches_no");                        // no remaining interfaces means this catch target does not apply
-    emitter.instruction("mov r12, QWORD PTR [r10]");                            // r12 = current implemented interface_id
-    emitter.instruction("cmp r12, rsi");                                        // does this implemented interface match the catch target id?
+    emitter.instruction("mov rcx, QWORD PTR [r10]");                            // rcx = current implemented interface_id without clobbering callee-saved r12
+    emitter.instruction("cmp rcx, rsi");                                        // does this implemented interface match the catch target id?
     emitter.instruction("je __rt_exception_matches_yes");                       // matching interface ids mean the catch clause applies
     emitter.instruction("add r10, 16");                                         // advance to the next [interface_id, impl_ptr] pair
     emitter.instruction("sub r11, 1");                                          // consume one implemented interface entry
@@ -145,4 +174,31 @@ fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_exception_matches_no");
     emitter.instruction("xor eax, eax");                                        // return false when the catch type does not match the thrown object
     emitter.instruction("ret");                                                 // finish the instanceof-style catch test
+
+    emitter.label("__rt_exception_matches_absent");
+    abi::emit_symbol_address(emitter, "rsi", ABSENT_MESSAGE_SYMBOL);            // the diagnostic, not a PHP-visible error
+    emitter.instruction(&format!("mov edx, {}", ABSENT_MESSAGE.len()));         // its byte length
+    emitter.instruction("mov edi, 2");                                          // fd = stderr, as every other fatal runtime path uses
+    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
+    emitter.instruction("syscall");                                             // write the internal metadata diagnostic to stderr
+    emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // exit with PHP's uncaught-throwable status
+    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("syscall");                                             // exit rather than misreport the broken chain as a non-match
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies the x86_64 matcher never clobbers SysV callee-saved registers.
+    #[test]
+    fn linux_x86_64_matcher_uses_only_volatile_scratch_registers() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_exception_matches(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("r12"));
+        assert!(asm.contains("mov rcx, QWORD PTR [r10]"));
+    }
 }

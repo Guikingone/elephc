@@ -5,7 +5,13 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for functions.
+//! - Submodules group focused fixtures for BCMath, functions, and PHP float->int conversion.
 
+#[path = "math/bcmath.rs"]
+mod bcmath;
 #[path = "math/functions.rs"]
 mod functions;
+#[path = "math/php_float_to_int.rs"]
+mod php_float_to_int;
+#[path = "math/rounding_modes.rs"]
+mod rounding_modes;

@@ -128,6 +128,43 @@ pub(crate) fn array_element_type(arr_ty: &PhpType) -> PhpType {
     }
 }
 
+/// Returns the array key type carried by an array/associative-array type.
+///
+/// Indexed arrays are integer-keyed; an associative array reports its declared key type.
+/// A `Mixed` receiver yields `Mixed` keys so callback validation keeps the declaration as
+/// the only available contract. Other non-array types retain the `Int` fallback, matching
+/// [`array_element_type`]; callers that require arrays diagnose the container separately.
+pub(crate) fn array_key_type(arr_ty: &PhpType) -> PhpType {
+    match arr_ty {
+        PhpType::Array(_) => PhpType::Int,
+        PhpType::AssocArray { key, .. } => (**key).clone(),
+        PhpType::Mixed => PhpType::Mixed,
+        _ => PhpType::Int,
+    }
+}
+
+/// Returns the argument positions whose callback operand is type-checked *contextually* by
+/// the builtin's own `check` hook, with parameter types derived from the array element/key.
+///
+/// Every eager pre-inference pass must skip these positions. Inferring the closure there
+/// first would check its body once with the unhinted `Int`/`Mixed` parameter fallback and
+/// reject valid code — e.g. `array_filter($strings, fn($v) => strlen($v) > 5)` would fail
+/// with "strlen() argument must be string" before the hook ever supplied the `Str` hint.
+///
+/// The table mirrors the `check_array_callback_builtin_call` / `check_callback_builtin_call`
+/// call sites in `src/builtins/array/` plus `preg_replace_callback`, whose contextual
+/// signature lives in `callables::preg_replace_callback`.
+pub(crate) fn contextual_callback_arg_positions(builtin_name: &str) -> &'static [usize] {
+    match crate::names::php_symbol_key(builtin_name.trim_start_matches('\\')).as_str() {
+        "array_map" => &[0],
+        "array_all" | "array_any" | "array_filter" | "array_find" | "array_reduce"
+        | "array_walk" | "array_walk_recursive" | "preg_replace_callback" | "uasort"
+        | "uksort" | "usort" => &[1],
+        "array_udiff" | "array_uintersect" => &[2],
+        _ => &[],
+    }
+}
+
 /// Prefix for synthetic callback arguments; PHP identifiers cannot begin with a digit.
 const CALLBACK_ARG_PLACEHOLDER_PREFIX: &str = "0__elephc_callback_arg";
 
@@ -179,6 +216,28 @@ fn callback_dummy_arg_for_type(
 /// checker-only arguments. Known element types remain strict; `Mixed`/`Never` elements defer
 /// the element-to-declaration comparison without weakening global type compatibility.
 pub(crate) fn check_array_callback_builtin_call(
+    checker: &mut Checker,
+    callback: &Expr,
+    callback_arg_types: &[PhpType],
+    span: crate::span::Span,
+    env: &TypeEnv,
+    label: &str,
+) -> Result<PhpType, CompileError> {
+    checker.with_internal_callback_binding(|checker| {
+        check_array_callback_builtin_call_in_engine_frame(
+            checker,
+            callback,
+            callback_arg_types,
+            span,
+            env,
+            label,
+        )
+    })
+}
+
+/// Type-checks an array-callback builtin's callback after the caller's `strict_types` setting
+/// has been suspended, matching the coercive frame PHP's engine invokes such callbacks from.
+fn check_array_callback_builtin_call_in_engine_frame(
     checker: &mut Checker,
     callback: &Expr,
     callback_arg_types: &[PhpType],
@@ -284,6 +343,11 @@ fn check_object_or_array_callable_call(
                 "callback runtime does not yet support dynamically selected callable arrays",
             ));
         }
+        // The `[$receiver, $method]` pair is only known at runtime, so no signature governs the
+        // callback arguments — alias them conservatively (see
+        // `Checker::record_unresolved_callee_argument_aliases`). This is the shape `$cls::m($a)`
+        // and `$obj->$m($a)` desugar to.
+        checker.record_unresolved_callee_argument_aliases(callback_args);
         for arg in callback_args {
             checker.infer_type(arg, env)?;
         }
@@ -756,6 +820,28 @@ pub(crate) fn check_callback_builtin_call(
     env: &TypeEnv,
     label: &str,
 ) -> Result<PhpType, CompileError> {
+    checker.with_internal_callback_binding(|checker| {
+        check_callback_builtin_call_in_engine_frame(
+            checker,
+            callback,
+            callback_args,
+            span,
+            env,
+            label,
+        )
+    })
+}
+
+/// Type-checks a callback builtin's callback after the caller's `strict_types` setting has been
+/// suspended, matching the coercive frame PHP's engine invokes such callbacks from.
+fn check_callback_builtin_call_in_engine_frame(
+    checker: &mut Checker,
+    callback: &Expr,
+    callback_args: &[Expr],
+    span: crate::span::Span,
+    env: &TypeEnv,
+    label: &str,
+) -> Result<PhpType, CompileError> {
     if checker.expr_call_complex_callee_needs_runtime_capture(callback)
         && !callback_builtin_allows_complex_descriptor_env(label, callback)
     {
@@ -1113,6 +1199,11 @@ pub(crate) fn check_call_user_func_array(
     if callback_ty == PhpType::Str
         && call_user_func_array_arg_container_is_supported(&arg_array_ty)
     {
+        // The argument LIST is the second argument, and an unresolved callee may bind an element
+        // of it by reference, so the local holding that array loses kill/retype eligibility. An
+        // array LITERAL there is not aliasable (PHP refuses to bind a literal element by
+        // reference) and `record_reference_alias_root` correctly stops at it.
+        checker.record_unresolved_callee_argument_aliases(&args[1..]);
         return Ok(PhpType::Mixed);
     }
     if matches!(callback_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_))
@@ -1120,6 +1211,7 @@ pub(crate) fn check_call_user_func_array(
     {
         // A Mixed/Union callback is validated and dispatched at runtime by tag
         // (string name, closure, or array), matching PHP's runtime callable check.
+        checker.record_unresolved_callee_argument_aliases(&args[1..]);
         return Ok(PhpType::Mixed);
     }
     Err(CompileError::new(
@@ -1229,6 +1321,10 @@ pub(crate) fn check_call_user_func(
     }
     let callback_ty = checker.infer_type(&args[0], env)?;
     if callback_ty == PhpType::Str {
+        // The callee is a runtime string. `$cls::m($a)` and `$obj->$m($a)` desugar to this shape
+        // (see the `DoubleColon` arm of the Pratt parser), and a by-reference parameter behind it
+        // would alias the local, so the arguments lose kill/retype eligibility.
+        checker.record_unresolved_callee_argument_aliases(&args[1..]);
         for arg in &args[1..] {
             checker.infer_type(arg, env)?;
         }
@@ -1240,6 +1336,7 @@ pub(crate) fn check_call_user_func(
         // lowering unboxes it and dispatches by tag (string name, closure, or
         // array), matching PHP's runtime callable check. The concrete callee
         // return type is not statically known, so the call yields Mixed.
+        checker.record_unresolved_callee_argument_aliases(&args[1..]);
         for arg in &args[1..] {
             checker.infer_type(arg, env)?;
         }
@@ -1309,9 +1406,35 @@ pub(crate) fn array_filter_callback_arg_types(
 ) -> Vec<PhpType> {
     let elem_ty = array_element_type(arr_ty);
     match mode_arg.and_then(static_array_filter_mode_value) {
-        Some(1) => vec![elem_ty, PhpType::Int],
-        Some(2) => vec![PhpType::Int],
+        Some(1) => vec![elem_ty, array_key_type(arr_ty)],
+        Some(2) => vec![array_key_type(arr_ty)],
         _ => vec![elem_ty],
+    }
+}
+
+/// Returns the contextual callback parameter types for `array_walk()`/`array_walk_recursive()`.
+///
+/// PHP always invokes the callback as `callback($value, $key)`, but declaring only the value
+/// parameter is legal and common. The key slot is therefore added only when the callback is a
+/// closure literal that declares at least two parameters, so a one-parameter callback keeps
+/// passing arity validation while `function ($v, $k)` gets its key typed from the array.
+pub(crate) fn array_walk_callback_arg_types(arr_ty: &PhpType, callback: &Expr) -> Vec<PhpType> {
+    let elem_ty = array_element_type(arr_ty);
+    if callback_declares_at_least_two_params(callback) {
+        vec![elem_ty, array_key_type(arr_ty)]
+    } else {
+        vec![elem_ty]
+    }
+}
+
+/// Reports whether a callback expression is a closure literal declaring two or more parameters.
+///
+/// Only literal closures/arrow functions are inspected; every other callable shape keeps the
+/// single-parameter contract the checker can prove without resolving the callable.
+fn callback_declares_at_least_two_params(callback: &Expr) -> bool {
+    match &callback.kind {
+        ExprKind::Closure { params, .. } => params.len() >= 2,
+        _ => false,
     }
 }
 

@@ -2,7 +2,7 @@
 title: "array_shift()"
 description: "Shifts an element off the beginning of array."
 sidebar:
-  order: 36
+  order: 37
 ---
 
 ## array_shift()
@@ -24,12 +24,6 @@ Shifts an element off the beginning of array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_shift.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_shift.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 
