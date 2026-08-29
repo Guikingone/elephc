@@ -35,6 +35,17 @@ const WRAPPER_ID_PHP: u64 = 6;
 ///
 /// Replaces whatever was held: the only caller drained the buffer into its own accumulation first,
 /// so what it hands back already contains the previous contents.
+/// Emits `__rt_stream_pending_append(handle, ptr, len)`: adds to what the holding area holds.
+///
+/// The put beside it REPLACES, which is right for a caller that has drained the area first. The
+/// topping-up in `__rt_fread` has not: php keeps the leftovers and adds after them.
+pub fn emit_stream_pending_append(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => emit_append_aarch64(emitter),
+        Arch::X86_64 => emit_append_x86_64(emitter),
+    }
+}
+
 pub fn emit_stream_pending_put(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => emit_put_aarch64(emitter),
@@ -96,6 +107,186 @@ fn emit_put_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spp_done");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the writer frame
+    emitter.instruction("ret");
+}
+
+/// The AArch64 appender: keeps what is still held and adds to it.
+///
+/// `__rt_stream_pending_put` replaces, and says so — it frees the old block because its callers
+/// have drained it. Topping the area up has NOT drained it: php keeps the bytes the last read left
+/// over and adds the new chunk after them, which is what lets `fread($h, 4)` answer four bytes
+/// across a chunk boundary. Replacing there loses exactly the leftovers.
+fn emit_append_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: append to retained stream bytes ---");
+    emitter.label_global("__rt_stream_pending_append");
+    // Frame: [0]=state [8]=source ptr [16]=source len [24]=old block [32]=kept count [40]=new block
+    emitter.instruction("sub sp, sp, #64");
+    emitter.instruction("stp x29, x30, [sp, #48]");
+    emitter.instruction("add x29, sp, #48");
+    emitter.instruction("str x1, [sp, #8]");                                    // the bytes to add
+    emitter.instruction("str x2, [sp, #16]");                                   // and how many
+    emitter.instruction("cbz x2, __rt_spa_done");                               // nothing to add
+    emitter.instruction("bl __rt_stream_state");                                // resolve the owning stream state
+    emitter.instruction("cbz x0, __rt_spa_done");                               // a stale handle retains nothing
+    emitter.instruction("str x0, [sp, #0]");
+
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_PENDING_PTR_OFFSET}]"));
+    emitter.instruction("str x9, [sp, #24]");                                   // whatever block is there now
+    emitter.instruction(&format!("ldr x10, [x0, #{STREAM_PENDING_LEN_OFFSET}]"));
+    emitter.instruction(&format!("ldr x11, [x0, #{STREAM_PENDING_POS_OFFSET}]"));
+    emitter.instruction("subs x10, x10, x11");                                  // what is still unread
+    emitter.instruction("csel x10, x10, xzr, gt");                              // never negative
+    emitter.instruction("cbz x9, __rt_spa_kept");                               // no block: nothing is kept
+    emitter.instruction("b __rt_spa_have_kept");
+    emitter.label("__rt_spa_kept");
+    emitter.instruction("mov x10, #0");
+    emitter.label("__rt_spa_have_kept");
+    emitter.instruction("str x10, [sp, #32]");                                  // how many survive the append
+
+    emitter.instruction("ldr x0, [sp, #16]");
+    emitter.instruction("add x0, x0, x10");                                     // the whole area, after
+    emitter.instruction("bl __rt_heap_alloc");
+    emitter.instruction("cbz x0, __rt_spa_done");                               // out of memory: keep what there is
+    emitter.instruction("str x0, [sp, #40]");
+
+    // -- the survivors first, from where the reader had got to --
+    emitter.instruction("ldr x9, [sp, #24]");                                   // the old block
+    emitter.instruction("cbz x9, __rt_spa_kept_copied");
+    emitter.instruction("ldr x11, [sp, #0]");
+    emitter.instruction(&format!("ldr x11, [x11, #{STREAM_PENDING_POS_OFFSET}]"));
+    emitter.instruction("add x9, x9, x11");                                     // the first unread byte
+    emitter.instruction("ldr x10, [sp, #32]");
+    emitter.instruction("mov x12, #0");
+    emitter.label("__rt_spa_kept_copy");
+    emitter.instruction("cmp x12, x10");
+    emitter.instruction("b.ge __rt_spa_kept_copied");
+    emitter.instruction("ldrb w13, [x9, x12]");
+    emitter.instruction("strb w13, [x0, x12]");
+    emitter.instruction("add x12, x12, #1");
+    emitter.instruction("b __rt_spa_kept_copy");
+    emitter.label("__rt_spa_kept_copied");
+
+    // -- then the new bytes, after them --
+    emitter.instruction("ldr x0, [sp, #40]");
+    emitter.instruction("ldr x10, [sp, #32]");
+    emitter.instruction("add x0, x0, x10");                                     // where the new chunk lands
+    emitter.instruction("ldr x11, [sp, #8]");
+    emitter.instruction("ldr x14, [sp, #16]");
+    emitter.instruction("mov x12, #0");
+    emitter.label("__rt_spa_new_copy");
+    emitter.instruction("cmp x12, x14");
+    emitter.instruction("b.ge __rt_spa_new_copied");
+    emitter.instruction("ldrb w13, [x11, x12]");
+    emitter.instruction("strb w13, [x0, x12]");
+    emitter.instruction("add x12, x12, #1");
+    emitter.instruction("b __rt_spa_new_copy");
+    emitter.label("__rt_spa_new_copied");
+
+    emitter.instruction("ldr x9, [sp, #0]");                                    // the state
+    emitter.instruction("ldr x0, [sp, #40]");
+    emitter.instruction(&format!("str x0, [x9, #{STREAM_PENDING_PTR_OFFSET}]"));
+    emitter.instruction("ldr x10, [sp, #32]");
+    emitter.instruction("ldr x14, [sp, #16]");
+    emitter.instruction("add x10, x10, x14");
+    emitter.instruction(&format!("str x10, [x9, #{STREAM_PENDING_LEN_OFFSET}]"));
+    emitter.instruction(&format!("str xzr, [x9, #{STREAM_PENDING_POS_OFFSET}]"));
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the block it replaces
+    emitter.instruction("cbz x0, __rt_spa_done");
+    emitter.instruction("bl __rt_heap_free");
+
+    emitter.label("__rt_spa_done");
+    emitter.instruction("ldp x29, x30, [sp, #48]");
+    emitter.instruction("add sp, sp, #64");
+    emitter.instruction("ret");
+}
+
+/// The x86_64 twin of [`emit_append_aarch64`].
+fn emit_append_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: append to retained stream bytes ---");
+    emitter.label_global("__rt_stream_pending_append");
+    emitter.instruction("push rbp");
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 64");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // the bytes to add
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // and how many
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction("jz __rt_spa_done_x86");                                // nothing to add
+    emitter.instruction("call __rt_stream_state");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_spa_done_x86");                                // a stale handle retains nothing
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");
+
+    emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_PENDING_PTR_OFFSET}]"));
+    emitter.instruction("mov QWORD PTR [rbp - 32], r9");                        // whatever block is there now
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {STREAM_PENDING_LEN_OFFSET}]"));
+    emitter.instruction(&format!("mov r11, QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}]"));
+    emitter.instruction("sub r10, r11");                                        // what is still unread
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jnz __rt_spa_have_kept_x86");
+    emitter.instruction("xor r10, r10");                                        // no block: nothing is kept
+    emitter.label("__rt_spa_have_kept_x86");
+    emitter.instruction("cmp r10, 0");
+    emitter.instruction("jg __rt_spa_kept_ok_x86");
+    emitter.instruction("xor r10, r10");                                        // never negative
+    emitter.label("__rt_spa_kept_ok_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // how many survive the append
+
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");
+    emitter.instruction("add rdi, r10");                                        // the whole area, after
+    emitter.instruction("call __rt_heap_alloc");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_spa_done_x86");                                // out of memory: keep what there is
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");
+
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // the old block
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_spa_kept_copied_x86");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");
+    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {STREAM_PENDING_POS_OFFSET}]"));
+    emitter.instruction("add r9, r11");                                         // the first unread byte
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");
+    emitter.instruction("xor rcx, rcx");
+    emitter.label("__rt_spa_kept_copy_x86");
+    emitter.instruction("cmp rcx, r10");
+    emitter.instruction("jge __rt_spa_kept_copied_x86");
+    emitter.instruction("movzx edi, BYTE PTR [r9 + rcx]");
+    emitter.instruction("mov BYTE PTR [rax + rcx], dil");
+    emitter.instruction("inc rcx");
+    emitter.instruction("jmp __rt_spa_kept_copy_x86");
+    emitter.label("__rt_spa_kept_copied_x86");
+
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");
+    emitter.instruction("add rax, r10");                                        // where the new chunk lands
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");
+    emitter.instruction("xor rcx, rcx");
+    emitter.label("__rt_spa_new_copy_x86");
+    emitter.instruction("cmp rcx, r8");
+    emitter.instruction("jge __rt_spa_new_copied_x86");
+    emitter.instruction("movzx edi, BYTE PTR [r11 + rcx]");
+    emitter.instruction("mov BYTE PTR [rax + rcx], dil");
+    emitter.instruction("inc rcx");
+    emitter.instruction("jmp __rt_spa_new_copy_x86");
+    emitter.label("__rt_spa_new_copied_x86");
+
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // the state
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {STREAM_PENDING_PTR_OFFSET}], rax"));
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");
+    emitter.instruction("add r10, QWORD PTR [rbp - 24]");
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {STREAM_PENDING_LEN_OFFSET}], r10"));
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {STREAM_PENDING_POS_OFFSET}], 0"));
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the block it replaces
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_spa_done_x86");
+    emitter.instruction("call __rt_heap_free");
+
+    emitter.label("__rt_spa_done_x86");
+    emitter.instruction("add rsp, 64");
+    emitter.instruction("pop rbp");
     emitter.instruction("ret");
 }
 

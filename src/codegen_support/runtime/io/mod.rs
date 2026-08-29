@@ -291,7 +291,8 @@ pub(crate) use stream_supports_lock::emit_stream_unlink_if_owned;
 pub(crate) use stream_select_memory_guard::emit_stream_select_memory_guard;
 pub(crate) use stream_pending::{
     emit_stream_pending_clear, emit_stream_pending_consume, emit_stream_pending_fill,
-    emit_stream_pending_held, emit_stream_pending_put, emit_stream_pending_take,
+    emit_stream_pending_append, emit_stream_pending_held, emit_stream_pending_put,
+    emit_stream_pending_take,
     emit_stream_temp_eof_probe,
 };
 pub(crate) use filter_inert::emit_filter_mark_inert;

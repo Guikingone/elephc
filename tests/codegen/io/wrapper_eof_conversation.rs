@@ -141,3 +141,71 @@ fclose($h);
         "string(10) \"abcdefghij\"\nstring(10) \"abcdefghij\"\n"
     );
 }
+
+/// Verifies `fread($h, 4)` answers FOUR bytes while the source still has them.
+///
+/// php tops its holding area up before serving: when it holds less than the caller asked for, it
+/// asks the source again. elephc answered whatever happened to be held, so a wrapper handing back
+/// 6 bytes at a time turned this into 'abcd', 'ef', 'ghij', 'kl' — a silently short read, which
+/// looks exactly like data. MEASURED on `php -n` 8.5.6: 'abcd', 'efgh', 'ijkl', 'mnop', 'qrst'.
+#[test]
+fn test_a_read_is_topped_up_rather_than_answered_short() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class P {
+    public $context;
+    public $pos = 0;
+    public $data = "abcdefghijklmnopqrst";
+    public function stream_open($p, $m, $o, &$x) { return true; }
+    public function stream_read($n) {
+        $r = substr($this->data, $this->pos, min($n, 6));
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->data); }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("pw", "P");
+$h = fopen("pw://x", "r");
+for ($i = 1; $i <= 5; $i++) { echo var_export(fread($h, 4), true), "\n"; }
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "'abcd'\n'efgh'\n'ijkl'\n'mnop'\n'qrst'\n");
+}
+
+/// Verifies the leftovers survive the top-up, and that ONE chunk is what a top-up adds.
+///
+/// Two rules in one line. The holding area is APPENDED to, not put over: `__rt_stream_pending_put`
+/// frees what it replaces because its callers have drained it first, and the topping-up has not.
+/// And php stops filling on a SHORT read rather than asking until satisfied — MEASURED, a source
+/// handing back 3 bytes at a time answers `fread($h, 5)` with FOUR, one leftover plus one chunk.
+#[test]
+fn test_the_leftovers_survive_the_top_up() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class P {
+    public $context;
+    public $pos = 0;
+    public $data = "0123456789";
+    public function stream_open($p, $m, $o, &$x) { return true; }
+    public function stream_read($n) {
+        $r = substr($this->data, $this->pos, min($n, 3));
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->data); }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("qw", "P");
+$h = fopen("qw://x", "r");
+echo fread($h, 2), "|", fread($h, 5), "|", fread($h, 5), "\n";
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "01|2345|678\n");
+}

@@ -48,6 +48,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fread_linux_x86_64(emitter);
         emit_wrapper_chunked_read(emitter);
+        emit_uw_fill_one_chunk(emitter);
         return;
     }
 
@@ -102,6 +103,39 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #8]");                                    // the requested byte count
     emitter.instruction("cmp x1, #1");                                          // a non-positive request moves nothing
     emitter.instruction("b.lt __rt_fread_wrapper_call");
+
+    // -- php tops the holding area up before serving from it --
+    //
+    // Answering whatever happens to be held turns `fread($h, 4)` into a two-byte answer while the
+    // source still has plenty: MEASURED against a wrapper handing back 6 bytes at a time, php says
+    // 'abcd', 'efgh', 'ijkl' where this said 'abcd', 'ef', 'ghij'. A short read that looks like
+    // data. This runs BEFORE the destination is reserved, because filling reserves a window of its
+    // own and holding one across that would be a bet on what the allocator does with the first.
+    emitter.label("__rt_fread_held_topup");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");
+    emitter.instruction("cbz x0, __rt_fread_held_ready");                       // no state: serve what there is
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_PENDING_LEN_OFFSET}]"));
+    emitter.instruction(&format!("ldr x10, [x0, #{STREAM_PENDING_POS_OFFSET}]"));
+    emitter.instruction("sub x9, x9, x10");                                     // what the area still holds
+    emitter.instruction("ldr x10, [sp, #8]");                                   // what the caller asked for
+    emitter.instruction("cmp x9, x10");
+    emitter.instruction("b.ge __rt_fread_held_ready");                          // enough held: serve it
+    emitter.instruction("ldr x0, [sp, #0]");
+    emitter.instruction("bl __rt_uw_fill_one_chunk");                           // x0 = bytes added
+    // php stops filling on a SHORT read, it does not keep asking until satisfied: MEASURED, a
+    // source handing back 3 bytes at a time answers `fread($h, 5)` with FOUR — one leftover plus
+    // one chunk — not five. Looping here answered five, which no php ever would.
+    emitter.instruction("str x0, [sp, #24]");                                   // what that fill added
+    emitter.instruction("cbz x0, __rt_fread_held_ready");                       // the source is spent
+    emitter.instruction("ldr x0, [sp, #0]");
+    emitter.instruction("bl __rt_stream_chunk_size");                           // what it was asked for
+    emitter.instruction("ldr x9, [sp, #24]");
+    emitter.instruction("cmp x9, x0");
+    emitter.instruction("b.ge __rt_fread_held_topup");                          // a FULL chunk: there may be more
+    emitter.label("__rt_fread_held_ready");
+
+    emitter.instruction("ldr x1, [sp, #8]");                                    // the requested byte count
     emitter.instruction("mov x0, x1");                                          // storage for at most the requested count
     emitter.instruction("bl __rt_concat_reserve");
     emitter.instruction("str x0, [sp, #16]");                                   // the destination, and the returned pointer
@@ -372,6 +406,104 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     emit_wrapper_chunked_read(emitter);
+    emit_uw_fill_one_chunk(emitter);
+}
+
+/// Emits `__rt_uw_fill_one_chunk(handle) -> bytes added`.
+///
+/// Asks the stream's source for one chunk and puts the whole thing in the holding area, which is
+/// php's read buffer. Answers how many bytes it added, so a caller topping the area up knows when
+/// the source is spent.
+///
+/// It asks the SOURCE, not `__rt_fread`: the topping-up that calls this runs while the holding
+/// area still holds something, so going through `__rt_fread` took the held path, topped up again,
+/// and recursed until the stack ran out. php's `stream_eof()` question is asked here instead, so
+/// the conversation with the class is the same either way.
+fn emit_uw_fill_one_chunk(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: uw_fill_one_chunk ---");
+            emitter.label_global("__rt_uw_fill_one_chunk");
+            emitter.instruction("sub sp, sp, #64");
+            emitter.instruction("stp x29, x30, [sp, #48]");
+            emitter.instruction("add x29, sp, #48");
+            emitter.instruction("str x0, [sp, #0]");                            // the opaque stream handle
+            emitter.instruction("bl __rt_stream_chunk_size");                   // what php would ask for
+            emitter.instruction("str x0, [sp, #24]");                           // across the descriptor lookup
+            emitter.instruction("ldr x0, [sp, #0]");
+            emitter.instruction("bl __rt_stream_fd");                           // the source behind this stream
+            emitter.instruction("str x0, [sp, #8]");                            // the descriptor, for the question below
+            emitter.instruction("ldr x1, [sp, #24]");                           // one chunk
+            emitter.instruction("bl __rt_user_wrapper_fread");                  // x1/x2 = the chunk
+            emitter.instruction("stp x1, x2, [sp, #24]");                       // it outlives the question
+            emitter.instruction("ldr x0, [sp, #0]");                            // the opaque stream handle
+            emitter.instruction("ldr x1, [sp, #8]");                            // the descriptor
+            emitter.instruction("bl __rt_uw_post_read_eof");                    // php asks after every read
+            emitter.instruction("ldp x1, x2, [sp, #24]");
+            emitter.instruction("cbz x2, __rt_uwfoc_none");                     // the source had nothing left
+            emitter.instruction("ldr x0, [sp, #0]");
+            emitter.instruction("ldr x1, [sp, #24]");
+            emitter.instruction("ldr x2, [sp, #32]");
+            emitter.instruction("bl __rt_stream_pending_append");               // ADDED to what is held, not put over it
+            emitter.instruction("ldr x1, [sp, #24]");
+            emitter.instruction("mov x2, #0");
+            emitter.instruction("bl __rt_concat_publish");                      // hand the scratch window back
+            emitter.instruction("ldr x0, [sp, #24]");
+            emitter.instruction("bl __rt_decref_any");                          // the copy on the stream is the one that lives
+            emitter.instruction("ldr x0, [sp, #32]");                           // how many were added
+            emitter.instruction("b __rt_uwfoc_done");
+            emitter.label("__rt_uwfoc_none");
+            emitter.instruction("mov x0, #0");
+            emitter.label("__rt_uwfoc_done");
+            emitter.instruction("ldp x29, x30, [sp, #48]");
+            emitter.instruction("add sp, sp, #64");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: uw_fill_one_chunk ---");
+            emitter.label_global("__rt_uw_fill_one_chunk");
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 32");
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // the opaque stream handle
+            emitter.instruction("call __rt_stream_chunk_size");                 // what php would ask for
+            emitter.instruction("mov QWORD PTR [rbp - 32], rax");               // across the descriptor lookup
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+            emitter.instruction("call __rt_stream_fd");                         // the source behind this stream
+            emitter.instruction("mov QWORD PTR [rbp - 24], rax");               // the descriptor, for the question below
+            emitter.instruction("mov rdi, rax");
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");               // one chunk
+            emitter.instruction("call __rt_user_wrapper_fread");                // rax/rdx = the chunk
+            emitter.instruction("mov QWORD PTR [rbp - 16], rax");               // it outlives the question
+            emitter.instruction("mov QWORD PTR [rbp - 32], rdx");
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // the opaque stream handle
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");               // the descriptor
+            emitter.instruction("call __rt_uw_post_read_eof");                  // php asks after every read
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");
+            emitter.instruction("test rdx, rdx");
+            emitter.instruction("jz __rt_uwfoc_none_x86");                      // the source had nothing left
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");
+            emitter.instruction("call __rt_stream_pending_append");             // ADDED to what is held, not put over it
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");               // publish reads RAX/RDX
+            emitter.instruction("xor edx, edx");
+            emitter.instruction("call __rt_concat_publish");                    // hand the scratch window back
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");               // decref reads RAX
+            emitter.instruction("call __rt_decref_any");                        // the copy on the stream is the one that lives
+            emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // how many were added
+            emitter.instruction("jmp __rt_uwfoc_done_x86");
+            emitter.label("__rt_uwfoc_none_x86");
+            emitter.instruction("xor eax, eax");
+            emitter.label("__rt_uwfoc_done_x86");
+            emitter.instruction("add rsp, 32");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
 }
 
 /// Emits `__rt_uw_fread_chunked(handle, requested) -> (flag, ptr, len)`.

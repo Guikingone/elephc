@@ -86,6 +86,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_filter_create_warning(emitter);
     io::emit_filter_mark_inert(emitter);
     io::emit_stream_pending_put(emitter);
+    io::emit_stream_pending_append(emitter);
     io::emit_stream_pending_take(emitter);
     io::emit_stream_pending_clear(emitter);
     io::emit_stream_pending_held(emitter);
