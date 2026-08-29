@@ -333,7 +333,7 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::{Platform, Target};
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
     use crate::span::Span;
     use crate::types::{FunctionSig, PhpType};
 
@@ -383,6 +383,43 @@ mod tests {
             "lazy stack init must follow host-argument preservation and precede boundary entry:\n{asm}"
         );
         assert!(data.emit(target).contains(LAST_ERROR_BUFFER));
+    }
+
+    /// Pins the ABI-v3 Darwin boundary to real iOS device and Simulator targets,
+    /// including the persisted cache key and Mach-O linker platform token.
+    #[test]
+    fn emits_ios_aarch64_v3_boundary_with_distinct_target_identity() {
+        for (variant, cache_key, macho_platform) in [
+            (AppleVariant::IOS, "ios-arm64", "ios"),
+            (
+                AppleVariant::IOSSimulator,
+                "ios-sim-arm64",
+                "ios-simulator",
+            ),
+        ] {
+            let target = Target::new_apple(Arch::AArch64, variant);
+            assert_eq!(target.as_str(), cache_key);
+            assert_eq!(target.apple_platform_name(), macho_platform);
+
+            let mut emitter = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let export = string_export();
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            let asm = emitter.output();
+
+            assert!(
+                asm.contains(".globl _roundtrip\n_roundtrip:"),
+                "{cache_key}: missing public Darwin export"
+            );
+            assert!(
+                asm.contains("stur x2, [x29, #-24]")
+                    && asm.contains("stur x3, [x29, #-32]"),
+                "{cache_key}: missing ABI-v3 output-address preservation:\n{asm}"
+            );
+            assert!(asm.contains("_elephc_abi_version:"));
+            assert!(asm.contains(&format!("mov w0, #{ELEPHC_ABI_VERSION}")));
+            assert!(data.emit(target).contains(LAST_ERROR_BUFFER));
+        }
     }
 
     /// AArch64 lifecycle initialization preserves the host return address around

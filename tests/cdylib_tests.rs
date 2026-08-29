@@ -901,19 +901,19 @@ fn test_ios_showcase_bridging_headers_compile_against_generated_abi_v3() {
     for (label, source_path, wrapper_path, expected_prototype) in [
         (
             "view",
-            "examples/swiftui-view-protocol/view.php",
+            "examples/swiftui-view-protocol/main.php",
             "examples/swiftui-view-protocol/elephc_abi.h",
             "int32_t render_view(char **output_ptr, size_t *output_len);",
         ),
         (
             "probe",
-            "examples/ios-device-probe/probe.php",
+            "examples/ios-device-probe/main.php",
             "examples/ios-device-probe/probe_abi.h",
             "int32_t probe(const char *writableDir_ptr, size_t writableDir_len, char **output_ptr, size_t *output_len);",
         ),
     ] {
         let dir = make_test_dir(&format!("elephc_ios_{label}_header"));
-        let source_name = format!("{label}.php");
+        let source_name = "main.php";
         fs::write(dir.join(&source_name), fs::read(root.join(source_path)).unwrap()).unwrap();
         let wrapper_name = Path::new(wrapper_path).file_name().unwrap();
         fs::write(dir.join(wrapper_name), fs::read(root.join(wrapper_path)).unwrap()).unwrap();
@@ -928,7 +928,7 @@ fn test_ios_showcase_bridging_headers_compile_against_generated_abi_v3() {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        let generated = fs::read_to_string(dir.join(format!("lib{label}.h"))).unwrap();
+        let generated = fs::read_to_string(dir.join("libmain.h")).unwrap();
         assert!(
             generated.contains("#define ELEPHC_ABI_VERSION UINT32_C(3)")
                 && generated.contains(expected_prototype),
@@ -970,7 +970,7 @@ fn test_process_spawning_builtins_are_refused_for_ios_targets() {
         ("exec", r#"<?php exec("ls");"#),
         ("shell_exec", r#"<?php shell_exec("ls");"#),
         ("popen", r#"<?php popen("ls", "r");"#),
-        ("pclose", r#"<?php pclose(popen("ls", "r"));"#),
+        ("pclose", r#"<?php $handle = fopen("php://memory", "r+"); pclose($handle);"#),
     ] {
         fs::write(dir.join("spawn.php"), source).unwrap();
 
@@ -981,7 +981,7 @@ fn test_process_spawning_builtins_are_refused_for_ios_targets() {
         assert!(!refused.status.success(), "{builtin} must not type-check for iOS");
         let message = String::from_utf8_lossy(&refused.stderr);
         assert!(
-            message.contains(&format!("{builtin}()")) || message.contains("popen()"),
+            message.contains(&format!("{builtin}()")),
             "{builtin}: diagnostic must name the builtin, got: {message}"
         );
         assert!(
@@ -1003,6 +1003,121 @@ fn test_process_spawning_builtins_are_refused_for_ios_targets() {
             String::from_utf8_lossy(&accepted.stderr)
         );
     }
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Verifies an iOS target cannot accidentally produce Elephc's standalone CLI
+/// executable shape; consumers must choose a host-linked library artifact.
+#[test]
+fn test_ios_targets_reject_executable_output_with_library_guidance() {
+    let dir = make_test_dir("elephc_ios_executable_refuse");
+    fs::write(dir.join("main.php"), "<?php echo 'not an app bundle';").unwrap();
+
+    for target in ["ios-arm64", "ios-sim-arm64"] {
+        let output = elephc_command(&dir)
+            .args(["--target", target, "--emit", "executable", "main.php"])
+            .output()
+            .expect("failed to run elephc");
+        assert!(!output.status.success(), "{target} executable must be rejected");
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            message.contains("iOS targets do not emit standalone executables")
+                && message.contains("--emit staticlib"),
+            "{target}: missing actionable diagnostic: {message}"
+        );
+    }
+
+    let check = elephc_command(&dir)
+        .args(["--target", "ios-arm64", "--check", "main.php"])
+        .output()
+        .expect("failed to check iOS source");
+    assert!(
+        check.status.success(),
+        "analysis-only iOS mode must remain available:\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Cross-emits an iOS AArch64 static-library boundary and pins both zero-input
+/// and mixed-input string-return shapes without relying on the CI host ABI.
+#[test]
+fn test_ios_aarch64_emit_asm_pins_string_return_out_parameters() {
+    let dir = make_test_dir("elephc_ios_aarch64_string_abi");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+#[Export]
+function render_view(): string {
+    return "view";
+}
+
+#[Export]
+function dispatch(string $action, int $count, float $ratio, bool $enabled): string {
+    return $action . $count . $ratio . $enabled;
+}
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_command(&dir)
+        .args([
+            "--target",
+            "ios-arm64",
+            "--emit",
+            "staticlib",
+            "--emit-asm",
+            "main.php",
+        ])
+        .output()
+        .expect("failed to cross-emit the iOS library assembly");
+    assert!(
+        output.status.success(),
+        "iOS AArch64 assembly emission failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("missing iOS AArch64 assembly");
+    let dispatch_start = asm
+        .find(".globl _dispatch\n_dispatch:")
+        .expect("missing public dispatch boundary");
+    let render_start = asm
+        .find(".globl _render_view\n_render_view:")
+        .expect("missing public render_view boundary");
+    let lifecycle_start = asm
+        .find(".globl _elephc_abi_version\n_elephc_abi_version:")
+        .expect("missing public ABI-version boundary");
+    assert!(dispatch_start < render_start && render_start < lifecycle_start);
+
+    let dispatch = &asm[dispatch_start..render_start];
+    for required in [
+        "stur x0, [x29, #-8]",
+        "stur x1, [x29, #-16]",
+        "stur x2, [x29, #-24]",
+        "stur d0, [x29, #-32]",
+        "stur x3, [x29, #-40]",
+        "stur x4, [x29, #-48]",
+        "stur x5, [x29, #-56]",
+    ] {
+        assert!(
+            dispatch.contains(required),
+            "dispatch boundary is missing `{required}`"
+        );
+    }
+
+    let render = &asm[render_start..lifecycle_start];
+    for required in [
+        "stur x0, [x29, #-8]",
+        "stur x1, [x29, #-16]",
+    ] {
+        assert!(
+            render.contains(required),
+            "render_view boundary is missing `{required}`"
+        );
+    }
+    assert!(asm[lifecycle_start..].contains("mov w0, #3"));
 
     fs::remove_dir_all(&dir).ok();
 }

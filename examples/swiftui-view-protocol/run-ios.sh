@@ -6,7 +6,7 @@
 #   ./run-ios.sh                 # build, install, launch, screenshot
 #   ./run-ios.sh --selftest      # run the headless round-trip check instead
 #
-# The interface is decided entirely by compiled PHP: `view.php` is compiled to
+# The interface is decided entirely by compiled PHP: `main.php` is compiled to
 # an arm64 iOS static library and linked into the app, which asks it for a view
 # tree and renders it as SwiftUI. No .xcodeproj is involved — swiftc and the
 # simulator SDK are enough.
@@ -44,18 +44,18 @@ if [ ! -x "$ELEPHC" ]; then
   (cd "$PROJECT_DIR" && cargo build)
 fi
 
-echo "==> compiling view.php for ios-sim-arm64"
-(cd "$HERE" && "$ELEPHC" --target ios-sim-arm64 --emit staticlib view.php)
+echo "==> compiling main.php for ios-sim-arm64"
+(cd "$HERE" && "$ELEPHC" --target ios-sim-arm64 --emit staticlib main.php)
 
 echo "==> archive members and their Mach-O platform"
-(cd "$HERE" && for member in $(ar t libview.a | grep -v SYMDEF); do
-  ar x libview.a "$member"
+(cd "$HERE" && for member in $(ar t libmain.a | grep -v SYMDEF); do
+  ar x libmain.a "$member"
   printf '    %-13s %s\n' "$(vtool -show-build "$member" | grep -Eo 'IOS[A-Z]*|MACOS' | head -1)" "$member"
   rm -f "$member"
 done)
 
 echo "==> compiling the SwiftUI host for the simulator"
-# -import-objc-header includes the freshly generated ABI-v3 libview.h through a
+# -import-objc-header includes the freshly generated ABI-v3 libmain.h through a
 # thin wrapper that also gives the `dispatch` export a collision-free Swift name.
 # -parse-as-library is required by @main.
 # -sdk covers compilation, but swiftc drives clang for the link step and that
@@ -66,7 +66,7 @@ swiftc -O -parse-as-library \
        -Xclang-linker -isysroot -Xclang-linker "$SDK_PATH" \
        -import-objc-header "$HERE/elephc_abi.h" \
        -o "$HERE/ViewProtocolIOS" \
-       "$HERE/ViewProtocolApp.swift" "$HERE/libview.a"
+       "$HERE/ViewProtocolApp.swift" "$HERE/libmain.a"
 
 if [ "$SELFTEST" = "1" ]; then
   if [ -z "$DEVICE" ]; then

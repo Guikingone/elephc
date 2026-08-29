@@ -11,11 +11,19 @@ The change adds two native compilation targets:
 - `ios-arm64` / `aarch64-apple-ios`
 - `ios-sim-arm64` / `aarch64-apple-ios-simulator`
 
+Only AArch64 iOS targets exist. Device and Simulator x86_64 spellings are
+rejected by `Target::parse()` with an arm64-only diagnostic.
+
 Both can produce a `staticlib`, which is the normal delivery form for an Xcode
 application. They can also use the shared library code path where the platform
 toolchain permits it. The PHP program still uses Elephc's existing native
 backend and runtime; this change does not add an interpreter or an iOS UI
 runtime.
+
+`--emit executable` is rejected for iOS code generation. Elephc's executable
+shape is a CLI process, not a packaged, signed application; consumers link a
+generated library into their own app host. Analysis-only `--check` and
+`--emit-ir` remain available without selecting a library output.
 
 ## Target model
 
@@ -167,11 +175,13 @@ includes the freshly generated `libspike.h` in its C host. Its string call uses
 status plus `char **`/`size_t *`, checks the result, and releases the owned
 buffer with `elephc_free()`.
 
-The SwiftUI view-protocol and device-probe examples import thin bridging
-headers that include the freshly generated `libview.h` or `libprobe.h` directly.
-The view wrapper's only adapter gives the source export `dispatch` a
-collision-free Swift name; its inline C body is type-checked against the
-generated prototype. The Swift hosts therefore carry no copied library ABI.
+The SwiftUI view-protocol and device-probe examples each use the conventional
+`main.php` entrypoint and import thin bridging headers that include that
+example's freshly generated `libmain.h`. The view wrapper's only adapter gives
+the source export `dispatch` a collision-free Swift name; its inline C body is
+type-checked against the generated prototype. The Swift hosts compare
+`elephc_abi_version()` against the imported `ELEPHC_ABI_VERSION` macro and carry
+no copied library ABI.
 
 The earlier Simulator run (`42 hi iOS 6`) established the target, Mach-O,
 static-link, and execution path before ABI v3 landed. The current host now speaks
@@ -183,6 +193,8 @@ arm64 Simulator.
 Focused tests cover:
 
 - Apple target names parsing and round-tripping without `as_str()` collisions;
+- parse-time refusal of x86_64 iOS spellings and codegen-time refusal of iOS
+  executable output;
 - the iOS `13.0` deployment floor and missing-SDK diagnostic;
 - compile-time refusal of process-spawning builtins on both iOS variants;
 - static archive creation and direct host linking;
@@ -190,7 +202,9 @@ Focused tests cover:
   owned-buffer release, and recovered failure paths;
 - explicit and lazy stack-limit initialization across the library boundary;
 - native catalog target coverage and deterministic lockfiles;
-- generated showcase headers compiling through the Swift bridging wrappers.
+- generated showcase headers compiling through the Swift bridging wrappers;
+- AArch64 iOS assembly for zero-input and mixed-input string-return ABI-v3
+  wrappers, independent of the CI host architecture.
 
 CI remains authoritative for the full macOS AArch64, Linux AArch64, and Linux
 x86_64 matrix. iOS SDK assembly/linking and SwiftUI execution require Xcode.

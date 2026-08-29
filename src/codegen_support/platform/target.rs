@@ -656,6 +656,14 @@ impl Target {
         )
     }
 
+    /// Returns whether this Darwin target represents iOS device or Simulator.
+    pub fn is_ios(&self) -> bool {
+        matches!(
+            self.apple_variant,
+            AppleVariant::IOS | AppleVariant::IOSSimulator
+        )
+    }
+
     /// Returns the OS component of the Apple compiler triple, as reported by
     /// `clang -dumpmachine` — `arm64-apple-darwin` versus `arm64-apple-ios`.
     /// Native-dependency toolchain validation compares against this.
@@ -696,9 +704,13 @@ impl Target {
             "ios-sim-arm64" | "ios-simulator-arm64" | "aarch64-apple-ios-simulator" => {
                 Ok(Self::new_apple(Arch::AArch64, AppleVariant::IOSSimulator))
             }
-            "ios-sim-x86_64" | "x86_64-apple-ios-simulator" => {
-                Ok(Self::new_apple(Arch::X86_64, AppleVariant::IOSSimulator))
-            }
+            "ios-x86_64"
+            | "x86_64-apple-ios"
+            | "ios-sim-x86_64"
+            | "x86_64-apple-ios-simulator" => Err(format!(
+                "unsupported iOS target '{}'; only arm64 iOS targets are available: ios-arm64, ios-sim-arm64",
+                value
+            )),
             "linux-aarch64" | "linux-arm64" | "aarch64-unknown-linux-gnu" => {
                 Ok(Self::new(Platform::Linux, Arch::AArch64))
             }

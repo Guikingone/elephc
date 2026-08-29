@@ -1,7 +1,7 @@
 # PHP-driven SwiftUI — the view-protocol spike
 
 A native app whose entire interface is decided by compiled PHP. Swift draws; it
-does not decide. Runs on macOS **and** on iOS, from the same `view.php` and the
+does not decide. Runs on macOS **and** on iOS, from the same `main.php` and the
 same Swift.
 
 ```
@@ -39,8 +39,8 @@ render_view()  ─────────► {"t":"vstack","children":[ … ]} 
 dispatch("inc") ◄────────────────── button tapped ◄───────────────────────┘
 ```
 
-`view.php` owns the layout, the labels, the pluralisation and the state.
-`ViewProtocolApp.swift` knows four node types and nothing else. Swap `view.php`
+`main.php` owns the layout, the labels, the pluralisation and the state.
+`ViewProtocolApp.swift` knows four node types and nothing else. Swap `main.php`
 and the app changes without recompiling a line of Swift.
 
 This matters for the ahead-of-time story specifically. A template engine has to
@@ -72,9 +72,9 @@ PASS: the view tree, the string ABI and PHP-side state all round-trip
 
 | | |
 |---|---|
-| `view.php` | the whole application: tree builders, state, action handling |
+| `main.php` | the whole application: tree builders, state, action handling |
 | `ViewProtocolApp.swift` | JSON → SwiftUI, event dispatch, the self-test |
-| `elephc_abi.h` | Swift bridging wrapper around the generated ABI-v3 `libview.h` |
+| `elephc_abi.h` | Swift bridging wrapper around the generated ABI-v3 `libmain.h` |
 | `run.sh` | macOS: compile both sides, assemble and sign a `.app` |
 | `run-ios.sh` | iOS: same, then install, launch and screenshot on a simulator |
 
@@ -82,7 +82,7 @@ PASS: the view tree, the string ABI and PHP-side state all round-trip
 
 **Use the generated header.** String exports return `int32_t` status and append
 `char **output_ptr, size_t *output_len`; they do not return a C aggregate.
-`elephc_abi.h` includes the freshly generated `libview.h` instead of copying its
+`elephc_abi.h` includes the freshly generated `libmain.h` instead of copying its
 declarations. Its only adapter renames the source export `dispatch` for Swift;
 the inline C call is type-checked against the generated prototype. Successful
 buffers are caller-owned; failed calls leave the outputs `NULL`/zero.

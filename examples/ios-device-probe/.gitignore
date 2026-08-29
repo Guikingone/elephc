@@ -1,7 +1,8 @@
 *.a
 *.o
 *.s
-libprobe.h
+main
+libmain.h
 .cache/
 ElephcProbe
 ElephcProbe-*.app/

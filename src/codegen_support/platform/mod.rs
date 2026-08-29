@@ -61,6 +61,22 @@ mod tests {
         }
     }
 
+    /// iOS has no x86_64 backend, so legacy-looking device and Simulator
+    /// spellings fail during target parsing instead of reaching codegen.
+    #[test]
+    fn test_target_parse_rejects_ios_x86_64_with_arm64_guidance() {
+        for spelling in [
+            "ios-x86_64",
+            "x86_64-apple-ios",
+            "ios-sim-x86_64",
+            "x86_64-apple-ios-simulator",
+        ] {
+            let error = Target::parse(spelling).expect_err("x86_64 iOS must be rejected");
+            assert!(error.contains("only arm64 iOS targets"), "{spelling}: {error}");
+            assert!(error.contains("ios-arm64") && error.contains("ios-sim-arm64"));
+        }
+    }
+
     /// Three persisted keys derive from `as_str()` — the runtime object cache
     /// filename, the native-dependency receipt JSON and the package catalog — so
     /// two targets sharing a string silently reuse each other's artifacts.

@@ -22,11 +22,11 @@ if [ ! -x "$ELEPHC" ]; then
   (cd "$PROJECT_DIR" && cargo build)
 fi
 
-echo "==> compiling view.php to a native static library"
-(cd "$HERE" && "$ELEPHC" --emit staticlib view.php)
+echo "==> compiling main.php to a native static library"
+(cd "$HERE" && "$ELEPHC" --emit staticlib main.php)
 
 echo "==> compiling the SwiftUI host"
-# -import-objc-header includes the freshly generated ABI-v3 libview.h through a
+# -import-objc-header includes the freshly generated ABI-v3 libmain.h through a
 # thin wrapper that also gives the `dispatch` export a collision-free Swift name.
 # -parse-as-library is required by @main: it tells swiftc the file defines a
 # module rather than a script with top-level code.
@@ -34,7 +34,7 @@ echo "==> compiling the SwiftUI host"
 # consumes, so the exports are ordinary C symbols rather than dlsym lookups.
 swiftc -O -parse-as-library \
        -import-objc-header "$HERE/elephc_abi.h" \
-       -o "$HERE/ViewProtocol" "$HERE/ViewProtocolApp.swift" "$HERE/libview.a"
+       -o "$HERE/ViewProtocol" "$HERE/ViewProtocolApp.swift" "$HERE/libmain.a"
 
 echo "==> assembling $APP"
 rm -rf "$APP"

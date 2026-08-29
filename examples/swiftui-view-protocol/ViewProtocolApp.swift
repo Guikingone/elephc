@@ -4,7 +4,7 @@
 // This file contains no application logic. It asks the elephc-compiled library
 // for a view tree, turns that tree into real SwiftUI views, and sends button
 // actions back. Layout, labels, pluralisation and state all live on the PHP
-// side; swapping view.php changes the app without touching a line of Swift.
+// side; swapping main.php changes the app without touching a line of Swift.
 //
 // The library is linked statically, so the exports are ordinary C symbols
 // declared in elephc_abi.h. That is the delivery form an Xcode project
@@ -20,9 +20,9 @@ import SwiftUI
 /// `elephc_free`, which is why each call copies into a Swift `String` and frees
 /// immediately rather than holding the pointer.
 enum Elephc {
-    /// Verifies ABI v3, then prepares heap, globals, and the host stack guard.
+    /// Verifies the generated-header ABI version, then prepares runtime state.
     static func start() -> Bool {
-        elephc_abi_version() == 3 && elephc_init() == 0
+        elephc_abi_version() == ELEPHC_ABI_VERSION && elephc_init() == 0
     }
 
     /// Copies a successful ABI-v3 output into Swift and releases the owned buffer.

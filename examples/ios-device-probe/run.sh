@@ -49,8 +49,8 @@ fi
 ELEPHC="${ELEPHC_BIN:-$PROJECT_DIR/target/debug/elephc}"
 [ -x "$ELEPHC" ] || (cd "$PROJECT_DIR" && cargo build)
 
-echo "==> compiling probe.php for $ELEPHC_TARGET"
-(cd "$HERE" && XDG_CACHE_HOME="$HERE/.cache" "$ELEPHC" --target "$ELEPHC_TARGET" --emit staticlib probe.php)
+echo "==> compiling main.php for $ELEPHC_TARGET"
+(cd "$HERE" && XDG_CACHE_HOME="$HERE/.cache" "$ELEPHC" --target "$ELEPHC_TARGET" --emit staticlib main.php)
 
 # Any PHP touching the filesystem reaches __rt_fopen_maybe_phar, so the phar
 # bridge is not optional here. Bridges are ordinary Rust staticlibs and must be
@@ -69,7 +69,7 @@ swiftc -O -parse-as-library \
        -Xclang-linker -isysroot -Xclang-linker "$SDK_PATH" \
        -import-objc-header "$HERE/probe_abi.h" \
        -o "$HERE/ElephcProbe" \
-       "$HERE/ProbeApp.swift" "$HERE/libprobe.a" "$BRIDGE" \
+       "$HERE/ProbeApp.swift" "$HERE/libmain.a" "$BRIDGE" \
        -lbz2 -lz
 
 # --- assemble the bundle ----------------------------------------------------

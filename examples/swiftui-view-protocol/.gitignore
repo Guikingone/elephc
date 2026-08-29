@@ -1,9 +1,10 @@
 *.s
 *.o
+main
 *.a
 *.so
 *.dylib
-libview.h
+libmain.h
 ViewProtocol
 ViewProtocolIOS
 ViewProtocol.app/

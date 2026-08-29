@@ -12,7 +12,9 @@ import SwiftUI
 /// macOS-hosted path in the Simulator — the difference between those two is a
 /// large part of what this probe exists to reveal.
 func runProbe() -> String {
-    guard elephc_abi_version() == 3 else { return "unexpected elephc ABI version" }
+    guard elephc_abi_version() == ELEPHC_ABI_VERSION else {
+        return "unexpected elephc ABI version"
+    }
     guard elephc_init() == 0 else { return "elephc_init failed" }
 
     let dir = NSTemporaryDirectory()

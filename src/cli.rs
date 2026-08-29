@@ -124,6 +124,7 @@ Output modes:
   --emit-ir               Emit EIR text instead of compiling
   --emit-asm              Emit assembly (.s) instead of linking
   --emit KIND             Output kind: executable (default) | cdylib | staticlib
+                          Aliases: exe/bin | dylib/shared | static/lib (`lib` is staticlib)
 
 Target:
   --target TARGET         macos-aarch64 | ios-arm64 | ios-sim-arm64 |
@@ -532,6 +533,9 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if output_modes > 1 {
         fail("--emit-ir, --emit-asm, and --check are mutually exclusive");
     }
+    if let Err(message) = validate_target_output(target, emit, check_only, emit_ir) {
+        fail(message);
+    }
     if web && check_only {
         fail("--web cannot be combined with --check");
     }
@@ -761,6 +765,26 @@ fn parse_target(value: &str) -> Target {
     }
 }
 
+/// Validates artifact kinds that depend on the selected target.
+///
+/// iOS source can still be checked or lowered to EIR with the default emit kind,
+/// but actual code generation must use a library boundary: an Elephc executable
+/// is a CLI process, not a complete signed iOS application bundle.
+fn validate_target_output(
+    target: Target,
+    emit: Emit,
+    check_only: bool,
+    emit_ir: bool,
+) -> Result<(), &'static str> {
+    if target.is_ios() && emit == Emit::Executable && !check_only && !emit_ir {
+        return Err(
+            "iOS targets do not emit standalone executables; use --emit staticlib (or --emit \
+             cdylib) and link the library into an iOS app host",
+        );
+    }
+    Ok(())
+}
+
 /// Retrieve a required argument at index, or fail with the given message.
 fn required_value(args: &[String], index: usize, message: &str) -> String {
     if index < args.len() {
@@ -831,6 +855,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::codegen::platform::{AppleVariant, Arch, Platform};
 
     /// Extracts the compile configuration returned for a legacy invocation.
     fn compile_config(args: &[String]) -> CliConfig {
@@ -921,6 +946,38 @@ mod tests {
         assert_eq!(parse_emit("shared"), Emit::Cdylib);
         assert_eq!(parse_emit("static"), Emit::Staticlib);
         assert_eq!(parse_emit("lib"), Emit::Staticlib);
+    }
+
+    /// Verifies `lib` is advertised as a static-library alias rather than being
+    /// mistaken for the dynamic-library family.
+    #[test]
+    fn help_identifies_lib_as_a_staticlib_alias() {
+        assert!(HELP.contains("static/lib (`lib` is staticlib)"));
+    }
+
+    /// Verifies iOS code generation produces host-consumable libraries rather
+    /// than a CLI executable that cannot be installed as an iOS application.
+    #[test]
+    fn ios_rejects_executable_artifacts_but_allows_analysis_and_libraries() {
+        for target in [
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+        ] {
+            assert!(validate_target_output(target, Emit::Executable, false, false).is_err());
+            assert!(validate_target_output(target, Emit::Staticlib, false, false).is_ok());
+            assert!(validate_target_output(target, Emit::Cdylib, false, false).is_ok());
+            assert!(validate_target_output(target, Emit::Executable, true, false).is_ok());
+            assert!(validate_target_output(target, Emit::Executable, false, true).is_ok());
+        }
+        assert!(
+            validate_target_output(
+                Target::new(Platform::MacOS, Arch::AArch64),
+                Emit::Executable,
+                false,
+                false,
+            )
+            .is_ok()
+        );
     }
 
     /// Verifies the canonical `--ir-opt=` spellings toggle the EIR optimization
