@@ -20088,3 +20088,70 @@ fclose($h);
         ),
     );
 }
+
+/// Verifies `fputcsv()` writes a row in ONE call, the way php does.
+///
+/// elephc composed the row at the descriptor — a separator, a quote, each escaped byte, the
+/// field, the newline — so a userspace wrapper saw a `stream_write()` per piece where php's sees
+/// one: `fputcsv($h, ["a","b"])` was FOUR calls of one byte. The bytes were identical; the
+/// conversation was not, and a wrapper that frames what it is given (a network sink, a digest, a
+/// row counter) is a different program under each.
+///
+/// The quoted row is here because that is where the old shape was worst: the enclosure-doubling
+/// loop wrote ONE BYTE AT A TIME.
+#[test]
+fn test_fputcsv_writes_a_row_in_one_call() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W {
+    public $context;
+    public function stream_open($p, $m, $o, &$x) { return true; }
+    public function stream_write($d) {
+        echo "write(", strlen($d), ") ", var_export($d, true), "\n";
+        return strlen($d);
+    }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_close() {}
+}
+stream_wrapper_register("w2", "W");
+$h = fopen("w2://x", "w");
+var_dump(fputcsv($h, ["a", "b"], ",", '"', "\\"));
+var_dump(fputcsv($h, ["a,x", 'q"z', "plain"], ",", '"', "\\"));
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "write(4) 'a,b\n'\n",
+            "int(4)\n",
+            "write(19) '\"a,x\",\"q\"\"z\",plain\n'\n",
+            "int(19)\n",
+        ),
+    );
+}
+
+/// Verifies a row LONGER than the buffer still comes out byte for byte.
+///
+/// The buffer holds 64 KiB and a longer row goes out in pieces, which is more writes than php
+/// makes — so the bytes are what this pins. A single field of 100 000 bytes also takes the path
+/// where one piece is too big to hold at all and goes straight to the descriptor.
+#[test]
+fn test_a_csv_row_larger_than_the_row_buffer_keeps_its_bytes() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$big = str_repeat("x", 100000);
+$h = fopen("big.csv", "w");
+fputcsv($h, [$big, "tail"], ",", '"', "\\");
+fclose($h);
+$read = file_get_contents("big.csv");
+echo strlen($read), "|", substr($read, 0, 3), "|", substr($read, -6), "\n";
+unlink("big.csv");
+"#,
+    );
+    // 100000 + 1 separator + 4 + 1 newline
+    assert_eq!(out, "100006|xxx|,tail\n\n");
+    let _ = fs::remove_dir_all(&dir);
+}

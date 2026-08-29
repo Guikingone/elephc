@@ -100,6 +100,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    // The row `fputcsv()` composes before writing it, so a wrapper sees ONE `stream_write` per
+    // row the way php's does. 64 KiB matches `_concat_buf`; a row longer than that goes out in
+    // buffer-sized pieces rather than being refused.
+    out.push_str(&comm_directive("_fputcsv_row_buf", 65536, target));
+    out.push_str(&comm_directive("_fputcsv_row_len", 8, target));
     out.push_str(&comm_directive("_unser_depth", 8, target));
     out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
     out.push_str(&comm_directive("_unser_allowed_mode", 8, target));

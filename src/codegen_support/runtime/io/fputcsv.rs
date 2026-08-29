@@ -17,13 +17,192 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+/// Bytes the row buffer holds before it has to go out early. Matches `_concat_buf`.
+const FPUTCSV_ROW_CAP: usize = 65536;
+
 /// Emits the `__rt_fputcsv` runtime helper, dispatching to the target-specific variant.
 pub fn emit_fputcsv(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fputcsv_linux_x86_64(emitter);
-        return;
+    } else {
+        emit_fputcsv_aarch64(emitter);
     }
-    emit_fputcsv_aarch64(emitter);
+    emit_fputcsv_emit(emitter);
+    emit_fputcsv_flush(emitter);
+}
+
+/// `__rt_fputcsv_emit(fd, ptr, len) -> bytes accepted`.
+///
+/// The sink every piece of a row goes to. It takes `__rt_fd_write`'s arguments and answers the
+/// same way, so the emitter above kept its shape when the sink changed: each site still adds the
+/// return value to the row's running total, and on the ordinary path that total is the row's
+/// length — which is what `fputcsv()` returns.
+///
+/// A row longer than the buffer is written in buffer-sized pieces, and a SINGLE piece larger
+/// than the buffer goes straight to the descriptor. Both are more writes than php makes; both
+/// need a field of tens of kilobytes to reach, and refusing the row instead would be worse.
+fn emit_fputcsv_emit(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: fputcsv row-buffer append ---");
+    // `__rt_fputcsv` ends with its one-byte newline literal, so the location counter arrives here
+    // ODD. Without this the label lands three bytes before its first instruction, and a `bl` to it
+    // is an illegal instruction — measured, SIGILL on the first `fputcsv()`.
+    emitter.raw("    .p2align 2");                                              // 4-byte alignment for the helper entry
+    emitter.label_global("__rt_fputcsv_emit");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #48");                             // frame: [0]=fd [8]=ptr [16]=len
+            emitter.instruction("stp x29, x30, [sp, #32]");                     // save frame pointer and return address
+            emitter.instruction("add x29, sp, #32");                            // establish the helper frame pointer
+            emitter.instruction("str x0, [sp, #0]");                            // the descriptor a flush would use
+            emitter.instruction("str x1, [sp, #8]");                            // the bytes
+            emitter.instruction("str x2, [sp, #16]");                           // and how many
+
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_fputcsv_row_len");
+            emitter.instruction("ldr x10, [x9]");                               // what the buffer already holds
+            emitter.instruction("add x11, x10, x2");                            // where this piece would end
+            emitter.instruction(&format!("mov x12, #{FPUTCSV_ROW_CAP}"));
+            emitter.instruction("cmp x11, x12");
+            emitter.instruction("b.ls __rt_fpcemit_copy");                      // it fits
+
+            // -- full: what is held goes out, and the buffer starts over --
+            emitter.instruction("ldr x0, [sp, #0]");
+            emitter.instruction("bl __rt_fputcsv_flush");
+            emitter.instruction("ldr x2, [sp, #16]");                           // reload the length
+            emitter.instruction(&format!("mov x12, #{FPUTCSV_ROW_CAP}"));
+            emitter.instruction("cmp x2, x12");
+            emitter.instruction("b.ls __rt_fpcemit_copy");                      // it fits in an empty buffer
+            // A single piece too big to hold: the descriptor takes it directly.
+            emitter.instruction("ldr x0, [sp, #0]");
+            emitter.instruction("ldr x1, [sp, #8]");
+            emitter.instruction("ldr x2, [sp, #16]");
+            emitter.instruction("bl __rt_fd_write");
+            emitter.instruction("b __rt_fpcemit_ret");                          // report what the descriptor took
+
+            emitter.label("__rt_fpcemit_copy");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_fputcsv_row_len");
+            emitter.instruction("ldr x10, [x9]");                               // reload: a flush above may have zeroed it
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_fputcsv_row_buf");
+            emitter.instruction("add x11, x11, x10");                           // where this piece lands
+            emitter.instruction("ldr x1, [sp, #8]");                            // the source
+            emitter.instruction("ldr x2, [sp, #16]");                           // the length
+            emitter.instruction("mov x13, #0");                                 // byte cursor
+            emitter.label("__rt_fpcemit_loop");
+            emitter.instruction("cmp x13, x2");
+            emitter.instruction("b.hs __rt_fpcemit_done");
+            emitter.instruction("ldrb w14, [x1, x13]");
+            emitter.instruction("strb w14, [x11, x13]");
+            emitter.instruction("add x13, x13, #1");
+            emitter.instruction("b __rt_fpcemit_loop");
+            emitter.label("__rt_fpcemit_done");
+            emitter.instruction("add x10, x10, x2");                            // the buffer holds this much now
+            emitter.instruction("str x10, [x9]");
+            emitter.instruction("ldr x0, [sp, #16]");                           // the bytes accepted
+
+            emitter.label("__rt_fpcemit_ret");
+            emitter.instruction("ldp x29, x30, [sp, #32]");                     // restore frame pointer and return address
+            emitter.instruction("add sp, sp, #48");                             // release the helper frame
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish the helper frame pointer
+            emitter.instruction("sub rsp, 48");                                 // [rbp-8]=fd [rbp-16]=ptr [rbp-24]=len
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // the descriptor a flush would use
+            emitter.instruction("mov QWORD PTR [rbp - 16], rsi");               // the bytes
+            emitter.instruction("mov QWORD PTR [rbp - 24], rdx");               // and how many
+
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_fputcsv_row_len");
+            emitter.instruction("mov r10, QWORD PTR [r9]");                     // what the buffer already holds
+            emitter.instruction("add r10, rdx");                                // where this piece would end
+            emitter.instruction(&format!("cmp r10, {FPUTCSV_ROW_CAP}"));
+            emitter.instruction("jbe __rt_fpcemit_copy_x86");                   // it fits
+
+            // -- full: what is held goes out, and the buffer starts over --
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+            emitter.instruction("call __rt_fputcsv_flush");
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");               // reload the length
+            emitter.instruction(&format!("cmp rdx, {FPUTCSV_ROW_CAP}"));
+            emitter.instruction("jbe __rt_fpcemit_copy_x86");                   // it fits in an empty buffer
+            // A single piece too big to hold: the descriptor takes it directly.
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");
+            emitter.instruction("call __rt_fd_write");
+            emitter.instruction("jmp __rt_fpcemit_ret_x86");                    // report what the descriptor took
+
+            emitter.label("__rt_fpcemit_copy_x86");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_fputcsv_row_len");
+            emitter.instruction("mov r10, QWORD PTR [r9]");                     // reload: a flush above may have zeroed it
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_fputcsv_row_buf");
+            emitter.instruction("add r11, r10");                                // where this piece lands
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");               // the source
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");               // the length
+            emitter.instruction("xor rcx, rcx");                                // byte cursor
+            emitter.label("__rt_fpcemit_loop_x86");
+            emitter.instruction("cmp rcx, rdx");
+            emitter.instruction("jae __rt_fpcemit_done_x86");
+            emitter.instruction("movzx eax, BYTE PTR [rsi + rcx]");
+            emitter.instruction("mov BYTE PTR [r11 + rcx], al");
+            emitter.instruction("inc rcx");
+            emitter.instruction("jmp __rt_fpcemit_loop_x86");
+            emitter.label("__rt_fpcemit_done_x86");
+            emitter.instruction("add r10, rdx");                                // the buffer holds this much now
+            emitter.instruction("mov QWORD PTR [r9], r10");
+            emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // the bytes accepted
+
+            emitter.label("__rt_fpcemit_ret_x86");
+            emitter.instruction("leave");                                       // restore rbp and rsp
+            emitter.instruction("ret");
+        }
+    }
+}
+
+/// `__rt_fputcsv_flush(fd) -> bytes written`, 0 when the buffer is empty.
+///
+/// The buffer is emptied BEFORE the write, so a `__rt_fd_write` that reaches a userspace
+/// wrapper — which can run PHP that writes to the same stream — cannot see the bytes twice.
+fn emit_fputcsv_flush(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: fputcsv row-buffer flush ---");
+    emitter.raw("    .p2align 2");                                              // 4-byte alignment for the helper entry
+    emitter.label_global("__rt_fputcsv_flush");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #16");                             // aligned link-register save
+            emitter.instruction("str x30, [sp, #8]");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_fputcsv_row_len");
+            emitter.instruction("ldr x2, [x9]");                                // how much is held
+            emitter.instruction("cbz x2, __rt_fpcflush_empty");                 // nothing to write
+            emitter.instruction("str xzr, [x9]");                               // empty it BEFORE the write
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_fputcsv_row_buf");
+            emitter.instruction("bl __rt_fd_write");                            // the row, in one call
+            emitter.instruction("b __rt_fpcflush_ret");
+            emitter.label("__rt_fpcflush_empty");
+            emitter.instruction("mov x0, #0");                                  // nothing was held
+            emitter.label("__rt_fpcflush_ret");
+            emitter.instruction("ldr x30, [sp, #8]");
+            emitter.instruction("add sp, sp, #16");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish the helper frame pointer
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_fputcsv_row_len");
+            emitter.instruction("mov rdx, QWORD PTR [r9]");                     // how much is held
+            emitter.instruction("test rdx, rdx");
+            emitter.instruction("jz __rt_fpcflush_empty_x86");                  // nothing to write
+            emitter.instruction("mov QWORD PTR [r9], 0");                       // empty it BEFORE the write
+            crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_fputcsv_row_buf");
+            emitter.instruction("call __rt_fd_write");                          // the row, in one call
+            emitter.instruction("jmp __rt_fpcflush_ret_x86");
+            emitter.label("__rt_fpcflush_empty_x86");
+            emitter.instruction("xor eax, eax");                                // nothing was held
+            emitter.label("__rt_fpcflush_ret_x86");
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.instruction("ret");
+        }
+    }
 }
 
 /// ARM64 variant of `__rt_fputcsv`.
@@ -31,12 +210,13 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
 /// Signature: `__rt_fputcsv(fd: x0, arr: x1, csv_opts: x2, eol_ptr: x3, eol_len: x4)
 /// -> bytes_written: x0`.
 ///
-/// ⚠️ It writes the row PIECE BY PIECE — separator, quote, escaped byte, field, end of line — and
-/// php composes the row and writes it ONCE. Invisible on a descriptor, where the kernel buffers;
-/// visible through a userspace wrapper, which sees a `stream_write()` per piece:
-/// `fputcsv($h, ["a", "b"])` is FOUR calls here and one in php. MEASURED on `php -n` 8.5.6.
-/// The bytes are identical either way. Composing into a buffer first is the fix, and it is a
-/// restructure of this whole emitter rather than a change at one site.
+/// The row is composed piece by piece — separator, quote, escaped byte, field, end of line — and
+/// written ONCE, which is what php does. Each piece goes to `__rt_fputcsv_emit`, which takes
+/// `__rt_fd_write`'s arguments and answers the same way, so every site keeps its shape and the
+/// running total keeps counting bytes. Only the sink changed.
+///
+/// It matters through a userspace wrapper, which sees one `stream_write()` per call:
+/// `fputcsv($h, ["a", "b"])` was FOUR calls here and one in php. MEASURED on `php -n` 8.5.6.
 ///
 /// Writes each array element as a CSV field, quoting fields that contain the
 /// separator, enclosure, escape, or whitespace characters. Internal quotes are
@@ -60,6 +240,10 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save fd
     emitter.instruction("str x1, [sp, #8]");                                    // save array pointer
     emitter.instruction("str xzr, [sp, #16]");                                   // total bytes written = 0
+
+    // -- start the row buffer empty, so a row abandoned mid-way cannot bleed into the next --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_fputcsv_row_len");
+    emitter.instruction("str xzr, [x9]");                                        // nothing held yet
     emitter.instruction("str xzr, [sp, #24]");                                   // current element index = 0
 
     // -- unpack csv_opts: sep = x2 & 0xFF, enc = (x2 >> 8) & 0xFF, esc = (x2 >> 16) & 0xFF --
@@ -118,7 +302,7 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("strb w1, [sp, #96]");                                    // store sep byte in scratch slot
     emitter.instruction("add x1, sp, #96");                                        // ptr = scratch slot
     emitter.instruction("mov x2, #1");                                            // write 1 byte (sep)
-    emitter.instruction("bl __rt_fd_write");                                      // write the separator
+    emitter.instruction("bl __rt_fputcsv_emit");                                      // write the separator
     emitter.instruction("ldr x9, [sp, #16]");                                    // reload total bytes
     emitter.instruction("add x9, x9, x0");                                        // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                     // save updated total
@@ -209,7 +393,7 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("strb w1, [sp, #96]");                                        // store enc byte in scratch slot
     emitter.instruction("add x1, sp, #96");                                          // ptr = scratch slot
     emitter.instruction("mov x2, #1");                                              // write 1 byte (enc)
-    emitter.instruction("bl __rt_fd_write");                                        // write opening quote
+    emitter.instruction("bl __rt_fputcsv_emit");                                        // write opening quote
     emitter.instruction("ldr x9, [sp, #16]");                                       // reload total bytes
     emitter.instruction("add x9, x9, x0");                                          // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                       // save updated total
@@ -253,7 +437,7 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("strb w1, [sp, #96]");                                         // store enc in scratch
     emitter.instruction("add x1, sp, #96");                                            // ptr = scratch slot
     emitter.instruction("mov x2, #1");                                                 // write 1 byte
-    emitter.instruction("bl __rt_fd_write");                                           // write the doubling enclosure
+    emitter.instruction("bl __rt_fputcsv_emit");                                           // write the doubling enclosure
     emitter.instruction("ldr x9, [sp, #16]");                                          // reload total bytes
     emitter.instruction("add x9, x9, x0");                                             // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                          // save updated total
@@ -269,7 +453,7 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x1, x3, x9");                                             // pointer to the byte
     emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
     emitter.instruction("mov x2, #1");                                                 // write 1 byte
-    emitter.instruction("bl __rt_fd_write");                                           // write this byte
+    emitter.instruction("bl __rt_fputcsv_emit");                                           // write this byte
     emitter.instruction("ldr x9, [sp, #16]");                                          // reload total bytes
     emitter.instruction("add x9, x9, x0");                                             // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                          // save updated total
@@ -287,7 +471,7 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("strb w1, [sp, #96]");                                         // store enc byte in scratch
     emitter.instruction("add x1, sp, #96");                                            // ptr = scratch slot
     emitter.instruction("mov x2, #1");                                                // write 1 byte (enc)
-    emitter.instruction("bl __rt_fd_write");                                          // write closing quote
+    emitter.instruction("bl __rt_fputcsv_emit");                                          // write closing quote
     emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
     emitter.instruction("add x9, x9, x0");                                            // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                         // save updated total
@@ -298,7 +482,7 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
     emitter.instruction("mov x1, x3");                                                // field pointer
     emitter.instruction("mov x2, x4");                                                // field length
-    emitter.instruction("bl __rt_fd_write");                                          // write the plain field
+    emitter.instruction("bl __rt_fputcsv_emit");                                          // write the plain field
     emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
     emitter.instruction("add x9, x9, x0");                                            // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                         // save updated total
@@ -324,7 +508,7 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
     emitter.instruction("mov x1, x3");                                                // eol pointer
     emitter.instruction("mov x2, x4");                                                // eol length
-    emitter.instruction("bl __rt_fd_write");                                          // write the eol
+    emitter.instruction("bl __rt_fputcsv_emit");                                          // write the eol
     emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
     emitter.instruction("add x9, x9, x0");                                            // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                         // save final total
@@ -335,13 +519,17 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.adrp("x1", "__rt_fputcsv_nl_lit");                                        // load newline literal address
     emitter.add_lo12("x1", "x1", "__rt_fputcsv_nl_lit");                              // resolve exact address
     emitter.instruction("mov x2, #1");                                                // write 1 byte (newline)
-    emitter.instruction("bl __rt_fd_write");                                          // write the newline
+    emitter.instruction("bl __rt_fputcsv_emit");                                          // write the newline
     emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
     emitter.instruction("add x9, x9, x0");                                            // add final bytes written
     emitter.instruction("str x9, [sp, #16]");                                         // save final total
 
     // -- return total bytes written --
     emitter.label("__rt_fputcsv_ret");
+    // -- the row goes out HERE, in one write, which is the call php's wrapper sees --
+    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
+    emitter.instruction("bl __rt_fputcsv_flush");                                     // the row's only write
+
     // -- reclaim the row's cast scratch before returning --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [sp, #176]");                                       // the caller's concat write offset
@@ -381,6 +569,9 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                         // preserve the destination file descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                        // preserve the source string-array pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                          // total written bytes start at zero
+    // -- start the row buffer empty; see the AArch64 arm --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_fputcsv_row_len");
+    emitter.instruction("mov QWORD PTR [r9], 0");                                // nothing held yet
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                          // current field index starts at zero
     // -- save eol_ptr (rcx) and eol_len (r8) BEFORE unpacking csv_opts (which clobbers rcx) --
     emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                        // preserve eol_ptr before rcx is clobbered
@@ -437,7 +628,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                          // pass the destination fd for the separator
     emitter.instruction("lea rsi, [rbp - 40]");                                  // ptr = address of sep byte on stack
     emitter.instruction("mov edx, 1");                                           // write exactly one separator byte
-    emitter.instruction("call __rt_fd_write");                                   // emit the separator through __rt_fd_write()
+    emitter.instruction("call __rt_fputcsv_emit");                                   // emit the separator through __rt_fd_write()
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                         // accumulate the separator byte count
 
     // -- load current field from array --
@@ -533,7 +724,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                          // pass the destination fd for the opening quote
     emitter.instruction("lea rsi, [rbp - 48]");                                  // ptr = address of enc byte on stack
     emitter.instruction("mov edx, 1");                                          // write exactly one opening quote byte
-    emitter.instruction("call __rt_fd_write");                                   // emit the opening quote
+    emitter.instruction("call __rt_fputcsv_emit");                                   // emit the opening quote
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                        // accumulate the opening-quote byte count
     emitter.instruction("mov QWORD PTR [rbp - 112], 0");                         // current byte index inside the quoted field
 
@@ -567,7 +758,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                         // pass the destination fd
     emitter.instruction("lea rsi, [rbp - 48]");                                  // ptr = address of enc byte
     emitter.instruction("mov edx, 1");                                          // write one enc
-    emitter.instruction("call __rt_fd_write");                                  // emit the doubling enclosure
+    emitter.instruction("call __rt_fputcsv_emit");                                  // emit the doubling enclosure
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                        // accumulate
 
     emitter.label("__rt_fputcsv_x_q_plain");
@@ -581,7 +772,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rcx, 1");                                        // index of byte to write
     emitter.instruction("lea rsi, [r8 + rcx]");                                // pointer to the byte
     emitter.instruction("mov edx, 1");                                         // write exactly one byte
-    emitter.instruction("call __rt_fd_write");                                 // emit the byte
+    emitter.instruction("call __rt_fputcsv_emit");                                 // emit the byte
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
     emitter.instruction("jmp __rt_fputcsv_x_qloop");                           // continue the quoted field loop
 
@@ -590,7 +781,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                       // pass the destination fd
     emitter.instruction("lea rsi, [rbp - 48]");                                // ptr = address of enc byte
     emitter.instruction("mov edx, 1");                                         // write one closing quote
-    emitter.instruction("call __rt_fd_write");                                // emit the closing quote
+    emitter.instruction("call __rt_fputcsv_emit");                                // emit the closing quote
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
     emitter.instruction("jmp __rt_fputcsv_x_next");                            // advance to the next field
 
@@ -599,7 +790,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                       // pass the destination fd
     emitter.instruction("mov rsi, QWORD PTR [rbp - 88]");                       // pass the field pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                      // pass the field length
-    emitter.instruction("call __rt_fd_write");                                 // emit the plain field
+    emitter.instruction("call __rt_fputcsv_emit");                                 // emit the plain field
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
 
     // -- advance to next element --
@@ -623,7 +814,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                      // pass the destination fd
     emitter.instruction("mov rsi, rax");                                      // pass eol pointer
     emitter.instruction("mov rdx, rcx");                                      // pass eol length
-    emitter.instruction("call __rt_fd_write");                                // emit the eol
+    emitter.instruction("call __rt_fputcsv_emit");                                // emit the eol
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
     emitter.instruction("jmp __rt_fputcsv_x_ret");                            // return
 
@@ -631,11 +822,15 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                      // pass the destination fd
     emitter.instruction("lea rsi, [rip + __rt_fputcsv_nl_lit]");               // pass the newline literal address
     emitter.instruction("mov edx, 1");                                        // write exactly one trailing newline byte
-    emitter.instruction("call __rt_fd_write");                                // emit the trailing newline
+    emitter.instruction("call __rt_fputcsv_emit");                                // emit the trailing newline
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate the trailing newline byte count
 
     // -- return total bytes written --
     emitter.label("__rt_fputcsv_x_ret");
+    // -- the row goes out HERE, in one write; see the AArch64 arm --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                       // reload fd
+    emitter.instruction("call __rt_fputcsv_flush");                            // the row's only write
+
     // -- reclaim the row's cast scratch before returning --
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov r11, QWORD PTR [rbp - 168]");                     // the caller's concat write offset
