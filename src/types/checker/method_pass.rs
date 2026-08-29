@@ -724,7 +724,11 @@ fn stream_wrapper_contract_param_types(method_key: &str) -> Option<Vec<Option<Ph
         "stream_write" => strs(vec![PhpType::Str]),
         "stream_read" | "stream_truncate" | "stream_lock" | "stream_cast" => ints(1),
         "stream_seek" => ints(2),
-        "stream_set_option" => ints(3),
+        // `$arg2` is php's `mixed`: NULL for STREAM_OPTION_BLOCKING, an int for the buffer and
+        // timeout options. MEASURED — `set_option(1, 0, NULL)` beside `set_option(4, 1, 500)`.
+        // Only Mixed spans both, and a boxed Mixed travels in the same register an int does, so
+        // the call shape is unchanged; `__rt_user_wrapper_set_option` does the boxing.
+        "stream_set_option" => strs(vec![PhpType::Int, PhpType::Int, PhpType::Mixed]),
         "unlink" => strs(vec![PhpType::Str]),
         "rename" => strs(vec![PhpType::Str, PhpType::Str]),
         "url_stat" | "rmdir" | "dir_opendir" => strs(vec![PhpType::Str, PhpType::Int]),

@@ -20040,3 +20040,51 @@ fclose($h);
         out.diagnostics
     );
 }
+
+/// Verifies `stream_set_option()`'s third argument is the MIXED php sends, not always an int.
+///
+/// MEASURED on `php -n` 8.5.6: `stream_set_blocking()` calls
+/// `stream_set_option(STREAM_OPTION_BLOCKING, $mode, null)`, while the buffer and timeout options
+/// send integers there. elephc typed the parameter `int` and passed a raw 0, so a wrapper testing
+/// `$arg2 === null` — the documented way to tell the blocking option apart — never saw it.
+///
+/// The box is minted in `__rt_user_wrapper_set_option` rather than at the four call sites, which
+/// hold their arguments in registers, and is released after the call: the method borrows it.
+#[test]
+fn test_stream_set_option_gets_the_mixed_third_argument_php_sends() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class T {
+    public $context;
+    public function stream_open($p, $m, $o, &$x) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_set_option($opt, $a1, $a2) {
+        echo "opt=", $opt, " a1=", $a1, " a2=", var_export($a2, true),
+             " null?", ($a2 === null ? "yes" : "no"), "\n";
+        return true;
+    }
+    public function stream_close() {}
+}
+stream_wrapper_register("so", "T");
+$h = fopen("so://x", "r");
+stream_set_blocking($h, false);
+stream_set_blocking($h, true);
+stream_set_timeout($h, 1, 500);
+stream_set_write_buffer($h, 100);
+stream_set_read_buffer($h, 0);
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "opt=1 a1=0 a2=NULL null?yes\n",
+            "opt=1 a1=1 a2=NULL null?yes\n",
+            "opt=4 a1=1 a2=500 null?no\n",
+            "opt=3 a1=2 a2=100 null?no\n",
+            "opt=2 a1=0 a2=1024 null?no\n",
+        ),
+    );
+}

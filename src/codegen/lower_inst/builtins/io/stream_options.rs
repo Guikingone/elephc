@@ -58,15 +58,11 @@ pub(crate) fn lower_stream_set_blocking(
             );                                                                  // select STREAM_OPTION_BLOCKING
             // php sends NULL here, not a number: MEASURED, `stream_set_blocking()` calls
             // `stream_set_option(STREAM_OPTION_BLOCKING, $mode, null)`, while the buffer and
-            // timeout options do send integers. A wrapper testing `$arg2 === null` saw 0.
-            // php sends NULL here, not a number: MEASURED, `stream_set_blocking()` calls
-            // `stream_set_option(STREAM_OPTION_BLOCKING, $mode, null)`, while the buffer and
-            // timeout options really do send integers. elephc sends 0, and cannot yet send
-            // anything else: the vtable call hands the method raw values and its untyped
-            // parameters are typed int, so `NULL_SENTINEL` arrives as 9223372036854775806 and
-            // a boxed Mixed cell as its own address. Both were measured. Giving a wrapper
-            // method mixed-shaped parameters is the fix, and it is the method ABI, not here.
-            ctx.emitter.instruction("mov x3, #0");                              // pass zero as wrapper option arg2
+            // timeout options do send integers. Which mixed to box is the DISPATCHER's decision,
+            // taken from the option — the four call sites hold their arguments in registers and
+            // would each have to spill them around the boxing call — so what travels from here
+            // is a placeholder the blocking arm never reads.
+            ctx.emitter.instruction("mov x3, #0");                              // arg2 is boxed from the option
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);
         }
@@ -83,9 +79,8 @@ pub(crate) fn lower_stream_set_blocking(
             ctx.emitter.instruction(
                 &format!("mov rsi, {}", STREAM_OPTION_BLOCKING)
             );                                                                  // select STREAM_OPTION_BLOCKING
-            // See the AArch64 arm: php sends NULL here, not a number.
-            // See the AArch64 arm: php sends NULL here, and elephc cannot yet.
-            ctx.emitter.instruction("xor ecx, ecx");                            // pass zero as wrapper option arg2
+            // See the AArch64 arm: php sends NULL here, and the dispatcher boxes it.
+            ctx.emitter.instruction("xor ecx, ecx");                            // arg2 is boxed from the option
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);
         }
