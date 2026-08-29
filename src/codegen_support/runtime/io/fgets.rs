@@ -337,7 +337,7 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_fgets_wrapper_have_byte");               // a buffered byte needs no wrapper call
 
     emitter.instruction("ldr x0, [sp, #40]");                                   // reload the wrapper fd
-    emitter.instruction("bl __rt_feof");                                        // check stream_eof FIRST (x0 = 1 at EOF)
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("cbnz x0, __rt_fgets_wrapper_done");                    // at EOF: return the bytes gathered so far
     emitter.instruction("ldr x0, [sp, #0]");                                    // the handle carries the chunk size
     emitter.instruction("bl __rt_stream_chunk_size");                           // x0 = how much php would ask for
@@ -617,7 +617,7 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_fgets_wrapper_have_byte_x86");                // a buffered byte needs no wrapper call
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the wrapper fd
-    emitter.instruction("call __rt_feof");                                      // check stream_eof FIRST (rax = 1 at EOF)
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("test rax, rax");                                       // at EOF?
     emitter.instruction("jnz __rt_fgets_wrapper_done_x86");                     // at EOF: return the bytes gathered so far
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the handle carries the chunk size

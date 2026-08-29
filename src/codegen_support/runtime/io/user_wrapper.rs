@@ -345,7 +345,18 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x3", "_uwmh_tail_eof");
     emitter.instruction(&format!("mov x4, #{}", WRAPPER_MISSING_HOOK_TAIL_EOF.len()));
     emitter.instruction("bl __rt_wrapper_missing_hook_warning");
-    emitter.instruction("ldp x1, x2, [sp, #40]");                               // php discards these bytes; the flag is what the caller reads
+    // php keeps NONE of what a refused read produced. Handing the pair back beside a zero flag
+    // was not enough: `fgets` looks at the LENGTH alone, so it answered the line php refuses, and
+    // `readfile` printed the whole file before the warning.
+    emitter.instruction("ldr x1, [sp, #40]");                                   // what the wrapper handed back
+    emitter.instruction("cbz x1, __rt_uwfread_verdict_released");               // nothing to give back
+    emitter.instruction("mov x2, #0");                                          // release the whole claimed window
+    emitter.instruction("bl __rt_concat_publish");
+    emitter.instruction("ldr x0, [sp, #40]");
+    emitter.instruction("bl __rt_decref_any");                                  // and release the string itself
+    emitter.label("__rt_uwfread_verdict_released");
+    emitter.instruction("mov x1, #0");                                          // the refusal answers nothing
+    emitter.instruction("mov x2, #0");
     emitter.instruction("mov x0, #0");                                          // the read failed
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
@@ -440,8 +451,17 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rcx", "_uwmh_tail_eof");
     emitter.instruction(&format!("mov r8, {}", WRAPPER_MISSING_HOOK_TAIL_EOF.len()));
     emitter.instruction("call __rt_wrapper_missing_hook_warning");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // php discards these bytes; the flag is what the caller reads
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");
+    // See the AArch64 counterpart: php keeps none of what a refused read produced.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // what the wrapper handed back
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_uwfread_verdict_released_x86");                // nothing to give back
+    emitter.instruction("xor edx, edx");                                        // release the whole claimed window
+    emitter.instruction("call __rt_concat_publish");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // decref reads RAX, not rdi
+    emitter.instruction("call __rt_decref_any");                                // and release the string itself
+    emitter.label("__rt_uwfread_verdict_released_x86");
+    emitter.instruction("xor eax, eax");                                        // the refusal answers nothing
+    emitter.instruction("xor edx, edx");
     emitter.instruction("xor ecx, ecx");                                        // the read failed
     emitter.instruction("add rsp, 48");                                         // release the WHOLE frame, which grew for the boxed-result spills
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -592,6 +612,19 @@ fn emit_user_wrapper_fwrite_linux_x86_64(emitter: &mut Emitter) {
 /// `__rt_user_wrapper_feof`: invoke the wrapper's `stream_eof()` and return
 /// its declared bool result. When the method is absent, returns 1 (EOF) so
 /// callers that loop until feof terminate instead of spinning.
+///
+/// `__rt_user_wrapper_feof_quiet` is the same question asked by elephc rather than by the program.
+/// php's readers do not call `feof()` at all: they read, and the read asks the wrapper itself. So
+/// a class with no `stream_eof` must not be warned about HERE — the read that follows refuses and
+/// names the function the user actually called. MEASURED: php says
+/// `Warning: fgets(): C::stream_eof is not implemented!`, elephc said `feof()`, because its
+/// `fgets` loop probes before reading. The quiet twin answers "not at end" so that read happens.
+///
+/// The mode arrives in x1 / rsi: 0 when the program asked, 1 when elephc did. It is ONE entry
+/// point with an argument rather than two labels sharing a body, because two globals sharing a
+/// body are two linker ATOMS under `.subsections_via_symbols` — a program that never calls `feof()`
+/// has the loud entry dead-stripped, and a quiet entry branching into it lands in code that is no
+/// longer there. Every call site goes through `emit_feof_call`, so the mode cannot be forgotten.
 pub fn emit_user_wrapper_feof(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_user_wrapper_feof_linux_x86_64(emitter);
@@ -602,21 +635,24 @@ pub fn emit_user_wrapper_feof(emitter: &mut Emitter) {
     emitter.comment("--- runtime: user_wrapper_feof ---");
     emitter.label_global("__rt_user_wrapper_feof");
 
-    emitter.instruction("sub sp, sp, #16");                                     // helper frame for the wrapper dispatch
-    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    emitter.instruction("sub sp, sp, #32");                                     // helper frame, plus who is asking
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // outlives the lookups below
 
     emit_aarch64_handle_lookup(emitter, "__rt_uwfeof_eof");                     // resolve obj into x0, fall through to EOF on missing handles
     emit_aarch64_method_lookup(emitter, "__rt_uwfeof_missing", VTABLE_SLOT_EOF); // resolve stream_eof method pointer into x11
 
     emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_EOF, "feof");            // invoke stream_eof, unboxing an undeclared return
-    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the helper frame
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
     // -- the class does not implement stream_eof: warn, then keep the EOF answer --
     // php says so in the warning itself: "... is not implemented! Assuming EOF".
     emitter.label("__rt_uwfeof_missing");
+    emitter.instruction("ldr x9, [sp, #0]");                                    // an internal probe says nothing and answers
+    emitter.instruction("cbnz x9, __rt_uwfeof_quiet_answer");                   // "not at end": the read refuses, and names its caller
     emit_missing_hook_warning_call(
         emitter,
         "_uwmh_head_feof",
@@ -627,9 +663,15 @@ pub fn emit_user_wrapper_feof(emitter: &mut Emitter) {
 
     emitter.label("__rt_uwfeof_eof");
     emitter.instruction("mov x0, #1");                                          // report EOF when the wrapper does not implement stream_eof
-    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the helper frame
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return EOF
+
+    emitter.label("__rt_uwfeof_quiet_answer");
+    emitter.instruction("mov x0, #0");                                          // let the reader read; the read is what refuses
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return "not at end"
 }
 
 /// Emits the Linux x86_64 stream runtime helper for user wrapper feof.
@@ -640,16 +682,22 @@ fn emit_user_wrapper_feof_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // aligned storage for who is asking
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // outlives the lookups below
 
     emit_x86_handle_lookup(emitter, "__rt_uwfeof_eof_x86");                     // resolve obj into rdi, fall through on missing handles
     emit_x86_method_lookup(emitter, "__rt_uwfeof_missing_x86", VTABLE_SLOT_EOF); // resolve stream_eof method pointer into r11
 
     emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_EOF, "feof");                // invoke stream_eof, unboxing an undeclared return
+    emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
     // -- the class does not implement stream_eof: warn, then keep the EOF answer --
     emitter.label("__rt_uwfeof_missing_x86");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // an internal probe says nothing and answers
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jnz __rt_uwfeof_quiet_answer_x86");                    // "not at end": the read refuses, and names its caller
     emit_missing_hook_warning_call(
         emitter,
         "_uwmh_head_feof",
@@ -660,8 +708,15 @@ fn emit_user_wrapper_feof_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_uwfeof_eof_x86");
     emitter.instruction("mov eax, 1");                                          // report EOF when the wrapper does not implement stream_eof
+    emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return EOF
+
+    emitter.label("__rt_uwfeof_quiet_answer_x86");
+    emitter.instruction("xor eax, eax");                                        // let the reader read; the read is what refuses
+    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return "not at end"
 }
 
 /// `__rt_user_wrapper_ftell`: invoke the wrapper's `stream_tell()` and return

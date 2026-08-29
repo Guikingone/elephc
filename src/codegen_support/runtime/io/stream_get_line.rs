@@ -228,7 +228,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     // The opaque HANDLE, not the fd: both helpers resolve the descriptor themselves, and only the
     // handle resolves the STATE where the stream's buffered bytes live.
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the opaque stream handle
-    emitter.instruction("bl __rt_feof");                                        // check stream_eof FIRST (x0 = 1 at EOF)
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("cbnz x0, __rt_stream_get_line_done");                  // at EOF: return the bytes gathered so far
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the opaque stream handle
     emitter.instruction("mov x1, #1");                                          // read exactly one byte
@@ -473,7 +473,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // reached the byte budget?
     emitter.instruction("jge __rt_stream_get_line_done_x86");                   // stop at the maximum length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
-    emitter.instruction("call __rt_feof");                                      // check stream_eof FIRST (rax = 1 at EOF)
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("test rax, rax");                                       // at EOF?
     emitter.instruction("jnz __rt_stream_get_line_done_x86");                   // at EOF: return the bytes gathered so far
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle

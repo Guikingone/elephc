@@ -243,7 +243,7 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("lsl w11, w11, #16");                                   // form 0x40000000
     emitter.instruction("cmp x14, x11");                                        // synthetic user-wrapper fd?
     emitter.instruction("b.lt __rt_stream_get_contents_bounded_after_feof");    // normal fd: skip wrapper EOF dispatch
-    emitter.instruction("bl __rt_feof");                                        // wrapper: check stream_eof before reading
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("cbnz x0, __rt_stream_get_contents_bounded_done");      // wrapper EOF means no extra stream_read call
     emitter.label("__rt_stream_get_contents_bounded_after_feof");
 
@@ -505,7 +505,7 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10d, 0x40000000");                                // USER_WRAPPER_FD_BASE
     emitter.instruction("cmp r14, r10");                                        // synthetic user-wrapper fd?
     emitter.instruction("jl __rt_stream_get_contents_bounded_after_feof_x86");  // normal fd: skip wrapper EOF dispatch
-    emitter.instruction("call __rt_feof");                                      // wrapper: check stream_eof before reading
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("test rax, rax");                                       // did stream_eof report true?
     emitter.instruction("jnz __rt_stream_get_contents_bounded_done_x86");       // wrapper EOF means no extra stream_read call
     emitter.label("__rt_stream_get_contents_bounded_after_feof_x86");

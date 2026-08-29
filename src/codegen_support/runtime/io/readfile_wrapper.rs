@@ -58,11 +58,14 @@ pub fn emit_readfile_wrapper(emitter: &mut Emitter) {
     //    makes the EOF read whose empty result would cross the method boundary --
     emitter.label("__rt_rfw_loop");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the wrapper fd
-    emitter.instruction("bl __rt_feof");                                        // check stream_eof first (x0 = 1 at EOF)
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("cbnz x0, __rt_rfw_done");                              // at EOF: stop without reading
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the wrapper fd
     emitter.instruction("mov x1, #4096");                                       // request up to 4096 bytes
     emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = len
+    // A REFUSED read is not a short one. php answers -1 for the whole readfile(), however many
+    // bytes went out before it — MEASURED against a wrapper with no stream_eof.
+    emitter.instruction("cbz x0, __rt_rfw_refused");
     emitter.instruction("cbz x2, __rt_rfw_release_eof");                        // defensive: empty read also stops
     emitter.instruction("str x1, [sp, #32]");                                   // save the chunk ptr for the later release
     emitter.instruction("ldr x9, [sp, #24]");                                   // current byte total
@@ -72,6 +75,11 @@ pub fn emit_readfile_wrapper(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the chunk ptr
     emitter.instruction("bl __rt_decref_any");                                  // release the owned chunk, then loop
     emitter.instruction("b __rt_rfw_loop");                                     // stream the next chunk
+
+    emitter.label("__rt_rfw_refused");
+    emitter.instruction("mov x9, #-1");                                         // php's readfile failure answer
+    emitter.instruction("str x9, [sp, #24]");                                   // replaces the total
+    emitter.instruction("b __rt_rfw_done");
 
     emitter.label("__rt_rfw_release_eof");
     emitter.instruction("mov x0, x1");                                          // the final (empty/uncopied) owned chunk
@@ -122,12 +130,15 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
     // -- feof-gated drain: check stream_eof BEFORE each read --
     emitter.label("__rt_rfw_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
-    emitter.instruction("call __rt_feof");                                      // check stream_eof first (rax = 1 at EOF)
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("test rax, rax");                                       // at EOF?
     emitter.instruction("jnz __rt_rfw_done_x86");                               // at EOF: stop without reading
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
     emitter.instruction("mov rsi, 4096");                                       // request up to 4096 bytes
     emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = len
+    // See the AArch64 counterpart: a refused read makes the whole readfile() answer -1.
+    emitter.instruction("test rcx, rcx");                                       // the read's verdict travels beside the pair
+    emitter.instruction("jz __rt_rfw_refused_x86");
     emitter.instruction("test rdx, rdx");                                       // zero-length read?
     emitter.instruction("jz __rt_rfw_release_eof_x86");                         // defensive: empty read also stops
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the chunk ptr for the later release
@@ -139,6 +150,10 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the chunk ptr
     emitter.instruction("call __rt_decref_any");                                // release the owned chunk, then loop
     emitter.instruction("jmp __rt_rfw_loop_x86");                               // stream the next chunk
+
+    emitter.label("__rt_rfw_refused_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 16], -1");                        // php's readfile failure answer
+    emitter.instruction("jmp __rt_rfw_done_x86");
 
     emitter.label("__rt_rfw_release_eof_x86");
     emitter.instruction("call __rt_decref_any");                                // release the final (empty/uncopied) chunk (rax=ptr)

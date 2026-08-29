@@ -149,3 +149,67 @@ var_dump(file_get_contents("witheof://y"));
         out.diagnostics
     );
 }
+
+/// Verifies `fgets()` answers false under its OWN name, not `feof()`.
+///
+/// elephc's `fgets` loop probes end-of-file before reading; php's does not — it reads, and the
+/// read asks the wrapper. So the probe warned as `feof()` and the loop then answered the line php
+/// refuses. The probe is silent now, and the read is what refuses.
+#[test]
+fn test_fgets_on_a_wrapper_without_stream_eof_answers_false() {
+    let out = run_without_eof(r#"$h = fopen("noeof://x", "r"); var_dump(fgets($h)); fclose($h);"#);
+    assert_refusal(&out, "fgets", "bool(false)\n");
+}
+
+/// Verifies `fgetcsv()` does the same, under its own name.
+#[test]
+fn test_fgetcsv_on_a_wrapper_without_stream_eof_answers_false() {
+    let out = run_without_eof(r#"$h = fopen("noeof://x", "r"); var_dump(fgetcsv($h)); fclose($h);"#);
+    assert_refusal(&out, "fgetcsv", "bool(false)\n");
+}
+
+/// Verifies `stream_get_contents()` answers the empty string, under its own name.
+#[test]
+fn test_stream_get_contents_on_a_wrapper_without_stream_eof_answers_empty() {
+    let out = run_without_eof(
+        r#"$h = fopen("noeof://x", "r"); var_dump(stream_get_contents($h)); fclose($h);"#,
+    );
+    assert_refusal(&out, "stream_get_contents", "string(0) \"\"\n");
+}
+
+/// Verifies `stream_get_line()` answers false, under its own name.
+#[test]
+fn test_stream_get_line_on_a_wrapper_without_stream_eof_answers_false() {
+    let out = run_without_eof(
+        "$h = fopen(\"noeof://x\", \"r\"); var_dump(stream_get_line($h, 100, \"\\n\")); fclose($h);",
+    );
+    assert_refusal(&out, "stream_get_line", "bool(false)\n");
+}
+
+/// Verifies `fpassthru()` answers -1 and prints NOTHING.
+///
+/// A refused read is not a short one: elephc counted the bytes it had managed and answered 0,
+/// after printing them. php answers -1 and prints nothing, because it keeps none of them.
+#[test]
+fn test_fpassthru_on_a_wrapper_without_stream_eof_answers_minus_one() {
+    let out =
+        run_without_eof(r#"$h = fopen("noeof://x", "r"); var_dump(fpassthru($h)); fclose($h);"#);
+    assert_refusal(&out, "fpassthru", "int(-1)\n");
+}
+
+/// Verifies `readfile()` answers -1 and prints NOTHING.
+#[test]
+fn test_readfile_on_a_wrapper_without_stream_eof_answers_minus_one() {
+    let out = run_without_eof(r#"var_dump(readfile("noeof://x"));"#);
+    assert_refusal(&out, "readfile", "int(-1)\n");
+}
+
+/// Verifies a `feof()` the PROGRAM wrote is still LOUD, and still names `feof()`.
+///
+/// The quiet probe exists for elephc's own loops. php warns for a `feof()` the user called, so
+/// silencing that one would trade a wrong name for a missing warning.
+#[test]
+fn test_a_feof_the_program_called_still_warns() {
+    let out = run_without_eof(r#"$h = fopen("noeof://x", "r"); var_dump(feof($h)); fclose($h);"#);
+    assert_refusal(&out, "feof", "bool(true)\n");
+}

@@ -21,6 +21,8 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
     let loop_label = ctx.next_label("fpt_loop");
     let release_eof_label = ctx.next_label("fpt_release_eof");
     let wrapper_done_label = ctx.next_label("fpt_done");
+    // A read the wrapper REFUSED is not a short read: php answers -1, not the byte count so far.
+    let refused_label = ctx.next_label("fpt_refused");
     let done_label = ctx.next_label("fpt_after");
     let native_label = ctx.next_label("fpt_native");
     let drain_label = ctx.next_label("fpt_drain");
@@ -75,11 +77,14 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("str xzr, [sp, #8]");                       // initialize copied byte total to zero
             ctx.emitter.label(&loop_label);
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the read handle for EOF probing
-            abi::emit_call_label(ctx.emitter, "__rt_feof");
+            // fpassthru's OWN probe, not one the program wrote: it must not warn about a missing
+            // stream_eof. php reads first and lets the read refuse, naming fpassthru().
+            crate::codegen_support::runtime::io::emit_feof_call(ctx.emitter, true);
             ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper_done_label)); // stop streaming when stream_eof reports EOF
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the read handle for reading
             ctx.emitter.instruction("mov x1, #4096");                           // request a bounded read chunk
             abi::emit_call_label(ctx.emitter, "__rt_fread");
+            ctx.emitter.instruction(&format!("cbz x0, {}", refused_label));     // the read refused: php answers -1
             ctx.emitter.instruction(&format!("cbz x2, {}", release_eof_label)); // stop defensively on empty wrapper reads
             ctx.emitter.instruction("str x1, [sp, #16]");                       // preserve the owned chunk pointer for release
             ctx.emitter.instruction("ldr x9, [sp, #8]");                        // load the current copied byte total
@@ -92,6 +97,10 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&release_eof_label);
             ctx.emitter.instruction("mov x0, x1");                              // pass the final empty chunk pointer to decref
             abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction(&format!("b {}", wrapper_done_label));
+            ctx.emitter.label(&refused_label);
+            ctx.emitter.instruction("mov x9, #-1");                             // php's fpassthru failure answer
+            ctx.emitter.instruction("str x9, [sp, #8]");                        // replaces the total, however much was passed
             ctx.emitter.label(&wrapper_done_label);
             ctx.emitter.instruction("ldr x0, [sp, #8]");                        // return the copied byte total
             ctx.emitter.instruction("add sp, sp, #32");                         // release wrapper streaming scratch storage
@@ -142,12 +151,15 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 0");              // initialize copied byte total to zero
             ctx.emitter.label(&loop_label);
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the read handle for EOF probing
-            abi::emit_call_label(ctx.emitter, "__rt_feof");
+            // See the AArch64 arm: fpassthru's own probe stays silent.
+            crate::codegen_support::runtime::io::emit_feof_call(ctx.emitter, true);
             ctx.emitter.instruction("test rax, rax");                           // test whether stream_eof reported EOF
             ctx.emitter.instruction(&format!("jnz {}", wrapper_done_label));    // stop streaming when stream_eof reports EOF
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the read handle for reading
             ctx.emitter.instruction("mov rsi, 4096");                           // request a bounded read chunk
             abi::emit_call_label(ctx.emitter, "__rt_fread");
+            ctx.emitter.instruction("test rcx, rcx");                           // the read's verdict travels beside the pair
+            ctx.emitter.instruction(&format!("jz {}", refused_label));          // the read refused: php answers -1
             ctx.emitter.instruction("test rdx, rdx");                           // test whether the wrapper returned an empty chunk
             ctx.emitter.instruction(&format!("jz {}", release_eof_label));      // stop defensively on empty wrapper reads
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the owned chunk pointer for release
@@ -161,6 +173,9 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("jmp {}", loop_label));            // continue draining the wrapper stream
             ctx.emitter.label(&release_eof_label);
             abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction(&format!("jmp {}", wrapper_done_label));
+            ctx.emitter.label(&refused_label);
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], -1");             // php's fpassthru failure answer
             ctx.emitter.label(&wrapper_done_label);
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // return the copied byte total
             ctx.emitter.instruction("add rsp, 32");                             // release wrapper streaming scratch storage
@@ -177,7 +192,7 @@ pub(crate) fn lower_feof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque stream handle to the EOF runtime helper
     }
-    abi::emit_call_label(ctx.emitter, "__rt_feof");
+    crate::codegen_support::runtime::io::emit_feof_call(ctx.emitter, false); // the PROGRAM asked
     store_if_result(ctx, inst)
 }
 

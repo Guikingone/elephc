@@ -193,7 +193,7 @@ pub(crate) use path_op_warning::emit_rename_warning;
 pub(crate) use disk_space::emit_disk_space;
 pub(crate) use dirname::emit_dirname;
 pub(crate) use dirname_levels::emit_dirname_levels;
-pub(crate) use feof::emit_feof;
+pub(crate) use feof::{emit_feof, emit_feof_call};
 pub(crate) use fgetcsv::emit_fgetcsv;
 pub(crate) use fgets::emit_fgets;
 pub(crate) use file::emit_file;

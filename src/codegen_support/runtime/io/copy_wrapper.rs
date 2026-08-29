@@ -68,7 +68,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     // -- feof-gated drain, exactly the shape `__rt_readfile_wrapper` uses --
     emitter.label("__rt_cpw_loop");
     emitter.instruction("ldr x0, [sp, #0]");
-    emitter.instruction("bl __rt_feof");                                        // ask before reading
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("cbnz x0, __rt_cpw_done");
     emitter.instruction("ldr x0, [sp, #0]");
     emitter.instruction("mov x1, #4096");                                       // one chunk at a time
@@ -166,7 +166,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_cpw_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
-    emitter.instruction("call __rt_feof");                                      // ask before reading
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("test rax, rax");
     emitter.instruction("jnz __rt_cpw_done_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");

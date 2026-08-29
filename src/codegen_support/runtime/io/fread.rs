@@ -447,11 +447,13 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("ret");
 
             emitter.label("__rt_uwfc_failed");
+            emitter.instruction("cbz x1, __rt_uwfc_failed_empty");              // the read already gave its window back
             emitter.instruction("stp x1, x2, [sp, #16]");                       // the refused chunk, to be released
             emitter.instruction("mov x2, #0");                                  // release the whole claimed window
             emitter.instruction("bl __rt_concat_publish");                      // hand the scratch window back
             emitter.instruction("ldr x0, [sp, #16]");
             emitter.instruction("bl __rt_decref_any");                          // and release the chunk itself
+            emitter.label("__rt_uwfc_failed_empty");
             emitter.instruction("mov x0, #0");                                  // the refusal is the answer
             emitter.instruction("mov x1, #0");
             emitter.instruction("mov x2, #0");
@@ -536,11 +538,14 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("ret");
 
             emitter.label("__rt_uwfc_failed_x86");
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_uwfc_failed_empty_x86");               // the read already gave its window back
             emitter.instruction("mov QWORD PTR [rbp - 24], rax");               // the refused chunk, to be released
             emitter.instruction("xor edx, edx");                                // release the whole claimed window
             emitter.instruction("call __rt_concat_publish");                    // hand the scratch window back
             emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // decref reads RAX, not rdi
             emitter.instruction("call __rt_decref_any");                        // and release the chunk itself
+            emitter.label("__rt_uwfc_failed_empty_x86");
             emitter.instruction("xor eax, eax");                                // the refusal is the answer
             emitter.instruction("xor edx, edx");
             emitter.instruction("xor ecx, ecx");

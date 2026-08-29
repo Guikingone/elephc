@@ -14,10 +14,40 @@ use crate::codegen_support::runtime::resources::layout::{
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+/// Emits a call to `__rt_feof`, stating who is asking.
+///
+/// `quiet` is not optional and not a default: the mode decides whether a wrapper with no
+/// `stream_eof` is warned about, and a site that guessed would warn in the wrong function's name
+/// or swallow a warning php prints. `false` means the PROGRAM called `feof()`; `true` means this
+/// is elephc's own probe before a read.
+pub fn emit_feof_call(emitter: &mut Emitter, quiet: bool) {
+    let mode = i64::from(quiet);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x1, #{mode}"));                   // who is asking
+            emitter.instruction("bl __rt_feof");
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rsi, {mode}"));                   // who is asking
+            emitter.instruction("call __rt_feof");
+        }
+    }
+}
+
 /// Emits the `__rt_feof` runtime helper.
 /// Dispatches to the target-specific implementation based on `emitter.target`.
 /// Input: x0 = opaque stream handle
 /// Output: x0 = 1 if EOF reached, 0 otherwise
+///
+/// The mode arrives in x1 / rsi and is what `emit_feof_call` writes: 0 when the PROGRAM called
+/// `feof()`, 1 for elephc's OWN probes — the loops in `fgets`,
+/// `readfile`, `stream_get_contents`, `stream_get_line`, `fpassthru` and `copy` that ask before
+/// reading. php's readers ask no such question: they read, and the read asks the wrapper. So a
+/// class with no `stream_eof` must not be warned about by a probe the program never wrote — the
+/// read that follows refuses and names the caller. Only a `feof()` the PROGRAM called is loud.
+///
+/// One entry with an argument, not two labels sharing a body: see `emit_user_wrapper_feof` for why
+/// the two-label spelling dead-strips itself on macOS.
 pub fn emit_feof(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_feof_linux_x86_64(emitter);
@@ -27,10 +57,11 @@ pub fn emit_feof(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: feof ---");
     emitter.label_global("__rt_feof");
-    emitter.instruction("sub sp, sp, #32");                                     // preserve the stream handle and caller frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // establish a stable helper frame
+    emitter.instruction("sub sp, sp, #48");                                     // preserve the stream handle, who is asking, and the caller frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable helper frame
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the opaque stream handle
+    emitter.instruction("str x1, [sp, #24]");                                   // and who asked, across every call below
     emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor for wrapper dispatch
     emitter.instruction("str x0, [sp, #8]");                                    // the probe below clobbers it
     emitter.instruction("mov w9, #0x4000");                                     // load the high half of USER_WRAPPER_FD_BASE = 0x40000000
@@ -57,19 +88,21 @@ pub fn emit_feof(emitter: &mut Emitter) {
     emitter.instruction("subs x9, x9, x10");                                    // what remains
     emitter.instruction("b.le __rt_feof_wrapper_call");                         // nothing held: ask the wrapper
     emitter.instruction("mov x0, #0");                                          // holding bytes: not at end
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame and return address
-    emitter.instruction("add sp, sp, #32");                                     // release helper scratch storage
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #48");                                     // release helper scratch storage
     emitter.instruction("ret");
     emitter.label("__rt_feof_wrapper_call");
     emitter.instruction("ldr x0, [sp, #8]");                                    // the wrapper descriptor the probe clobbered
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame before wrapper tail dispatch
-    emitter.instruction("add sp, sp, #32");                                     // release helper scratch storage
+    emitter.instruction("ldr x9, [sp, #24]");                                   // who asked travels with the question
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame before wrapper tail dispatch
+    emitter.instruction("add sp, sp, #48");                                     // release helper scratch storage
+    emitter.instruction("mov x1, x9");                                          // and reaches the wrapper as its second argument
     emitter.instruction("b __rt_user_wrapper_feof");                            // wrapper backend delegates to stream_eof
     emitter.label("__rt_feof_stream_state");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle
     emitter.instruction("bl __rt_stream_eof_get");                              // read EOF from the stable StreamState
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame and return address
-    emitter.instruction("add sp, sp, #32");                                     // release helper scratch storage
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #48");                                     // release helper scratch storage
     emitter.instruction("ret");                                                 // return the state-owned EOF predicate
 }
 
@@ -83,8 +116,9 @@ fn emit_feof_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_feof");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame
-    emitter.instruction("sub rsp, 16");                                         // reserve aligned storage for the stream handle
+    emitter.instruction("sub rsp, 32");                                         // aligned storage for the handle and who is asking
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the opaque stream handle
+    emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // and who asked, across every call below
     emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor for wrapper dispatch
     emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("cmp rax, r9");                                         // is the backend below the synthetic wrapper range?
@@ -107,18 +141,20 @@ fn emit_feof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, 0");
     emitter.instruction("jle __rt_feof_wrapper_call_x86");                      // nothing held: ask the wrapper
     emitter.instruction("xor eax, eax");                                        // holding bytes: not at end
-    emitter.instruction("add rsp, 16");                                         // release stream-handle storage
+    emitter.instruction("add rsp, 32");                                         // release stream-handle storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");
     emitter.label("__rt_feof_wrapper_call_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // the wrapper descriptor the probe clobbered
-    emitter.instruction("add rsp, 16");                                         // release stream-handle storage before tail dispatch
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // who asked travels with the question
+    emitter.instruction("add rsp, 32");                                         // release stream-handle storage before tail dispatch
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("mov rsi, r9");                                         // and reaches the wrapper as its second argument
     emitter.instruction("jmp __rt_user_wrapper_feof");                          // wrapper backend delegates to stream_eof
     emitter.label("__rt_feof_stream_state_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
     emitter.instruction("call __rt_stream_eof_get");                            // read EOF from the stable StreamState
-    emitter.instruction("add rsp, 16");                                         // release stream-handle storage
+    emitter.instruction("add rsp, 32");                                         // release stream-handle storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the state-owned EOF predicate
 }
