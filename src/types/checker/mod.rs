@@ -38,7 +38,7 @@ pub(crate) mod yield_validation;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::platform::Platform;
+use crate::codegen::platform::Target;
 use crate::errors::CompileError;
 use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, Program, TypeExpr,
@@ -62,7 +62,10 @@ use schema::propagate_abstract_return_types;
 /// during type checking.
 pub(crate) struct Checker {
     /// Target platform for codegen (affects ABI, sizes, and platform checks).
-    pub target_platform: Platform,
+    /// Full compilation target. `platform` drives OS constants; `apple_variant`
+    /// distinguishes iOS from macOS, which share every one of those constants but
+    /// not their sandbox rules.
+    pub target: Target,
     /// User-defined function declarations, keyed by canonical name.
     pub fn_decls: HashMap<String, FnDecl>,
     /// Groups of function variant names that share the same logical function
@@ -717,7 +720,7 @@ pub(crate) struct FnDecl {
     pub attributes: Vec<crate::parser::ast::AttributeGroup>,
 }
 
-/// Runs the type checker on `program` for the given `target_platform` with default
+/// Runs the type checker on `program` for the given `target` with default
 /// `CheckOptions`, returning a `CheckResult` on success or a `CompileError` on failure.
 /// Delegates to `check_types_with_options`; see it for the full behavior.
 ///
@@ -726,21 +729,21 @@ pub(crate) struct FnDecl {
 #[allow(dead_code)]
 pub fn check_types(
     program: &Program,
-    target_platform: Platform,
+    target: Target,
 ) -> Result<CheckResult, CompileError> {
-    check_types_with_options(program, target_platform, CheckOptions::default())
+    check_types_with_options(program, target, CheckOptions::default())
 }
 
-/// Runs the type checker on `program` for the given `target_platform` and `options`,
+/// Runs the type checker on `program` for the given `target` and `options`,
 /// returning a `CheckResult` on success or a `CompileError` on failure. The checker
 /// validates types, resolves declarations, infers return types, and collects warnings.
 /// Abstract return types are propagated from concrete implementations before returning.
 pub fn check_types_with_options(
     program: &Program,
-    target_platform: Platform,
+    target: Target,
     options: CheckOptions,
 ) -> Result<CheckResult, CompileError> {
-    let (mut checker, global_env) = driver::check_types_impl(program, target_platform, options)?;
+    let (mut checker, global_env) = driver::check_types_impl(program, target, options)?;
 
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);

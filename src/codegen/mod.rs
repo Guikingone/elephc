@@ -64,9 +64,9 @@ pub(crate) use crate::codegen_support::{
 };
 #[allow(unused_imports)]
 pub use crate::codegen_support::{
-    generate_runtime, generate_runtime_with_features, generate_runtime_with_features_pic,
-    link_requirements_for_runtime_features, runtime_features_for_program_and_classes,
-    LinkRequirement, RuntimeFeatures,
+    generate_runtime, generate_runtime_with_features, generate_runtime_with_features_mode,
+    generate_runtime_with_features_pic, link_requirements_for_runtime_features,
+    runtime_features_for_program_and_classes, LinkRequirement, RuntimeFeatures,
 };
 pub use crate::codegen_support::{
     prepare_declared_name_order, set_autoload_rule_count, set_compile_profile,
@@ -138,10 +138,29 @@ impl Instrumentation {
 ///
 /// `Executable` produces a standalone native binary with a process entry point.
 /// `Cdylib` produces a position-independent shared library with exported lifecycle hooks.
+/// `Staticlib` produces an `ar` archive of the same exported surface, for a host
+/// that links elephc into its own binary — an Xcode project, say — instead of
+/// loading it at run time.
+///
+/// `Staticlib` is *not* PIC. `Emitter::new_pic` exists for dynamic loading,
+/// where the loader must resolve cross-object references at `dlopen` time; its
+/// GOT indirection is unrelated to position independence as such. An archive is
+/// merged once into the host's final binary by the host's own linker, exactly
+/// like the executable path, whose non-PIC output is already PC-relative and
+/// already yields PIE binaries.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Emit {
     Executable,
     Cdylib,
+    Staticlib,
+}
+
+impl Emit {
+    /// Returns whether this artifact is a library exposing `#[Export]`
+    /// trampolines and lifecycle symbols rather than a process entry point.
+    pub fn is_library(self) -> bool {
+        matches!(self, Emit::Cdylib | Emit::Staticlib)
+    }
 }
 
 /// Compile-time process-isolation model selected for a `--web` executable.
@@ -265,6 +284,10 @@ pub fn generate_user_asm_from_ir_with_options(
 ) -> Result<String> {
     let mut emitter = match emit {
         Emit::Cdylib => Emitter::new_cdylib(module.target),
+        // A staticlib joins the executable path: it is linked once into the host
+        // binary, so it needs no GOT indirection, but it still exposes the same
+        // recoverable host boundary as a cdylib.
+        Emit::Staticlib => Emitter::new_staticlib(module.target),
         Emit::Executable => Emitter::new(module.target),
     };
     if module.target.arch == Arch::X86_64 {
@@ -365,7 +388,7 @@ fn finalize_user_asm(
         Some(&allowed_class_names),
     );
     emit_intrinsic_method_wrappers(module, &mut emitter);
-    if matches!(emit, Emit::Cdylib) {
+    if emit.is_library() {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
         sorted_exports.sort_by(|a, b| a.c_name.cmp(&b.c_name));
         crate::codegen::cdylib::emit_cdylib_exports(
@@ -413,7 +436,7 @@ fn finalize_user_asm(
         .map(|export| module.target.extern_symbol(&export.c_name))
         .collect();
     match emit {
-        Emit::Cdylib => {
+        Emit::Cdylib | Emit::Staticlib => {
             for lifecycle in [
                 "elephc_abi_version",
                 "elephc_init",

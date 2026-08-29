@@ -1503,7 +1503,7 @@ mod tests {
             (Platform::Linux, Arch::AArch64, "8"),
             (Platform::Linux, Arch::X86_64, "8"),
         ] {
-            let target = Target { platform, arch };
+            let target = Target::new(platform, arch);
             let asm = emit_runtime_data_fixed(8_388_608, target);
 
             let mut seen = 0usize;
@@ -1531,10 +1531,7 @@ mod tests {
     fn test_stack_limit_is_eight_byte_aligned_on_elf() {
         let asm = emit_runtime_data_fixed(
             8_388_608,
-            Target {
-                platform: Platform::Linux,
-                arch: Arch::AArch64,
-            },
+            Target::new(Platform::Linux, Arch::AArch64),
         );
 
         assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
@@ -1566,7 +1563,7 @@ mod tests {
             (Platform::Linux, Arch::AArch64, ""),
             (Platform::Linux, Arch::X86_64, ""),
         ] {
-            let target = Target { platform, arch };
+            let target = Target::new(platform, arch);
             let asm = emit_runtime_data_fixed(8_388_608, target);
             for slot in &bridge_slots {
                 let wanted = format!(".comm {prefix}{slot}, 8, ");

@@ -1,8 +1,9 @@
 //! Purpose:
-//! Emits recoverable scalar cdylib wrappers while preserving their public C signatures.
+//! Emits recoverable scalar wrappers and shared argument plumbing for library exports.
 //!
 //! Called from:
 //! - `super::emit_cdylib_exports()` for every non-string-return export.
+//! - `super::owned_string` for generic fixed-input string-return exports.
 //!
 //! Key details:
 //! - Public C arguments are saved before setjmp and rematerialized through Elephc's ABI.
@@ -129,12 +130,12 @@ fn scalar_boundary_layout(export: &ExportedFunction) -> ScalarBoundaryLayout {
 }
 
 /// Rounds a frame byte count up to the native 16-byte stack alignment.
-fn align_16(value: usize) -> usize {
+pub(super) fn align_16(value: usize) -> usize {
     (value + 15) & !15
 }
 
 /// Flattens PHP parameters into the independent scalar words used by the public C ABI.
-fn scalar_c_input_types(export: &ExportedFunction) -> Vec<PhpType> {
+pub(super) fn flattened_c_param_types(export: &ExportedFunction) -> Vec<PhpType> {
     export
         .sig
         .params
@@ -152,13 +153,23 @@ fn emit_save_scalar_c_inputs(
     export: &ExportedFunction,
     layout: &ScalarBoundaryLayout,
 ) {
-    let flattened_types = scalar_c_input_types(export);
+    let flattened_types = flattened_c_param_types(export);
+    let offsets = layout.param_offsets.iter().flatten().copied().collect::<Vec<_>>();
+    emit_save_c_words(emitter, &flattened_types, &offsets);
+}
+
+/// Saves flattened public C words from registers or the caller stack into frame slots.
+pub(super) fn emit_save_c_words(
+    emitter: &mut Emitter,
+    flattened_types: &[PhpType],
+    offsets: &[usize],
+) {
+    debug_assert_eq!(flattened_types.len(), offsets.len());
     let assignments = abi::build_outgoing_arg_assignments_for_target(
         emitter.target,
-        &flattened_types,
+        flattened_types,
         0,
     );
-    let offsets = layout.param_offsets.iter().flatten().copied().collect::<Vec<_>>();
     let mut caller_stack_offset = 16usize;
     for ((ty, assignment), offset) in flattened_types.iter().zip(assignments).zip(offsets) {
         let reg = if assignment.in_register() {
@@ -176,18 +187,18 @@ fn emit_save_scalar_c_inputs(
             abi::load_from_caller_stack(emitter, reg, caller_stack_offset);
             caller_stack_offset += 8;
         }
-        abi::store_at_offset(emitter, reg, offset);
+        abi::store_at_offset(emitter, reg, *offset);
     }
 }
 
 /// Re-materializes saved public inputs through Elephc's internal function ABI.
-fn emit_call_scalar_body(
+pub(super) fn emit_call_body(
     emitter: &mut Emitter,
     export: &ExportedFunction,
-    layout: &ScalarBoundaryLayout,
+    param_offsets: &[Vec<usize>],
     internal: &str,
 ) {
-    for ((_, ty), offsets) in export.sig.params.iter().zip(&layout.param_offsets) {
+    for ((_, ty), offsets) in export.sig.params.iter().zip(param_offsets) {
         match ty {
             PhpType::Float => {
                 abi::load_at_offset(emitter, abi::float_result_reg(emitter), offsets[0]);
@@ -223,10 +234,10 @@ fn emit_call_scalar_body(
 }
 
 /// Validates every public string pair without clobbering the saved inputs.
-fn emit_validate_scalar_string_inputs(
+pub(super) fn emit_validate_string_inputs(
     emitter: &mut Emitter,
     export: &ExportedFunction,
-    layout: &ScalarBoundaryLayout,
+    param_offsets: &[Vec<usize>],
     invalid: &str,
     suffix: &str,
 ) {
@@ -234,13 +245,13 @@ fn emit_validate_scalar_string_inputs(
         .sig
         .params
         .iter()
-        .zip(&layout.param_offsets)
+        .zip(param_offsets)
         .enumerate()
     {
         if *ty != PhpType::Str {
             continue;
         }
-        let valid = format!("L_cdylib_{suffix}_scalar_string_{index}_valid");
+        let valid = format!("L_cdylib_{suffix}_input_string_{index}_valid");
         match emitter.target.arch {
             Arch::AArch64 => {
                 abi::load_at_offset(emitter, "x9", offsets[1]);
@@ -413,11 +424,11 @@ fn emit_scalar_export_aarch64(
         &format!("L_cdylib_{suffix}_stack_limit_ready"),
     );
     emit_clear_error_inline(emitter);
-    emit_validate_scalar_string_inputs(emitter, export, layout, invalid, suffix);
+    emit_validate_string_inputs(emitter, export, &layout.param_offsets, invalid, suffix);
     emit_enter_boundary(emitter, layout.concat_offset, suffix);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
     emit_boundary_push_aarch64(emitter, escaped, layout.handler_base);
-    emit_call_scalar_body(emitter, export, layout, internal);
+    emit_call_body(emitter, export, &layout.param_offsets, internal);
     emit_save_scalar_result(emitter, &export.sig.return_type, layout.result_offset);
     emit_boundary_pop_aarch64(emitter, layout.handler_base);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
@@ -492,11 +503,11 @@ fn emit_scalar_export_x86_64(
         &format!("L_cdylib_{suffix}_stack_limit_ready"),
     );
     emit_clear_error_inline(emitter);
-    emit_validate_scalar_string_inputs(emitter, export, layout, invalid, suffix);
+    emit_validate_string_inputs(emitter, export, &layout.param_offsets, invalid, suffix);
     emit_enter_boundary(emitter, layout.concat_offset, suffix);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
     emit_boundary_push_x86_64(emitter, escaped, layout.handler_base);
-    emit_call_scalar_body(emitter, export, layout, internal);
+    emit_call_body(emitter, export, &layout.param_offsets, internal);
     emit_save_scalar_result(emitter, &export.sig.return_type, layout.result_offset);
     emit_boundary_pop_x86_64(emitter, layout.handler_base);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);

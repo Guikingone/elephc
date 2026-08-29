@@ -1,12 +1,12 @@
 //! Purpose:
-//! Renders the deterministic C header emitted beside an Elephc cdylib.
+//! Renders the deterministic C header emitted beside an Elephc native library.
 //!
 //! Called from:
-//! - `crate::pipeline::backend` after a cdylib links successfully.
+//! - `crate::pipeline::backend` after a cdylib or staticlib is produced successfully.
 //!
 //! Key details:
 //! - Scalar export prototypes preserve their original C signatures exactly.
-//! - The exact `string -> string` surface uses status plus owned output parameters.
+//! - Every string return uses status plus caller-owned output parameters.
 //! - Export ordering and include-guard normalization are deterministic.
 
 use std::collections::HashSet;
@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 
 use crate::types::PhpType;
 
-use super::{is_string_roundtrip_signature, ExportedFunction};
+use super::{is_string_return_signature, ExportedFunction};
 
 /// Public ABI version returned by `elephc_abi_version()` and written to generated headers.
 pub const ELEPHC_ABI_VERSION: u32 = 3;
@@ -74,25 +74,33 @@ pub fn render_c_header(library_stem: &str, exports: &[&ExportedFunction]) -> Str
 
 /// Renders one public export prototype using its resolved PHP signature.
 fn render_export(out: &mut String, export: &ExportedFunction) {
-    if is_string_roundtrip_signature(&export.sig) {
-        let param = c_parameter_names(&export.sig.params, &["output_ptr", "output_len"])[0]
-            .clone();
+    if is_string_return_signature(&export.sig) {
         writeln!(out, "/* On success, *output_ptr is caller-owned and must be released with").unwrap();
         writeln!(out, " * elephc_free(); output_len is authoritative and excludes the optional").unwrap();
         writeln!(out, " * trailing NUL byte. Failure leaves both outputs NULL/zero. */").unwrap();
-        writeln!(
-            out,
-            "int32_t {}(const char *{}_ptr, size_t {}_len, char **output_ptr, size_t *output_len);",
-            export.c_name, param, param
-        )
-        .unwrap();
+        write!(out, "int32_t {}(", export.c_name).unwrap();
+        let mut parameters = c_export_parameters(export, &["output_ptr", "output_len"]);
+        parameters.push("char **output_ptr".to_string());
+        parameters.push("size_t *output_len".to_string());
+        writeln!(out, "{});", parameters.join(", ")).unwrap();
         return;
     }
 
     let return_type = c_scalar_return_type(&export.sig.return_type);
     write!(out, "{return_type} {}(", export.c_name).unwrap();
+    let parameters = c_export_parameters(export, &[]);
+    if parameters.is_empty() {
+        write!(out, "void").unwrap();
+    } else {
+        write!(out, "{}", parameters.join(", ")).unwrap();
+    }
+    writeln!(out, ");").unwrap();
+}
+
+/// Flattens validated PHP parameters into their public C declaration fragments.
+fn c_export_parameters(export: &ExportedFunction, reserved: &[&str]) -> Vec<String> {
     let mut parameters = Vec::new();
-    let names = c_parameter_names(&export.sig.params, &[]);
+    let names = c_parameter_names(&export.sig.params, reserved);
     for ((_, php_type), name) in export.sig.params.iter().zip(names) {
         match php_type {
             PhpType::Str => {
@@ -104,12 +112,7 @@ fn render_export(out: &mut String, export: &ExportedFunction) {
             other => unreachable!("validated export parameter reached header rendering: {other:?}"),
         }
     }
-    if parameters.is_empty() {
-        write!(out, "void").unwrap();
-    } else {
-        write!(out, "{}", parameters.join(", ")).unwrap();
-    }
-    writeln!(out, ");").unwrap();
+    parameters
 }
 
 /// Maps a validated scalar return type to its stable C spelling.
@@ -333,7 +336,22 @@ mod tests {
             vec![("a", PhpType::Int), ("b", PhpType::Int)],
             PhpType::Int,
         );
-        let header = render_c_header("libroundtrip", &[&roundtrip, &add]);
+        let fixed = export("fixed_label", Vec::new(), PhpType::Str);
+        let mixed = export(
+            "compose",
+            vec![
+                ("left", PhpType::Str),
+                ("count", PhpType::Int),
+                ("ratio", PhpType::Float),
+                ("enabled", PhpType::Bool),
+                ("right", PhpType::Str),
+            ],
+            PhpType::Str,
+        );
+        let header = render_c_header(
+            "libroundtrip",
+            &[&roundtrip, &add, &fixed, &mixed],
+        );
 
         assert!(header.contains("#define ELEPHC_ABI_VERSION UINT32_C(3)"));
         assert!(header.contains("#define ELEPHC_STATUS_PHP_EXCEPTION INT32_C(2)"));
@@ -341,6 +359,10 @@ mod tests {
         assert!(header.contains("int32_t elephc_last_status(void);"));
         assert!(header.contains("int64_t add_i64(int64_t a, int64_t b);"));
         assert!(header.contains("int32_t roundtrip(const char *input_ptr, size_t input_len, char **output_ptr, size_t *output_len);"));
+        assert!(header.contains("int32_t fixed_label(char **output_ptr, size_t *output_len);"));
+        assert!(header.contains(
+            "int32_t compose(const char *left_ptr, size_t left_len, int64_t count, double ratio, int64_t enabled, const char *right_ptr, size_t right_len, char **output_ptr, size_t *output_len);"
+        ));
         assert!(header.contains("must be released with"));
         assert!(header.contains("A recorded empty message is a non-NULL pointer"));
     }

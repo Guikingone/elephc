@@ -80,17 +80,32 @@ pub fn generate_runtime_with_features_pic(
     features: RuntimeFeatures,
     pic: bool,
 ) -> String {
+    generate_runtime_with_features_mode(heap_size, target, features, pic, pic)
+}
+
+/// Emits a runtime object for an explicitly selected relocation and host-boundary mode.
+///
+/// `library_boundary` is separate from `pic` because static libraries need the
+/// recoverable C ABI while retaining direct, final-link-time relocations.
+pub fn generate_runtime_with_features_mode(
+    heap_size: usize,
+    target: Target,
+    features: RuntimeFeatures,
+    pic: bool,
+    library_boundary: bool,
+) -> String {
     // macOS executables strip unreachable runtime helpers per-symbol: internal
     // labels are renamed to assembler-local (`L`-prefixed) labels and a
     // `.subsections_via_symbols` footer lets the linker's `-dead_strip` drop
-    // whole unreferenced `__rt_*` helpers as single atoms. cdylibs (pic) never
-    // strip, and Linux uses per-section `--gc-sections` instead, so both keep
-    // the monolithic object.
+    // whole unreferenced `__rt_*` helpers as single atoms. Linux instead keeps
+    // the monolithic object and lets supported final links use per-section
+    // `--gc-sections`.
     let dead_strip = target.platform == crate::codegen_support::platform::Platform::MacOS;
-    let mut emitter = if pic {
-        Emitter::new_cdylib(target)
-    } else {
-        Emitter::new(target)
+    let mut emitter = match (pic, library_boundary) {
+        (true, true) => Emitter::new_cdylib(target),
+        (true, false) => Emitter::new_pic(target),
+        (false, true) => Emitter::new_staticlib(target),
+        (false, false) => Emitter::new(target),
     };
     emitter.dead_strip = dead_strip;
     emitter.emit_text_prelude();
@@ -107,7 +122,7 @@ pub fn generate_runtime_with_features_pic(
     output.push_str(&runtime::emit_runtime_data_fixed(heap_size, target));
     // PIC runtime globals are implementation details on every shared-library
     // target. ELF uses hidden visibility; Mach-O uses private extern visibility.
-    if pic {
+    if library_boundary {
         output = crate::codegen_support::visibility::append_hidden_directives(
             &output,
             &std::collections::HashSet::new(),

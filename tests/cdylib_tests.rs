@@ -1,7 +1,7 @@
 //! Purpose:
-//! End-to-end tests for `--emit cdylib`: compile PHP with `#[Export]` functions
-//! into a shared library, load it from a C host via dlopen, and assert the
-//! exported C ABI behaves per the scalar and owned-string contracts.
+//! End-to-end tests for library emission: compile PHP with `#[Export]` functions
+//! into a shared library or static archive and assert the exported C ABI behaves
+//! per the scalar and owned-string contracts.
 //!
 //! Called from:
 //! - `cargo test --test cdylib_tests` through Rust's test harness.
@@ -159,7 +159,7 @@ fn compile_linked_c_host(dir: &Path, source: &str, out_name: &str, library: &str
     if cfg!(target_os = "macos") {
         cmd.arg("-Wl,-rpath,@loader_path");
     } else {
-        cmd.arg("-Wl,-rpath,$ORIGIN");
+        cmd.arg("-Wl,-rpath,$ORIGIN").arg("-lm");
     }
     let output = cmd.output().expect("failed to spawn the system C compiler");
     assert!(
@@ -197,6 +197,34 @@ function scalar_throw(int $value): int {
 function symbol_string(string $input): string {
     return $input;
 }
+
+#[Export]
+function fixed_label(): string {
+    return "fixed";
+}
+
+#[Export]
+function fixed_throw(): string {
+    throw new RuntimeException("fixed boom");
+}
+
+#[Export]
+function compose_label(
+    string $left,
+    int $count,
+    float $ratio,
+    bool $enabled,
+    string $right,
+    int $extra_a,
+    int $extra_b,
+    int $extra_c,
+): string {
+    if ($count !== 7 || $ratio !== 1.5 || !$enabled ||
+        $extra_a !== 11 || $extra_b !== 13 || $extra_c !== 17) {
+        return "bad";
+    }
+    return $left . $right;
+}
 "#;
 
 const HOST_C: &str = r#"
@@ -204,6 +232,7 @@ const HOST_C: &str = r#"
 #include <stdint.h>
 #include <stdio.h>
 #include <stddef.h>
+#include <string.h>
 
 int main(int argc, char **argv) {
     if (argc != 2) return 1;
@@ -217,15 +246,79 @@ int main(int argc, char **argv) {
         (int64_t (*)(int64_t))dlsym(lib, "scalar_throw");
     int32_t (*vt)(const char *, size_t) =
         (int32_t (*)(const char *, size_t))dlsym(lib, "validate_token");
+    int32_t (*fixed_label)(char **, size_t *) =
+        (int32_t (*)(char **, size_t *))dlsym(lib, "fixed_label");
+    int32_t (*fixed_throw)(char **, size_t *) =
+        (int32_t (*)(char **, size_t *))dlsym(lib, "fixed_throw");
+    int32_t (*compose_label)(const char *, size_t, int64_t, double, int64_t,
+                             const char *, size_t, int64_t, int64_t, int64_t,
+                             char **, size_t *) =
+        (int32_t (*)(const char *, size_t, int64_t, double, int64_t,
+                    const char *, size_t, int64_t, int64_t, int64_t,
+                    char **, size_t *))dlsym(lib, "compose_label");
+    void (*efree)(void *) = (void (*)(void *))dlsym(lib, "elephc_free");
     void (*shutdown)(void) = (void (*)(void))dlsym(lib, "elephc_shutdown");
-    if (!init || !last_status || !last_error || !add || !scalar_throw || !vt || !shutdown) {
+    if (!init || !last_status || !last_error || !add || !scalar_throw || !vt ||
+        !fixed_label || !fixed_throw || !compose_label || !efree || !shutdown) {
         fprintf(stderr, "dlsym failed\n"); return 3;
     }
     if (init() != 0) return 4;
     if (scalar_throw(7) != 0 || last_status() != 2 || !last_error()) return 5;
     if (add(40, 2) != 42 || last_status() != 0 || last_error() != NULL) return 6;
+    char *output = (char *)(uintptr_t)1;
+    size_t output_len = 99;
+    if (fixed_throw(&output, &output_len) != 2 || output != NULL || output_len != 0 ||
+        last_status() != 2 || !last_error() || !strstr(last_error(), "fixed boom")) return 7;
+    output = NULL;
+    output_len = 0;
+    if (fixed_label(&output, &output_len) != 0 || !output || output_len != 5 ||
+        memcmp(output, "fixed", 5) != 0 || last_error() != NULL) return 8;
+    efree(output);
+    output = NULL;
+    output_len = 0;
+    if (compose_label("left", 4, 7, 1.5, 1, "right", 5, 11, 13, 17,
+                      &output, &output_len) != 0 ||
+        !output || output_len != 9 || memcmp(output, "leftright", 9) != 0) return 9;
+    efree(output);
+    output = (char *)(uintptr_t)1;
+    output_len = 99;
+    if (compose_label(NULL, 1, 7, 1.5, 1, "right", 5, 11, 13, 17,
+                      &output, &output_len) != 1 ||
+        output != NULL || output_len != 0 || last_status() != 1 || !last_error()) return 10;
     printf("%lld %d %d\n", (long long)add(40, 2), vt("supersecret", 11), vt("nope", 4));
     shutdown();
+    return 0;
+}
+"#;
+
+const STATICLIB_HOST_C: &str = r#"
+#include "libauth.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+    if (elephc_abi_version() != ELEPHC_ABI_VERSION ||
+        elephc_init() != ELEPHC_STATUS_OK) return 1;
+    char *output = NULL;
+    size_t output_len = 0;
+    if (symbol_string("static", 6, &output, &output_len) != ELEPHC_STATUS_OK ||
+        !output || output_len != 6 || memcmp(output, "static", 6) != 0) return 2;
+    elephc_free(output);
+    output = NULL;
+    output_len = 0;
+    if (fixed_label(&output, &output_len) != ELEPHC_STATUS_OK ||
+        !output || output_len != 5 || memcmp(output, "fixed", 5) != 0) return 3;
+    elephc_free(output);
+    output = NULL;
+    output_len = 0;
+    if (compose_label("left", 4, 7, 1.5, 1, "right", 5, 11, 13, 17,
+                      &output, &output_len) !=
+            ELEPHC_STATUS_OK ||
+        !output || output_len != 9 || memcmp(output, "leftright", 9) != 0) return 4;
+    printf("%.*s %lld\n", (int)output_len, output, (long long)add_i64(40, 2));
+    elephc_free(output);
+    elephc_shutdown();
     return 0;
 }
 "#;
@@ -277,6 +370,11 @@ function force_allocation_failure(string $input): string {
 }
 
 #[Export]
+function fixed_allocation_failure(): string {
+    return str_repeat("x", 70000);
+}
+
+#[Export]
 function add_after_failure(int $a, int $b): int {
     return $a + $b;
 }
@@ -299,6 +397,7 @@ typedef int32_t (*last_status_fn)(void);
 typedef const char *(*last_error_fn)(void);
 typedef void (*free_fn)(void *);
 typedef int32_t (*string_export_fn)(const char *, size_t, char **, size_t *);
+typedef int32_t (*zero_string_export_fn)(char **, size_t *);
 typedef int64_t (*add_fn)(int64_t, int64_t);
 
 int main(int argc, char **argv) {
@@ -318,10 +417,12 @@ int main(int argc, char **argv) {
     LOAD(cleanup_throw, p_cleanup_throw, string_export_fn);
     LOAD(concat_success, p_concat_success, string_export_fn);
     LOAD(force_allocation_failure, p_force_allocation_failure, string_export_fn);
+    LOAD(fixed_allocation_failure, p_fixed_allocation_failure, zero_string_export_fn);
     LOAD(add_after_failure, p_add_after_failure, add_fn);
     if (!p_abi_version || !p_init || !p_shutdown || !p_last_status || !p_last_error || !p_free ||
         !p_roundtrip || !p_maybe_throw || !p_empty_throw || !p_cleanup_throw ||
-        !p_concat_success || !p_force_allocation_failure || !p_add_after_failure)
+        !p_concat_success || !p_force_allocation_failure || !p_fixed_allocation_failure ||
+        !p_add_after_failure)
         return 3;
     if (p_abi_version() != ELEPHC_ABI_VERSION ||
         p_init() != ELEPHC_STATUS_OK) return 4;
@@ -429,13 +530,22 @@ int main(int argc, char **argv) {
         return 23;
     error = p_last_error();
     if (!error || !strstr(error, "allocation failed")) return 24;
-    if (p_add_after_failure(20, 22) != 42 || p_last_error() != NULL) return 25;
+
+    out = (char *)(uintptr_t)1;
+    out_len = 99;
+    if (p_fixed_allocation_failure(&out, &out_len) !=
+            ELEPHC_STATUS_ALLOCATION_FAILURE ||
+        p_last_status() != ELEPHC_STATUS_ALLOCATION_FAILURE || out != NULL || out_len != 0)
+        return 25;
+    error = p_last_error();
+    if (!error || !strstr(error, "allocation failed")) return 26;
+    if (p_add_after_failure(20, 22) != 42 || p_last_error() != NULL) return 27;
 
     out = NULL;
     out_len = 0;
     if (p_roundtrip("alive", 5, &out, &out_len) != ELEPHC_STATUS_OK ||
         out_len != 5 || memcmp(out, "alive", 5) != 0 || p_last_error() != NULL)
-        return 26;
+        return 28;
     p_free(out);
     p_shutdown();
     dlclose(lib);
@@ -732,6 +842,282 @@ fn test_cdylib_builds_and_host_calls_exports() {
     );
 
     assert_eq!(String::from_utf8_lossy(&run.stdout), "42 0 1\n");
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Verifies `--emit staticlib` produces an indexed archive and matching C header
+/// that can be linked directly into a native host without `dlopen`.
+#[test]
+fn test_staticlib_links_directly_into_a_host_binary() {
+    let dir = make_test_dir("elephc_staticlib_e2e");
+    fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "staticlib", "auth.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "staticlib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let archive = dir.join("libauth.a");
+    let header = dir.join("libauth.h");
+    assert!(archive.exists(), "expected archive at {archive:?}");
+    assert!(header.exists(), "expected generated header at {header:?}");
+
+    let listing = Command::new("ar")
+        .arg("t")
+        .arg(&archive)
+        .output()
+        .expect("failed to list generated archive");
+    assert!(listing.status.success(), "ar failed to inspect {archive:?}");
+    let members = String::from_utf8_lossy(&listing.stdout);
+    assert!(members.contains("auth.o"), "missing user object: {members}");
+    assert!(members.contains("runtime-"), "missing runtime object: {members}");
+
+    let host = compile_linked_c_host(&dir, STATICLIB_HOST_C, "static-host", "auth");
+    let run = Command::new(&host)
+        .output()
+        .expect("failed to run statically linked C host");
+    assert!(
+        run.status.success(),
+        "static host failed (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "leftright 42\n");
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Regenerates both iOS showcase headers and compiles their Swift bridging
+/// wrappers against ABI v3 so no host can retain a copied obsolete signature.
+#[test]
+fn test_ios_showcase_bridging_headers_compile_against_generated_abi_v3() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (label, source_path, wrapper_path, expected_prototype) in [
+        (
+            "view",
+            "examples/swiftui-view-protocol/main.php",
+            "examples/swiftui-view-protocol/elephc_abi.h",
+            "int32_t render_view(char **output_ptr, size_t *output_len);",
+        ),
+        (
+            "probe",
+            "examples/ios-device-probe/main.php",
+            "examples/ios-device-probe/probe_abi.h",
+            "int32_t probe(const char *writableDir_ptr, size_t writableDir_len, char **output_ptr, size_t *output_len);",
+        ),
+    ] {
+        let dir = make_test_dir(&format!("elephc_ios_{label}_header"));
+        let source_name = "main.php";
+        fs::write(dir.join(&source_name), fs::read(root.join(source_path)).unwrap()).unwrap();
+        let wrapper_name = Path::new(wrapper_path).file_name().unwrap();
+        fs::write(dir.join(wrapper_name), fs::read(root.join(wrapper_path)).unwrap()).unwrap();
+
+        let output = elephc_command(&dir)
+            .args(["--emit", "staticlib", &source_name])
+            .output()
+            .expect("failed to run elephc");
+        assert!(
+            output.status.success(),
+            "{label} staticlib compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let generated = fs::read_to_string(dir.join("libmain.h")).unwrap();
+        assert!(
+            generated.contains("#define ELEPHC_ABI_VERSION UINT32_C(3)")
+                && generated.contains(expected_prototype),
+            "generated {label} header did not expose the expected ABI-v3 contract:\n{generated}"
+        );
+
+        let host = dir.join("header-host.c");
+        fs::write(
+            &host,
+            format!("#include \"{}\"\nint main(void) {{ return 0; }}\n", wrapper_name.to_string_lossy()),
+        )
+        .unwrap();
+        let compile = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only"])
+            .arg("-I")
+            .arg(&dir)
+            .arg(&host)
+            .output()
+            .expect("failed to compile the showcase bridging header");
+        assert!(
+            compile.status.success(),
+            "{wrapper_path} disagrees with the generated header:\n{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// Verifies process-spawning builtins are rejected during iOS type checking
+/// while remaining available on the ordinary host target.
+#[test]
+fn test_process_spawning_builtins_are_refused_for_ios_targets() {
+    let dir = make_test_dir("elephc_ios_capability");
+
+    for (builtin, source) in [
+        ("system", r#"<?php system("ls");"#),
+        ("passthru", r#"<?php passthru("ls");"#),
+        ("exec", r#"<?php exec("ls");"#),
+        ("shell_exec", r#"<?php shell_exec("ls");"#),
+        ("popen", r#"<?php popen("ls", "r");"#),
+        ("pclose", r#"<?php $handle = fopen("php://memory", "r+"); pclose($handle);"#),
+    ] {
+        fs::write(dir.join("spawn.php"), source).unwrap();
+
+        let refused = elephc_command(&dir)
+            .args(["--check", "--target", "ios-arm64", "spawn.php"])
+            .output()
+            .expect("failed to run elephc");
+        assert!(!refused.status.success(), "{builtin} must not type-check for iOS");
+        let message = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            message.contains(&format!("{builtin}()")),
+            "{builtin}: diagnostic must name the builtin, got: {message}"
+        );
+        assert!(
+            message.contains("ios-arm64"),
+            "{builtin}: diagnostic must name the target, got: {message}"
+        );
+        assert!(
+            message.contains("error["),
+            "{builtin}: diagnostic must carry a source position, got: {message}"
+        );
+
+        let accepted = elephc_command(&dir)
+            .args(["--check", "spawn.php"])
+            .output()
+            .expect("failed to run elephc");
+        assert!(
+            accepted.status.success(),
+            "{builtin} must still type-check for the host:\n{}",
+            String::from_utf8_lossy(&accepted.stderr)
+        );
+    }
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Verifies an iOS target cannot accidentally produce Elephc's standalone CLI
+/// executable shape; consumers must choose a host-linked library artifact.
+#[test]
+fn test_ios_targets_reject_executable_output_with_library_guidance() {
+    let dir = make_test_dir("elephc_ios_executable_refuse");
+    fs::write(dir.join("main.php"), "<?php echo 'not an app bundle';").unwrap();
+
+    for target in ["ios-arm64", "ios-sim-arm64"] {
+        let output = elephc_command(&dir)
+            .args(["--target", target, "--emit", "executable", "main.php"])
+            .output()
+            .expect("failed to run elephc");
+        assert!(!output.status.success(), "{target} executable must be rejected");
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            message.contains("iOS targets do not emit standalone executables")
+                && message.contains("--emit staticlib"),
+            "{target}: missing actionable diagnostic: {message}"
+        );
+    }
+
+    let check = elephc_command(&dir)
+        .args(["--target", "ios-arm64", "--check", "main.php"])
+        .output()
+        .expect("failed to check iOS source");
+    assert!(
+        check.status.success(),
+        "analysis-only iOS mode must remain available:\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Cross-emits an iOS AArch64 static-library boundary and pins both zero-input
+/// and mixed-input string-return shapes without relying on the CI host ABI.
+#[test]
+fn test_ios_aarch64_emit_asm_pins_string_return_out_parameters() {
+    let dir = make_test_dir("elephc_ios_aarch64_string_abi");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+#[Export]
+function render_view(): string {
+    return "view";
+}
+
+#[Export]
+function dispatch(string $action, int $count, float $ratio, bool $enabled): string {
+    return $action . $count . $ratio . $enabled;
+}
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_command(&dir)
+        .args([
+            "--target",
+            "ios-arm64",
+            "--emit",
+            "staticlib",
+            "--emit-asm",
+            "main.php",
+        ])
+        .output()
+        .expect("failed to cross-emit the iOS library assembly");
+    assert!(
+        output.status.success(),
+        "iOS AArch64 assembly emission failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("missing iOS AArch64 assembly");
+    let dispatch_start = asm
+        .find(".globl _dispatch\n_dispatch:")
+        .expect("missing public dispatch boundary");
+    let render_start = asm
+        .find(".globl _render_view\n_render_view:")
+        .expect("missing public render_view boundary");
+    let lifecycle_start = asm
+        .find(".globl _elephc_abi_version\n_elephc_abi_version:")
+        .expect("missing public ABI-version boundary");
+    assert!(dispatch_start < render_start && render_start < lifecycle_start);
+
+    let dispatch = &asm[dispatch_start..render_start];
+    for required in [
+        "stur x0, [x29, #-8]",
+        "stur x1, [x29, #-16]",
+        "stur x2, [x29, #-24]",
+        "stur d0, [x29, #-32]",
+        "stur x3, [x29, #-40]",
+        "stur x4, [x29, #-48]",
+        "stur x5, [x29, #-56]",
+    ] {
+        assert!(
+            dispatch.contains(required),
+            "dispatch boundary is missing `{required}`"
+        );
+    }
+
+    let render = &asm[render_start..lifecycle_start];
+    for required in [
+        "stur x0, [x29, #-8]",
+        "stur x1, [x29, #-16]",
+    ] {
+        assert!(
+            render.contains(required),
+            "render_view boundary is missing `{required}`"
+        );
+    }
+    assert!(asm[lifecycle_start..].contains("mov w0, #3"));
 
     fs::remove_dir_all(&dir).ok();
 }
@@ -1093,6 +1479,9 @@ fn test_cdylib_dynamic_symbols_expose_only_public_abi_on_linux() {
         "elephc_last_error",
         "elephc_free",
         "add_i64",
+        "compose_label",
+        "fixed_label",
+        "fixed_throw",
         "scalar_throw",
         "symbol_string",
         "validate_token",
@@ -1136,6 +1525,9 @@ fn test_cdylib_dynamic_symbols_expose_only_public_abi_on_macos() {
         .collect::<BTreeSet<_>>();
     let expected = [
         "add_i64",
+        "compose_label",
+        "fixed_label",
+        "fixed_throw",
         "scalar_throw",
         "elephc_abi_version",
         "elephc_free",
@@ -1179,6 +1571,35 @@ fn test_export_with_unsupported_parameter_type_is_rejected() {
         stderr.contains("unsupported type for --emit cdylib"),
         "expected the scalar-set diagnostic, got:\n{}",
         stderr
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Rejects scalar functions declared to return by reference because the public
+/// C ABI exposes only values and cannot preserve PHP reference identity.
+#[test]
+fn test_export_with_by_reference_return_is_rejected() {
+    let dir = make_test_dir("elephc_cdylib_by_ref_return");
+    fs::write(
+        dir.join("bad.php"),
+        "<?php\n#[Export]\nfunction &borrowed(): int {\n    $value = 1;\n    return $value;\n}\n",
+    )
+    .unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", "bad.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        !output.status.success(),
+        "compilation must fail for a by-reference exported result"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("returns by reference")
+            && stderr.contains("#[Export] accepts only by-value results"),
+        "expected the by-value result diagnostic, got:\n{stderr}"
     );
 
     fs::remove_dir_all(&dir).ok();

@@ -13,9 +13,11 @@ namespaced names replace namespace separators with underscores, so
 resulting public-name collision and writes a deterministic C header containing
 the exact mapped ABI.
 
-The mode supports macOS aarch64 (`.dylib`), Linux aarch64 (`.so`), and Linux
-x86_64 (`.so`). The ABI is single-threaded: a host must not call the same
-Elephc library concurrently. Boundary depth and concat scratch state are
+The mode supports macOS aarch64 (`.dylib`), iOS device and Simulator aarch64
+(`.dylib`), Linux aarch64 (`.so`), and Linux x86_64 (`.so`). iOS libraries are
+cross-compiled from macOS with the matching Xcode SDK; `staticlib` remains the
+usual Xcode delivery form. The ABI is single-threaded: a host must not call the
+same Elephc library concurrently. Boundary depth and concat scratch state are
 nest-safe, so internal recovery cannot accidentally deactivate an outer
 boundary.
 
@@ -30,6 +32,10 @@ elephc --emit cdylib auth.php
 The aliases `--emit dylib` and `--emit shared` are accepted. A cdylib has no
 `main` entry point and does not run top-level statements when loaded; the host
 drives it through the public functions.
+
+`--emit staticlib` produces `lib<name>.a` plus the same generated header and
+public ABI. It is linked into the final host executable instead of loaded with
+`dlopen`, and uses direct final-link relocations instead of PIC/GOT references.
 
 ## Exporting functions
 
@@ -75,9 +81,10 @@ those return types unchanged. On failure they return the zero value for their C
 return type (`0`, `0.0`, or no value for `void`); the host must call
 `elephc_last_status()` to distinguish that failure from a legitimate zero.
 
-The first string-return ABI is deliberately exact: one by-value `string`
-parameter and a `string` return. A function such as `roundtrip` has this C
-prototype:
+Every fixed parameter list made from the supported scalar and string types can
+return `string`. The wrapper preserves the ordinary flattened inputs and
+appends the caller-owned output addresses. A function such as `roundtrip` has
+this C prototype:
 
 ```c
 int32_t roundtrip(
@@ -100,9 +107,10 @@ convenience trailing NUL, which is not included in `output_len`; hosts must use
 the length as authoritative. Release every successful result with
 `elephc_free()`. Never call `free()` on it or retain a borrowed runtime pointer.
 
-Arrays, objects, callables, nullable, variadic, and by-reference export values
-remain unsupported. Mixed scalar/string argument layouts that return strings
-are also rejected until they have an explicit ABI.
+Zero-argument string returns therefore receive only `output_ptr` and
+`output_len`; mixed or multi-parameter signatures place those two parameters
+after all flattened inputs. Arrays, objects, callables, nullable, variadic, and
+by-reference export parameters and returns remain unsupported.
 
 ## Boundary API and statuses
 
@@ -217,8 +225,9 @@ dynamic loader to relocate the library.
 - One `.php` or `.lfc` entry source per cdylib; normal includes/requires still
   work.
 - The ABI is single-threaded and exposes no per-host runtime context.
-- String results still use only the exact `string -> string` owned-result
-  surface; scalar signatures preserve their existing C prototypes and expose
-  recovered status through `elephc_last_status()`.
+- String results use the caller-owned status/out surface for every fixed list of
+  supported scalar/string inputs; scalar-return signatures preserve their
+  existing C prototypes and expose recovered status through
+  `elephc_last_status()`.
 - Array, object, callable, nullable, variadic, by-reference, and generic string
-  return signatures are not public ABI.
+  value signatures are not public ABI.

@@ -13,7 +13,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::{self, Command};
 
-use crate::codegen::platform::{Platform, Target};
+use crate::codegen::platform::{AppleVariant, Platform, Target};
 use crate::codegen::Emit;
 use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan, LinuxLinkMode};
 
@@ -124,6 +124,22 @@ pub(super) fn run_tool(name: &str, command: &mut Command) {
     }
 }
 
+/// Returns the minimum-OS version recorded in `-platform_version`.
+///
+/// macOS keeps its long-standing behaviour of reporting the SDK version as the
+/// deployment floor, so existing binaries are unaffected. iOS cannot: its SDK
+/// versions run far ahead of any sensible floor, and recording one would refuse
+/// to load on every device below it. `13.0` is the oldest release the arm64-only
+/// backend can target anyway.
+fn apple_min_os_version<'a>(target: Target, sdk_version: &'a str) -> &'a str {
+    match target.apple_variant {
+        AppleVariant::MacOS => sdk_version,
+        AppleVariant::IOS | AppleVariant::IOSSimulator => {
+            crate::codegen::platform::APPLE_IOS_MIN_OS
+        }
+    }
+}
+
 /// Renders the existing direct-`ld` macOS command shape from a typed plan.
 fn render_macos_command(
     target: Target,
@@ -139,6 +155,7 @@ fn render_macos_command(
             args.extend([OsString::from("-e"), OsString::from("_main")]);
             args.push(OsString::from("-dead_strip"));
         }
+        Emit::Staticlib => unreachable!("a static library is archived with ar, never linked"),
         Emit::Cdylib => {
             let install_name = paths
                 .bin
@@ -167,8 +184,8 @@ fn render_macos_command(
         OsString::from("-syslibroot"),
         OsString::from(sdk.path),
         OsString::from("-platform_version"),
-        OsString::from("macos"),
-        OsString::from(sdk.version),
+        OsString::from(target.apple_platform_name()),
+        OsString::from(apple_min_os_version(target, sdk.version)),
         OsString::from(sdk.version),
     ]);
 
@@ -200,6 +217,7 @@ fn render_linux_command(
     let mut args = Vec::new();
     match emit {
         Emit::Executable => args.push(OsString::from("-Wl,--gc-sections")),
+        Emit::Staticlib => unreachable!("a static library is archived with ar, never linked"),
         Emit::Cdylib => {
             args.push(OsString::from("-shared"));
             // A shared library collects the same unreachable helpers an executable does. The
@@ -340,7 +358,7 @@ fn bridge_archive_count(plan: &LinkPlan) -> usize {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::codegen::platform::{Arch, Platform};
+    use crate::codegen::platform::{AppleVariant, Arch, Platform};
 
     use super::*;
 
@@ -420,6 +438,37 @@ mod tests {
             &["/brew/lib"],
         )
         .arguments_lossy()
+    }
+
+    /// Verifies iOS device and simulator links carry distinct platform tokens
+    /// while sharing the compiler's fixed deployment floor.
+    #[test]
+    fn ios_link_commands_record_variant_and_deployment_floor() {
+        for (variant, platform_name) in [
+            (AppleVariant::IOS, "ios"),
+            (AppleVariant::IOSSimulator, "ios-simulator"),
+        ] {
+            let args = render_link_command(
+                Target::new_apple(Arch::AArch64, variant),
+                Emit::Executable,
+                paths(),
+                &LinkPlan::new(),
+                false,
+                Some(MacSdk {
+                    path: "/SDK",
+                    version: "18.2",
+                }),
+                &[],
+            )
+            .arguments_lossy();
+            let flag = args
+                .iter()
+                .position(|argument| argument == "-platform_version")
+                .expect("Apple link must carry -platform_version");
+            assert_eq!(args[flag + 1], platform_name);
+            assert_eq!(args[flag + 2], crate::codegen::platform::APPLE_IOS_MIN_OS);
+            assert_eq!(args[flag + 3], "18.2");
+        }
     }
 
     /// Verifies exact managed archives keep static mode and catalog order on both Linux architectures.

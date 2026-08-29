@@ -3273,10 +3273,7 @@ mod tests {
             Some(&allowed_class_names),
             false,
             None,
-            Target {
-                platform: Platform::MacOS,
-                arch: Arch::AArch64,
-            },
+            Target::new(Platform::MacOS, Arch::AArch64),
         );
 
         assert!(asm.contains("_class_vtable_1"));
@@ -3314,10 +3311,7 @@ mod tests {
             None,
             false,
             None,
-            Target {
-                platform: Platform::MacOS,
-                arch: Arch::AArch64,
-            },
+            Target::new(Platform::MacOS, Arch::AArch64),
         );
 
         assert!(asm.contains("_class_gc_desc_count:\n    .quad 4\n"));
@@ -3356,10 +3350,7 @@ mod tests {
             None,
             false,
             None,
-            Target {
-                platform: Platform::MacOS,
-                arch: Arch::AArch64,
-            },
+            Target::new(Platform::MacOS, Arch::AArch64),
         );
 
         assert!(asm.contains("_class_gc_desc_1:\n    .byte 10\n"));
