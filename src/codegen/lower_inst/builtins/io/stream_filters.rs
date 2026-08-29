@@ -69,6 +69,27 @@ pub(crate) fn lower_stream_filter_register(
 }
 
 /// Lowers `stream_filter_append` and `stream_filter_prepend`.
+/// ⚠️ `STREAM_FILTER_ALL` makes TWO filters in php, and one here.
+///
+/// MEASURED on `php -n` 8.5.6 with a `php_user_filter` that announces itself:
+/// `stream_filter_append($h, "cc")` — the default mode — prints `onCreate` TWICE, and
+/// `stream_filter_remove()` prints `onClose` ONCE, with the second arriving at `fclose()`. php
+/// makes one filter per direction and the resource names one of them, so removing it detaches one
+/// chain and leaves the other running:
+///
+/// ```text
+///                                        php      elephc
+/// toupper ALL, then removed              'ABC'    'abc'     the WRITE side survives
+/// rot13 ALL, then removed                'nop'    'abc'
+/// toupper+rot13 ALL, rot13 removed       'NOP'    'ABC'
+/// toupper+rot13 ALL, toupper removed     'ABC'    'abc'
+/// ```
+///
+/// With an EXPLICIT direction everything already matches, in both orders and through
+/// `stream_filter_prepend` — it is only the default that differs. Fixing it means minting two
+/// chain nodes for the ALL mode, and the mode is handled separately by each attach below (builtin,
+/// user, iconv, zlib, bzip2), so the change belongs to whatever they come to share rather than to
+/// one of them.
 pub(crate) fn lower_stream_filter_attach(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
