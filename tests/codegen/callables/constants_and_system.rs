@@ -2386,6 +2386,28 @@ echo $missing === false ? " unset" : " set";
     );
 }
 
+/// Verifies `getenv` releases an owned temporary used as the variable name.
+#[test]
+fn test_getenv_releases_owned_temporary_name() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$missing = 0;
+for ($i = 0; $i < 8; $i++) {
+    $value = getenv(strtr("ELEPHC_GETENV_TEMP_REGRESSI0N_801", "0", "O"));
+    if ($value === false) { $missing = $missing + 1; }
+}
+echo $missing;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "8");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 // Tests `putenv("ELEPHC_TEST_VAR=hello")` followed by `getenv("ELEPHC_TEST_VAR")`
 // returns "hello". Verifies environment variable set/get round-trip.
 /// Verifies that putenv.

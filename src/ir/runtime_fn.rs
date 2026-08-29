@@ -1045,7 +1045,11 @@ impl RuntimeFnId {
                         | crate::ir::Effects::ALLOC_HEAP.bits(),
                 )
             }
-            RuntimeFnId::Getenv | RuntimeFnId::Gethostname => {
+            RuntimeFnId::Getenv => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
+            RuntimeFnId::Gethostname => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
                         | crate::ir::Effects::ALLOC_CONCAT.bits(),
@@ -1499,6 +1503,10 @@ impl RuntimeFnId {
                 // its release, leaking one block per call — measured unbounded, 10 calls left
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
+                // `getenv()` boxes `false` or an owned copy made by `__rt_str_persist` in a
+                // fresh Mixed cell. Neither result can alias the variable-name argument, so
+                // retaining an owned name temporary leaks one block per call.
+                | RuntimeFnId::Getenv
                 | RuntimeFnId::GetObjectVars
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
