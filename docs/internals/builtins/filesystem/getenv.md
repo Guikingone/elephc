@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function getenv(string $name): mixed
+function getenv(string $name): string|false
 ```
 
 ## What the type checker enforces

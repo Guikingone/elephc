@@ -64,6 +64,13 @@ class ContractPipelineTests(unittest.TestCase):
         self.assertEqual([param["name"] for param in hash_init["aot"]["params"]], ["algo"])
         self.assertEqual(self.by_name["exit"]["params"][0]["default"], 0)
 
+    def test_getenv_user_signature_preserves_checked_union(self) -> None:
+        """Render the checked `string|false` result instead of contract-level `mixed`."""
+        self.assertEqual(
+            self.render_by_name["getenv"]["sig"]["return_type"],
+            "string|false",
+        )
+
     def test_unknown_presentation_override_is_rejected(self) -> None:
         """Prevent dormant override keys from accumulating silently again."""
         with patch.dict(extract.AREA_BY_NAME, {"__unknown_contract": ("Misc", "Misc")}):

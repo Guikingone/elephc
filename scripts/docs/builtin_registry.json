@@ -30771,7 +30771,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "string|false",
       "variadic": null
     },
     "slug": "getenv",
