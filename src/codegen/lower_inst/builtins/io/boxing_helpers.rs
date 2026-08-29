@@ -10,7 +10,6 @@
 use super::*;
 use crate::ir::ResourceCleanupKind;
 
-/// Boxes a raw stream string slice or EOF result into Mixed string-or-false form.
 /// Boxes a `readline()` result: `false` at EOF, otherwise the line WITHOUT its
 /// trailing newline.
 ///
@@ -73,6 +72,7 @@ pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut Fu
     }
 }
 
+/// Boxes a raw stream string slice or EOF result into Mixed string-or-false form.
 pub(super) fn box_stream_string_or_false_on_empty_result(
     ctx: &mut FunctionContext<'_>,
     label_prefix: &str,
