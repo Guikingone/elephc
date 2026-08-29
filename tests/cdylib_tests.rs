@@ -197,6 +197,34 @@ function scalar_throw(int $value): int {
 function symbol_string(string $input): string {
     return $input;
 }
+
+#[Export]
+function fixed_label(): string {
+    return "fixed";
+}
+
+#[Export]
+function fixed_throw(): string {
+    throw new RuntimeException("fixed boom");
+}
+
+#[Export]
+function compose_label(
+    string $left,
+    int $count,
+    float $ratio,
+    bool $enabled,
+    string $right,
+    int $extra_a,
+    int $extra_b,
+    int $extra_c,
+): string {
+    if ($count !== 7 || $ratio !== 1.5 || !$enabled ||
+        $extra_a !== 11 || $extra_b !== 13 || $extra_c !== 17) {
+        return "bad";
+    }
+    return $left . $right;
+}
 "#;
 
 const HOST_C: &str = r#"
@@ -204,6 +232,7 @@ const HOST_C: &str = r#"
 #include <stdint.h>
 #include <stdio.h>
 #include <stddef.h>
+#include <string.h>
 
 int main(int argc, char **argv) {
     if (argc != 2) return 1;
@@ -217,13 +246,45 @@ int main(int argc, char **argv) {
         (int64_t (*)(int64_t))dlsym(lib, "scalar_throw");
     int32_t (*vt)(const char *, size_t) =
         (int32_t (*)(const char *, size_t))dlsym(lib, "validate_token");
+    int32_t (*fixed_label)(char **, size_t *) =
+        (int32_t (*)(char **, size_t *))dlsym(lib, "fixed_label");
+    int32_t (*fixed_throw)(char **, size_t *) =
+        (int32_t (*)(char **, size_t *))dlsym(lib, "fixed_throw");
+    int32_t (*compose_label)(const char *, size_t, int64_t, double, int64_t,
+                             const char *, size_t, int64_t, int64_t, int64_t,
+                             char **, size_t *) =
+        (int32_t (*)(const char *, size_t, int64_t, double, int64_t,
+                    const char *, size_t, int64_t, int64_t, int64_t,
+                    char **, size_t *))dlsym(lib, "compose_label");
+    void (*efree)(void *) = (void (*)(void *))dlsym(lib, "elephc_free");
     void (*shutdown)(void) = (void (*)(void))dlsym(lib, "elephc_shutdown");
-    if (!init || !last_status || !last_error || !add || !scalar_throw || !vt || !shutdown) {
+    if (!init || !last_status || !last_error || !add || !scalar_throw || !vt ||
+        !fixed_label || !fixed_throw || !compose_label || !efree || !shutdown) {
         fprintf(stderr, "dlsym failed\n"); return 3;
     }
     if (init() != 0) return 4;
     if (scalar_throw(7) != 0 || last_status() != 2 || !last_error()) return 5;
     if (add(40, 2) != 42 || last_status() != 0 || last_error() != NULL) return 6;
+    char *output = (char *)(uintptr_t)1;
+    size_t output_len = 99;
+    if (fixed_throw(&output, &output_len) != 2 || output != NULL || output_len != 0 ||
+        last_status() != 2 || !last_error() || !strstr(last_error(), "fixed boom")) return 7;
+    output = NULL;
+    output_len = 0;
+    if (fixed_label(&output, &output_len) != 0 || !output || output_len != 5 ||
+        memcmp(output, "fixed", 5) != 0 || last_error() != NULL) return 8;
+    efree(output);
+    output = NULL;
+    output_len = 0;
+    if (compose_label("left", 4, 7, 1.5, 1, "right", 5, 11, 13, 17,
+                      &output, &output_len) != 0 ||
+        !output || output_len != 9 || memcmp(output, "leftright", 9) != 0) return 9;
+    efree(output);
+    output = (char *)(uintptr_t)1;
+    output_len = 99;
+    if (compose_label(NULL, 1, 7, 1.5, 1, "right", 5, 11, 13, 17,
+                      &output, &output_len) != 1 ||
+        output != NULL || output_len != 0 || last_status() != 1 || !last_error()) return 10;
     printf("%lld %d %d\n", (long long)add(40, 2), vt("supersecret", 11), vt("nope", 4));
     shutdown();
     return 0;
@@ -243,6 +304,18 @@ int main(void) {
     size_t output_len = 0;
     if (symbol_string("static", 6, &output, &output_len) != ELEPHC_STATUS_OK ||
         !output || output_len != 6 || memcmp(output, "static", 6) != 0) return 2;
+    elephc_free(output);
+    output = NULL;
+    output_len = 0;
+    if (fixed_label(&output, &output_len) != ELEPHC_STATUS_OK ||
+        !output || output_len != 5 || memcmp(output, "fixed", 5) != 0) return 3;
+    elephc_free(output);
+    output = NULL;
+    output_len = 0;
+    if (compose_label("left", 4, 7, 1.5, 1, "right", 5, 11, 13, 17,
+                      &output, &output_len) !=
+            ELEPHC_STATUS_OK ||
+        !output || output_len != 9 || memcmp(output, "leftright", 9) != 0) return 4;
     printf("%.*s %lld\n", (int)output_len, output, (long long)add_i64(40, 2));
     elephc_free(output);
     elephc_shutdown();
@@ -297,6 +370,11 @@ function force_allocation_failure(string $input): string {
 }
 
 #[Export]
+function fixed_allocation_failure(): string {
+    return str_repeat("x", 70000);
+}
+
+#[Export]
 function add_after_failure(int $a, int $b): int {
     return $a + $b;
 }
@@ -319,6 +397,7 @@ typedef int32_t (*last_status_fn)(void);
 typedef const char *(*last_error_fn)(void);
 typedef void (*free_fn)(void *);
 typedef int32_t (*string_export_fn)(const char *, size_t, char **, size_t *);
+typedef int32_t (*zero_string_export_fn)(char **, size_t *);
 typedef int64_t (*add_fn)(int64_t, int64_t);
 
 int main(int argc, char **argv) {
@@ -338,10 +417,12 @@ int main(int argc, char **argv) {
     LOAD(cleanup_throw, p_cleanup_throw, string_export_fn);
     LOAD(concat_success, p_concat_success, string_export_fn);
     LOAD(force_allocation_failure, p_force_allocation_failure, string_export_fn);
+    LOAD(fixed_allocation_failure, p_fixed_allocation_failure, zero_string_export_fn);
     LOAD(add_after_failure, p_add_after_failure, add_fn);
     if (!p_abi_version || !p_init || !p_shutdown || !p_last_status || !p_last_error || !p_free ||
         !p_roundtrip || !p_maybe_throw || !p_empty_throw || !p_cleanup_throw ||
-        !p_concat_success || !p_force_allocation_failure || !p_add_after_failure)
+        !p_concat_success || !p_force_allocation_failure || !p_fixed_allocation_failure ||
+        !p_add_after_failure)
         return 3;
     if (p_abi_version() != ELEPHC_ABI_VERSION ||
         p_init() != ELEPHC_STATUS_OK) return 4;
@@ -449,13 +530,22 @@ int main(int argc, char **argv) {
         return 23;
     error = p_last_error();
     if (!error || !strstr(error, "allocation failed")) return 24;
-    if (p_add_after_failure(20, 22) != 42 || p_last_error() != NULL) return 25;
+
+    out = (char *)(uintptr_t)1;
+    out_len = 99;
+    if (p_fixed_allocation_failure(&out, &out_len) !=
+            ELEPHC_STATUS_ALLOCATION_FAILURE ||
+        p_last_status() != ELEPHC_STATUS_ALLOCATION_FAILURE || out != NULL || out_len != 0)
+        return 25;
+    error = p_last_error();
+    if (!error || !strstr(error, "allocation failed")) return 26;
+    if (p_add_after_failure(20, 22) != 42 || p_last_error() != NULL) return 27;
 
     out = NULL;
     out_len = 0;
     if (p_roundtrip("alive", 5, &out, &out_len) != ELEPHC_STATUS_OK ||
         out_len != 5 || memcmp(out, "alive", 5) != 0 || p_last_error() != NULL)
-        return 26;
+        return 28;
     p_free(out);
     p_shutdown();
     dlclose(lib);
@@ -798,7 +888,7 @@ fn test_staticlib_links_directly_into_a_host_binary() {
         run.status.code(),
         String::from_utf8_lossy(&run.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "static 42\n");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "leftright 42\n");
 
     fs::remove_dir_all(&dir).ok();
 }
@@ -1209,6 +1299,9 @@ fn test_cdylib_dynamic_symbols_expose_only_public_abi_on_linux() {
         "elephc_last_error",
         "elephc_free",
         "add_i64",
+        "compose_label",
+        "fixed_label",
+        "fixed_throw",
         "scalar_throw",
         "symbol_string",
         "validate_token",
@@ -1252,6 +1345,9 @@ fn test_cdylib_dynamic_symbols_expose_only_public_abi_on_macos() {
         .collect::<BTreeSet<_>>();
     let expected = [
         "add_i64",
+        "compose_label",
+        "fixed_label",
+        "fixed_throw",
         "scalar_throw",
         "elephc_abi_version",
         "elephc_free",

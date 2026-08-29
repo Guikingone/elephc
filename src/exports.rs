@@ -156,8 +156,8 @@ fn has_export_attribute(stmt: &Stmt) -> bool {
 }
 
 /// Validates that every parameter and return type has a defined cdylib ABI.
-/// Scalar C signatures remain unchanged; the owned-string ABI additionally accepts the
-/// exact binary-safe `string -> string` status/out-parameter surface.
+/// Scalar C signatures remain unchanged; every string return uses the binary-safe
+/// status/out-parameter surface while preserving the fixed scalar/string inputs.
 fn validate_signature(
     name: &str,
     sig: &FunctionSig,
@@ -194,11 +194,11 @@ fn validate_signature(
         }
     }
     if sig.return_type == PhpType::Str {
-        if !is_string_roundtrip_signature(sig) {
+        if sig.by_ref_return {
             return Err(CompileError::new(
                 span,
                 &format!(
-                    "exported function '{}' returns string; --emit cdylib currently supports string returns only for exactly one by-value string parameter",
+                    "exported function '{}' returns by reference; #[Export] accepts only by-value results",
                     name
                 ),
             ));
@@ -217,17 +217,12 @@ fn validate_signature(
     Ok(())
 }
 
-/// Returns whether `sig` uses the first binary-safe owned-string export ABI.
-///
-/// Keeping this surface deliberately exact avoids implying marshaling support for
-/// mixed scalar/string argument layouts that have not received a public ABI yet.
-pub fn is_string_roundtrip_signature(sig: &FunctionSig) -> bool {
+/// Returns whether `sig` uses the binary-safe caller-owned string result ABI.
+pub fn is_string_return_signature(sig: &FunctionSig) -> bool {
     sig.return_type == PhpType::Str
-        && sig.params.len() == 1
-        && sig.params[0].1 == PhpType::Str
         && sig.variadic.is_none()
         && !sig.by_ref_return
-        && !sig.ref_params.first().copied().unwrap_or(false)
+        && !sig.ref_params.iter().any(|by_ref| *by_ref)
 }
 
 /// Returns whether `ty` can be marshaled as a scalar C-ABI export parameter.
@@ -268,17 +263,9 @@ mod tests {
         }
     }
 
-    /// Accepts the exact binary-safe `string -> string` ABI introduced for cdylibs.
+    /// Accepts every fixed scalar/string input shape for a caller-owned string result.
     #[test]
-    fn accepts_exact_string_roundtrip_signature() {
-        let sig = signature(vec![("input".to_string(), PhpType::Str)], PhpType::Str);
-        assert!(validate_signature("roundtrip", &sig, Span::dummy()).is_ok());
-        assert!(is_string_roundtrip_signature(&sig));
-    }
-
-    /// Rejects broader string-return shapes until their C marshaling is specified.
-    #[test]
-    fn rejects_unspecified_string_return_shapes() {
+    fn accepts_all_fixed_string_return_shapes() {
         for sig in [
             signature(Vec::new(), PhpType::Str),
             signature(vec![("input".to_string(), PhpType::Int)], PhpType::Str),
@@ -290,10 +277,21 @@ mod tests {
                 PhpType::Str,
             ),
         ] {
-            let error = validate_signature("unsupported", &sig, Span::dummy())
-                .expect_err("broader string return must be rejected");
-            assert!(error.message.contains("exactly one by-value string parameter"));
+            assert!(validate_signature("owned_string", &sig, Span::dummy()).is_ok());
+            assert!(is_string_return_signature(&sig));
         }
+    }
+
+    /// Rejects by-reference string results because the caller-owned ABI returns values only.
+    #[test]
+    fn rejects_by_reference_string_returns() {
+        let mut sig = signature(Vec::new(), PhpType::Str);
+        sig.by_ref_return = true;
+
+        let error = validate_signature("borrowed", &sig, Span::dummy())
+            .expect_err("by-reference string result must be rejected");
+        assert!(error.message.contains("returns by reference"));
+        assert!(!is_string_return_signature(&sig));
     }
 
     /// Preserves the existing scalar-return export contract unchanged.
@@ -302,7 +300,7 @@ mod tests {
         for return_type in [PhpType::Int, PhpType::Float, PhpType::Bool, PhpType::Void] {
             let sig = signature(vec![("input".to_string(), PhpType::Str)], return_type);
             assert!(validate_signature("scalar", &sig, Span::dummy()).is_ok());
-            assert!(!is_string_roundtrip_signature(&sig));
+            assert!(!is_string_return_signature(&sig));
         }
     }
 
