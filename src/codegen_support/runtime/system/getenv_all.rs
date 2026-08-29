@@ -146,7 +146,10 @@ fn emit_getenv_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r12");                                            // preserve the destination hash
     emitter.instruction("push r13");                                            // preserve the current entry pointer
     emitter.instruction("push r14");                                            // preserve the name length
-    emitter.instruction("sub rsp, 8");                                          // keep rsp 16-byte aligned for the nested calls
+    // No padding: rsp is 16-byte aligned here already. A call leaves it at 8 mod
+    // 16 on entry, and the five pushes above bring it back to 0 — so subtracting
+    // another 8 would MISALIGN every nested call rather than align it, which is
+    // what the comment used to claim it did.
 
     emit_load_environ(emitter, "rbx");                                          // rbx = the live entry vector
     emitter.instruction("mov rdi, 128");                                        // capacity: a shell environment is ~60 entries and the table grows past 75% load, so 128 clears it without a rebuild
@@ -206,7 +209,6 @@ fn emit_getenv_all_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_getenv_all_done");
     emitter.instruction("mov rax, r12");                                        // return the populated hash
-    emitter.instruction("add rsp, 8");                                          // release the alignment padding
     emitter.instruction("pop r14");                                             // restore the name-length register
     emitter.instruction("pop r13");                                             // restore the entry register
     emitter.instruction("pop r12");                                             // restore the hash register
