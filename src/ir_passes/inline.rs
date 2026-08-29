@@ -1072,10 +1072,6 @@ mod tests {
     // Real tests are in src/ir_passes/tests/inline_test.rs (Builder-driven, per repo policy).
 }
 
-/// Returns whether a callee takes a by-value array or associative-array parameter.
-///
-/// Such a parameter is privatized into an owning shadow slot at function entry, and that shadow
-/// cannot currently be transplanted safely into a host loop; see the gate in `is_eligible_callee`.
 /// Whether the callee stores a container into one of its own locals.
 ///
 /// Sibling of [`callee_has_by_value_container_param`], and refused for the same
@@ -1110,6 +1106,10 @@ fn callee_stores_a_container_local(callee: &Function) -> bool {
     })
 }
 
+/// Returns whether a callee takes a by-value array or associative-array parameter.
+///
+/// Such a parameter is privatized into an owning shadow slot at function entry, and that shadow
+/// cannot currently be transplanted safely into a host loop; see the gate in `is_eligible_callee`.
 fn callee_has_by_value_container_param(callee: &Function) -> bool {
     callee.params.iter().any(|param| {
         !param.by_ref
