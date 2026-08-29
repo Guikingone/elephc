@@ -33,7 +33,7 @@ use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::data::{
     WRAPPER_MISSING_HOOK_HEAD_FEOF, WRAPPER_MISSING_HOOK_HEAD_FLOCK,
-    WRAPPER_MISSING_HOOK_HEAD_FSTAT, WRAPPER_MISSING_HOOK_HEAD_FWRITE,
+    WRAPPER_MISSING_HOOK_HEAD_FWRITE,
     WRAPPER_MISSING_HOOK_TAIL_EOF, WRAPPER_MISSING_HOOK_TAIL_LOCK,
     WRAPPER_MISSING_HOOK_TAIL_STAT, WRAPPER_MISSING_HOOK_TAIL_WRITE,
 };
@@ -307,10 +307,50 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emit_aarch64_handle_lookup(emitter, "__rt_uwfread_empty");                  // resolve obj into x0, fall through to empty-string on missing handles
     emit_aarch64_method_lookup(emitter, "__rt_uwfread_missing", VTABLE_SLOT_READ); // resolve stream_read method pointer into x11
 
+    // -- php asks this class whether the read reached the end, and a class that cannot answer
+    //    fails the READ --
+    //
+    // A wrapper has no way to set the stream's EOF flag itself, so php asks `stream_eof()` after
+    // every `stream_read()`. A class that does not implement it gets
+    // `Warning: fread(): C::stream_eof is not implemented! Assuming EOF`, and the bytes it just
+    // returned are DISCARDED — `fread()` answers false, `file_get_contents()` answers "".
+    // MEASURED on `php -n` 8.5.6; the caller's name was published by the lowering, because this
+    // one helper is where every reader's wrapper branch ends up.
+    //
+    // The presence is probed HERE, before the call, where no user code has run yet; the warning
+    // is emitted AFTER it, because that is the order php prints them in.
+    emitter.instruction("ldr x12, [x0]");                                       // class_id at the head of every wrapper object
+    abi::emit_symbol_address(emitter, "x14", "_user_wrapper_vtable_ptrs");
+    emitter.instruction("ldr x14, [x14, x12, lsl #3]");                         // this class's wrapper vtable
+    emitter.instruction(&format!("ldr x14, [x14, #{}]", VTABLE_SLOT_EOF * 8));  // its stream_eof slot, if it has one
+    emitter.instruction("add x15, x12, #1");                                    // absent: remember WHICH class, biased by one
+    emitter.instruction("cmp x14, #0");
+    emitter.instruction("csel x15, xzr, x15, ne");                              // present: zero, the "nothing owed" marker
+    emitter.instruction("str x15, [sp, #56]");                                  // outlives the call into user code
+
     // -- call stream_read($this, $count); the result shape follows the method's return type --
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the requested byte count
     emitter.instruction(&format!("tbnz x13, #{}, __rt_uwfread_boxed", VTABLE_SLOT_READ)); // a `string|false` return arrives boxed instead
     emitter.instruction("blr x11");                                             // invoke stream_read on the wrapper object
+    emitter.instruction("b __rt_uwfread_verdict");                              // the pair is in x1/x2; the flag is the eof question
+
+    // -- the read's verdict: a class php could not ask about answers false, whatever it read --
+    emitter.label("__rt_uwfread_verdict");
+    emitter.instruction("ldr x9, [sp, #56]");
+    emitter.instruction("cbz x9, __rt_uwfread_verdict_ok");                     // the class can answer: an ordinary result
+    emitter.instruction("stp x1, x2, [sp, #40]");                               // the pair outlives the warning below
+    emitter.instruction("sub x0, x9, #1");                                      // the class php names, un-biased
+    abi::emit_symbol_address(emitter, "x9", "_uwmh_head");
+    emitter.instruction("ldp x1, x2, [x9]");                                    // the caller the lowering published
+    abi::emit_symbol_address(emitter, "x3", "_uwmh_tail_eof");
+    emitter.instruction(&format!("mov x4, #{}", WRAPPER_MISSING_HOOK_TAIL_EOF.len()));
+    emitter.instruction("bl __rt_wrapper_missing_hook_warning");
+    emitter.instruction("ldp x1, x2, [sp, #40]");                               // php discards these bytes; the flag is what the caller reads
+    emitter.instruction("mov x0, #0");                                          // the read failed
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the failure verdict
+    emitter.label("__rt_uwfread_verdict_ok");
     emitter.instruction("mov x0, #1");                                          // fread's result flag: a wrapper read is a real result
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
@@ -327,9 +367,7 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_free_deep");                             // release the box storage only, never the string being returned
     emitter.label("__rt_uwfread_boxed_done");
     emitter.instruction("ldp x1, x2, [sp, #40]");                               // restore the converted read result
-    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
-    emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
+    emitter.instruction("b __rt_uwfread_verdict");                              // a boxed return faces the same eof question
 
     // -- the class does not implement stream_read: php answers FALSE, not "" --
     // Measured on php 8.5.6 with `stream_eof` present so the read is genuinely attempted; php
@@ -360,18 +398,55 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 48");                                         // helper frame plus the boxed result and converted pair
+    emitter.instruction("sub rsp, 48");                                         // helper frame plus the boxed result, converted pair and eof marker
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the synthetic file descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested read length
 
     emit_x86_handle_lookup(emitter, "__rt_uwfread_empty_x86");                  // resolve obj into rdi, fall through on missing handles
     emit_x86_method_lookup(emitter, "__rt_uwfread_missing_x86", VTABLE_SLOT_READ); // resolve stream_read method pointer into r11
 
+    // See the AArch64 twin: php asks this class whether the read reached the end, and a class
+    // that cannot answer fails the read itself.
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // class_id at the head of every wrapper object
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_vtable_ptrs");
+    emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // this class's wrapper vtable
+    emitter.instruction(&format!("mov r10, QWORD PTR [r10 + {}]", VTABLE_SLOT_EOF * 8)); // its stream_eof slot, if it has one
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // present: the "nothing owed" marker
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jnz __rt_uwfread_eof_probed_x86");
+    emitter.instruction("add r9, 1");                                           // absent: remember WHICH class, biased by one
+    emitter.instruction("mov QWORD PTR [rbp - 48], r9");
+    emitter.label("__rt_uwfread_eof_probed_x86");
+
     // -- call stream_read($this, $count); the result shape follows the method's return type --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
     emitter.instruction(&format!("bt r8, {}", VTABLE_SLOT_READ));               // does this class return a boxed `string|false`?
     emitter.instruction("jc __rt_uwfread_boxed_x86");                           // convert the boxed result instead of reading the pair
     emitter.instruction("call r11");                                            // invoke stream_read on the wrapper object
+    emitter.instruction("jmp __rt_uwfread_verdict_x86");                        // the pair is in rax/rdx; the flag is the eof question
+
+    // -- the read's verdict: a class php could not ask about answers false, whatever it read --
+    emitter.label("__rt_uwfread_verdict_x86");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_uwfread_verdict_ok_x86");                      // the class can answer: an ordinary result
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // the pair outlives the warning below
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");
+    emitter.instruction("mov rdi, r9");
+    emitter.instruction("sub rdi, 1");                                          // the class php names, un-biased
+    abi::emit_symbol_address(emitter, "r10", "_uwmh_head");
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // the caller the lowering published
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");
+    abi::emit_symbol_address(emitter, "rcx", "_uwmh_tail_eof");
+    emitter.instruction(&format!("mov r8, {}", WRAPPER_MISSING_HOOK_TAIL_EOF.len()));
+    emitter.instruction("call __rt_wrapper_missing_hook_warning");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // php discards these bytes; the flag is what the caller reads
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");
+    emitter.instruction("xor ecx, ecx");                                        // the read failed
+    emitter.instruction("add rsp, 48");                                         // release the WHOLE frame, which grew for the boxed-result spills
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the failure verdict
+    emitter.label("__rt_uwfread_verdict_ok_x86");
     emitter.instruction("mov ecx, 1");                                          // fread's result flag: a wrapper read is a real result
     emitter.instruction("add rsp, 48");                                         // release the WHOLE frame, which grew for the boxed-result spills
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -414,10 +489,7 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uwfread_boxed_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // restore the converted read result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // restore the converted read result length
-    emitter.instruction("mov ecx, 1");                                          // fread's result flag: a wrapper read is a real result
-    emitter.instruction("add rsp, 48");                                         // release the WHOLE frame, which grew for the boxed-result spills
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
+    emitter.instruction("jmp __rt_uwfread_verdict_x86");                        // a boxed return faces the same eof question
 }
 
 /// `__rt_user_wrapper_fwrite`: invoke the wrapper's `stream_write($data)`

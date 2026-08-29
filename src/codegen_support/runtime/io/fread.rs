@@ -395,6 +395,10 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("ldr x0, [sp, #0]");
             emitter.instruction("bl __rt_fread");                               // x0 = flag, x1 = ptr, x2 = len
             emitter.instruction("str x0, [sp, #40]");                           // the read's OWN verdict travels out
+            // A REFUSED read keeps none of its bytes. php discards them — a wrapper with no
+            // `stream_eof` reads, warns, and answers false — so they must not reach the stream's
+            // holding area, where the next reader would serve them as if the read had worked.
+            emitter.instruction("cbz x0, __rt_uwfc_failed");                    // refused: give the window back, answer false
             emitter.instruction("cbz x2, __rt_uwfc_empty");                     // the source had nothing
             emitter.instruction("stp x1, x2, [sp, #16]");                       // the chunk outlives the calls below
 
@@ -442,6 +446,19 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("add sp, sp, #64");
             emitter.instruction("ret");
 
+            emitter.label("__rt_uwfc_failed");
+            emitter.instruction("stp x1, x2, [sp, #16]");                       // the refused chunk, to be released
+            emitter.instruction("mov x2, #0");                                  // release the whole claimed window
+            emitter.instruction("bl __rt_concat_publish");                      // hand the scratch window back
+            emitter.instruction("ldr x0, [sp, #16]");
+            emitter.instruction("bl __rt_decref_any");                          // and release the chunk itself
+            emitter.instruction("mov x0, #0");                                  // the refusal is the answer
+            emitter.instruction("mov x1, #0");
+            emitter.instruction("mov x2, #0");
+            emitter.instruction("ldp x29, x30, [sp, #48]");
+            emitter.instruction("add sp, sp, #64");
+            emitter.instruction("ret");
+
             emitter.label("__rt_uwfc_empty");
             // NOT a hardcoded success: a wrapper with no `stream_read` answers php `false`, and
             // that verdict is the flag, not the length. Returning 1 here turned that false into
@@ -470,6 +487,9 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
             emitter.instruction("call __rt_fread");                             // rax = ptr, rdx = len, rcx = flag
             emitter.instruction("mov QWORD PTR [rbp - 48], rcx");               // the read's OWN verdict travels out
+            // See the AArch64 counterpart: a refused read keeps none of its bytes.
+            emitter.instruction("test rcx, rcx");
+            emitter.instruction("jz __rt_uwfc_failed_x86");                     // refused: give the window back, answer false
             emitter.instruction("test rdx, rdx");
             emitter.instruction("jz __rt_uwfc_empty_x86");                      // the source had nothing
             emitter.instruction("mov QWORD PTR [rbp - 24], rax");
@@ -511,6 +531,19 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
             emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");
             emitter.instruction("mov rcx, 1");                                  // a real result, not a failed read
+            emitter.instruction("mov rsp, rbp");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+
+            emitter.label("__rt_uwfc_failed_x86");
+            emitter.instruction("mov QWORD PTR [rbp - 24], rax");               // the refused chunk, to be released
+            emitter.instruction("xor edx, edx");                                // release the whole claimed window
+            emitter.instruction("call __rt_concat_publish");                    // hand the scratch window back
+            emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // decref reads RAX, not rdi
+            emitter.instruction("call __rt_decref_any");                        // and release the chunk itself
+            emitter.instruction("xor eax, eax");                                // the refusal is the answer
+            emitter.instruction("xor edx, edx");
+            emitter.instruction("xor ecx, ecx");
             emitter.instruction("mov rsp, rbp");
             emitter.instruction("pop rbp");
             emitter.instruction("ret");

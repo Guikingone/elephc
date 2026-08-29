@@ -360,6 +360,11 @@ pub(super) fn emit_dynamic_php_filter_swap(
 /// behaviour: a site that does not publish leaves the slots zero and the opener uses the `fopen`
 /// wording it always had. A wrong name is loud in a diff; a garbled one would not be.
 pub(super) fn emit_publish_wrapper_open_callee(ctx: &mut FunctionContext<'_>, callee: &str) {
+    // The whole-file readers open a wrapper and read it without ever holding a stream resource,
+    // so they never pass through the publisher every handle-taking builtin shares. Without this,
+    // `file_get_contents()` on a wrapper with no `stream_eof` warned in the name of whichever
+    // builtin published last — MEASURED, it said `fgetcsv()`.
+    super::resource_handles::emit_publish_wrapper_read_caller(ctx, callee);
     let (invalid_label, invalid_len) = ctx
         .data
         .add_string(format!("Warning: {callee}(): Invalid php:// URL specified\n").as_bytes());

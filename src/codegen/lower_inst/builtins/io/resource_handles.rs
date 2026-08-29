@@ -46,6 +46,41 @@ pub(in crate::codegen::lower_inst::builtins) fn load_stream_fd_to_result_at(
     Ok(())
 }
 
+/// Publishes the name php would print if this builtin ends up reading a wrapper that has no
+/// `stream_eof`.
+///
+/// php asks a userspace wrapper, after EVERY `stream_read()`, whether that read reached the end —
+/// the wrapper has no other way to say so. A class that does not implement `stream_eof` therefore
+/// makes the READ ITSELF fail, and php names the function the user called. MEASURED on `php -n`
+/// 8.5.6 against a wrapper with `stream_read` but no `stream_eof`, eleven callers, eleven names:
+///
+///     Warning: fread(): C::stream_eof is not implemented! Assuming EOF        → false
+///     Warning: file_get_contents(): C::stream_eof is not implemented! ...     → ""
+///     Warning: fpassthru(): C::stream_eof is not implemented! ...             → -1
+///     Warning: file(): C::stream_eof is not implemented! ...                  → []
+///
+/// …and the same for `fgets`, `fgetc`, `fgetcsv`, `stream_get_contents`, `stream_get_line`,
+/// `readfile` and `fscanf`. Every failure shape is that one failed read travelling out through
+/// each builtin's ORDINARY failure path, so the runtime needs the name and nothing else.
+///
+/// It is published HERE, in the one place every stream builtin already passes its own name
+/// through, rather than at each reader: a reader added later cannot forget a step it does not
+/// take, where a per-caller publication that was missed would silently name whichever builtin
+/// published last. The single read of the slot runs only on the missing-method path.
+pub(in crate::codegen::lower_inst::builtins) fn emit_publish_wrapper_read_caller(
+    ctx: &mut FunctionContext<'_>,
+    function_name: &str,
+) {
+    let (label, len) = ctx
+        .data
+        .add_string(format!("Warning: {function_name}(): ").as_bytes());
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, scratch, &label);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_uwmh_head", 0);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, len as i64);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_uwmh_head", 8);
+}
+
 /// Loads a generic resource payload without interpreting it as a stream-registry handle.
 ///
 /// Internal resource-backed objects such as `HashContext` still store a native
@@ -211,6 +246,7 @@ pub(in crate::codegen::lower_inst::builtins) fn load_stream_handle_to_result_at(
     function_name: &str,
     param_index: usize,
 ) -> Result<()> {
+    emit_publish_wrapper_read_caller(ctx, function_name);
     let raw_ty = ctx.raw_value_php_type(value)?;
     ctx.load_value_to_result(value)?;
     match raw_ty {
