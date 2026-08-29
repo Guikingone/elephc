@@ -563,6 +563,17 @@ pub(crate) const UNKNOWN_WRAPPER_HEAD: &str = "Warning: ";
 /// The fixed text between the caller's name and the scheme.
 pub(crate) const UNKNOWN_WRAPPER_MIDDLE: &str = "(): Unable to find the wrapper \"";
 /// The fixed text after the scheme, copied from php-src verbatim.
+/// The halves of php's refusal to unregister a protocol nobody registered, either side of the
+/// name: `Warning: stream_wrapper_unregister(): Unable to unregister protocol nope://`.
+///
+/// MEASURED on `php -n` 8.5.6. It is a warning, not a silent false, and `@` suppresses it like any
+/// other.
+pub(crate) const STREAM_WRAPPER_UNREGISTER_HEAD: &str =
+    "Warning: stream_wrapper_unregister(): Unable to unregister protocol ";
+
+/// The tail of that refusal; see [`STREAM_WRAPPER_UNREGISTER_HEAD`].
+pub(crate) const STREAM_WRAPPER_UNREGISTER_TAIL: &str = "://\n";
+
 pub(crate) const UNKNOWN_WRAPPER_TAIL: &str =
     "\" - did you forget to enable it when you configured PHP?\n";
 

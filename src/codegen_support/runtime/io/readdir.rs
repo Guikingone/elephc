@@ -69,11 +69,23 @@ pub fn emit_readdir(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, #1");                                    // advance the glob iterator
     emitter.instruction("str x12, [x10, #16]");                                 // persist the next glob index
     emitter.instruction("mov x2, #0");                                          // begin measuring the matched path length
+    emitter.instruction("mov x3, #0");                                          // one past the last '/', where the NAME starts
     emitter.label("__rt_readdir_glob_strlen");
     emitter.instruction("ldrb w9, [x1, x2]");                                   // load the next matched-path byte
-    emitter.instruction("cbz w9, __rt_readdir_persist");                        // stop at the path terminator
+    emitter.instruction("cbz w9, __rt_readdir_glob_basename");                  // stop at the path terminator
+    emitter.instruction("add x4, x2, #1");                                      // where a name would start after this byte
+    emitter.instruction("cmp w9, #0x2F");                                       // '/'
+    emitter.instruction("csel x3, x4, x3, eq");                                 // remember the last separator seen
     emitter.instruction("add x2, x2, #1");                                      // count one more matched-path byte
     emitter.instruction("b __rt_readdir_glob_strlen");                          // continue scanning the matched path
+
+    emitter.label("__rt_readdir_glob_basename");
+    // php's `glob://` reads the NAME, not the path the pattern matched — MEASURED,
+    // `opendir("glob://g1/*.txt")` reads `a.txt`. The directory the pattern named is the
+    // caller's already.
+    emitter.instruction("add x1, x1, x3");                                      // step past the directory
+    emitter.instruction("sub x2, x2, x3");                                      // and shorten the name to match
+    emitter.instruction("b __rt_readdir_persist");
 
     emitter.label("__rt_readdir_user");
     emitter.instruction(&format!("ldr x0, [x0, #{}]", STREAM_FD_OFFSET));       // load the wrapper's synthetic directory handle
@@ -142,11 +154,23 @@ fn emit_readdir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rdx, 1");                                          // advance the glob iterator
     emitter.instruction("mov QWORD PTR [r10 + 16], rdx");                       // persist the next glob index
     emitter.instruction("xor edx, edx");                                        // begin measuring the matched path length
+    emitter.instruction("xor ecx, ecx");                                        // one past the last '/', where the NAME starts
     emitter.label("__rt_readdir_glob_strlen_x86");
-    emitter.instruction("cmp BYTE PTR [rsi + rdx], 0");                         // test the next matched-path byte
-    emitter.instruction("je __rt_readdir_persist_x86");                         // stop at the path terminator
+    emitter.instruction("movzx r9d, BYTE PTR [rsi + rdx]");                     // the next matched-path byte
+    emitter.instruction("test r9b, r9b");
+    emitter.instruction("jz __rt_readdir_glob_basename_x86");                   // stop at the path terminator
+    emitter.instruction("cmp r9b, 0x2F");                                       // '/'
+    emitter.instruction("jne __rt_readdir_glob_next_x86");
+    emitter.instruction("lea rcx, [rdx + 1]");                                  // remember the last separator seen
+    emitter.label("__rt_readdir_glob_next_x86");
     emitter.instruction("add rdx, 1");                                          // count one more matched-path byte
     emitter.instruction("jmp __rt_readdir_glob_strlen_x86");                    // continue scanning the matched path
+
+    emitter.label("__rt_readdir_glob_basename_x86");
+    // See the AArch64 arm: php reads the NAME, not the path the pattern matched.
+    emitter.instruction("add rsi, rcx");                                        // step past the directory
+    emitter.instruction("sub rdx, rcx");                                        // and shorten the name to match
+    emitter.instruction("jmp __rt_readdir_persist_x86");
 
     emitter.label("__rt_readdir_user_x86");
     emitter.instruction(&format!(

@@ -1014,10 +1014,14 @@ rmdir("gu");
 /// exists immediately, then cleans up the temporary file.
 #[test]
 fn test_glob_stream_wrapper_iterates_matches() {
-    // Phase 6: opendir("glob://pattern") returns a synthetic directory
-    // resource backed by libc glob; readdir iterates the matches, closedir
-    // releases the gl_pathv, rewinddir restarts the iteration. libc glob
-    // returns the matches in sorted order on every target we support.
+    // opendir("glob://pattern") returns a synthetic directory resource backed by libc glob;
+    // readdir iterates the matches, closedir releases the gl_pathv, rewinddir restarts the
+    // iteration. libc glob returns the matches in sorted order on every target we support.
+    //
+    // The NAME, not the path the pattern matched: this pinned `gw/a.txt` and php answers
+    // `a.txt` — MEASURED on `php -n` 8.5.6 with this very program. The directory the pattern
+    // named is the caller's already, so carrying it back made `dirname . "/" . readdir()` build
+    // `gw/gw/a.txt`.
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 mkdir("gw");
@@ -1036,7 +1040,7 @@ unlink("gw/b.txt");
 rmdir("gw");
 "#,
     );
-    assert_eq!(out, "gw/a.txt|gw/b.txt|end|gw/a.txt");
+    assert_eq!(out, "a.txt|b.txt|end|a.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 

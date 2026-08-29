@@ -19526,3 +19526,42 @@ fclose($h);
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `stream_wrapper_unregister()` refuses OUT LOUD, the way php does.
+///
+/// It answered false in silence. MEASURED on `php -n` 8.5.6:
+/// `Warning: stream_wrapper_unregister(): Unable to unregister protocol nope://`, and then false.
+/// Found by a surface sweep against php, not by this suite.
+#[test]
+fn test_unregistering_an_unknown_protocol_warns() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(stream_wrapper_unregister("nope"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
+    assert!(
+        out.diagnostics
+            .contains("stream_wrapper_unregister(): Unable to unregister protocol nope://"),
+        "expected php's refusal, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies `@` suppresses that refusal, as it does every other warning.
+#[test]
+fn test_the_unregister_refusal_is_suppressible() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(@stream_wrapper_unregister("nope"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
+    assert!(
+        !out.diagnostics.contains("Unable to unregister"),
+        "an @ scope must swallow it, got diagnostics={}",
+        out.diagnostics
+    );
+}

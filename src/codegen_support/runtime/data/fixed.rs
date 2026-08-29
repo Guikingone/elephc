@@ -69,6 +69,7 @@ use super::{
 };
 use super::super::system;
 use super::RT_DIAG_BUF_BYTES;
+use super::{STREAM_WRAPPER_UNREGISTER_HEAD, STREAM_WRAPPER_UNREGISTER_TAIL};
 use super::US_CACHE_PATH_CAP;
 use super::super::exceptions::{TRACE_BUF_BYTES, TRACE_LITERALS};
 use crate::codegen_support::data_section::comm_directive;
@@ -342,6 +343,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_unknown_wrapper_head", UNKNOWN_WRAPPER_HEAD),
         ("_unknown_wrapper_mid", UNKNOWN_WRAPPER_MIDDLE),
         ("_unknown_wrapper_tail", UNKNOWN_WRAPPER_TAIL),
+        ("_swu_head", STREAM_WRAPPER_UNREGISTER_HEAD),
+        ("_swu_tail", STREAM_WRAPPER_UNREGISTER_TAIL),
         ("_ob_ntc_no_end_flush", OB_NTC_NO_END_FLUSH),
         ("_ob_ntc_no_get_flush", OB_NTC_NO_GET_FLUSH),
         ("_ob_ntc_no_end_clean", OB_NTC_NO_END_CLEAN),

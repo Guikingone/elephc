@@ -72,6 +72,7 @@ pub fn emit_stream_wrapper_unregister(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #32");                                     // frame for the built-in probe
     emitter.instruction("stp x29, x30, [sp, #16]");
     emitter.instruction("add x29, sp, #16");
+    emitter.instruction("stp x15, x16, [sp, #0]");                              // the protocol outlives the probe call
     emitter.instruction("mov x0, x15");                                         // restore the protocol pointer
     emitter.instruction("mov x1, x16");                                         // restore the protocol length
     emitter.instruction("bl __rt_builtin_wrapper_index");                       // x0 = built-in index or -1
@@ -90,6 +91,20 @@ pub fn emit_stream_wrapper_unregister(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #32");
     emitter.instruction("ret");                                                 // return to the caller
     emitter.label("__rt_swu_really_miss");
+    // -- php refuses OUT LOUD --
+    //
+    // MEASURED on `php -n` 8.5.6: `stream_wrapper_unregister("nope")` prints
+    // `Warning: stream_wrapper_unregister(): Unable to unregister protocol nope://` and THEN
+    // answers false. Three pieces, because the protocol in the middle is a run-time string, and
+    // `__rt_diag_warning` writes the line once a piece ends it with a newline.
+    abi::emit_symbol_address(emitter, "x1", "_swu_head");
+    emitter.instruction("mov x2, #68");
+    emitter.instruction("bl __rt_diag_warning");
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // the protocol the caller named
+    emitter.instruction("bl __rt_diag_warning");
+    abi::emit_symbol_address(emitter, "x1", "_swu_tail");
+    emitter.instruction("mov x2, #4");
+    emitter.instruction("bl __rt_diag_warning");                                // the newline writes the line
     emitter.instruction("mov x0, #0");                                          // return false when nothing matched
     emitter.instruction("ldp x29, x30, [sp, #16]");
     emitter.instruction("add sp, sp, #32");
@@ -149,7 +164,9 @@ fn emit_stream_wrapper_unregister_linux_x86_64(emitter: &mut Emitter) {
     // as never changed.
     emitter.instruction("push rbp");                                            // align the stack for the probe call
     emitter.instruction("mov rbp, rsp");                                        // establish a frame to return through
-    // rdi/rsi still hold the requested protocol: the scan above reads them but never writes them.
+    emitter.instruction("sub rsp, 16");                                         // the protocol outlives the probe call
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");
     emitter.instruction("call __rt_builtin_wrapper_index");                     // rax = built-in index or -1
     emitter.instruction("cmp rax, 0");
     emitter.instruction("jl __rt_swu_really_miss_x86");                         // not a built-in either
@@ -167,6 +184,16 @@ fn emit_stream_wrapper_unregister_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");
     emitter.instruction("ret");                                                 // return to the caller
     emitter.label("__rt_swu_really_miss_x86");
+    // See the AArch64 arm: php refuses out loud, in three pieces.
+    abi::emit_symbol_address(emitter, "rdi", "_swu_head");
+    emitter.instruction("mov rsi, 68");
+    emitter.instruction("call __rt_diag_warning");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the protocol the caller named
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+    emitter.instruction("call __rt_diag_warning");
+    abi::emit_symbol_address(emitter, "rdi", "_swu_tail");
+    emitter.instruction("mov rsi, 4");
+    emitter.instruction("call __rt_diag_warning");                              // the newline writes the line
     emitter.instruction("xor eax, eax");                                        // return false when nothing matched
     emitter.instruction("mov rsp, rbp");
     emitter.instruction("pop rbp");
