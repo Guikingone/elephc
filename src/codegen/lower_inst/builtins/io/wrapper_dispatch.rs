@@ -420,6 +420,22 @@ pub(super) fn emit_publish_missing_hook_message(
     tail_symbol: &str,
     tail_len: usize,
 ) {
+    // Whether this query is one that never FILLS php's stat cache, and therefore never empties it
+    // either — see `_us_gentle`. The head names the builtin, and every stat query publishes one,
+    // so the bit rides along instead of needing a channel and a site of its own. A builtin that
+    // is not on the list evicts, which is the safe half: over-eviction costs a call, under-
+    // eviction answers from a slot php has already replaced.
+    let gentle = matches!(
+        head_symbol,
+        "_uwmh_head_file_exists"
+            | "_uwmh_head_is_readable"
+            | "_uwmh_head_is_writable"
+            | "_uwmh_head_is_writeable"
+            | "_uwmh_head_is_executable"
+    );
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(gentle));
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_us_gentle", 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", head_symbol);

@@ -166,19 +166,11 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, #1");
     emitter.instruction("b __rt_uus_cache_cmp");
 
-    // -- a query about ANY other path empties the slot, plain filesystem paths included --
-    //
-    // php holds ONE entry: MEASURED, `filesize()` on a real file makes the next wrapper query ask
-    // again. This helper runs for every stat-family builtin, wrapper or not, so it is the one
-    // place that sees them all. `file_exists()` and `is_readable()` on a plain path do NOT evict
-    // in php and do here — one extra call, against a stale answer if it went the other way.
+    // A miss is just a miss. Emptying the slot belongs to the moment ANOTHER stat takes it, which
+    // is not here: a wrapper path that resolves fills the slot itself, one that answers FALSE puts
+    // nothing there, and a plain path is handled at the no-match exit below.
     emitter.label("__rt_uus_evict");
-    emitter.instruction("str xzr, [x13]");                                      // the slot answers for nothing
-    emitter.instruction("ldr x0, [x15]");
-    emitter.instruction("cbz x0, __rt_uus_scan_start");
-    emitter.instruction("str xzr, [x15]");                                      // cleared BEFORE the release
-    emitter.instruction("bl __rt_decref_any");                                  // the reference the slot held
-    emitter.instruction("b __rt_uus_scan_start");                               // and ASK: the next label is the hit path
+    emitter.instruction("b __rt_uus_scan_start");
 
     emitter.label("__rt_uus_cache_hit");
     abi::emit_symbol_address(emitter, "x10", "_url_stat_matched");
@@ -384,6 +376,29 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_uus_ret");                                      // share the common return path
 
     emitter.label("__rt_uus_nomatch");
+
+    // -- a PLAIN path takes php's one slot, unless it is a query that never fills it --
+    //
+    // php holds ONE entry for the whole process: MEASURED, `filesize()` on a real file makes the
+    // next wrapper query ask again. `file_exists()` and the access predicates do NOT — they answer
+    // from `access(2)` and put nothing in the slot, so they empty nothing either. `_us_gentle`
+    // says which kind this is; see `emit_publish_missing_hook_message`.
+    //
+    // A plain stat that FAILS also leaves php's slot alone, and this cannot see that — the
+    // filesystem call happens in the caller. So a failing plain stat still evicts here: one extra
+    // question, never a stale answer.
+    abi::emit_symbol_address(emitter, "x9", "_us_gentle");
+    emitter.instruction("ldr x9, [x9]");
+    emitter.instruction("cbnz x9, __rt_uus_plain_kept");                        // it fills nothing, so it empties nothing
+    emit_select_stat_slot(emitter, "__rt_uus_plain_link", "__rt_uus_plain_chosen");
+    emitter.label("__rt_uus_plain_evict");
+    emitter.instruction("str xzr, [x13]");                                      // the slot answers for nothing
+    emitter.instruction("ldr x0, [x15]");
+    emitter.instruction("cbz x0, __rt_uus_plain_kept");
+    emitter.instruction("str xzr, [x15]");                                      // cleared BEFORE the release
+    emitter.instruction("bl __rt_decref_any");                                  // the reference the slot held
+    emitter.label("__rt_uus_plain_kept");
+
     abi::emit_symbol_address(emitter, "x10", "_url_stat_matched");
     emitter.instruction("strb wzr, [x10]");                                     // _url_stat_matched = 0 — caller falls back to the real filesystem
     emitter.instruction("mov x0, #0");                                          // return 0; the caller ignores it when the flag is 0
@@ -446,15 +461,9 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r10");
     emitter.instruction("jmp __rt_uus_cache_cmp_x86");
 
-    // See the AArch64 twin: one entry, so any other path empties it.
+    // See the AArch64 twin: a miss is just a miss.
     emitter.label("__rt_uus_evict_x86");
-    emitter.instruction("mov QWORD PTR [r13], 0");                              // the slot answers for nothing
-    emitter.instruction("mov rax, QWORD PTR [r15]");
-    emitter.instruction("test rax, rax");
-    emitter.instruction("jz __rt_uus_scan_start_x86");
-    emitter.instruction("mov QWORD PTR [r15], 0");                              // cleared BEFORE the release
-    emitter.instruction("call __rt_decref_any");                                // the reference the slot held
-    emitter.instruction("jmp __rt_uus_scan_start_x86");                         // and ASK: the next label is the hit path
+    emitter.instruction("jmp __rt_uus_scan_start_x86");
 
     emitter.label("__rt_uus_cache_hit_x86");
     abi::emit_symbol_address(emitter, "r10", "_url_stat_matched");
@@ -658,6 +667,21 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_uus_ret_x86");                                // share the common return path
 
     emitter.label("__rt_uus_nomatch_x86");
+
+    // See the AArch64 twin: a plain path takes php's one slot unless it never fills it.
+    abi::emit_symbol_address(emitter, "r9", "_us_gentle");
+    emitter.instruction("mov r9, QWORD PTR [r9]");
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jnz __rt_uus_plain_kept_x86");                         // it fills nothing, so it empties nothing
+    emit_select_stat_slot_x86(emitter, "__rt_uus_plain_link_x86", "__rt_uus_plain_chosen_x86");
+    emitter.instruction("mov QWORD PTR [r13], 0");                              // the slot answers for nothing
+    emitter.instruction("mov rax, QWORD PTR [r15]");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_uus_plain_kept_x86");
+    emitter.instruction("mov QWORD PTR [r15], 0");                              // cleared BEFORE the release
+    emitter.instruction("call __rt_decref_any");                                // the reference the slot held
+    emitter.label("__rt_uus_plain_kept_x86");
+
     abi::emit_symbol_address(emitter, "r10", "_url_stat_matched");              // out-flag address
     emitter.instruction("mov BYTE PTR [r10], 0");                               // _url_stat_matched = 0 — caller falls back to the real filesystem
     emitter.instruction("xor eax, eax");                                        // return 0; the caller ignores it when the flag is 0

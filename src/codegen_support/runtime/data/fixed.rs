@@ -1640,6 +1640,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // A path longer than the buffer is simply not cached: the alternative is an allocation whose
     // lifetime nothing owns, and the miss is correct, only slower. A wrapper that reports the path
     // ABSENT is never cached either — measured, php asks again every time.
+    // Whether the stat query now running is one that never FILLS the cache — `file_exists()` and
+    // the access predicates, which answer from `access(2)` on a plain path. Those do not empty it
+    // either: MEASURED, `filesize(A); file_exists(a real file); filesize(A)` is ONE call in php.
+    // Published from the warning head, which every stat query already publishes.
+    out.push_str(&comm_directive("_us_gentle", 8, target));
     out.push_str(&comm_directive("_us_cache_stat_len", 8, target));
     out.push_str(&comm_directive("_us_cache_stat_box", 8, target));
     out.push_str(&comm_directive("_us_cache_stat_path", US_CACHE_PATH_CAP, target));

@@ -277,3 +277,36 @@ echo "done\n";
         out.diagnostics
     );
 }
+
+/// Verifies a wrapper stat that answers FALSE does not empty the slot either.
+///
+/// Emptying was tied to "another path was asked about"; it belongs to "another stat took the
+/// slot". A path the wrapper says is absent puts nothing there, so it takes nothing away.
+#[test]
+fn test_an_absent_wrapper_path_does_not_evict_the_slot() {
+    let out = run(r#"filesize("sc://a"); file_exists("sc://gone"); filesize("sc://a");"#);
+    assert_trace(&out, &["url_stat(sc://a,4)", "url_stat(sc://gone,6)"]);
+}
+
+/// Verifies `file_exists()` on a PLAIN path leaves the wrapper's entry alone.
+///
+/// It answers from `access(2)` and fills no cache, so it empties none — MEASURED, php asks the
+/// wrapper once across the pair where elephc asked twice.
+#[test]
+fn test_a_query_that_fills_nothing_evicts_nothing() {
+    let out = run(r#"filesize("sc://a"); @file_exists(__FILE__); filesize("sc://a");"#);
+    assert_trace(&out, &["url_stat(sc://a,4)"]);
+}
+
+/// Verifies `is_readable()` on a plain path is the same, and `is_file()` is NOT.
+///
+/// The two halves of the rule, in one test: `is_file()` fills php's slot and therefore replaces
+/// what was in it, where the access predicates never touch it.
+#[test]
+fn test_is_readable_leaves_it_and_is_file_takes_it() {
+    let gentle = run(r#"filesize("sc://a"); @is_readable(__FILE__); filesize("sc://a");"#);
+    assert_trace(&gentle, &["url_stat(sc://a,4)"]);
+
+    let takes = run(r#"filesize("sc://b"); @is_file(__FILE__); filesize("sc://b");"#);
+    assert_trace(&takes, &["url_stat(sc://b,4)", "url_stat(sc://b,4)"]);
+}
