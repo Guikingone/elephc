@@ -283,7 +283,15 @@ def _availability_section(b: dict) -> str:
     else:
         route = aot.get("kind")
         if route == "registry":
-            lines.append("- **Compiled (AOT)**: supported by the Elephc code generator.")
+            target_support_kind = (b.get("semantics") or {}).get("target_support_kind")
+            if target_support_kind == "host_only":
+                lines.append(
+                    "- **Compiled (AOT)**: supported on the three executable/release "
+                    "hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are "
+                    "refused at compile time for iOS library targets."
+                )
+            else:
+                lines.append("- **Compiled (AOT)**: supported by the Elephc code generator.")
         else:
             route_text = {
             "language-construct": "a dedicated compiler language-construct path",

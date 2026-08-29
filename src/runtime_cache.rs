@@ -16,12 +16,11 @@
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::codegen;
-use crate::codegen::platform::{Platform, Target};
-use crate::codegen::RuntimeFeatures;
+use crate::codegen::platform::Target;
+use crate::codegen::{Emit, RuntimeFeatures};
 
 mod identity;
 mod storage;
@@ -29,9 +28,11 @@ mod storage;
 mod tests;
 
 use identity::{
-    harden_runtime_cache_dir, runtime_cache_file_name, runtime_cache_key_with_build_identity,
-    runtime_object_is_intact, write_runtime_object_integrity,
+    harden_runtime_cache_dir, runtime_cache_file_name, runtime_object_is_intact,
+    write_runtime_object_integrity,
 };
+#[cfg(test)]
+use identity::runtime_cache_key_with_build_identity;
 use storage::{lease_runtime_object, prune_runtime_cache_objects, RuntimeObjectLease};
 
 /// Runtime cache hit/miss status.
@@ -64,16 +65,50 @@ pub struct PreparedRuntimeObject {
 
 /// Builds (or retrieves from cache) the runtime object file for the given heap size, target, and features.
 /// On cache miss, generates runtime assembly, assembles it to an object file, and caches the result.
-/// The cache key includes compiler version, target, heap size, the PIC mode, and the typed runtime
-/// feature shape. A sidecar checksum validates cache bytes before a hit is accepted.
+/// The cache key includes compiler version, target, heap size, relocation and library-boundary
+/// modes, and the typed runtime feature shape. A sidecar checksum validates cache bytes before a
+/// hit is accepted.
 /// `pic` selects position-independent emission for `--emit cdylib` artifacts so the runtime object can be
 /// linked into a shared library without text-segment relocations. The returned path remains valid until
 /// the `PreparedRuntimeObject` is dropped, even if another compiler prunes the canonical cache entry.
+#[allow(dead_code)]
 pub fn prepare_runtime_object(
     heap_size: usize,
     target: Target,
     features: RuntimeFeatures,
     pic: bool,
+) -> Result<PreparedRuntimeObject, String> {
+    prepare_runtime_object_with_mode(heap_size, target, features, pic, pic)
+}
+
+/// Builds or reuses the runtime object required by one output artifact kind.
+///
+/// A static library uses direct relocations (`pic = false`) but still needs the
+/// recoverable host boundary enabled in runtime fatal paths.
+pub fn prepare_runtime_object_for_emit(
+    heap_size: usize,
+    target: Target,
+    features: RuntimeFeatures,
+    emit: Emit,
+) -> Result<PreparedRuntimeObject, String> {
+    match emit {
+        Emit::Executable => {
+            prepare_runtime_object_with_mode(heap_size, target, features, false, false)
+        }
+        Emit::Cdylib => prepare_runtime_object_with_mode(heap_size, target, features, true, true),
+        Emit::Staticlib => {
+            prepare_runtime_object_with_mode(heap_size, target, features, false, true)
+        }
+    }
+}
+
+/// Implements runtime preparation for independent relocation and library-boundary modes.
+fn prepare_runtime_object_with_mode(
+    heap_size: usize,
+    target: Target,
+    features: RuntimeFeatures,
+    pic: bool,
+    library_boundary: bool,
 ) -> Result<PreparedRuntimeObject, String> {
     let cache_dir = runtime_cache_dir();
     fs::create_dir_all(&cache_dir)
@@ -84,11 +119,12 @@ pub fn prepare_runtime_object(
     // runtime emitters differ. Cargo supplies a source-derived emitter identity
     // at build time, letting a warm cache hit avoid regenerating the full runtime
     // assembly while still rejecting an object from a different source revision.
-    let cache_key = runtime_cache_key_with_build_identity(
+    let cache_key = identity::runtime_cache_key_with_build_identity_and_boundary(
         heap_size,
         target,
         features,
         pic,
+        library_boundary,
         env!("ELEPHC_RUNTIME_BUILD_ID").as_bytes(),
     );
     let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, cache_key));
@@ -107,8 +143,13 @@ pub fn prepare_runtime_object(
         }
     }
 
-    let runtime_asm =
-        codegen::generate_runtime_with_features_pic(heap_size, target, features, pic);
+    let runtime_asm = codegen::generate_runtime_with_features_mode(
+        heap_size,
+        target,
+        features,
+        pic,
+        library_boundary,
+    );
 
     let unique = format!(
         "{}_{}",
@@ -132,10 +173,9 @@ pub fn prepare_runtime_object(
         )
     })?;
 
-    let mut assembler = Command::new(target.assembler_cmd());
-    if target.platform == Platform::MacOS {
-        assembler.args(["-arch", target.darwin_arch_name()]);
-    }
+    // Shared with the user object's assembly: both must carry the same Mach-O
+    // platform, or ld rejects whichever one disagrees.
+    let mut assembler = crate::linker::assembler_command(target);
     assembler.arg("-o").arg(&temp_obj_path).arg(&temp_asm_path);
     let assembler_status = assembler.status().map_err(|err| {
         format!(
@@ -173,7 +213,13 @@ pub fn prepare_runtime_object(
         }
     };
     let Some(prepared) = lease_runtime_object(&cache_path, &integrity_path, status)? else {
-        return prepare_runtime_object(heap_size, target, features, pic);
+        return prepare_runtime_object_with_mode(
+            heap_size,
+            target,
+            features,
+            pic,
+            library_boundary,
+        );
     };
     prune_runtime_cache_objects(&cache_dir, &cache_path);
     Ok(prepared)

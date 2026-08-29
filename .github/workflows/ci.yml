@@ -916,12 +916,18 @@ jobs:
       - name: Materialize catalog PCRE2 from verified source
         shell: bash
         run: |
-          ./target/debug/elephc native add pcre2 \
-            --target "${{ matrix.target }}" \
-            --manifest-path examples/date-json-regex/elephc.toml
+          for example in date-json-regex eval_regex hello-preg; do
+            ./target/debug/elephc native add pcre2 \
+              --target "${{ matrix.target }}" \
+              --manifest-path "examples/$example/elephc.toml"
+          done
           git diff --exit-code -- \
             examples/date-json-regex/elephc.toml \
-            examples/date-json-regex/elephc.lock
+            examples/date-json-regex/elephc.lock \
+            examples/eval_regex/elephc.toml \
+            examples/eval_regex/elephc.lock \
+            examples/hello-preg/elephc.toml \
+            examples/hello-preg/elephc.lock
 
       - name: Materialize catalog zlib and verify locked offline reuse
         shell: bash

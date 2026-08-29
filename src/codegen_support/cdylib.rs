@@ -1,14 +1,14 @@
 //! Purpose:
-//! Emits the cdylib-only C ABI boundary, including scalar trampolines, owned
+//! Emits the library C ABI boundary, including scalar trampolines, owned
 //! binary-string marshaling, lifecycle functions, and recoverable diagnostics.
 //!
 //! Called from:
-//! - `crate::codegen::finalize_user_asm()` for `Emit::Cdylib` artifacts.
+//! - `crate::codegen::finalize_user_asm()` for cdylib and staticlib artifacts.
 //!
 //! Key details:
 //! - Scalar exports retain their original C signatures and recover failures through
 //!   `elephc_last_status()` plus the shared diagnostic channel.
-//! - Exact `string -> string` exports return status plus caller-owned output storage.
+//! - String-return exports return status plus caller-owned output storage for every fixed input shape.
 //! - Nested native boundaries isolate concat scratch state and restore their caller.
 
 use crate::codegen_support::abi;
@@ -16,12 +16,12 @@ use crate::codegen_support::data_section::DataSection;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::{Arch, Target};
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
 };
-use crate::exports::{is_string_roundtrip_signature, ExportedFunction, ELEPHC_ABI_VERSION};
-use crate::names::function_symbol;
+use crate::exports::{is_string_return_signature, ExportedFunction, ELEPHC_ABI_VERSION};
 
 mod boundary;
+mod owned_string;
 
 pub(crate) const STATUS_OK: i32 = 0;
 pub(crate) const STATUS_INVALID_ARGUMENT: i32 = 1;
@@ -37,29 +37,7 @@ const LAST_ERROR_PRESENT: &str = "_elephc_last_error_present";
 const LAST_ERROR_CAPACITY: usize = 4096;
 const CONCAT_SCRATCH_CAPACITY: i64 = 65_536;
 
-const AARCH64_FRAME_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 80;
-const AARCH64_FOOTER_OFFSET: usize = AARCH64_FRAME_SIZE - 16;
-const AARCH64_INPUT_PTR_OFFSET: usize = TRY_HANDLER_SLOT_SIZE;
-const AARCH64_INPUT_LEN_OFFSET: usize = TRY_HANDLER_SLOT_SIZE + 8;
-const AARCH64_OUT_PTR_OFFSET: usize = TRY_HANDLER_SLOT_SIZE + 16;
-const AARCH64_OUT_LEN_OFFSET: usize = TRY_HANDLER_SLOT_SIZE + 24;
-const AARCH64_RESULT_PTR_OFFSET: usize = TRY_HANDLER_SLOT_SIZE + 32;
-const AARCH64_RESULT_LEN_OFFSET: usize = TRY_HANDLER_SLOT_SIZE + 40;
-const AARCH64_OWNED_PTR_OFFSET: usize = TRY_HANDLER_SLOT_SIZE + 48;
-const AARCH64_CONCAT_OFFSET: usize = 8;
-
-const X86_FRAME_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 96;
-const X86_HANDLER_BASE: usize = X86_FRAME_SIZE;
-const X86_INPUT_PTR_OFFSET: usize = 8;
-const X86_INPUT_LEN_OFFSET: usize = 16;
-const X86_OUT_PTR_OFFSET: usize = 24;
-const X86_OUT_LEN_OFFSET: usize = 32;
-const X86_RESULT_PTR_OFFSET: usize = 40;
-const X86_RESULT_LEN_OFFSET: usize = 48;
-const X86_OWNED_PTR_OFFSET: usize = 56;
-const X86_CONCAT_OFFSET: usize = 64;
-
-/// Reserves the fixed, allocation-free state shared by every cdylib export.
+/// Reserves the fixed, allocation-free state shared by every library export.
 fn reserve_boundary_data(data: &mut DataSection) {
     data.add_comm(BOUNDARY_ACTIVE.to_string(), 8);
     data.add_comm(BOUNDARY_STATUS.to_string(), 8);
@@ -83,8 +61,8 @@ pub(crate) fn emit_cdylib_exports(
 
     emit_error_helpers(emitter, target);
     for export in exports {
-        if is_string_roundtrip_signature(&export.sig) {
-            emit_string_export(
+        if is_string_return_signature(&export.sig) {
+            owned_string::emit_owned_string_export(
                 emitter,
                 target,
                 export,
@@ -117,341 +95,6 @@ fn label_suffix(name: &str) -> String {
             }
         })
         .collect()
-}
-
-/// Emits one exact `string -> string` status/out-parameter C ABI wrapper.
-fn emit_string_export(
-    emitter: &mut Emitter,
-    target: Target,
-    export: &ExportedFunction,
-    invalid_error: (&str, usize),
-    allocation_error: (&str, usize),
-    runtime_error: (&str, usize),
-) {
-    let suffix = label_suffix(&export.c_name);
-    let internal = function_symbol(&export.name);
-    let exported = target.extern_symbol(&export.c_name);
-    emitter.blank();
-    emitter.comment(&format!("#[Export] owned string boundary for PHP function {}", export.name));
-    emitter.label_global(&exported);
-    match target.arch {
-        Arch::AArch64 => emit_string_export_aarch64(
-            emitter,
-            &suffix,
-            &internal,
-            invalid_error,
-            allocation_error,
-            runtime_error,
-        ),
-        Arch::X86_64 => emit_string_export_x86_64(
-            emitter,
-            &suffix,
-            &internal,
-            invalid_error,
-            allocation_error,
-            runtime_error,
-        ),
-    }
-}
-
-/// Emits the AArch64 implementation of the owned string boundary.
-fn emit_string_export_aarch64(
-    emitter: &mut Emitter,
-    suffix: &str,
-    internal: &str,
-    invalid_error: (&str, usize),
-    allocation_error: (&str, usize),
-    runtime_error: (&str, usize),
-) {
-    let invalid = format!("L_cdylib_{suffix}_invalid");
-    let invoke = format!("L_cdylib_{suffix}_invoke");
-    let escaped = format!("L_cdylib_{suffix}_escaped");
-    let allocation = format!("L_cdylib_{suffix}_allocation");
-    let allocation_active = format!("L_cdylib_{suffix}_allocation_active");
-    let allocation_release_done = format!("L_cdylib_{suffix}_allocation_release_done");
-    let runtime = format!("L_cdylib_{suffix}_runtime");
-    let exception = format!("L_cdylib_{suffix}_exception");
-    let copy = format!("L_cdylib_{suffix}_copy");
-    let copied = format!("L_cdylib_{suffix}_copied");
-    let skip_release = format!("L_cdylib_{suffix}_skip_release");
-    let finish = format!("L_cdylib_{suffix}_finish");
-    let out_ptr_ready = format!("L_cdylib_{suffix}_out_ptr_ready");
-    let out_len_ready = format!("L_cdylib_{suffix}_out_len_ready");
-
-    emitter.instruction(&format!("sub sp, sp, #{AARCH64_FRAME_SIZE}"));         // reserve the aligned owned-string boundary frame
-    emitter.instruction(&format!("stp x29, x30, [sp, #{AARCH64_FOOTER_OFFSET}]")); // save the native frame pointer and return address
-    emitter.instruction(&format!("add x29, sp, #{AARCH64_FOOTER_OFFSET}"));     // establish the stable wrapper frame pointer
-    emitter.instruction(&format!("str x0, [sp, #{AARCH64_INPUT_PTR_OFFSET}]")); // save the host input pointer across nested calls
-    emitter.instruction(&format!("str x1, [sp, #{AARCH64_INPUT_LEN_OFFSET}]")); // save the authoritative host input length
-    emitter.instruction(&format!("str x2, [sp, #{AARCH64_OUT_PTR_OFFSET}]"));   // save the caller output-pointer address
-    emitter.instruction(&format!("str x3, [sp, #{AARCH64_OUT_LEN_OFFSET}]"));   // save the caller output-length address
-    crate::codegen::stack_guard::emit_lazy_stack_limit_init(
-        emitter,
-        &format!("L_cdylib_{suffix}_stack_limit_ready"),
-    );
-    emitter.instruction(&format!("ldr x0, [sp, #{AARCH64_INPUT_PTR_OFFSET}]")); // restore the host input pointer after the lazy initializer
-    emitter.instruction(&format!("ldr x1, [sp, #{AARCH64_INPUT_LEN_OFFSET}]")); // restore the host input length after the lazy initializer
-    emitter.instruction(&format!("ldr x2, [sp, #{AARCH64_OUT_PTR_OFFSET}]"));   // restore the host output-pointer address after the lazy initializer
-    emitter.instruction(&format!("ldr x3, [sp, #{AARCH64_OUT_LEN_OFFSET}]"));   // restore the host output-length address after the lazy initializer
-    emitter.instruction(&format!("str xzr, [sp, #{AARCH64_RESULT_PTR_OFFSET}]")); // clear the borrowed PHP result pointer slot
-    emitter.instruction(&format!("str xzr, [sp, #{AARCH64_OWNED_PTR_OFFSET}]")); // clear the caller-owned output pointer slot
-    emit_clear_error_inline(emitter);
-    boundary::emit_enter_boundary(emitter, AARCH64_CONCAT_OFFSET, suffix);
-    emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
-
-    emitter.instruction(&format!("cbz x2, {out_ptr_ready}"));                   // clear the output pointer only when the caller supplied its address
-    emitter.instruction("str xzr, [x2]");                                       // clear the caller output pointer before validating arguments
-    emitter.label(&out_ptr_ready);
-    emitter.instruction(&format!("cbz x3, {out_len_ready}"));                   // clear the output length only when the caller supplied its address
-    emitter.instruction("str xzr, [x3]");                                       // clear the caller output length before validating arguments
-    emitter.label(&out_len_ready);
-    emitter.instruction(&format!("cbz x2, {invalid}"));                         // route a missing required pointer to invalid-argument reporting
-    emitter.instruction(&format!("cbz x3, {invalid}"));                         // route a missing required pointer to invalid-argument reporting
-    emitter.instruction(&format!("cbz x1, {invoke}"));                          // accept NULL input storage only when its byte length is zero
-    emitter.instruction(&format!("cbz x0, {invalid}"));                         // route a missing required pointer to invalid-argument reporting
-
-    emitter.label(&invoke);
-    emit_boundary_push_aarch64(emitter, &escaped, AARCH64_FOOTER_OFFSET);
-    emitter.instruction(&format!("ldr x0, [sp, #{AARCH64_INPUT_PTR_OFFSET}]")); // restore the host input pointer for the PHP call
-    emitter.instruction(&format!("ldr x1, [sp, #{AARCH64_INPUT_LEN_OFFSET}]")); // restore the host input length for the PHP call
-    emitter.instruction(&format!("bl {internal}"));                             // invoke the internal PHP body through its native ABI
-    emitter.instruction(&format!("str x1, [sp, #{AARCH64_RESULT_PTR_OFFSET}]")); // save the borrowed PHP result pointer
-    emitter.instruction(&format!("str x2, [sp, #{AARCH64_RESULT_LEN_OFFSET}]")); // save or reload the authoritative PHP result length
-    emitter.instruction("cmn x2, #1");                                          // test the allocation-failure sentinel returned as a string length
-    emitter.instruction(&format!("b.eq {allocation_active}"));                  // recover a sentinel result while the native boundary is installed
-    emitter.instruction("add x0, x2, #1");                                      // include one byte for the convenience trailing NUL
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate caller-owned storage for the exported string result
-    emitter.instruction(&format!("str x0, [sp, #{AARCH64_OWNED_PTR_OFFSET}]")); // save the caller-owned output pointer
-    emitter.instruction(&format!("ldr x9, [sp, #{AARCH64_RESULT_PTR_OFFSET}]")); // load the borrowed PHP result pointer for copying
-    emitter.instruction(&format!("ldr x10, [sp, #{AARCH64_RESULT_LEN_OFFSET}]")); // save or reload the authoritative PHP result length
-    emitter.instruction("mov x11, x0");                                         // keep the owned output base in a copy-loop register
-    emitter.instruction("mov x12, #0");                                         // initialize the binary result copy cursor
-    emitter.label(&copy);
-    emitter.instruction("cmp x12, x10");                                        // compare the copy cursor with the result length
-    emitter.instruction(&format!("b.hs {copied}"));                             // finish once every binary result byte has been copied
-    emitter.instruction("ldrb w13, [x9, x12]");                                 // load one byte from the borrowed PHP result
-    emitter.instruction("strb w13, [x11, x12]");                                // copy one byte into caller-owned output storage
-    emitter.instruction("add x12, x12, #1");                                    // advance the binary result copy cursor
-    emitter.instruction(&format!("b {copy}"));                                  // continue the binary-safe result copy loop
-    emitter.label(&copied);
-    emitter.instruction("strb wzr, [x11, x10]");                                // append the non-authoritative trailing NUL byte
-    emitter.instruction(&format!("ldr x0, [sp, #{AARCH64_RESULT_PTR_OFFSET}]")); // load the PHP result pointer for ownership release
-    emitter.instruction(&format!("ldr x9, [sp, #{AARCH64_INPUT_PTR_OFFSET}]")); // load the host-owned input pointer for alias comparison
-    emitter.instruction("cmp x0, x9");                                          // test whether the PHP result aliases host-owned input
-    emitter.instruction(&format!("b.eq {skip_release}"));                       // preserve a result that aliases the host-owned input buffer
-    emitter.instruction("bl __rt_heap_free_safe");                              // release non-borrowed runtime storage when present
-    emitter.label(&skip_release);
-    emit_boundary_pop_aarch64(emitter, AARCH64_FOOTER_OFFSET);
-    emitter.instruction(&format!("ldr x9, [sp, #{AARCH64_OUT_PTR_OFFSET}]"));   // load the caller output-pointer address
-    emitter.instruction(&format!("ldr x10, [sp, #{AARCH64_OWNED_PTR_OFFSET}]")); // load the caller-owned output pointer
-    emitter.instruction("str x10, [x9]");                                       // publish the caller-owned pointer or authoritative result length
-    emitter.instruction(&format!("ldr x9, [sp, #{AARCH64_OUT_LEN_OFFSET}]"));   // load the caller output-length address
-    emitter.instruction(&format!("ldr x10, [sp, #{AARCH64_RESULT_LEN_OFFSET}]")); // save or reload the authoritative PHP result length
-    emitter.instruction("str x10, [x9]");                                       // publish the caller-owned pointer or authoritative result length
-    emitter.instruction(&format!("mov w0, #{STATUS_OK}"));                      // return the successful native boundary status
-    emitter.instruction(&format!("b {finish}"));                                // join the common native boundary teardown path
-
-    emitter.label(&allocation_active);
-    emit_boundary_pop_aarch64(emitter, AARCH64_FOOTER_OFFSET);
-    emitter.instruction(&format!("b {allocation}"));                            // continue through allocation-failure cleanup and reporting
-
-    emitter.label(&escaped);
-    emit_boundary_pop_aarch64(emitter, AARCH64_FOOTER_OFFSET);
-    abi::emit_load_symbol_to_reg(emitter, "x9", BOUNDARY_STATUS, 0);
-    emitter.instruction(&format!("cmp x9, #{STATUS_ALLOCATION_FAILURE}"));      // classify or return a recoverable allocation failure
-    emitter.instruction(&format!("b.eq {allocation}"));                         // continue through allocation-failure cleanup and reporting
-    emitter.instruction(&format!("cbnz x9, {runtime}"));                        // continue through generic runtime-failure reporting
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
-    emitter.instruction(&format!("cbnz x9, {exception}"));                      // continue through escaping-Throwable diagnostic capture
-    emitter.instruction(&format!("b {runtime}"));                               // continue through generic runtime-failure reporting
-
-    emitter.label(&exception);
-    emitter.instruction("ldr x0, [x9, #8]");                                    // load the escaping Throwable message pointer
-    emitter.instruction("ldr x1, [x9, #16]");                                   // load the escaping Throwable message length
-    emitter.instruction("bl __rt_cdylib_set_error");                            // copy the current diagnostic into stable boundary storage
-    abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    emitter.instruction("bl __rt_decref_any");                                  // release the consumed escaping Throwable object
-    emitter.instruction(&format!("mov w0, #{STATUS_PHP_EXCEPTION}"));           // return the recoverable PHP-exception status
-    emitter.instruction(&format!("b {finish}"));                                // join the common native boundary teardown path
-
-    emitter.label(&allocation);
-    emitter.instruction(&format!("ldr x0, [sp, #{AARCH64_RESULT_PTR_OFFSET}]")); // load any partial PHP result for release
-    emitter.instruction(&format!("ldr x9, [sp, #{AARCH64_INPUT_PTR_OFFSET}]")); // load the host input pointer for alias comparison
-    emitter.instruction("cmp x0, x9");                                          // avoid releasing a result borrowed from the host input
-    emitter.instruction(&format!("b.eq {allocation_release_done}"));            // skip result release when no owned PHP buffer exists
-    emitter.instruction("bl __rt_heap_free_safe");                              // release non-borrowed runtime storage when present
-    emitter.label(&allocation_release_done);
-    emit_set_static_error_aarch64(emitter, allocation_error);
-    emitter.instruction(&format!("mov w0, #{STATUS_ALLOCATION_FAILURE}"));      // classify or return a recoverable allocation failure
-    emitter.instruction(&format!("b {finish}"));                                // join the common native boundary teardown path
-    emitter.label(&runtime);
-    emit_set_static_error_aarch64(emitter, runtime_error);
-    emitter.instruction(&format!("mov w0, #{STATUS_RUNTIME_FAILURE}"));         // return the generic recoverable runtime-failure status
-    emitter.instruction(&format!("b {finish}"));                                // join the common native boundary teardown path
-    emitter.label(&invalid);
-    emit_set_static_error_aarch64(emitter, invalid_error);
-    emitter.instruction(&format!("mov w0, #{STATUS_INVALID_ARGUMENT}"));        // return the invalid-argument boundary status
-
-    emitter.label(&finish);
-    abi::emit_store_reg_to_symbol(emitter, "x0", BOUNDARY_STATUS, 0);
-    boundary::emit_leave_boundary(emitter, AARCH64_CONCAT_OFFSET);
-    emitter.instruction(&format!("ldp x29, x30, [sp, #{AARCH64_FOOTER_OFFSET}]")); // restore the native frame pointer and return address
-    emitter.instruction(&format!("add sp, sp, #{AARCH64_FRAME_SIZE}"));         // release the aligned owned-string boundary frame
-    emitter.instruction("ret");                                                 // return to the current C-ABI caller
-}
-
-/// Emits the x86_64 System V implementation of the owned string boundary.
-fn emit_string_export_x86_64(
-    emitter: &mut Emitter,
-    suffix: &str,
-    internal: &str,
-    invalid_error: (&str, usize),
-    allocation_error: (&str, usize),
-    runtime_error: (&str, usize),
-) {
-    let invalid = format!("L_cdylib_{suffix}_invalid");
-    let invoke = format!("L_cdylib_{suffix}_invoke");
-    let escaped = format!("L_cdylib_{suffix}_escaped");
-    let allocation = format!("L_cdylib_{suffix}_allocation");
-    let allocation_active = format!("L_cdylib_{suffix}_allocation_active");
-    let allocation_release_done = format!("L_cdylib_{suffix}_allocation_release_done");
-    let runtime = format!("L_cdylib_{suffix}_runtime");
-    let exception = format!("L_cdylib_{suffix}_exception");
-    let copy = format!("L_cdylib_{suffix}_copy");
-    let copied = format!("L_cdylib_{suffix}_copied");
-    let skip_release = format!("L_cdylib_{suffix}_skip_release");
-    let finish = format!("L_cdylib_{suffix}_finish");
-    let out_ptr_ready = format!("L_cdylib_{suffix}_out_ptr_ready");
-    let out_len_ready = format!("L_cdylib_{suffix}_out_len_ready");
-
-    emitter.instruction("push rbp");                                            // save the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the stable wrapper frame pointer
-    emitter.instruction(&format!("sub rsp, {X86_FRAME_SIZE}"));                 // reserve aligned owned-string boundary storage
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_INPUT_PTR_OFFSET}], rdi")); // save the host input pointer across nested calls
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_INPUT_LEN_OFFSET}], rsi")); // save the authoritative host input length
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_OUT_PTR_OFFSET}], rdx")); // save the caller output-pointer address
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_OUT_LEN_OFFSET}], rcx")); // save the caller output-length address
-    crate::codegen::stack_guard::emit_lazy_stack_limit_init(
-        emitter,
-        &format!("L_cdylib_{suffix}_stack_limit_ready"),
-    );
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {X86_INPUT_PTR_OFFSET}]")); // restore the host input pointer after the lazy initializer
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {X86_INPUT_LEN_OFFSET}]")); // restore the host input length after the lazy initializer
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {X86_OUT_PTR_OFFSET}]")); // restore the host output-pointer address after the lazy initializer
-    emitter.instruction(&format!("mov rcx, QWORD PTR [rbp - {X86_OUT_LEN_OFFSET}]")); // restore the host output-length address after the lazy initializer
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_RESULT_PTR_OFFSET}], 0")); // clear the borrowed PHP result pointer slot
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_OWNED_PTR_OFFSET}], 0")); // clear the caller-owned output pointer slot
-    emit_clear_error_inline(emitter);
-    boundary::emit_enter_boundary(emitter, X86_CONCAT_OFFSET, suffix);
-    emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
-
-    emitter.instruction("test rdx, rdx");                                       // check whether the caller supplied an output pointer address
-    emitter.instruction(&format!("je {out_ptr_ready}"));                        // clear the output pointer only when the caller supplied its address
-    emitter.instruction("mov QWORD PTR [rdx], 0");                              // clear the caller output pointer before validating arguments
-    emitter.label(&out_ptr_ready);
-    emitter.instruction("test rcx, rcx");                                       // check whether the caller supplied an output length address
-    emitter.instruction(&format!("je {out_len_ready}"));                        // clear the output length only when the caller supplied its address
-    emitter.instruction("mov QWORD PTR [rcx], 0");                              // clear the caller output length before validating arguments
-    emitter.label(&out_len_ready);
-    emitter.instruction("test rdx, rdx");                                       // validate the required output pointer address
-    emitter.instruction(&format!("je {invalid}"));                              // route a missing required pointer to invalid-argument reporting
-    emitter.instruction("test rcx, rcx");                                       // validate the required output length address
-    emitter.instruction(&format!("je {invalid}"));                              // route a missing required pointer to invalid-argument reporting
-    emitter.instruction("test rsi, rsi");                                       // accept NULL input storage only for an empty input string
-    emitter.instruction(&format!("je {invoke}"));                               // accept NULL input storage only when its byte length is zero
-    emitter.instruction("test rdi, rdi");                                       // validate storage for a non-empty input string
-    emitter.instruction(&format!("je {invalid}"));                              // route a missing required pointer to invalid-argument reporting
-
-    emitter.label(&invoke);
-    emit_boundary_push_x86_64(emitter, &escaped, X86_HANDLER_BASE);
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {X86_INPUT_PTR_OFFSET}]")); // restore the host input pointer for the PHP call
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {X86_INPUT_LEN_OFFSET}]")); // restore the host input length for the PHP call
-    emitter.instruction(&format!("call {internal}"));                           // invoke the internal PHP body through its native ABI
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_RESULT_PTR_OFFSET}], rax")); // save the borrowed PHP result pointer
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_RESULT_LEN_OFFSET}], rdx")); // save or reload the authoritative PHP result length
-    emitter.instruction("cmp rdx, -1");                                         // test the allocation-failure sentinel returned as a string length
-    emitter.instruction(&format!("je {allocation_active}"));                    // recover a sentinel result while the native boundary is installed
-    emitter.instruction("lea rax, [rdx + 1]");                                  // include one byte for the convenience trailing NUL
-    emitter.instruction("call __rt_heap_alloc");                                // allocate caller-owned storage for the exported string result
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {X86_OWNED_PTR_OFFSET}], rax")); // save the caller-owned output pointer
-    emitter.instruction(&format!("mov r8, QWORD PTR [rbp - {X86_RESULT_PTR_OFFSET}]")); // load the borrowed PHP result pointer for copying
-    emitter.instruction(&format!("mov r9, QWORD PTR [rbp - {X86_RESULT_LEN_OFFSET}]")); // save or reload the authoritative PHP result length
-    emitter.instruction("mov r10, rax");                                        // keep the owned output base in a copy-loop register
-    emitter.instruction("xor r11d, r11d");                                      // initialize the binary result copy cursor
-    emitter.label(&copy);
-    emitter.instruction("cmp r11, r9");                                         // compare the copy cursor with the result length
-    emitter.instruction(&format!("jae {copied}"));                              // finish once every binary result byte has been copied
-    emitter.instruction("movzx eax, BYTE PTR [r8 + r11]");                      // load one byte from the borrowed PHP result
-    emitter.instruction("mov BYTE PTR [r10 + r11], al");                        // copy one byte into caller-owned output storage
-    emitter.instruction("add r11, 1");                                          // advance the binary result copy cursor
-    emitter.instruction(&format!("jmp {copy}"));                                // continue the binary-safe result copy loop
-    emitter.label(&copied);
-    emitter.instruction("mov BYTE PTR [r10 + r9], 0");                          // append the non-authoritative trailing NUL byte
-    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {X86_RESULT_PTR_OFFSET}]")); // load the PHP result pointer for ownership release
-    emitter.instruction(&format!("cmp rax, QWORD PTR [rbp - {X86_INPUT_PTR_OFFSET}]")); // test whether the result aliases host-owned input
-    emitter.instruction(&format!("je {skip_release}"));                         // preserve a result that aliases the host-owned input buffer
-    emitter.instruction("call __rt_heap_free_safe");                            // release non-borrowed runtime storage when present
-    emitter.label(&skip_release);
-    emit_boundary_pop_x86_64(emitter, X86_HANDLER_BASE);
-    emitter.instruction(&format!("mov r8, QWORD PTR [rbp - {X86_OUT_PTR_OFFSET}]")); // load the caller output-pointer address
-    emitter.instruction(&format!("mov r9, QWORD PTR [rbp - {X86_OWNED_PTR_OFFSET}]")); // load the caller-owned output pointer
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the caller-owned pointer or authoritative result length
-    emitter.instruction(&format!("mov r8, QWORD PTR [rbp - {X86_OUT_LEN_OFFSET}]")); // load the caller output-length address
-    emitter.instruction(&format!("mov r9, QWORD PTR [rbp - {X86_RESULT_LEN_OFFSET}]")); // save or reload the authoritative PHP result length
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the caller-owned pointer or authoritative result length
-    emitter.instruction(&format!("mov eax, {STATUS_OK}"));                      // return the successful native boundary status
-    emitter.instruction(&format!("jmp {finish}"));                              // join the common native boundary teardown path
-
-    emitter.label(&allocation_active);
-    emit_boundary_pop_x86_64(emitter, X86_HANDLER_BASE);
-    emitter.instruction(&format!("jmp {allocation}"));                          // continue through allocation-failure cleanup and reporting
-
-    emitter.label(&escaped);
-    emit_boundary_pop_x86_64(emitter, X86_HANDLER_BASE);
-    abi::emit_load_symbol_to_reg(emitter, "r9", BOUNDARY_STATUS, 0);
-    emitter.instruction(&format!("cmp r9, {STATUS_ALLOCATION_FAILURE}"));       // classify or return a recoverable allocation failure
-    emitter.instruction(&format!("je {allocation}"));                           // continue through allocation-failure cleanup and reporting
-    emitter.instruction("test r9, r9");                                         // distinguish Throwable propagation from status escapes
-    emitter.instruction(&format!("jne {runtime}"));                             // continue through generic runtime-failure reporting
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_exc_value", 0);
-    emitter.instruction("test r9, r9");                                         // check whether a Throwable escaped the PHP body
-    emitter.instruction(&format!("jne {exception}"));                           // continue through escaping-Throwable diagnostic capture
-    emitter.instruction(&format!("jmp {runtime}"));                             // continue through generic runtime-failure reporting
-
-    emitter.label(&exception);
-    emitter.instruction("mov rdi, QWORD PTR [r9 + 8]");                         // load the escaping Throwable message pointer
-    emitter.instruction("mov rsi, QWORD PTR [r9 + 16]");                        // load the escaping Throwable message length
-    emitter.instruction("call __rt_cdylib_set_error");                          // copy the current diagnostic into stable boundary storage
-    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    emitter.instruction("call __rt_decref_any");                                // release the consumed escaping Throwable object
-    emitter.instruction(&format!("mov eax, {STATUS_PHP_EXCEPTION}"));           // return the recoverable PHP-exception status
-    emitter.instruction(&format!("jmp {finish}"));                              // join the common native boundary teardown path
-
-    emitter.label(&allocation);
-    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {X86_RESULT_PTR_OFFSET}]")); // load any partial PHP result for release
-    emitter.instruction(&format!("cmp rax, QWORD PTR [rbp - {X86_INPUT_PTR_OFFSET}]")); // avoid releasing host-owned input storage
-    emitter.instruction(&format!("je {allocation_release_done}"));              // skip result release when no owned PHP buffer exists
-    emitter.instruction("call __rt_heap_free_safe");                            // release non-borrowed runtime storage when present
-    emitter.label(&allocation_release_done);
-    emit_set_static_error_x86_64(emitter, allocation_error);
-    emitter.instruction(&format!("mov eax, {STATUS_ALLOCATION_FAILURE}"));      // classify or return a recoverable allocation failure
-    emitter.instruction(&format!("jmp {finish}"));                              // join the common native boundary teardown path
-    emitter.label(&runtime);
-    emit_set_static_error_x86_64(emitter, runtime_error);
-    emitter.instruction(&format!("mov eax, {STATUS_RUNTIME_FAILURE}"));         // return the generic recoverable runtime-failure status
-    emitter.instruction(&format!("jmp {finish}"));                              // join the common native boundary teardown path
-    emitter.label(&invalid);
-    emit_set_static_error_x86_64(emitter, invalid_error);
-    emitter.instruction(&format!("mov eax, {STATUS_INVALID_ARGUMENT}"));        // return the invalid-argument boundary status
-
-    emitter.label(&finish);
-    abi::emit_store_reg_to_symbol(emitter, "rax", BOUNDARY_STATUS, 0);
-    boundary::emit_leave_boundary(emitter, X86_CONCAT_OFFSET);
-    emitter.instruction("mov rsp, rbp");                                        // release wrapper locals through the stable frame pointer
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return to the current C-ABI caller
 }
 
 /// Pushes the cdylib exception handler record and snapshots it with `setjmp` on AArch64.
@@ -690,11 +333,11 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::{Platform, Target};
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
     use crate::span::Span;
     use crate::types::{FunctionSig, PhpType};
 
-    /// Builds one exact `string -> string` export fixture.
+    /// Builds one single-string-input owned-result export fixture.
     fn string_export() -> ExportedFunction {
         ExportedFunction {
             name: "roundtrip".to_string(),
@@ -732,9 +375,7 @@ mod tests {
         assert!(asm.contains("sub x9, x9, #1"));
         assert!(asm.contains("_elephc_abi_version:"));
         assert!(asm.contains("bl __rt_stack_limit_init"));
-        let saved_host_args = asm.find(&format!(
-            "str x3, [sp, #{AARCH64_OUT_LEN_OFFSET}]"
-        )).unwrap();
+        let saved_host_args = asm.find("stur x3, [x29, #-32]").unwrap();
         let lazy_init = asm.find("bl __rt_stack_limit_init").unwrap();
         let boundary_push = asm.find("bl _setjmp").unwrap();
         assert!(
@@ -742,6 +383,43 @@ mod tests {
             "lazy stack init must follow host-argument preservation and precede boundary entry:\n{asm}"
         );
         assert!(data.emit(target).contains(LAST_ERROR_BUFFER));
+    }
+
+    /// Pins the ABI-v3 Darwin boundary to real iOS device and Simulator targets,
+    /// including the persisted cache key and Mach-O linker platform token.
+    #[test]
+    fn emits_ios_aarch64_v3_boundary_with_distinct_target_identity() {
+        for (variant, cache_key, macho_platform) in [
+            (AppleVariant::IOS, "ios-arm64", "ios"),
+            (
+                AppleVariant::IOSSimulator,
+                "ios-sim-arm64",
+                "ios-simulator",
+            ),
+        ] {
+            let target = Target::new_apple(Arch::AArch64, variant);
+            assert_eq!(target.as_str(), cache_key);
+            assert_eq!(target.apple_platform_name(), macho_platform);
+
+            let mut emitter = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let export = string_export();
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            let asm = emitter.output();
+
+            assert!(
+                asm.contains(".globl _roundtrip\n_roundtrip:"),
+                "{cache_key}: missing public Darwin export"
+            );
+            assert!(
+                asm.contains("stur x2, [x29, #-24]")
+                    && asm.contains("stur x3, [x29, #-32]"),
+                "{cache_key}: missing ABI-v3 output-address preservation:\n{asm}"
+            );
+            assert!(asm.contains("_elephc_abi_version:"));
+            assert!(asm.contains(&format!("mov w0, #{ELEPHC_ABI_VERSION}")));
+            assert!(data.emit(target).contains(LAST_ERROR_BUFFER));
+        }
     }
 
     /// AArch64 lifecycle initialization preserves the host return address around
@@ -788,9 +466,7 @@ mod tests {
         assert!(asm.contains("sub r10, 1"));
         assert!(asm.contains("elephc_free:"));
         assert!(asm.contains("call __rt_stack_limit_init"));
-        let saved_host_args = asm.find(&format!(
-            "mov QWORD PTR [rbp - {X86_OUT_LEN_OFFSET}], rcx"
-        )).unwrap();
+        let saved_host_args = asm.find("mov QWORD PTR [rbp - 32], rcx").unwrap();
         let lazy_init = asm.find("call __rt_stack_limit_init").unwrap();
         let boundary_push = asm.find("call setjmp").unwrap();
         assert!(
@@ -799,12 +475,14 @@ mod tests {
         );
     }
 
-    /// Every supported target reloads all four owned-string host arguments after the
-    /// ordinary lazy-initializer call and before dereferencing either output address.
+    /// Every supported target saves all four owned-string host arguments before the
+    /// lazy initializer and reloads output addresses from stable frame slots afterward.
     #[test]
-    fn restores_owned_string_host_arguments_after_lazy_stack_init_for_all_targets() {
+    fn preserves_owned_string_host_arguments_across_lazy_stack_init_for_all_targets() {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
             Target::new(Platform::Linux, Arch::AArch64),
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
@@ -814,31 +492,40 @@ mod tests {
             emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
             let asm = emitter.output();
             let lazy_init = asm.find("__rt_stack_limit_init").unwrap();
-            let first_output_clear = match target.arch {
-                Arch::AArch64 => asm.find("str xzr, [x2]").unwrap(),
-                Arch::X86_64 => asm.find("mov QWORD PTR [rdx], 0").unwrap(),
+            let first_output_load = match target.arch {
+                Arch::AArch64 => asm[lazy_init..].find("ldur x9, [x29, #-24]").unwrap() + lazy_init,
+                Arch::X86_64 => {
+                    asm[lazy_init..]
+                        .find("mov r10, QWORD PTR [rbp - 24]")
+                        .unwrap()
+                        + lazy_init
+                }
             };
-            let restorations = match target.arch {
+            let saved_arguments = match target.arch {
                 Arch::AArch64 => [
-                    format!("ldr x0, [sp, #{AARCH64_INPUT_PTR_OFFSET}]"),
-                    format!("ldr x1, [sp, #{AARCH64_INPUT_LEN_OFFSET}]"),
-                    format!("ldr x2, [sp, #{AARCH64_OUT_PTR_OFFSET}]"),
-                    format!("ldr x3, [sp, #{AARCH64_OUT_LEN_OFFSET}]"),
+                    "stur x0, [x29, #-8]",
+                    "stur x1, [x29, #-16]",
+                    "stur x2, [x29, #-24]",
+                    "stur x3, [x29, #-32]",
                 ],
                 Arch::X86_64 => [
-                    format!("mov rdi, QWORD PTR [rbp - {X86_INPUT_PTR_OFFSET}]"),
-                    format!("mov rsi, QWORD PTR [rbp - {X86_INPUT_LEN_OFFSET}]"),
-                    format!("mov rdx, QWORD PTR [rbp - {X86_OUT_PTR_OFFSET}]"),
-                    format!("mov rcx, QWORD PTR [rbp - {X86_OUT_LEN_OFFSET}]"),
+                    "mov QWORD PTR [rbp - 8], rdi",
+                    "mov QWORD PTR [rbp - 16], rsi",
+                    "mov QWORD PTR [rbp - 24], rdx",
+                    "mov QWORD PTR [rbp - 32], rcx",
                 ],
             };
-            for restoration in restorations {
-                let restored = asm[lazy_init..].find(&restoration).unwrap() + lazy_init;
+            for saved_argument in saved_arguments {
+                let saved = asm.find(saved_argument).unwrap();
                 assert!(
-                    restored < first_output_clear,
-                    "{target:?} used an output address before restoring `{restoration}`:\n{asm}"
+                    saved < lazy_init,
+                    "{target:?} did not preserve `{saved_argument}` before lazy initialization:\n{asm}"
                 );
             }
+            assert!(
+                lazy_init < first_output_load,
+                "{target:?} loaded an output address before lazy initialization completed:\n{asm}"
+            );
         }
     }
 }

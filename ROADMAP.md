@@ -1069,10 +1069,10 @@ statics, and static class properties all reset between requests). Run it with
 
 ## v0.27.x — Shared and static libraries (C ABI)
 
-- [x] `--emit cdylib` flag, export PHP functions as C-callable symbols via `#[Export]` (shipped early; supersedes the planned `--lib` spelling)
+- [x] `--emit cdylib` flag, export PHP functions as C-callable symbols via `#[Export]`
 - [x] `#[Export]` attribute for symbol selection (supersedes the planned `--export` flag spelling)
-- [x] `.dylib` / `.so` output on all supported targets (macOS aarch64, Linux aarch64, Linux x86_64)
-- [ ] `.a` static library output
+- [x] `.dylib` / `.so` output on all supported targets (macOS aarch64, iOS device/simulator aarch64, Linux aarch64, Linux x86_64)
+- [x] `.a` static library output through `--emit staticlib` (`--emit lib` is its alias, not a cdylib spelling)
 - [ ] Multi-file library compilation
 - [x] Symbol visibility control — ELF hidden and Mach-O private-extern directives keep every compiler/runtime/CRT implementation symbol private; the public table contains only `#[Export]` trampolines plus `elephc_abi_version`, `elephc_init`, `elephc_shutdown`, `elephc_last_status`, `elephc_last_error`, and `elephc_free`
 - [x] Binary-safe string return values for the exact `string -> string` export ABI — status/out-parameters, independent caller ownership through `elephc_free`, and recoverable PHP-exception/allocation failures

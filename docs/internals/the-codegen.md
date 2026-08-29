@@ -117,8 +117,9 @@ Literal `eval()` calls reach EIR as `EvalLiteralCall`. The shared planner in
 
 The lowerer preserves PHP source evaluation order before ABI materialization,
 boxes values into the shared `Mixed` cell representation, and uses the normal
-target-aware call helpers on macOS ARM64, Linux ARM64, and Linux x86_64. See
-[Eval Runtime Architecture](eval-runtime.md) for the complete boundary.
+target-aware call helpers on the three executable hosts: macOS ARM64, Linux
+ARM64, and Linux x86_64. See [Eval Runtime Architecture](eval-runtime.md) for the
+complete boundary.
 
 ## Emit Modes
 
@@ -126,8 +127,9 @@ target-aware call helpers on macOS ARM64, Linux ARM64, and Linux x86_64. See
 cdylib` emits a PIC user object with `#[Export]` trampolines, ABI/error/memory
 helpers, and lifecycle symbols for embedding hosts. Every export uses a native
 exception boundary; scalar exports preserve their C signatures and publish
-status through `elephc_last_status()`, while exact `string -> string` exports
-return status directly and copy the PHP byte string into caller-owned heap
+status through `elephc_last_status()`, while string-return exports preserve
+their fixed scalar/string inputs, append output pointer/length parameters,
+return status directly, and copy the PHP byte string into caller-owned heap
 storage. Boundary nesting is explicit and concat scratch state is saved and
 restored around each entry. Internal symbols are hidden on ELF (including
 driver-supplied `_init`/`_fini`) and private externs on Mach-O, so separate

@@ -100,7 +100,7 @@ var_dump(array_key_exists(0, $a));
 
 /// Returns the runtime assembly emitted for one supported target.
 fn runtime_asm_for(arch: Arch, platform: Platform) -> String {
-    elephc::codegen::generate_runtime(8_388_608, Target { arch, platform })
+    elephc::codegen::generate_runtime(8_388_608, Target::new(platform, arch))
 }
 
 /// Verifies the AArch64 runtime defines `__rt_php_float_to_int` with its integer decode.

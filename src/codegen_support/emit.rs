@@ -80,6 +80,17 @@ impl Emitter {
         emitter
     }
 
+    /// Returns a non-PIC emitter configured for the recoverable library ABI.
+    ///
+    /// Static archives are relocated once by the consuming application's linker,
+    /// so they keep direct PC-relative data references while publishing the same
+    /// fatal-recovery boundary as a dynamically loaded library.
+    pub fn new_staticlib(target: Target) -> Self {
+        let mut emitter = Self::new(target);
+        emitter.cdylib_boundary = true;
+        emitter
+    }
+
     /// Emits a single assembly instruction with standard indentation.
     pub fn instruction(&mut self, instr: &str) {
         let _ = writeln!(self.buf, "    {}", instr);

@@ -591,7 +591,7 @@ pub(crate) fn compile(config: CliConfig) {
     };
     timings.record_since("ir-lower", phase_started);
 
-    if matches!(emit, Emit::Cdylib) || (check_only && !exported_functions.is_empty()) {
+    if emit.is_library() || (check_only && !exported_functions.is_empty()) {
         if let Err(error) = exports::validate_cdylib_call_graph(&ir_module, &exported_functions) {
             crate::progress::clear();
             errors::report(&error.with_file(filename.to_string()));

@@ -739,7 +739,8 @@ The implementation tracks stable PECL PDO_IBM 1.7.0. Its seven historical
 `PDO::SQL_ATTR_*` constants remain available on PHP 8.0–8.6. `Pdo\Ibm` and its
 shorter `ATTR_*` spellings exist from PHP 8.4; PHP 8.5 deprecates only the
 historical aliases. IBM i/PASE-only `I5_*` constants are deliberately absent
-because elephc's supported targets are macOS and Linux.
+because PDO_IBM targets the three executable/release hosts: macOS ARM64, Linux
+ARM64, and Linux x86_64. It does not claim iOS/unixODBC support.
 
 - **DSNs.** `ibm:<cataloged-database>` uses `SQLConnect`; a body containing `=`
   uses `SQLDriverConnect`. Constructor credentials are appended only when the
@@ -764,9 +765,11 @@ because elephc's supported targets are macOS and Linux.
 - **Connection information.** `ATTR_CLIENT_VERSION` reports `1.7.0` and
   `ATTR_SERVER_INFO` returns the DBMS name. On supported non-PASE targets,
   PDO_IBM does not expose `ATTR_SERVER_VERSION` or connection status.
-- **Targets.** The bridge builds on all three supported targets through unixODBC.
-  A live connection additionally needs a compatible IBM CLI/ODBC driver; IBM's
-  proprietary client is not redistributed by elephc or public CI images.
+- **Targets.** The bridge builds on the three executable/release hosts — macOS
+  ARM64, Linux ARM64, and Linux x86_64 — through unixODBC. It does not target
+  iOS libraries. A live connection additionally needs a compatible IBM CLI/ODBC
+  driver; IBM's proprietary client is not redistributed by elephc or public CI
+  images.
 
 ## PDO_SQLSRV notes
 

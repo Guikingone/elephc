@@ -220,7 +220,7 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
-| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library. |
+| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. |
 | `--emit-asm` | — | off | Write generated assembly instead of a binary. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
@@ -234,7 +234,8 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | `--web-isolation MODE` / `--web-isolation=MODE` | `worker`, `pool`, `request` | `worker` | Bake the web handler process model into the produced binary. Requires `--web`; plain `--web` is exactly `worker`. |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
-be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
+be combined with `--check`, either library emit kind (`cdylib` or `staticlib`),
+`--emit-asm`, or `--emit-ir`. See
 [Output formats and diagnostics](output-and-diagnostics.md).
 
 ### Where the profile comes from
@@ -414,10 +415,12 @@ status and headers with `http_response_code()` and `header()`. See
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. |
+| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. iOS is ARM64-only and emits libraries for an app host, not standalone app executables. |
 
 See [Targets and cross-compilation](targets.md) for the full list of accepted
-spellings.
+spellings. For `ios-arm64` and `ios-sim-arm64`, use `--emit staticlib` (normally)
+or `--emit cdylib`; `--emit executable` is rejected because it would be an
+Elephc CLI process, not a signed iOS application bundle.
 
 ## Optimization and code generation
 

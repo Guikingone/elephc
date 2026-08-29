@@ -5,7 +5,7 @@
 //! - `crate::pipeline::compile()` and its backend stage.
 //!
 //! Key details:
-//! - Shared-library names follow each target platform's conventional suffix.
+//! - Library names follow each target platform's conventional prefix and suffix.
 
 use std::path::{Path, PathBuf};
 
@@ -50,12 +50,13 @@ pub(super) fn output_paths(filename: &str, target: Target, emit: Emit) -> Output
             Platform::Linux => format!("lib{}.so", stem),
             Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         },
+        Emit::Staticlib => format!("lib{}.a", stem),
     };
     OutputPaths {
         asm: parent.join(format!("{}.s", stem)),
         obj: parent.join(format!("{}.o", stem)),
         bin: parent.join(bin_name),
         source_map: parent.join(format!("{}.map", stem)),
-        header: matches!(emit, Emit::Cdylib).then(|| parent.join(format!("lib{}.h", stem))),
+        header: emit.is_library().then(|| parent.join(format!("lib{}.h", stem))),
     }
 }
