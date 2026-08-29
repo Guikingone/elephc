@@ -740,8 +740,9 @@ ini_get_all()['opcache.save_comments'];                              // '0'
 
 A value that does not parse for the directive's type is **ignored** — the
 compile-time value stays, on both surfaces — rather than corrupting the report.
-An environment variable set to the empty string is treated as unset, because
-`getenv()` cannot distinguish the two.
+An environment variable set to the empty string is treated as unset by this INI
+override policy. `getenv()` itself distinguishes a missing name (`false`) from a
+present empty value (`""`).
 
 **Which directives are overridable at run time.** Only the ones elephc merely
 *reports*. Ten `opcache.*` directives are consumed at compile time to bake code

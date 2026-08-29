@@ -31390,7 +31390,7 @@
         "kind": "static",
         "names": [
           "reads_process",
-          "alloc_concat"
+          "alloc_heap"
         ]
       },
       "lowering": {
@@ -31399,13 +31399,13 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
         "values": []
       },
-      "result_type": "shared",
+      "result_type": "checked",
       "runtime_functions": [
         "getenv"
       ],
@@ -31433,7 +31433,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "string|false",
       "variadic": null
     },
     "slug": "getenv",

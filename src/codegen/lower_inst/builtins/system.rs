@@ -694,7 +694,13 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     Ok(())
 }
 
-/// Lowers `getenv(name)` through the target-aware environment lookup helper.
+/// Lowers `getenv(name)` through the target-aware environment lookup helper and
+/// boxes its string-or-false result.
+///
+/// The boxing is what makes the two answers distinguishable. Without it the
+/// result was a plain string, so a variable that is NOT SET came back as `""` —
+/// indistinguishable from one set to the empty string, and `getenv($x) !== false`,
+/// which is the idiom for "is this set", was true for every name.
 pub(crate) fn lower_getenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -703,6 +709,7 @@ pub(crate) fn lower_getenv(
     let name = expect_operand(inst, 0)?;
     require_string(ctx.load_value_to_result(name)?.codegen_repr(), "getenv name")?;
     abi::emit_call_label(ctx.emitter, "__rt_getenv");
+    super::io::box_owned_string_or_false_result(ctx, "getenv");
     store_if_result(ctx, inst)
 }
 

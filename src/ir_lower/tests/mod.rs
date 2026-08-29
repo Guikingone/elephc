@@ -302,10 +302,19 @@ fn unary_string_builtin_coerces_mixed_operand_before_runtime_call() {
 }
 
 /// Verifies descriptor result contracts override checker precision when runtime layouts differ.
+///
+/// Both directions are covered, because the descriptor wins either way and only
+/// one of them is safe to get wrong quietly. `readline` is the narrowing case:
+/// the checker says `string|false`, the backend hands back a plain string, and
+/// the descriptor says so. `getenv` used to be the example here — it no longer
+/// is, because narrowing it was a BUG rather than a layout fact: it made a
+/// variable that is not set indistinguishable from one set to `""`, and
+/// `getenv($x) !== false` true for every name. It now carries the union, and
+/// that is asserted here so the old override cannot come back unnoticed.
 #[test]
 fn builtin_runtime_calls_use_descriptor_result_representations() {
     let module = lower_source(
-        "<?php $encoded = json_encode(INF); $environment = getenv('HOME'); echo $encoded === false; echo strlen($environment);",
+        "<?php $encoded = json_encode(INF); $typed = readline(); $environment = getenv('HOME'); echo $encoded === false; echo strlen($typed); echo $environment === false;",
     );
     let text = print_module(&module);
     assert!(
@@ -316,9 +325,15 @@ fn builtin_runtime_calls_use_descriptor_result_representations() {
     );
     assert!(
         text.lines().any(|line| {
-            line.contains("Str php=string") && line.contains("runtime.getenv")
+            line.contains("Str php=string") && line.contains("runtime.readline")
         }),
-        "getenv must retain the backend's concrete string EIR result: {text}"
+        "readline must retain the backend's concrete string EIR result: {text}"
+    );
+    assert!(
+        text.lines().any(|line| {
+            line.contains("php=string|false") && line.contains("runtime.getenv")
+        }),
+        "getenv must carry string|false: narrowing it hides an unset variable: {text}"
     );
 }
 

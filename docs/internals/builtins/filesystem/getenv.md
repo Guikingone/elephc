@@ -24,8 +24,8 @@ sidebar:
 
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
-- **Result type source**: `shared`
-- **Result ownership**: `may_alias_arguments`
+- **Result type source**: `checked`
+- **Result ownership**: `fresh`
 - **Effects**: `static (2 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function getenv(string $name): mixed
+function getenv(string $name): string|false
 ```
 
 ## What the type checker enforces

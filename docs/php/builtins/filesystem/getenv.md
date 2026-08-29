@@ -8,7 +8,7 @@ sidebar:
 ## getenv()
 
 ```php
-function getenv(string $name): mixed
+function getenv(string $name): string|false
 ```
 
 Gets the value of an environment variable.
@@ -16,7 +16,7 @@ Gets the value of an environment variable.
 **Parameters**:
 - `$name` (`string`)
 
-**Returns**: `mixed`
+**Returns**: `string|false`
 
 ## Availability
 
