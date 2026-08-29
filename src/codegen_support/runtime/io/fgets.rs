@@ -336,13 +336,19 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_pending_take");
     emitter.instruction("cbnz x0, __rt_fgets_wrapper_have_byte");               // a buffered byte needs no wrapper call
 
-    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the wrapper fd
-    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
+    // php's `fgets()` asks the class NOTHING: it fills, and reads what it already knows. See
+    // `emit_stream_eof_known` — asking here put a question to the class that php never puts.
+    // It takes the HANDLE: driven by the descriptor it resolves no state and can never say yes.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_eof_known");
     emitter.instruction("cbnz x0, __rt_fgets_wrapper_done");                    // at EOF: return the bytes gathered so far
     emitter.instruction("ldr x0, [sp, #0]");                                    // the handle carries the chunk size
     emitter.instruction("bl __rt_stream_chunk_size");                           // x0 = how much php would ask for
     emitter.instruction("mov x1, x0");                                          // that is the read length
-    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the wrapper fd
+    // The HANDLE, not the descriptor: the read posts the wrapper's end-of-file answer on the
+    // stream, and only the handle reaches it. Driven by the fd that answer landed nowhere, and
+    // the loop read an extra empty chunk at every line that did not end in a newline.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
     emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = len
     emitter.instruction("cbz x2, __rt_fgets_wrapper_done");                     // an empty read ends the line
     emitter.instruction("stp x1, x2, [sp, #64]");                               // the chunk outlives the release calls
@@ -616,14 +622,16 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");
     emitter.instruction("jnz __rt_fgets_wrapper_have_byte_x86");                // a buffered byte needs no wrapper call
 
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the wrapper fd
-    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
+    // See the AArch64 arm: it takes the HANDLE, not the descriptor.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_eof_known");
     emitter.instruction("test rax, rax");                                       // at EOF?
     emitter.instruction("jnz __rt_fgets_wrapper_done_x86");                     // at EOF: return the bytes gathered so far
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the handle carries the chunk size
     emitter.instruction("call __rt_stream_chunk_size");                         // rax = how much php would ask for
     emitter.instruction("mov rsi, rax");                                        // that is the read length
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the wrapper fd
+    // See the AArch64 arm: the HANDLE, not the descriptor.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
     emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = len
     emitter.instruction("test rdx, rdx");                                       // zero-length read?
     emitter.instruction("jz __rt_fgets_wrapper_done_x86");                      // an empty read ends the line

@@ -14,6 +14,63 @@ use crate::codegen_support::runtime::resources::layout::{
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+/// Emits `__rt_stream_eof_known(handle)`: is this stream KNOWN to be finished?
+///
+/// Answers 1 only when the holding area is empty and the read has already posted `stream_eof()`'s
+/// answer. It never asks the class — that is the whole point. A fill loop that asks before reading
+/// makes the class see a question php never puts to it, and gets nothing in return: php fills, and
+/// reads what it already knows.
+pub fn emit_stream_eof_known(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: stream_eof_known ---");
+    emitter.label_global("__rt_stream_eof_known");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #16");
+            emitter.instruction("stp x29, x30, [sp, #0]");
+            emitter.instruction("mov x29, sp");
+            emitter.instruction("bl __rt_stream_state");
+            emitter.instruction("cbz x0, __rt_sek_no");                         // no state: nothing is known
+            emitter.instruction(&format!("ldr x9, [x0, #{STREAM_PENDING_LEN_OFFSET}]"));
+            emitter.instruction(&format!("ldr x10, [x0, #{STREAM_PENDING_POS_OFFSET}]"));
+            emitter.instruction("subs x9, x9, x10");                            // what is still held
+            emitter.instruction("b.gt __rt_sek_no");                            // bytes in hand: not at the end
+            emitter.instruction(&format!("ldr x9, [x0, #{STREAM_EOF_OFFSET}]")); // what the read posted
+            emitter.instruction("cmp x9, #0");
+            emitter.instruction("cset x0, ne");
+            emitter.instruction("b __rt_sek_done");
+            emitter.label("__rt_sek_no");
+            emitter.instruction("mov x0, #0");
+            emitter.label("__rt_sek_done");
+            emitter.instruction("ldp x29, x30, [sp, #0]");
+            emitter.instruction("add sp, sp, #16");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("call __rt_stream_state");
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_sek_no_x86");                          // no state: nothing is known
+            emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_PENDING_LEN_OFFSET}]"));
+            emitter.instruction(&format!("mov r10, QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}]"));
+            emitter.instruction("sub r9, r10");                                 // what is still held
+            emitter.instruction("cmp r9, 0");
+            emitter.instruction("jg __rt_sek_no_x86");                          // bytes in hand: not at the end
+            emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_EOF_OFFSET}]")); // what the read posted
+            emitter.instruction("xor eax, eax");
+            emitter.instruction("test r9, r9");
+            emitter.instruction("setne al");
+            emitter.instruction("jmp __rt_sek_done_x86");
+            emitter.label("__rt_sek_no_x86");
+            emitter.instruction("xor eax, eax");
+            emitter.label("__rt_sek_done_x86");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
 /// Emits a call to `__rt_feof`, stating who is asking.
 ///
 /// `quiet` is not optional and not a default: the mode decides whether a wrapper with no

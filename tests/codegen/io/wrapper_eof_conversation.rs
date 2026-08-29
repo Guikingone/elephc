@@ -209,3 +209,29 @@ fclose($h);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "01|2345|678\n");
 }
+
+/// Verifies `fgets()` asks the class NOTHING: it fills, and reads what it already knows.
+///
+/// php's is `read`, `eof`, and that is all. elephc asked before reading and asked again when the
+/// buffer emptied, so a class saw three questions where php puts one — and the last of them was a
+/// read that came back empty. Same lines out either way.
+#[test]
+fn test_fgets_asks_the_class_nothing_before_it_reads() {
+    assert_eq!(
+        calls(r#"$h = fopen("tw://x", "r"); fgets($h); fclose($h);"#),
+        vec!["read", "eof"],
+    );
+}
+
+/// Verifies draining a stream with `fgets()` reads it ONCE, even where the last line has no
+/// newline.
+///
+/// The probe it uses takes the HANDLE: driven by the descriptor it resolves no stream state, so it
+/// could never answer yes, and every unterminated line cost an extra empty read.
+#[test]
+fn test_draining_with_fgets_reads_once() {
+    assert_eq!(
+        calls(r#"$h = fopen("tw://x", "r"); while (fgets($h) !== false) {} fclose($h);"#),
+        vec!["read", "eof"],
+    );
+}

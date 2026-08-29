@@ -33,6 +33,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_fopen(emitter);
     io::emit_fgets(emitter);
     io::emit_feof(emitter);
+    io::emit_stream_eof_known(emitter);
     io::emit_stream_isatty(emitter);
     io::emit_stream_select(emitter);
     io::emit_stream_set_blocking(emitter);
