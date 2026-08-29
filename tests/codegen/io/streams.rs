@@ -19700,3 +19700,75 @@ foreach (["q", "q.x", "qq"] as $name) {
     // write and again on the read — MEASURED, php brackets twice too.
     assert_eq!(out.stdout, "q true [[x]]\nq.x false x\nqq false x\n");
 }
+
+/// Verifies `$this->filtername` is the MEMBER's name, not the family's pattern.
+///
+/// The registry holds `p.*` and php reports `p.one` — which is how a family implementation tells
+/// its members apart, and the only reason to register a family. This reported the pattern, so
+/// every member looked alike.
+///
+/// The registry's copy was used because the property must outlive the caller's string; boxing
+/// persists the bytes by itself, so the caller's own name can be reported safely.
+#[test]
+fn test_a_family_member_knows_its_own_name() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class F extends php_user_filter {
+    public function onCreate(): bool { echo "create ", $this->filtername, "\n"; return true; }
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = "<" . $this->filtername . ">";
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("p.*", "F");
+foreach (["p.one", "p.two"] as $name) {
+    $h = fopen("php://memory", "w+");
+    stream_filter_append($h, $name, STREAM_FILTER_WRITE);
+    fwrite($h, "x");
+    rewind($h);
+    echo "read ", stream_get_contents($h), "\n";
+    fclose($h);
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "create p.one\nread <p.one>\ncreate p.two\nread <p.two>\n",
+    );
+}
+
+/// Verifies an EXACT registration still reports the name it was registered under.
+///
+/// The name now travels from the caller rather than the registry, and for a non-family the two
+/// are the same string — this is the test that says so.
+#[test]
+fn test_an_exact_filter_still_reports_its_name() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class F extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = "<" . $this->filtername . ">";
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("solo", "F");
+$h = fopen("php://memory", "w+");
+stream_filter_append($h, "solo", STREAM_FILTER_WRITE);
+fwrite($h, "x");
+rewind($h);
+echo stream_get_contents($h), "\n";
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "<solo>\n");
+}

@@ -354,6 +354,20 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_sfau_try_builtin");                       // not a user filter: try the built-in table
     emitter.instruction("str x0, [sp, #24]");                                   // save the resolved id across __rt_new_by_name
 
+    // -- the name this filter was ATTACHED under, boxed while the caller's pair is still here --
+    //
+    // `$this->filtername` is the member, not the family: the registry holds `p.*` and php reports
+    // `p.one`, which is how a family implementation tells its members apart. The registry's copy
+    // was used because the property must outlive the caller's string — and boxing persists the
+    // bytes by itself, so the caller's own name can be reported safely. [sp, #40] carries the box
+    // from here; nothing on this path reads the length again.
+    emitter.instruction("ldr x1, [sp, #32]");                                   // the name the caller asked for
+    emitter.instruction("ldr x2, [sp, #40]");
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // it persists the bytes itself
+    emitter.instruction("str x0, [sp, #40]");                                   // the boxed attach name
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the id the lookup below reads
+
     // -- look up class_name in the registry slot --
     emitter.instruction("sub x9, x0, #128");                                    // slot_index = id - USER_FILTER_ID_BASE
     abi::emit_symbol_address(emitter, "x10", "_user_filter_registry");
@@ -387,31 +401,31 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     // rather than the caller's argument because the registry owns a persisted copy, so the
     // property cannot outlive the string it names.
     //
-    // ⚠️ For a FAMILY that costs the member: the registry holds `p.*` and php reports `p.one`,
-    // which is how a family implementation tells its members apart. MEASURED on `php -n` 8.5.6.
-    // Reporting the caller's name means persisting it — the very thing the registry copy avoids —
-    // and the frame here has one free slot, already scratch for the property offset below.
+    // For a FAMILY that name is the MEMBER, not the pattern: the registry holds `p.*` and php
+    // reports `p.one`, which is how a family implementation tells its members apart. MEASURED on
+    // `php -n` 8.5.6. So the box is made where the caller's pair still is, above — boxing
+    // persists the bytes by itself, which was the whole reason the registry copy was used here.
     emitter.instruction("ldr x6, [x0]");                                        // class_id at the head of the obj
     abi::emit_symbol_address(emitter, "x7", "_user_filter_vtable_ptrs");
     emitter.instruction("ldr x7, [x7, x6, lsl #3]");                            // per-class user-filter vtable
     emitter.instruction("ldr x9, [x7, #40]");                                   // slot 5 = filtername property byte offset
-    emitter.instruction("cbz x9, __rt_sfau_filtername_done");                   // class without the inherited property
-    emitter.instruction("str x9, [sp, #40]");                                   // hold the offset across the boxing call
-    emitter.instruction("ldr x10, [sp, #24]");                                  // the resolved user-filter id
-    emitter.instruction("sub x10, x10, #128");                                  // slot_index = id - USER_FILTER_ID_BASE
-    abi::emit_symbol_address(emitter, "x11", "_user_filter_registry");
-    emitter.instruction("add x11, x11, x10, lsl #5");                           // registry entry = base + slot_index * 32
-    emitter.instruction("ldr x1, [x11]");                                       // the persisted filter-name pointer
-    emitter.instruction("ldr x2, [x11, #8]");                                   // and its length
-    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // x0 = boxed filter name
-    emitter.instruction("mov x10, x0");                                         // hold the boxed value
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the property offset
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the filter object
+    emitter.instruction("cbz x9, __rt_sfau_filtername_none");                   // class without the inherited property
+    emitter.instruction("ldr x10, [sp, #40]");                                  // the boxed attach name, made above
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the filter object
     emitter.instruction("str x10, [x0, x9]");                                   // store the name in the inherited slot
     emitter.instruction("add x11, x0, x9");                                     // the property slot address
     emitter.instruction("str xzr, [x11, #8]");                                  // clear the high word of the Mixed pointer slot
+    emitter.instruction("b __rt_sfau_filtername_done");
+
+    // A class without the property owns nothing, so the box has to go rather than sit unreachable.
+    emitter.label("__rt_sfau_filtername_none");
+    emitter.instruction("ldr x0, [sp, #40]");
+    emitter.instruction("cbz x0, __rt_sfau_filtername_done");
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    emitter.instruction("str xzr, [sp, #40]");
     emitter.label("__rt_sfau_filtername_done");
+    // The code below reads the object out of x0, and this arm has just spent it on a release.
+    emitter.instruction("ldr x0, [sp, #32]");
 
     // -- onCreate() lifecycle hook (vtable slot 1). When present, the
     //    user's filter class can refuse the attach by returning false.
@@ -538,6 +552,22 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_resolve_user_filter_id");                    // rax = id or 0
     emitter.instruction("test rax, rax");                                       // unknown filter name?
     emitter.instruction("jz __rt_sfau_try_builtin_x86");                        // not a user filter: try the built-in table
+
+    // -- the name this filter was ATTACHED under; see the AArch64 arm --
+    //
+    // Boxed BEFORE the id takes [rbp - 32], which is where the caller's name pointer still sits.
+    // The id rides on the stack across the call rather than in a register the call may clobber,
+    // through an aligned slot rather than a push, which would leave rsp off by eight.
+    emitter.instruction("sub rsp, 16");
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // the resolved id
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the name the caller asked for
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");
+    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // it persists the bytes itself
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // the boxed attach name
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // the id back
+    emitter.instruction("add rsp, 16");
+
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save resolved id
 
     // -- look up class_name in the registry slot --
@@ -576,22 +606,22 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-filter vtable
     emitter.instruction("mov r9, QWORD PTR [r11 + 40]");                        // slot 5 = filtername property byte offset
     emitter.instruction("test r9, r9");                                         // class without the inherited property
-    emitter.instruction("jz __rt_sfau_filtername_done_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // hold the offset across the boxing call
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // the resolved user-filter id
-    emitter.instruction("sub r10, 128");                                        // slot_index = id - USER_FILTER_ID_BASE
-    emitter.instruction("shl r10, 5");                                          // slot offset = slot_index * 32
-    abi::emit_symbol_address(emitter, "r11", "_user_filter_registry");
-    emitter.instruction("add r11, r10");                                        // registry entry
-    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // the persisted filter-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // and its length
-    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // rax = boxed filter name
-    emitter.instruction("mov r10, rax");                                        // hold the boxed value
-    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload the property offset
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the filter object
+    emitter.instruction("jz __rt_sfau_filtername_none_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // the boxed attach name, made above
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the filter object
     emitter.instruction("mov QWORD PTR [rax + r9], r10");                       // store the name in the inherited slot
     emitter.instruction("mov QWORD PTR [rax + r9 + 8], 0");                     // clear the high word
+    emitter.instruction("jmp __rt_sfau_filtername_done_x86");
+
+    // A class without the property owns nothing, so the box has to go.
+    emitter.label("__rt_sfau_filtername_none_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_sfau_filtername_kept_x86");
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");
+    emitter.label("__rt_sfau_filtername_kept_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the object the code below reads
     emitter.label("__rt_sfau_filtername_done_x86");
 
     // -- onCreate() lifecycle hook (vtable slot 1) — see ARM64 path. --
