@@ -31,7 +31,7 @@ sidebar:
 | [`filetype()`](./filesystem/filetype.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fnmatch()`](./filesystem/fnmatch.md) | `(string $pattern, string $filename, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`getcwd()`](./filesystem/getcwd.md) | `(): string` | `string` | ✓ | ✓ |
-| [`getenv()`](./filesystem/getenv.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
+| [`getenv()`](./filesystem/getenv.md) | `(string $name): string|false` | `string|false` | ✓ | ✓ |
 | [`glob()`](./filesystem/glob.md) | `(string $pattern, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`is_dir()`](./filesystem/is_dir.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_executable()`](./filesystem/is_executable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |

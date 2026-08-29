@@ -20,8 +20,9 @@ mod values;
 #[cfg(test)]
 pub use bootstrap::emit_copy_frame_pointer;
 pub use bootstrap::{
-    emit_enable_heap_debug_flag, emit_enable_web_heap_guard_flag, emit_exit,
-    emit_exit_with_result_reg, emit_ignore_sigpipe, emit_store_process_args_to_globals,
+    emit_cdylib_exit_escape, emit_enable_heap_debug_flag, emit_enable_web_heap_guard_flag,
+    emit_exit, emit_exit_with_result_reg, emit_ignore_sigpipe,
+    emit_store_process_args_to_globals,
 };
 pub use calls::{
     build_outgoing_arg_assignments_for_target, emit_call_label, emit_call_reg,
@@ -41,9 +42,9 @@ pub use frame::{
 #[cfg(test)]
 pub use frame::{emit_preserve_return_value, emit_restore_return_value};
 pub(crate) use registers::{
-    float_arg_reg_name, float_result_reg, float_spill_scratch_reg, int_arg_reg_name,
-    int_result_reg, secondary_scratch_reg, string_result_regs, symbol_scratch_reg,
-    tertiary_scratch_reg,
+    float_arg_reg_name, float_result_reg, float_spill_scratch_reg, frame_pointer_reg,
+    int_arg_reg_name, int_result_reg, secondary_scratch_reg, string_result_regs,
+    symbol_scratch_reg, tertiary_scratch_reg,
 };
 pub use registers::{
     nested_call_reg, process_argc_reg, process_argv_reg, temp_int_reg, IncomingArgCursor,

@@ -10,7 +10,7 @@
 //! - `crate::codegen_support` owns shared target, runtime, ABI, and metadata helpers.
 
 mod block_emit;
-mod callable_reachability;
+pub(crate) mod callable_reachability;
 pub(crate) mod context;
 mod enum_singletons;
 mod eval_callable_helpers;
@@ -35,7 +35,7 @@ mod shared_count_guard;
 mod shared_helper;
 mod shared_mixed_string;
 mod shared_state;
-mod stack_guard;
+pub(crate) mod stack_guard;
 pub mod value_placement;
 mod web;
 use runtime_metadata::*;
@@ -48,7 +48,8 @@ pub(crate) use crate::codegen_support::sentinels::{
 };
 pub(crate) use crate::codegen_support::{
     abi, bcmath, callable_descriptor, callable_dispatch, callable_invoker_args, cdylib,
-    data_section, emit, hash_crypto, interface_wrappers, phar_stream, reflection, runtime,
+    data_section, emit, hash_crypto, iconv_bridge, interface_wrappers, phar_stream, reflection,
+    runtime,
     sentinels, stream_filters,
     tls, visibility,
 };
@@ -63,9 +64,9 @@ pub(crate) use crate::codegen_support::{
 };
 #[allow(unused_imports)]
 pub use crate::codegen_support::{
-    generate_runtime, generate_runtime_with_features, generate_runtime_with_features_pic,
-    link_requirements_for_runtime_features, runtime_features_for_program_and_classes,
-    LinkRequirement, RuntimeFeatures,
+    generate_runtime, generate_runtime_with_features, generate_runtime_with_features_mode,
+    generate_runtime_with_features_pic, link_requirements_for_runtime_features,
+    runtime_features_for_program_and_classes, LinkRequirement, RuntimeFeatures,
 };
 pub use crate::codegen_support::{
     prepare_declared_name_order, set_autoload_rule_count, set_compile_profile,
@@ -98,10 +99,10 @@ pub enum Instrumentation {
     /// No hooks at all.
     #[default]
     Off,
-    /// Every non-synthetic PHP function.
+    /// The `{main}` root and every non-synthetic PHP function.
     All,
-    /// Only the named functions. A trailing `*` matches by prefix, so
-    /// `PDOStatement::*` covers a class.
+    /// Only the named functions. `{main}` selects the top-level root; a trailing
+    /// `*` matches by prefix, so `PDOStatement::*` covers a class.
     Only(Vec<String>),
 }
 
@@ -137,10 +138,29 @@ impl Instrumentation {
 ///
 /// `Executable` produces a standalone native binary with a process entry point.
 /// `Cdylib` produces a position-independent shared library with exported lifecycle hooks.
+/// `Staticlib` produces an `ar` archive of the same exported surface, for a host
+/// that links elephc into its own binary — an Xcode project, say — instead of
+/// loading it at run time.
+///
+/// `Staticlib` is *not* PIC. `Emitter::new_pic` exists for dynamic loading,
+/// where the loader must resolve cross-object references at `dlopen` time; its
+/// GOT indirection is unrelated to position independence as such. An archive is
+/// merged once into the host's final binary by the host's own linker, exactly
+/// like the executable path, whose non-PIC output is already PC-relative and
+/// already yields PIE binaries.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Emit {
     Executable,
     Cdylib,
+    Staticlib,
+}
+
+impl Emit {
+    /// Returns whether this artifact is a library exposing `#[Export]`
+    /// trampolines and lifecycle symbols rather than a process entry point.
+    pub fn is_library(self) -> bool {
+        matches!(self, Emit::Cdylib | Emit::Staticlib)
+    }
 }
 
 /// Compile-time process-isolation model selected for a `--web` executable.
@@ -263,7 +283,11 @@ pub fn generate_user_asm_from_ir_with_options(
     web_isolation: WebIsolation,
 ) -> Result<String> {
     let mut emitter = match emit {
-        Emit::Cdylib => Emitter::new_pic(module.target),
+        Emit::Cdylib => Emitter::new_cdylib(module.target),
+        // A staticlib joins the executable path: it is linked once into the host
+        // binary, so it needs no GOT indirection, but it still exposes the same
+        // recoverable host boundary as a cdylib.
+        Emit::Staticlib => Emitter::new_staticlib(module.target),
         Emit::Executable => Emitter::new(module.target),
     };
     if module.target.arch == Arch::X86_64 {
@@ -291,6 +315,7 @@ pub fn generate_user_asm_from_ir_with_options(
         data,
         emit,
         exported_functions,
+        heap_debug,
     ))
 }
 
@@ -301,6 +326,7 @@ fn finalize_user_asm(
     mut data: DataSection,
     emit: Emit,
     exported_functions: &HashMap<String, ExportedFunction>,
+    heap_debug: bool,
 ) -> String {
     let eval_bridge = module.required_runtime_features.eval_bridge;
     let emit_eval_reflection_metadata =
@@ -342,7 +368,6 @@ fn finalize_user_asm(
         eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
         eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
     }
-    let data_output = data.emit(module.target);
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();
     let user_functions = runtime_user_function_sigs(module);
@@ -363,10 +388,16 @@ fn finalize_user_asm(
         Some(&allowed_class_names),
     );
     emit_intrinsic_method_wrappers(module, &mut emitter);
-    if matches!(emit, Emit::Cdylib) {
+    if emit.is_library() {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
-        sorted_exports.sort_by(|a, b| a.name.cmp(&b.name));
-        crate::codegen::cdylib::emit_cdylib_exports(&mut emitter, module.target, &sorted_exports);
+        sorted_exports.sort_by(|a, b| a.c_name.cmp(&b.c_name));
+        crate::codegen::cdylib::emit_cdylib_exports(
+            &mut emitter,
+            &mut data,
+            module.target,
+            &sorted_exports,
+            heap_debug,
+        );
     }
     let user_data = runtime::emit_runtime_data_user(
         &empty_globals,
@@ -405,6 +436,7 @@ fn finalize_user_asm(
         module.target,
     );
 
+    let data_output = data.emit(module.target);
     let mut user_asm = emitter.output();
     if !data_output.is_empty() {
         user_asm.push('\n');
@@ -414,13 +446,15 @@ fn finalize_user_asm(
     user_asm.push_str(&user_data);
     let mut exported: HashSet<String> = exported_functions
         .values()
-        .map(|export| module.target.extern_symbol(&export.name))
+        .map(|export| module.target.extern_symbol(&export.c_name))
         .collect();
     match emit {
-        Emit::Cdylib => {
+        Emit::Cdylib | Emit::Staticlib => {
             for lifecycle in [
+                "elephc_abi_version",
                 "elephc_init",
                 "elephc_shutdown",
+                "elephc_last_status",
                 "elephc_last_error",
                 "elephc_free",
             ] {
@@ -434,10 +468,21 @@ fn finalize_user_asm(
             exported.insert(module.target.extern_symbol("main"));
         }
     }
-    crate::codegen::visibility::append_hidden_directives(
+    // The GCC driver contributes the ELF CRT `_init`/`_fini` definitions after
+    // assembly. Hidden undefined declarations here propagate local visibility
+    // to those definitions in the final shared object.
+    let additional_internal: &[&str] = if matches!(emit, Emit::Cdylib)
+        && module.target.platform == platform::Platform::Linux
+    {
+        &["_init", "_fini"]
+    } else {
+        &[]
+    };
+    crate::codegen::visibility::append_hidden_directives_with_extras(
         &user_asm,
         &exported,
         module.target.platform,
+        additional_internal,
     )
 }
 
@@ -462,6 +507,10 @@ mod instrumentation_tests {
         assert!(!only.covers("run_process_order"));
         assert!(!only.covers("PDO::execute"));
         assert!(!only.covers("format_money"));
+
+        let main_only = Instrumentation::Only(vec!["{main}".to_string()]);
+        assert!(main_only.covers("{main}"));
+        assert!(!main_only.covers("main"), "the display-root spelling is explicit");
 
         assert!(Instrumentation::All.covers("anything"));
         assert!(!Instrumentation::Off.covers("anything"));

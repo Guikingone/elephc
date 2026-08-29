@@ -520,7 +520,7 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             // the module flag decides as before.
             abi::emit_load_int_immediate(ctx.emitter, "x1", i64::from(ctx.is_main));
             ctx.emitter.instruction("bl __rt_trace_write_block");               // this path never reaches the shared report
-            abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
+            emit_uncaught_exit(ctx);
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_exc_handler_top", 0);
@@ -549,7 +549,7 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             abi::emit_load_int_immediate(ctx.emitter, "rsi", i64::from(ctx.is_main));
             ctx.emitter.instruction("call __rt_trace_write_block");             // this path never reaches the shared report
             ctx.emitter.instruction("mov rsp, r15");                            // restore the entry rsp before leaving
-            abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
+            emit_uncaught_exit(ctx);
         }
     }
     ctx.emitter.label(&throw_label);
@@ -607,7 +607,7 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
                 abi::emit_load_int_immediate(ctx.emitter, "x1", i64::from(ctx.is_main));
                 ctx.emitter.instruction("bl __rt_trace_write_block");
             }
-            abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
+            emit_uncaught_exit(ctx);
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_exc_handler_top", 0);
@@ -645,10 +645,16 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
                 abi::emit_load_int_immediate(ctx.emitter, "rsi", i64::from(ctx.is_main));
                 ctx.emitter.instruction("call __rt_trace_write_block");
             }
-            abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
+            emit_uncaught_exit(ctx);
         }
     }
     ctx.emitter.label(&throw_label);
+}
+
+/// Publishes any active exact profile before an uncaught generated error exits.
+fn emit_uncaught_exit(ctx: &mut FunctionContext<'_>) {
+    crate::codegen::frame::emit_instr_terminate(ctx);
+    abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
 }
 
 /// Allocates a built-in throwable that owns the runtime message stored on the stack.

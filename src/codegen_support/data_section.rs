@@ -276,18 +276,12 @@ mod tests {
 
     /// A Mach-O target, whose assembler reads `.comm`'s alignment operand as `log2(bytes)`.
     fn macos() -> Target {
-        Target {
-            platform: Platform::MacOS,
-            arch: Arch::AArch64,
-        }
+        Target::new(Platform::MacOS, Arch::AArch64)
     }
 
     /// An ELF target, whose assembler reads `.comm`'s alignment operand as a byte count.
     fn linux(arch: Arch) -> Target {
-        Target {
-            platform: Platform::Linux,
-            arch,
-        }
+        Target::new(Platform::Linux, arch)
     }
 
     /// Verifies that float constants use power of two alignment directive.

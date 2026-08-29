@@ -263,12 +263,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::phase("runtime-cache");
     let phase_started = Instant::now();
-    let runtime_pic = matches!(emit, Emit::Cdylib);
-    let runtime_object = match runtime_cache::prepare_runtime_object(
+    let runtime_object = match runtime_cache::prepare_runtime_object_for_emit(
         heap_size,
         target,
         runtime_features,
-        runtime_pic,
+        emit,
     ) {
         Ok(runtime_object) => runtime_object,
         Err(err) => {
@@ -327,26 +326,47 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::phase("link");
     let phase_started = Instant::now();
-    if let Err(error) = linker::link_with_plan(
-        target,
-        emit,
-        &output_paths.bin,
-        &output_paths.obj,
-        &runtime_object.path,
-        &link_plan,
-        &forced_bridge_libs,
-    ) {
-        eprintln!("Linker error: {error}");
-        process::exit(1);
+    if matches!(emit, Emit::Staticlib) {
+        // The consuming project performs the final link and supplies bridge and
+        // managed-native archives alongside this library.
+        linker::archive(&output_paths.bin, &output_paths.obj, &runtime_object.path);
+    } else {
+        if let Err(error) = linker::link_with_plan(
+            target,
+            emit,
+            &output_paths.bin,
+            &output_paths.obj,
+            &runtime_object.path,
+            &link_plan,
+            &forced_bridge_libs,
+        ) {
+            eprintln!("Linker error: {error}");
+            process::exit(1);
+        }
     }
     timings.record_since("link", phase_started);
+
+    if let Some(header_path) = &output_paths.header {
+        let library_stem = header_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("libelephc_module");
+        let exports = exported_functions.values().collect::<Vec<_>>();
+        let header = exports::render_c_header(library_stem, &exports);
+        if let Err(error) = fs::write(header_path, header) {
+            crate::progress::clear();
+            eprintln!("Error writing '{}': {}", header_path.display(), error);
+            process::exit(1);
+        }
+    }
 
     // With --debug-info the DWARF line tables must be preserved past object
     // cleanup: on macOS `dsymutil` bakes them into a .dSYM while the object
     // still exists; if that fails the object is kept so debuggers can follow
     // the binary's debug map to it.
-    let keep_obj_for_debug =
-        emit_debug_info && !linker::bake_debug_info(target, &output_paths.bin);
+    let keep_obj_for_debug = emit_debug_info
+        && !matches!(emit, Emit::Staticlib)
+        && !linker::bake_debug_info(target, &output_paths.bin);
 
     // Strip after the dSYM is baked, never before: `dsymutil` reads the binary's debug map, and
     // a stripped binary has none. `--debug-info` and `--keep-symbols` both opt out — the first

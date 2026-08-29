@@ -22,6 +22,7 @@ pub(crate) mod dynamic_new;
 mod emitted_classes;
 pub(crate) mod emit;
 pub(crate) mod hash_crypto;
+pub(crate) mod iconv_bridge;
 pub(crate) mod interface_wrappers;
 pub(crate) mod phar_stream;
 /// Platform module.
@@ -51,7 +52,8 @@ pub use declaration_order::prepare_declared_name_order;
 pub(crate) use driver_support::{emit_write_current_string_stderr, emit_write_literal_stderr};
 #[allow(unused_imports)]
 pub use driver_support::{
-    generate_runtime, generate_runtime_with_features, generate_runtime_with_features_pic,
+    generate_runtime, generate_runtime_with_features, generate_runtime_with_features_mode,
+    generate_runtime_with_features_pic,
 };
 use emitted_classes::collect_emitted_class_names;
 pub(crate) use prescan::collect_constants;

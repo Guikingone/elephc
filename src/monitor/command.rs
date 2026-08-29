@@ -97,20 +97,25 @@ capability is dormant until asked: a monitored binary run on its own behaves and
 prints exactly like one built without it.
 
 A program monitor LAUNCHES (a source or a binary) is measured from inside: an
-exact per-function profile — inclusive and self time, call counts, allocations,
-retained bytes, SQL queries and I/O wait — not an estimate, with every export.
+exact per-function profile rooted at {main} — wall time, call counts,
+allocations, retained objects, SQL query counts and database-driver wait. The
+display derives wall-minus-recorded-DB-wait; it is not an OS CPU clock. File I/O
+is not counted or timed. Every local export is available.
 
 A service monitor CONNECTS to answers from its sample ring: CPU-time shares that
-sharpen as samples accumulate. Add --exact for the measured per-function table of
-the next request that completes; that answer is the table alone, so --exact
-cannot be combined with --out, --pprof, --dot or --html.
+sharpen as samples accumulate, sampled allocation attribution, and per-route
+stacks. The combined --with-monitoring build has no sampled SQL/wait summary and
+the CPU timer cannot see blocked wall time. Add --exact for the measured
+per-function table of the next request that completes; that answer is the table
+alone, so --exact cannot be combined with --out, --pprof, --dot or --html.
 
 --live refreshes the table window after window, top-style, until the target
 exits (or Ctrl-C). --attach reads an already-running local process; child worker
 processes (a --web prefork server's workers) are discovered and merged in both
 modes. Those two use an external sampler, which only macOS ships; elsewhere,
-point monitor at the program's endpoint instead. Everything else works on Linux
-and macOS alike.
+point monitor at the program's endpoint instead. They report sampled CPU stacks
+only: no calls, allocation/retained counts, SQL/file-I/O counts, wait, or route
+tags. Everything else works on Linux and macOS alike.
 
 --pprof writes the capture as a gzip pprof profile. --dot writes a Graphviz call
 graph (`dot -Tsvg`); --html writes a self-contained, interactive call graph (one

@@ -26,7 +26,14 @@ sys.path.insert(0, str(DOCS_LIB))
 
 import extract as docs_extract  # noqa: E402
 
-SUPPORTED_TARGETS = ["macos-aarch64", "linux-aarch64", "linux-x86_64"]
+SUPPORTED_TARGETS = [
+    "macos-aarch64",
+    "ios-arm64",
+    "ios-sim-arm64",
+    "linux-aarch64",
+    "linux-x86_64",
+]
+HOST_ONLY_TARGETS = ["macos-aarch64", "linux-aarch64", "linux-x86_64"]
 SOURCE_SUFFIXES = {".php", ".rs", ".snap"}
 
 
@@ -225,6 +232,12 @@ def build_inventory() -> dict[str, Any]:
         home_source = read(REPO / home_relative) if home_relative else ""
         block = builtin_macro_block(home_source)
         semantics = exported_record.get("semantics", {})
+        declared_target_support = semantics.get("target_support", [])
+        target_support_kind = semantics.get("target_support_kind")
+        required_target_support = {
+            "all": SUPPORTED_TARGETS,
+            "host_only": HOST_ONLY_TARGETS,
+        }.get(target_support_kind, [])
         strategy = semantics.get("target_strategy")
         category = {
             "eir_primitive": 1,
@@ -283,9 +296,10 @@ def build_inventory() -> dict[str, Any]:
                 },
                 "eval": exported_record.get("eval"),
                 "targets": {
-                    "required": SUPPORTED_TARGETS,
-                    "declared_support": semantics.get("target_support", []),
-                    "verified": semantics.get("target_support", []) == SUPPORTED_TARGETS,
+                    "required": required_target_support,
+                    "declared_support": declared_target_support,
+                    "verified": bool(required_target_support)
+                    and declared_target_support == required_target_support,
                 },
                 "tests": test_index.get(canonical, []),
             }

@@ -134,7 +134,9 @@ mod tests {
     /// Verifies the shared catalog validates and exposes every compiler/eval surface.
     #[test]
     fn catalog_is_valid_and_complete_for_all_contract_surfaces() {
-        assert_eq!(contracts().len(), 578);                                 // + the 14 `gz*` stream functions, + similar_text
+        // Both sides added contracts: this branch the 14 `gz*` stream functions and
+        // `similar_text`, upstream its own. Re-measured after the merge.
+        assert_eq!(contracts().len(), 588);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

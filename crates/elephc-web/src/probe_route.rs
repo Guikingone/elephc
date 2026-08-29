@@ -191,9 +191,9 @@ pub fn query_is_authentic(value: &str) -> bool {
 /// question a dev build answers — for the one request that asked. That is the
 /// difference between "profiling is a dev thing" and "profiling is a thing you
 /// can do where the problem actually is".
-/// Brackets a request, saying WHY rather than only whether.
 ///
-/// `1` this request was authorized by a signed header, `2` offer it — start
+/// The argument says WHY rather than only whether: `1` this request was
+/// authorized by a signed header, `2` offer it — start
 /// a slice only if something is waiting for one — and `0` end whatever
 /// started. The bridge cannot answer "is anyone waiting": that state lives in
 /// the instrumentation, so it reports what it knows and lets the other side

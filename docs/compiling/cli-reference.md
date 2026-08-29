@@ -55,8 +55,8 @@ selection, toolchain overrides, and transactional behavior.
 
 | Command | Arguments and flags | Description |
 |---|---|---|
-| `monitor` | `<program\|source.php> [--html <file>] [--trace <file>] [--assert <expr>] [--assert-file <file>] [--save <file>] [--baseline <file>] [--out <file.speedscope.json>]` | Profile a program built with `--with-monitoring` (a `.php` source is built first): measured per-function time, allocations, retained objects, I/O wait, SQL queries and call counts — exact, not sampled shares. A *service* read over its endpoint answers from the sample ring instead, unless `--exact` is given, which returns the measured table for one completed request (and cannot be combined with the exporters). A binary without the capability is refused. |
-| `monitor <address>` | `<host:port\|http://host\|https://host\|/path/to.sock> [--key <file>] [--out <file>] [--pprof <file>] [--dot <file>] [--html <file>]` | Profile a service that is already running, through its endpoint. Sampled by default; `--exact` returns the measured table for the next request that completes. Needs the build key. |
+| `monitor` | `<program\|source.php> [--html <file>] [--trace <file>] [--assert <expr>] [--assert-file <file>] [--save <file>] [--baseline <file>] [--out <file.speedscope.json>]` | Profile a program built with `--with-monitoring` (a `.php` source is built first): exact per-function wall time, allocations, retained objects, DB-driver wait, SQL queries and calls, rooted at `{main}`. File I/O is not measured. A service endpoint answers from the sampled CPU-time ring instead unless `--exact` requests one completed request. A binary without the capability is refused. |
+| `monitor <address>` | `<host:port\|http://host\|https://host\|/path/to.sock> [--key <file>] [--out <file>] [--pprof <file>] [--dot <file>] [--html <file>]` | Profile a service already running. Sampled CPU time, allocation attribution and route tags by default; no blocked wall time or combined-build SQL/wait summary. `--exact` returns the measured table for the next completed request. Needs the build key. |
 | `monitor --attach` | `<pid> [--live] [--duration <seconds>]` | Monitor an already-running local process (and its worker children) instead of spawning one. Sampled, and macOS-only. |
 | `monitor --live` | `<program\|source.php> [--duration <seconds>] [--html <file>] [--serve <host:port>]` | Top-style table refreshed once per window. Sampled, and macOS-only. |
 | `monitor --stitch` | `<log> [<log>...] [--html <file>] [--otlp <endpoint>] [--prometheus <file>]` | Correlate per-request slices from several services into distributed traces, joined by W3C trace id; summarise them per service and route, and export them as OpenTelemetry spans or Prometheus metrics. |
@@ -81,6 +81,13 @@ service asks for the measured per-function table of the next request that
 completes, at that request's expense. A binary built without `--with-monitoring`
 is **refused**, with both remedies printed — there is no reduced fallback,
 because a degraded profile that looks like the real one is worse than none.
+
+| Capture | CPU / wall | Calls | Allocation | Queries / file I/O / wait | Routes |
+|---|---|---|---|---|---|
+| launched default | exact wall; `wall - DB wait` is a derived remainder, not OS CPU | exact | exact plus exact retained | exact DB queries; no file-I/O metrics; exact DB wait | untagged |
+| service default | sampled CPU; no blocked wall time | none | exact inter-sample deltas with sampled attribution; no retained | none in combined `--with-monitoring`; no file-I/O metrics | sampled stacks carry route tags |
+| service `--exact` / signed request | exact request wall; no separate OS CPU | exact | exact plus exact retained | exact DB queries; no file-I/O metrics; exact DB wait | exact request route/trace |
+| `--live` / `--attach` | external sampled CPU only | none | none | none | none |
 
 Reading a running service (`monitor <address>`) needs the build key: from
 `--key <file>`, the `ELEPHC_PROBE_KEY` hex environment variable, or a `.key`
@@ -124,8 +131,10 @@ samples; thresholds of a few points are well clear of it.
 with nothing built into it. Their numbers are sampled shares, they cannot see
 time spent blocked on I/O, and they need macOS. On Linux, or for a process that
 does carry the capability, use `monitor <address>`: it answers from the process's
-own sample ring, which does account for I/O wait, and with `--exact` returns the
-measured per-function table for one completed request.
+own CPU-time sample ring, which also cannot see blocked wall time. In a combined
+`--with-monitoring` build that default answer has no SQL/wait summary; `--exact`
+returns the measured per-function table and DB-driver wait for one completed
+request.
 
 `--live` turns the table into a top-style display refreshed once per window
 (`--duration`, default 3s in live mode): the current window's shares with
@@ -211,10 +220,10 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
-| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library. |
+| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. |
 | `--emit-asm` | — | off | Write generated assembly instead of a binary. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
-| `--check` | — | off | Run front-end checks only; write nothing. |
+| `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
 | `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. See [Strict locals mode](#strict-locals-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
@@ -225,7 +234,8 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | `--web-isolation MODE` / `--web-isolation=MODE` | `worker`, `pool`, `request` | `worker` | Bake the web handler process model into the produced binary. Requires `--web`; plain `--web` is exactly `worker`. |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
-be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
+be combined with `--check`, either library emit kind (`cdylib` or `staticlib`),
+`--emit-asm`, or `--emit-ir`. See
 [Output formats and diagnostics](output-and-diagnostics.md).
 
 ### Where the profile comes from
@@ -405,10 +415,12 @@ status and headers with `http_response_code()` and `header()`. See
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. |
+| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. iOS is ARM64-only and emits libraries for an app host, not standalone app executables. |
 
 See [Targets and cross-compilation](targets.md) for the full list of accepted
-spellings.
+spellings. For `ios-arm64` and `ios-sim-arm64`, use `--emit staticlib` (normally)
+or `--emit cdylib`; `--emit executable` is rejected because it would be an
+Elephc CLI process, not a signed iOS application bundle.
 
 ## Optimization and code generation
 
@@ -428,7 +440,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `phar`, `tz`, `image`, `eval`, `regex`, `mysqli`, `web` | — | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic when static detection cannot see a call. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. |
+| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `iconv`, `phar`, `tz`, `image`, `eval`, `regex`, `mysqli`, `web` | — | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic when static detection cannot see a call. `--with-iconv` force-links character-set conversion the same way. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -728,8 +740,9 @@ ini_get_all()['opcache.save_comments'];                              // '0'
 
 A value that does not parse for the directive's type is **ignored** — the
 compile-time value stays, on both surfaces — rather than corrupting the report.
-An environment variable set to the empty string is treated as unset, because
-`getenv()` cannot distinguish the two.
+An environment variable set to the empty string is treated as unset by this INI
+override policy. `getenv()` itself distinguishes a missing name (`false`) from a
+present empty value (`""`).
 
 **Which directives are overridable at run time.** Only the ones elephc merely
 *reports*. Ten `opcache.*` directives are consumed at compile time to bake code
@@ -761,8 +774,8 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | `--quiet` / `-q` | — | off | Disable progress lines and colorized compiler output. |
 | `--gc-stats` | — | off | Print allocation/free counters at exit. |
 | `--counters` | — | off | Embed one BSS call counter per PHP function (a single prologue increment) and print exact `elephc-counters: <name> <count>` lines to stderr at exit. A fully inlined call site keeps its counter at zero, which makes inlining visible by difference. |
-| `--with-monitoring` | — | off | Embed the profiling capability: the exact instrumentation runtime (`elephc-instr`), the in-process sampling probe (`elephc-probe`), the symbol table both read, and a 32-byte build key. **Dormant until asked** — a monitored binary run on its own behaves and prints exactly like one built without it, and turns nothing on until `elephc monitor` connects over its control channel or endpoint, or a signed `X-Elephc-Query` header arrives. When asked, every PHP function is wrapped with `elephc_instr_enter/exit` and the run prints an **exact** (not sampled) profile to stderr: `elephc-instr: <name> calls=N incl_ns=X excl_ns=Y incl_allocs=A excl_allocs=B ...` per function plus `elephc-instr-edge: <caller> -> <callee> count=N ns=Y`. The `*_allocs` are exact per-function heap allocation counts (elephc owns the allocator), `*_io` are exact per-function DB query counts (PDO), so N+1 patterns are detected with certainty, `*_ret` are exact **retained** objects (allocated minus freed, signed) so a function that keeps what it builds is visible as a leak, and `*_wait` are the exact nanoseconds spent blocked inside a driver call, so each function's self time splits into CPU and I/O wait — five cost dimensions alongside time. When any DB queries ran it also prints `elephc-instr-query: <count> <normalized SQL>` per distinct statement (literals collapsed to `?`, so repeated queries aggregate); `elephc monitor --html` turns these into a 🗄 Queries panel, and gates the build against the project's `.elephc` performance budget (found by walking up from the source) plus any `--assert` flags. Inclusive is the outermost activation (recursion-safe), exclusive is inclusive minus callees, and exclusive times sum to the root's inclusive. Costs about **30 ns per profiled call** and nothing while dormant, so what it costs a program is `30 ns × its call count`: on the demo service (135,351 calls in 250 ms) that is +0% dormant, +3% while profiling and +219 KB of binary, while a loop that is almost nothing but calls pays +48%. Benchmarking inside a source checkout shows roughly seven times those figures, because the bridge archive is resolved from the directory the compiler itself lives in and a checkout links the debug build of the runtime. Inlined functions fold into their caller (as with `--counters`). An exception's frames never run their own exit hook, so the runtime's single unwinder reports the throw and they are closed at that instant, in all six dimensions — what a catch handler spends belongs to the handler, not to whatever threw. Per-thread, reporting the main thread at exit. Also writes the build key to a `<binary>.key` sidecar (keep it like a `.env` secret) and prints its public fingerprint; when `ELEPHC_PROBE_ADDR` names a socket path or `host:port` at run time, a background thread serves the profile to `elephc monitor <address>` after a mutual HMAC handshake proving both sides hold the key. Set `ELEPHC_INSTR_TRACE=<path>` at run time (or `elephc monitor --trace <path>`) to also write a Chrome/Perfetto timeline of every call (bounded by `ELEPHC_INSTR_TRACE_MAX`, default 500k). |
-| `--with-monitoring=<names>` | comma list, or `@file` | — | Embed the capability for **only** the named functions; a trailing `*` matches by prefix (`PDOStatement::*`). `@file` reads one name per line, `#` comments allowed. Everything else runs at full speed, which is what makes exact profiling affordable on a service under load: on the demo service, profiling all 35 functions cost +3% while profiling 3 cost +2% (+22% and +6% against a source checkout's debug runtime). The trade is reported rather than hidden — with a subset, an uninstrumented callee's time lands in its instrumented caller's **self**, so self values no longer sum to the root's inclusive, and the run prints `note: selective instrumentation` saying exactly that. |
+| `--with-monitoring` | — | off | Embed the profiling capability: the exact instrumentation runtime (`elephc-instr`), the in-process sampling probe (`elephc-probe`), the symbol table both read, and a 32-byte build key. **Dormant until asked** — a monitored binary run on its own behaves and prints exactly like one built without it, and turns nothing on until `elephc monitor` connects over its control channel or endpoint, or a signed `X-Elephc-Query` header arrives. A launched or `--exact` capture wraps the top-level PHP body as `{main}` and every PHP function with `elephc_instr_enter/exit`, then prints an **exact** (not sampled) profile: `elephc-instr: <name> calls=N incl_ns=X excl_ns=Y incl_allocs=A excl_allocs=B ...` plus caller/callee edges. The `*_allocs` are exact heap allocation counts, `*_io` are exact DB query counts (PDO), `*_ret` are exact signed retained-object counts, and `*_wait` are exact nanoseconds blocked inside DB driver calls. File I/O is not counted or timed, and `wall - recorded DB wait` is not an OS CPU measurement. When DB queries ran it also prints normalized `elephc-instr-query` rows for N+1 analysis. Inclusive is the outermost activation, exclusive is inclusive minus callees, and full-mode exclusive times sum to `{main}` inclusive. Costs about **30 ns per profiled call** and nothing while dormant: on the demo service (135,351 calls in 250 ms) that is +0% dormant, +3% while profiling and +219 KB of binary, while a call-only loop pays +48%. Inlined functions fold into their caller. Exception frames are closed at throw time in all dimensions. State is per-thread and reports the main thread at exit. The build also writes a secret `<binary>.key` sidecar; a configured endpoint serves mutually authenticated, sealed sampled captures by default and one request's table under `--exact`. `ELEPHC_INSTR_TRACE` / `monitor --trace` additionally writes a bounded Chrome/Perfetto call timeline. |
+| `--with-monitoring=<names>` | comma list, or `@file` | — | Embed the capability for **only** the named functions; a trailing `*` matches by prefix (`PDOStatement::*`) and `{main}` explicitly selects the top-level root. `@file` reads one name per line, `#` comments allowed. Everything else runs at full speed, which is what makes exact profiling affordable on a service under load. The trade is reported rather than hidden — without `{main}`, or when callees are omitted, self values no longer partition one root and an uninstrumented callee's time lands in its instrumented caller's **self**. The run prints `note: selective instrumentation` saying so. |
 | `--heap-debug` | — | off | Enable runtime heap verification (double-free, bad refcount, free-list corruption). |
 | `--help` / `-h` | — | off | Print the compiler help, including the current elephc version, and exit successfully. |
 | `--version` / `-V` | — | off | Print the elephc compiler version and exit successfully. |

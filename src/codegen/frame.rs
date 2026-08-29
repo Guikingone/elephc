@@ -10,6 +10,8 @@
 //! - Main currently exits through the process syscall used by normal executable output.
 //! - Each frame stores the inherited concat-buffer offset so statement resets do not clobber
 //!   `_concat_buf` slices that were passed in by the caller.
+//! - Cdylib user frames publish cleanup activations so boundary-caught exceptions release
+//!   owned locals before control returns to the native host.
 
 use std::collections::{HashMap, HashSet};
 
@@ -49,6 +51,7 @@ pub(super) struct FrameLayout {
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
     pub(super) concat_base_offset: usize,
+    pub(super) exception_activation_offset: Option<usize>,
     pub(super) frame_size: usize,
     pub(super) allocation: Allocation,
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
@@ -66,6 +69,7 @@ pub(super) fn layout_for_function(
     function: &Function,
     target: Target,
     regalloc_linear: bool,
+    exception_activations: bool,
 ) -> FrameLayout {
     let allocation = if regalloc_linear {
         allocate_registers(function, target)
@@ -126,6 +130,12 @@ pub(super) fn layout_for_function(
     }
     offset += 8;
     let concat_base_offset = offset;
+    let exception_activation_offset = if exception_activations {
+        offset += 24;
+        Some(offset)
+    } else {
+        None
+    };
     let frame_size = align_to_16(offset + FRAME_FOOTER_BYTES);
     FrameLayout {
         value_placement,
@@ -133,6 +143,7 @@ pub(super) fn layout_for_function(
         ref_cell_state_offsets,
         try_handler_offsets,
         concat_base_offset,
+        exception_activation_offset,
         frame_size,
         allocation,
         callee_saved_offsets,
@@ -255,6 +266,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     // is never guarded — it is the root of every call chain and runs before the floor exists.
     stack_guard::emit_stack_limit_init_call(ctx.emitter);
     emit_probe_init(ctx);
+    register_main_instr(ctx);
     emit_instr_init(ctx);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
@@ -271,6 +283,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     store_argv_global_if_needed(ctx);
     store_argc_local_if_present(ctx);
     store_argv_local_if_present(ctx);
+    emit_registered_instr_enter(ctx);
 }
 
 /// Emits a callable function prologue using an already-resolved entry label.
@@ -333,11 +346,92 @@ pub(super) fn emit_function_prologue_with_label(
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
+    emit_exception_activation_push(ctx, entry_label);
     // Instrument entry runs LAST in the prologue: the incoming arguments are
     // already spilled to their slots, so a call clobbering the argument/scratch
     // registers is safe. Callee-saved registers are already preserved above.
     emit_instr_enter(ctx);
     Ok(())
+}
+
+/// Publishes one cleanup activation for a cdylib-callable PHP frame.
+fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &str) {
+    let Some(offset) = ctx.exception_activation_offset else {
+        return;
+    };
+    let callback = format!("{entry_label}__cdylib_exception_cleanup");
+    ctx.emitter.comment("publish cdylib exception cleanup activation");
+    let scratch = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x10",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_call_frame_top", 0);
+    abi::store_at_offset(ctx.emitter, scratch, offset);
+    abi::emit_symbol_address(ctx.emitter, scratch, &callback);
+    abi::store_at_offset(ctx.emitter, scratch, offset - 8);
+    let frame_pointer = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x29",
+        Arch::X86_64 => "rbp",
+    };
+    abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
+    abi::emit_frame_slot_address(ctx.emitter, scratch, offset);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
+}
+
+/// Removes the current PHP frame from the cleanup activation chain on return.
+fn emit_exception_activation_pop(ctx: &mut FunctionContext<'_>) {
+    let Some(offset) = ctx.exception_activation_offset else {
+        return;
+    };
+    let scratch = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x10",
+        Arch::X86_64 => "r10",
+    };
+    abi::load_at_offset(ctx.emitter, scratch, offset);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
+}
+
+/// Emits the cleanup callback referenced by a cdylib PHP activation record.
+pub(super) fn emit_exception_cleanup_callback(
+    ctx: &mut FunctionContext<'_>,
+    entry_label: &str,
+) {
+    if ctx.exception_activation_offset.is_none() {
+        return;
+    }
+    let callback = format!("{entry_label}__cdylib_exception_cleanup");
+    ctx.emitter.blank();
+    ctx.emitter.comment("cdylib exceptional frame cleanup callback");
+    ctx.emitter.label_global(&callback);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve an aligned callback frame
+            ctx.emitter.instruction("stp x29, x30, [sp, #16]");                 // preserve the callback frame chain and return address
+            ctx.emitter.instruction("str x19, [sp, #8]");                       // preserve the scratch stack-base register
+            ctx.emitter.instruction("mov x19, sp");                             // remember the callback stack before cleanup switches frames
+            ctx.emitter.instruction("mov x29, x0");                             // select the abandoned PHP frame passed by the unwinder
+            emit_function_local_epilogue_cleanup(ctx, None);
+            ctx.emitter.instruction("mov sp, x19");                             // restore the callback stack after frame-relative cleanup
+            ctx.emitter.instruction("ldr x19, [sp, #8]");                       // restore the caller's scratch stack-base register
+            ctx.emitter.instruction("ldp x29, x30, [sp, #16]");                 // restore the callback frame chain and return address
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the aligned callback frame
+            ctx.emitter.instruction("ret");                                     // return to the exception frame walker
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rbp");                                // preserve the callback caller's frame pointer
+            ctx.emitter.instruction("mov rbp, rsp");                            // establish the callback frame pointer
+            ctx.emitter.instruction("push r12");                                // preserve the stack-base register used across cleanup calls
+            ctx.emitter.instruction("sub rsp, 8");                              // keep the callback stack aligned for nested cleanup calls
+            ctx.emitter.instruction("mov r12, rbp");                            // remember the callback frame before selecting the PHP frame
+            ctx.emitter.instruction("mov rbp, rdi");                            // select the abandoned PHP frame passed by the unwinder
+            emit_function_local_epilogue_cleanup(ctx, None);
+            ctx.emitter.instruction("mov rbp, r12");                            // restore the callback frame after PHP-local cleanup
+            ctx.emitter.instruction("lea rsp, [rbp - 8]");                      // discard cleanup-call stack temporaries and padding
+            ctx.emitter.instruction("pop r12");                                 // restore the caller's preserved stack-base register
+            ctx.emitter.instruction("pop rbp");                                 // restore the caller's frame pointer
+            ctx.emitter.instruction("ret");                                     // return to the exception frame walker
+        }
+    }
 }
 
 /// Retains a mutable by-value parameter so its frame slot has one callee-owned reference.
@@ -385,6 +479,12 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     // Then release the slot array itself. Only the CLI does this: a --web worker
     // reuses one registry across requests, so it stops at the request reset above.
     abi::emit_call_label(ctx.emitter, "__rt_resource_registry_teardown");
+    // The exact root brackets every PHP callback that shutdown can invoke:
+    // output handlers above, object destructors from the cleanup paths, and the
+    // resource teardown just above — which closes streams and can run a wrapper's
+    // `stream_close()`. If it exits earlier, those functions become disconnected
+    // graph roots and their work no longer partitions `{main}`.
+    emit_instr_exit(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     // Everything below is a call on a torn-down frame, and on x86_64 that frame
@@ -517,6 +617,11 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
+    // Registration happens while generating the handler, before the entry stub
+    // emits the inherited name table. At runtime the stub initializes the exact
+    // profiler before the bridge invokes this handler.
+    register_main_instr(ctx);
+    emit_registered_instr_enter(ctx);
 }
 
 /// Emits the `--web` top-level handler epilogue and returns to the bridge.
@@ -538,6 +643,10 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter
         .comment("close and invalidate abandoned request-owned resources");
     abi::emit_call_label(ctx.emitter, "__rt_resource_registry_request_reset");
+    // Per-request local teardown may run PHP destructors — and a resource reset may run a
+    // wrapper's `stream_close()` — so the exact root closes after it, inside the request's
+    // `{main}` frame just as process-exit teardown does.
+    emit_instr_exit(ctx);
     // Under `--web` the handler returns to the bridge server loop instead of
     // exiting, so the exit-based main epilogue (where `--gc-stats` normally
     // prints) is never reached. Emitting the counters here, once per request,
@@ -668,10 +777,9 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
         .locals
         .iter()
         .filter(|local| local_kind_needs_epilogue_cleanup(local.kind))
-        // Slots this frame only BORROWS (inliner-transplanted callee params, and slots whose
-        // ownership moved into a return value) must never be released here: the frame never
-        // acquired them. Releasing a borrow is a use-after-free, and it is what made a
-        // read-only `array` param in a loop die with `heap debug detected bad refcount`.
+        // Slots this frame only borrows, or whose ownership already moved into a return value,
+        // must never be released here. Releasing a borrowed parameter is a use-after-free; it
+        // is what made a read-only `array` param in a loop die under heap debug.
         .filter(|local| !ctx.function.no_epilogue_cleanup_slots.contains(&local.id))
         .filter(|local| {
             !ctx.local_slot_ever_stores_ref_cell_pointer(local.id)
@@ -1016,10 +1124,10 @@ fn function_cleanup_locals(
         .locals
         .iter()
         .filter(|local| local_kind_needs_epilogue_cleanup(local.kind))
-        // Slots this frame only BORROWS (inliner-transplanted callee params, and slots whose
-        // ownership moved into a return value) must never be released here: the frame never
-        // acquired them. Releasing a borrow is a use-after-free, and it is what made a
-        // read-only `array` param in a loop die with `heap debug detected bad refcount`.
+        // Slots this frame only borrows, or whose ownership already moved into a return value,
+        // must never be released here. Inlining rejects unwindable callees whose return slot
+        // still owns a value before `Return`, because this global exclusion cannot express
+        // that path-sensitive ownership transition.
         .filter(|local| !ctx.function.no_epilogue_cleanup_slots.contains(&local.id))
         .filter(|local| {
             !ctx.local_slot_ever_stores_ref_cell_pointer(local.id)
@@ -1072,14 +1180,14 @@ pub(super) fn emit_owned_local_cleanup(
         abi::load_at_offset(ctx.emitter, state_reg, state_offset);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // skip raw cleanup while this slot stores a ref-cell pointer
                     &format!("cbnz {}, {}", state_reg, done)
-                );                                                              // skip raw cleanup while this slot stores a ref-cell pointer
+                );
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // test whether this slot currently stores a ref-cell pointer
                     &format!("test {}, {}", state_reg, state_reg)
-                );                                                              // test whether this slot currently stores a ref-cell pointer
+                );
                 ctx.emitter
                     .instruction(&format!("jne {}", done));                      // skip raw cleanup for the ref-cell representation
             }
@@ -1324,7 +1432,6 @@ fn pop_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
     }
 }
 
-/// Emits allocation/free totals to stderr using the shared runtime counters.
 /// Emits the `--probe` initialization call in main's prologue: hands the
 /// embedded symbol table's address and entry count to `elephc_probe_init`,
 /// which installs the SIGPROF handler and arms the profiling timer. Inert
@@ -1368,7 +1475,7 @@ fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
         0,
     );
     // Claim the I/O event slots the PDO bridge calls through, so a `--probe`
-    // binary reports EXACT query counts and I/O wait per route. Those events are
+    // binary reports exact DB query counts and DB-driver wait per route. Those events are
     // not sampled — a driver call fires exactly one — and they cost an atomic
     // increment paid only when a query happens, so unlike per-call
     // instrumentation this is affordable in production.
@@ -1480,7 +1587,7 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
     abi::emit_symbol_address(ctx.emitter, scratch, &query_fn);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_query_fn"), 0);
     // Third slot: elephc_instr_wait, so the bridge can report how long a driver
-    // call actually blocked — the CPU-vs-wait split of each function's time.
+    // call actually blocked — the DB-wait split of each function's wall time.
     let wait_fn = target.extern_symbol("elephc_instr_wait");
     abi::emit_symbol_address(ctx.emitter, scratch, &wait_fn);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_wait_fn"), 0);
@@ -1499,6 +1606,19 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
         ctx.emitter,
         scratch,
         &target.extern_symbol("elephc_instr_throw_fn"),
+        0,
+    );
+    // Sixth slot: elephc_instr_unpark, called from the runtime's suspend helper
+    // on the paths that raise instead of returning. Those are the only ways a
+    // parked activation can reach a PHP handler without its resume hook, and the
+    // helper is shared by every coroutine — so it has no function id, and it
+    // passes the running coroutine instead, which is what the park recorded.
+    let unpark_fn = target.extern_symbol("elephc_instr_unpark");
+    abi::emit_symbol_address(ctx.emitter, scratch, &unpark_fn);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_unpark_fn"),
         0,
     );
     let request = target.extern_symbol("elephc_instr_request");
@@ -1520,11 +1640,34 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
 
 }
 
+/// Registers the top-level exact frame before main's name table is emitted.
+///
+/// Full instrumentation always covers `{main}`. Selective instrumentation keeps
+/// its existing pay-for-only-what-was-named contract and includes the root only
+/// when `{main}` itself is selected.
+fn register_main_instr(ctx: &mut FunctionContext<'_>) {
+    const MAIN_NAME: &str = "{main}";
+    if !ctx.shared.instrument.covers(MAIN_NAME) {
+        return;
+    }
+    let id = ctx.shared.register_instr(MAIN_NAME.to_string());
+    ctx.instr_id = Some(id);
+}
+
+/// Emits entry for an instrumentation id already registered on this context.
+fn emit_registered_instr_enter(ctx: &mut FunctionContext<'_>) {
+    let Some(id) = ctx.instr_id else {
+        return;
+    };
+    ctx.emitter.comment("instrument: enter (--instrument)");
+    emit_instr_hook_call(ctx, "elephc_instr_enter", id);
+}
+
 /// Emits the `--instrument` entry hook at the end of a user function's prologue:
 /// registers the function (assigning its id), records the id on the context for
 /// the epilogue, and calls `elephc_instr_enter(id)`. Synthetic bodies are not
-/// user code and stay uninstrumented; `main` uses its own prologue and is not
-/// a timed frame in this mode.
+/// user code and stay uninstrumented; `{main}` is registered by its dedicated
+/// process/web prologue before the name table is initialized.
 fn emit_instr_enter(ctx: &mut FunctionContext<'_>) {
     // Synthetic bodies are not user code. Beyond that, a selective set hooks
     // only the functions it names — the rest run at full speed.
@@ -1533,8 +1676,7 @@ fn emit_instr_enter(ctx: &mut FunctionContext<'_>) {
     }
     let id = ctx.shared.register_instr(ctx.function.name.clone());
     ctx.instr_id = Some(id);
-    ctx.emitter.comment("instrument: enter (--instrument)");
-    emit_instr_hook_call(ctx, "elephc_instr_enter", id);
+    emit_registered_instr_enter(ctx);
 }
 
 /// Emits the `--instrument` exit hook for one return path. Preserves the return
@@ -1558,13 +1700,108 @@ fn emit_instr_exit(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Emits the `--instrument` hook that parks this activation across a coroutine's
+/// stack switch, preserving `live` registers across the call.
+///
+/// A `yield` and a `Fiber::suspend` do not return: they switch stacks, so the
+/// enter hook's frame stays open across everything the consumer does next. The
+/// runtime then reads it as the caller of the consumer's next call and charges
+/// the consumer's whole cost to it — measured on four lines of PHP, a generator
+/// body that ran 23 us reported 99.8% inclusive time and an edge to a function
+/// it never called.
+///
+/// Emitted at the switch and not before it, with the outgoing arguments already
+/// staged, so what the suspension itself costs to set up — boxing the yielded
+/// value allocates — is still charged to the body that is doing it.
+pub(super) fn emit_instr_suspend(ctx: &mut FunctionContext<'_>, live: &[&'static str]) {
+    emit_instr_coroutine_hook(ctx, "elephc_instr_suspend", "suspend", live);
+}
+
+/// Emits the `--instrument` hook that unparks this activation where a resumed
+/// coroutine picks up, preserving `live` registers across the call.
+///
+/// Placed immediately after the switch returns, which is that point: the value
+/// the resume delivered is in the result register and is what `live` protects.
+pub(super) fn emit_instr_resume(ctx: &mut FunctionContext<'_>, live: &[&'static str]) {
+    emit_instr_coroutine_hook(ctx, "elephc_instr_resume", "resume", live);
+}
+
+/// Shared body of the two coroutine hooks.
+///
+/// Nothing at all is emitted for a function the instrumentation does not cover,
+/// including the saves — `instr_id` is set by the enter hook, so a body without
+/// one has no frame to park and the pushes would bracket a call that never
+/// happens.
+fn emit_instr_coroutine_hook(
+    ctx: &mut FunctionContext<'_>,
+    hook: &str,
+    label: &str,
+    live: &[&'static str],
+) {
+    if !ctx.shared.instrument.is_on() {
+        return;
+    }
+    let Some(id) = ctx.instr_id else {
+        return;
+    };
+    ctx.emitter
+        .comment(&format!("instrument: {label} (--instrument)"));
+    for reg in live {
+        abi::emit_push_reg(ctx.emitter, reg);
+    }
+    emit_instr_hook_args(ctx, id);
+    // A fifth argument these two take and the enter/exit pair does not: WHICH
+    // coroutine this is, read from the runtime's own `_fiber_current`.
+    //
+    // The frame pointer says which ACTIVATION and this says which SUSPENSION,
+    // and only the second can be had from inside the suspend helper — which is
+    // where it is needed, because that helper does not always return. Loaded
+    // last for the same reason the frame pointer is: the symbol loads above
+    // borrow a scratch register, and this one must survive to the call.
+    let coro_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_load_symbol_to_reg(ctx.emitter, coro_arg, "_fiber_current", 0);
+    let entry = ctx.emitter.target.extern_symbol(hook);
+    abi::emit_call_label(ctx.emitter, &entry);
+    for reg in live.iter().rev() {
+        abi::emit_pop_reg(ctx.emitter, reg);
+    }
+}
+
 /// Loads `id` into the first integer argument register, the program's live
-/// allocation counter (`_gc_allocs`) into the second, and the free counter
-/// (`_gc_frees`) into the third, then calls a `elephc_instr_*` hook. Reading
-/// both counters at the call site lets the runtime attribute allocations — and
-/// net retained objects (allocs minus frees) — per function exactly the way it
-/// attributes time.
+/// allocation counter (`_gc_allocs`) into the second, the free counter
+/// (`_gc_frees`) into the third, and this activation's frame pointer into the
+/// fourth, then calls a `elephc_instr_*` hook. Reading both counters at the call
+/// site lets the runtime attribute allocations — and net retained objects
+/// (allocs minus frees) — per function exactly the way it attributes time.
+///
+/// The frame pointer is what tells the runtime WHICH activation this is. An id
+/// alone cannot: two activations of a recursive function are the same thing to
+/// it, so an exception caught across them was charged to whichever frame the
+/// search found first, and an exit for an activation past the shadow-stack cap
+/// was indistinguishable from an exit for one that was tracked. Both were known
+/// defects with the same cause, and both close here.
+///
+/// It costs one `mov`. Every emitted function establishes a frame pointer in its
+/// prologue — unconditionally; there is no leaf or frameless variant — the enter
+/// hook runs last in that prologue and the exit hook first in the epilogue,
+/// before the teardown, so the register already holds this activation's own frame
+/// address at both sites. Live frames have distinct addresses by construction,
+/// which is exactly the property the runtime needs and the only one it uses.
+///
+/// What the runtime does NOT get for free is that a returned frame's address is
+/// handed back out, and its shadow stack can hold frames that have returned —
+/// an unwind leaves them until the catcher exits. Resolving that is the
+/// runtime's business, not this emission's; see `Frame::fp` and `dropped_fps`
+/// in `elephc-instr`.
 fn emit_instr_hook_call(ctx: &mut FunctionContext<'_>, hook: &str, id: usize) {
+    emit_instr_hook_args(ctx, id);
+    let entry = ctx.emitter.target.extern_symbol(hook);
+    abi::emit_call_label(ctx.emitter, &entry);
+}
+
+/// Places the four arguments every `elephc_instr_*` hook takes, without calling
+/// one. Split out because the coroutine hooks take a fifth.
+pub(super) fn emit_instr_hook_args(ctx: &mut FunctionContext<'_>, id: usize) {
     let target = ctx.emitter.target;
     let id_arg = abi::int_arg_reg_name(target, 0);
     abi::emit_load_int_immediate(ctx.emitter, id_arg, id as i64);
@@ -1572,7 +1809,27 @@ fn emit_instr_hook_call(ctx: &mut FunctionContext<'_>, hook: &str, id: usize) {
     abi::emit_load_symbol_to_reg(ctx.emitter, allocs_arg, "_gc_allocs", 0);
     let frees_arg = abi::int_arg_reg_name(target, 2);
     abi::emit_load_symbol_to_reg(ctx.emitter, frees_arg, "_gc_frees", 0);
-    let entry = target.extern_symbol(hook);
+    // Last, because the symbol loads above borrow a scratch register and this
+    // one must survive to the call.
+    let frame_arg = abi::int_arg_reg_name(target, 3);
+    let frame_ptr = abi::frame_pointer_reg(ctx.emitter);
+    ctx.emitter
+        .instruction(&format!("mov {frame_arg}, {frame_ptr}"));
+}
+
+/// Finalizes the active exact profile before a generated terminal path exits.
+///
+/// The current function id and frame pointer let the runtime identify the
+/// precise activation even under recursion; an uninstrumented current function
+/// uses the sentinel id and the runtime drains the tracked ancestors directly.
+pub(super) fn emit_instr_terminate(ctx: &mut FunctionContext<'_>) {
+    if !ctx.shared.instrument.is_on() {
+        return;
+    }
+    let target = ctx.emitter.target;
+    let current_id = ctx.instr_id.map_or(u32::MAX, |id| id as u32);
+    emit_instr_hook_args(ctx, current_id as usize);
+    let entry = target.extern_symbol("elephc_instr_terminate");
     abi::emit_call_label(ctx.emitter, &entry);
 }
 
@@ -1669,6 +1926,7 @@ pub(super) fn emit_function_return_epilogue(
     skip_return_slot: Option<LocalSlotId>,
 ) {
     emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
+    emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
@@ -1685,6 +1943,7 @@ pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
         .expect("codegen bug: user function has no epilogue label");
     ctx.emitter.label(&label);
     emit_function_local_epilogue_cleanup(ctx, None);
+    emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);

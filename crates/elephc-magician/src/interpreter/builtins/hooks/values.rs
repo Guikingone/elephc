@@ -281,6 +281,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StrSplit,
     /// Dispatches `str_word_count(...)`.
     StrWordCount,
+    /// Dispatches the whole `iconv*` extension family.
+    Iconv,
     /// Dispatches `strlen(...)` and `mb_strlen(...)`.
     Strlen,
     /// Dispatches `str_repeat(...)`.
@@ -518,7 +520,7 @@ impl EvalValuesHook {
                 }
                 eval_pi_result(values)
             }
-            Self::Printf => eval_printf_result(evaluated_args, values),
+            Self::Printf => eval_printf_result(evaluated_args, context, values),
             Self::QuoteMeta => one_arg(evaluated_args, values, eval_quotemeta_result),
             Self::QuotedPrintableEncode => {
                 one_arg(evaluated_args, values, eval_quoted_printable_encode_result)
@@ -568,7 +570,7 @@ impl EvalValuesHook {
                 "stripslashes" => eval_stripslashes_result(value, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             }),
-            Self::Sprintf => eval_sprintf_result(evaluated_args, values),
+            Self::Sprintf => eval_sprintf_result(evaluated_args, context, values),
             Self::Sscanf => eval_sscanf_values_result(evaluated_args, context, values),
             Self::StringCase => one_arg(evaluated_args, values, |value, values| match name {
                 "lcfirst" => eval_lcfirst_result(value, values),
@@ -671,6 +673,7 @@ impl EvalValuesHook {
                 ),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::Iconv => eval_iconv_values(name, evaluated_args, context, values),
             Self::Strlen => match name {
                 "mb_strlen" => match evaluated_args {
                     [value] => eval_mb_strlen_result(*value, None, context, values),
@@ -735,8 +738,8 @@ impl EvalValuesHook {
                 [value, separators] => eval_ucwords_result(*value, Some(*separators), values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::Vprintf => eval_vprintf_result(evaluated_args, values),
-            Self::Vsprintf => eval_vsprintf_result(evaluated_args, values),
+            Self::Vprintf => eval_vprintf_result(evaluated_args, context, values),
+            Self::Vsprintf => eval_vsprintf_result(evaluated_args, context, values),
             Self::Nl2br => match evaluated_args {
                 [value] => eval_nl2br_result(*value, true, values),
                 [value, use_xhtml] => {

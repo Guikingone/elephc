@@ -32,6 +32,9 @@
 //!   overwrote the same slot on every iteration and freed only the last value —
 //!   measured at 5 leaked blocks per iteration for a four-element string array, and a
 //!   `scandir()` body of that shape exhausted the heap where php runs to completion.
+//!   (3) A cleanup-tracked non-parameter slot returned by move is excluded only when
+//!   the callee cannot unwind: before its return, that slot still owns the value and
+//!   must be released by the callee's exceptional-cleanup frame.
 //!   Objects/closures/resources/`mixed`/`iterable` and by-ref params are excluded
 //!   because their cleanup timing or aliasing cannot be reproduced by a value-copy splice.
 //! - String arguments add one more call-site condition: PHP concatenation builds
@@ -50,9 +53,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
-    collect_dispatch_groups, BasicBlock, BlockId, Function, FunctionVariantLabel, Immediate,
-    InstId, Instruction, IrType, LocalKind, LocalSlotId, Module, Op, Ownership, Terminator, Value,
-    ValueDef, ValueId,
+    collect_dispatch_groups, BasicBlock, BlockId, Effects, Function, FunctionVariantLabel,
+    Immediate, InstId, Instruction, IrType, LocalKind, LocalSlotId, Module, Op, Ownership,
+    Terminator, Value, ValueDef, ValueId,
 };
 use crate::ir_passes::cfg::has_exception_handlers;
 use crate::ir_passes::rewrite::neutralize_to_nop;
@@ -157,7 +160,10 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
 ///    because the argument is borrowed and the return value's ownership is moved out) are
 ///    transplanted as `BorrowedTemp` so the host epilogue ignores them; ordinary refcounted
 ///    internal locals stay `PhpLocal` so the host epilogue still frees them. This
-///    is only allowed when direct-return cleanup is uniform across all return paths.
+///    is only allowed when direct-return cleanup is uniform across all return paths. A
+///    cleanup-tracked non-parameter return slot additionally requires a non-unwinding body:
+///    until the return executes, the slot remains an owner that an exceptional callee frame
+///    would release, while the coarse transplanted exclusion cannot distinguish that state.
 ///
 /// By-ref/variadic parameters and special-kind locals (ref-cells, statics, globals,
 /// captures, iterator/generator state) are excluded because they need aliasing/persistence
@@ -189,6 +195,9 @@ fn callee_is_inline_safe(callee: &Function) -> bool {
         }
     }
     if !direct_return_cleanup_is_inline_safe(callee) {
+        return false;
+    }
+    if callee_has_unwindable_owned_direct_return_slot(callee) {
         return false;
     }
     true
@@ -428,6 +437,45 @@ fn callee_param_slots(callee: &Function) -> HashSet<LocalSlotId> {
         .collect()
 }
 
+/// Returns true when inlining would erase exceptional cleanup for an owned return slot.
+///
+/// A non-parameter cleanup-tracked local is still owned by the callee until its `Return`
+/// transfers the value. `transplant_callee_body` must exclude that slot from the host's
+/// normal epilogue to avoid freeing the returned value, but that same coarse exclusion also
+/// affects the host's exception callback. Keep an ordinary call whenever the callee can throw
+/// or can exhaust heap/concat storage at a cdylib recovery boundary, so its own frame releases
+/// the slot on unwind. Parameter slots are borrows from entry and do not have this conflict.
+fn callee_has_unwindable_owned_direct_return_slot(callee: &Function) -> bool {
+    let unwind_effects = Effects::MAY_THROW | Effects::ALLOC_HEAP | Effects::ALLOC_CONCAT;
+    if !callee
+        .instructions
+        .iter()
+        .any(|instruction| instruction.effects.intersects(unwind_effects))
+    {
+        return false;
+    }
+
+    let parameter_slots = callee_param_slots(callee);
+    callee_directly_returned_slots(callee)
+        .into_iter()
+        .filter(|slot| !parameter_slots.contains(slot))
+        .any(|slot| {
+            callee
+                .locals
+                .get(slot.as_raw() as usize)
+                .is_some_and(|local| {
+                    matches!(
+                        local.kind,
+                        LocalKind::PhpLocal
+                            | LocalKind::HiddenTemp
+                            | LocalKind::OwnedTemp
+                            | LocalKind::NamedArgTemp
+                    ) && Ownership::php_type_needs_lifetime_tracking(&local.php_type)
+                        && !callee.no_epilogue_cleanup_slots.contains(&slot)
+                })
+        })
+}
+
 /// Returns whether the call site's argument operands bind directly to the callee's
 /// parameter slots with no coercion: one operand per parameter, each operand's storage
 /// type matching its parameter's. This rejects calls whose arguments the callee prologue
@@ -652,13 +700,15 @@ fn transplant_callee_body(
     let mut inst_map: HashMap<InstId, InstId> = HashMap::new();
     let mut local_map: HashMap<LocalSlotId, LocalSlotId> = HashMap::new();
 
-    // Parameter slots and directly-returned slots are excluded from the callee's
+    // Parameter slots and directly-returned slots are excluded from the callee's normal
     // epilogue cleanup (borrowed argument / ownership moved into the return value). The
     // host epilogue cleans owning local kinds, so transplant these slots as
     // `BorrowedTemp` to reproduce that exclusion; ordinary refcounted internal locals
     // keep their `PhpLocal` kind so the host epilogue still frees them (the only
     // difference is deferred timing, which is unobservable for the destructor-free
-    // types we inline).
+    // types we inline). Eligibility separately rejects unwindable callees with an owned
+    // directly-returned slot, because before `Return` that slot still needs exceptional
+    // cleanup and this coarse exclusion cannot represent the ownership state transition.
     let excluded_from_cleanup: HashSet<LocalSlotId> = callee_param_slots(callee)
         .into_iter()
         .chain(callee_directly_returned_slots(callee))

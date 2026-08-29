@@ -222,7 +222,10 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_hex2bin` | Hex → binary | `x1`/`x2` | `x1`/`x2` |
 | `__rt_md5` | MD5 hash | `x1`/`x2` | `x1`/`x2` |
 | `__rt_sha1` | SHA1 hash | `x1`/`x2` | `x1`/`x2` |
-| `__rt_sprintf` | Format string | format + args on stack | `x1`/`x2` |
+| `__rt_sprintf` | Format string, including deferred static/Mixed coercion and eval-aware object stringification | format + tagged args on stack + optional eval context | `x1`/`x2` |
+| `__rt_sprintf_pack_mixed` | Pack a boxed scalar or preserve a boxed non-scalar for deferred formatting | boxed `Mixed` in `x0` | record payload/tag in `x0`/`x1` |
+| `__rt_sprintf_mixed_to_int` | Apply PHP numeric formatting rules and warnings to a boxed or raw-tagged array, object, callable, iterable, or resource | record tag/payload + conversion kind + optional eval context in `x0`-`x3` | `x0` |
+| `__rt_sprintf_mixed_to_string` | Render a boxed or raw-tagged array/resource, dispatch native/eval `__toString()`, or throw a catchable `Error` for a non-stringable value | record tag/payload + optional eval context in `x0`/`x1`/`x2` | owner + `x1`/`x2` |
 | `__rt_base64_encode` | Base64 encode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_base64_decode` | Base64 decode (php-src semantics, `$strict` in `x3`) | `x1`/`x2`/`x3` | `x0` ok flag + `x1`/`x2` |
 | `__rt_quoted_printable_encode` | MIME quoted-printable encode | `x1`/`x2` | `x1`/`x2` |
@@ -251,7 +254,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_crc32` | CRC32 checksum | `x1`/`x2` | `x0` |
 | `__rt_inet_ntop` / `__rt_inet_pton` | IPv4/IPv6 address ↔ packed-binary conversion | address | `x1`/`x2` |
 | `__rt_long2ip` / `__rt_ip2long` | Dotted-quad string ↔ integer conversion | `x0` or `x1`/`x2` | `x1`/`x2` or `x0` |
-| `__rt_vsprintf` | `vsprintf()` formatting with an argument array | format + array | `x1`/`x2` |
+| `__rt_vsprintf` | `vsprintf()` formatting with an argument array | format + array + optional eval context | `x1`/`x2` |
+| `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |
 
 ## Callable routines
 
@@ -477,7 +481,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 |---|---|---|---|
 | `__rt_time` | Get current Unix timestamp via `gettimeofday` syscall | — | `x0` = seconds since epoch |
 | `__rt_microtime` | Get current time as float seconds via `gettimeofday` syscall | — | `d0` = seconds.microseconds |
-| `__rt_getenv` | Get environment variable value via libc `getenv()` | `x1`/`x2` = name string | `x1`/`x2` = value string |
+| `__rt_getenv` | Get environment variable value via libc `getenv()` | `x1`/`x2` = name string | Present: `x1`/`x2` = owned value string (non-null even when empty); unset: `x1 = 0`, `x2 = 0`, which lowering boxes as PHP `false` |
 | `__rt_php_uname` | Read target runtime system information via libc `uname()`; supports PHP modes `a`, `s`, `n`, `r`, `v`, and `m` | `x1`/`x2` = mode string | `x1`/`x2` = selected uname string |
 | `__rt_shell_exec` | Execute shell command and capture output via libc `popen()`/`pclose()` | `x1`/`x2` = command string | `x1`/`x2` = output string |
 
@@ -490,11 +494,11 @@ Unbounded recursion would otherwise run the stack pointer off the end of the map
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_stack_limit_init` | Measure the running stack once and publish the lowest address compiled prologues may reach | — | writes `_stack_limit` and `_stack_limit_main` |
-| `__rt_stack_overflow` | Write `Fatal error: Maximum call stack size reached. Infinite recursion?` to stderr and exit with status 255 | — | does not return |
+| `__rt_stack_overflow` | Write `Fatal error: Maximum call stack size reached. Infinite recursion?` to stderr, then escape an active cdylib boundary or exit a standalone process with status 255 | — | does not return |
 
 `__rt_stack_limit_init` calls `getrlimit(RLIMIT_STACK, …)` — resource number 3 on both Linux and macOS — and publishes `entry_sp - (min(rlim_cur, 64 MiB) - 32 KiB)`. The cap absorbs `RLIM_INFINITY`; the 32 KiB reserve is the headroom a guarded frame may still consume before the next guarded call (outgoing stack arguments, `__rt_*` helper frames, and their libc calls). When `getrlimit` fails, reports an implausibly small limit, or the subtraction would wrap, the routine publishes zero instead, and zero disables the guard for the whole process.
 
-The process-entry prologue calls it once, after argc/argv have been stored to globals (it is an ordinary call and clobbers the argument registers). Under `--web` the call sits in the process-entry stub, before the workers are forked, so every worker inherits a floor that matches its own stack.
+The process-entry prologue calls it once, after argc/argv have been stored to globals (it is an ordinary call and clobbers the argument registers). Under `--web` the call sits in the process-entry stub, before the workers are forked, so every worker inherits a floor that matches its own stack. A cdylib has no process entry, so `elephc_init()` calls the same helper before the host enters exported PHP code; stack exhaustion then unwinds to the export boundary as `ELEPHC_STATUS_RUNTIME_FAILURE` instead of terminating the host.
 
 Two globals hold the state:
 
@@ -995,7 +999,9 @@ The tables above document the public runtime operations. The emitters also split
 
 Compiled **executables** dead-strip unreachable runtime helpers at link time. On Linux each `__rt_*` helper is emitted in its own `.text.<name>` section and collected with `--gc-sections`; on macOS the runtime object carries a `.subsections_via_symbols` footer so each helper is a separately collectable atom dropped by `-dead_strip` (internal cross-helper labels stay assembler-local `L`-locals, with the few helpers reached by a `b`/`bl` from another atom marked `.alt_entry` so they remain live symbols). Combined with the AST-side control-flow pruning and dead-code elimination elephc already does before codegen, only the helpers a program actually reaches are linked. Shared libraries (`--emit cdylib`) keep the full runtime so every exported entry stays callable.
 
-The runtime can also be emitted in **position-independent mode** for `--emit cdylib` builds: the emitter's `pic_data_refs` flag makes the `abi::symbols` helpers route every global data reference through the GOT (`@GOTPCREL` on x86_64, `:got:`/`:got_lo12:` on AArch64) instead of direct PC-relative addressing, and on ELF targets every internal global gets a `.hidden` visibility directive. The PIC and non-PIC variants produce different assembly text, so they cache as separate runtime objects. See [The Codegen](the-codegen.md) and [Shared Libraries](../beyond-php/cdylib.md).
+The runtime can also be emitted in **position-independent mode** for `--emit cdylib` builds: the emitter's `pic_data_refs` flag makes the `abi::symbols` helpers route every global data reference through the GOT (`@GOTPCREL` on x86_64, `:got:`/`:got_lo12:` on AArch64) instead of direct PC-relative addressing. A separate `cdylib_boundary` flag controls exception activations and recoverable runtime exits, so those semantics no longer depend implicitly on PIC. Every internal ELF global receives `.hidden`; Mach-O uses `.private_extern`. The PIC and non-PIC variants produce different assembly text, so they cache as separate runtime objects.
+
+The cdylib boundary also makes recoverable unwinding explicit. Each cdylib user function publishes an exception-activation record that links the current frame to its generated cleanup callback. If an exception escapes any export, the existing Throwable machinery walks those records, releases function-owned values, and returns through the boundary handler. Heap and concat allocation exhaustion use the same active boundary to report `ELEPHC_STATUS_ALLOCATION_FAILURE`; other shared `emit_exit` paths become `ELEPHC_STATUS_RUNTIME_FAILURE` while a boundary is active, and executable fatal paths remain unchanged. Scalar wrappers preserve their original return signatures and expose the recorded result through `elephc_last_status`; owned-string wrappers preserve any fixed supported input layout, return status directly, copy successful bytes into independently owned runtime-heap storage, and transfer that buffer to the C caller for `elephc_free`. Boundary depth is counted, and each wrapper saves/restores `_concat_off`, so nested teardown cannot disable or corrupt its caller's boundary state. Diagnostic presence is stored separately from diagnostic length, so an empty Throwable message remains distinguishable from “no error”. See [The Codegen](the-codegen.md) and [Shared Libraries](../beyond-php/cdylib.md).
 
 ## Runtime data
 

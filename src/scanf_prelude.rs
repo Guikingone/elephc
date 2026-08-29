@@ -603,12 +603,6 @@ pub(crate) const SCANF_MAX_VARS: usize = 8;
 /// back two variables. The engine already tracks exactly that number; it is the first element of
 /// what `__elephc_scanf_ref()` returns. Input exhausted before any conversion succeeded is `-1`,
 /// where the array form answers `null`. Both measured on `php -n` 8.5.6.
-/// Test-only view of the generated wrappers, for the migration transcription and the oracle.
-#[cfg(test)]
-pub(crate) fn scanf_vars_wrappers_for_test() -> String {
-    scanf_vars_wrappers()
-}
-
 #[cfg(test)]
 fn scanf_vars_wrappers() -> String {
     let mut out = String::new();

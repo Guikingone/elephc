@@ -2,7 +2,7 @@
 title: "zlib_decode() — internals"
 description: "Compiler internals for zlib_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 508
+  order: 518
 ---
 
 ## `zlib_decode()` — internals

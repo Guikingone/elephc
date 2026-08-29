@@ -1,0 +1,12 @@
+*.s
+*.o
+main
+*.a
+*.so
+*.dylib
+libmain.h
+ViewProtocol
+ViewProtocolIOS
+ViewProtocol.app/
+ViewProtocolIOS.app/
+simulator.png

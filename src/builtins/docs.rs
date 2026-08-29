@@ -138,9 +138,24 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinTargetStrategy::EirGraph => "eir_graph",
         BuiltinTargetStrategy::RuntimeCall => "runtime_call",
     };
-    let target_support = match semantics.target_support {
+    let (target_support_kind, target_support) = match semantics.target_support {
         crate::builtins::semantics::BuiltinTargetSupport::All => {
-            ["macos-aarch64", "linux-aarch64", "linux-x86_64"]
+            (
+                "all",
+                vec![
+                    "macos-aarch64",
+                    "ios-arm64",
+                    "ios-sim-arm64",
+                    "linux-aarch64",
+                    "linux-x86_64",
+                ],
+            )
+        }
+        crate::builtins::semantics::BuiltinTargetSupport::HostOnly => {
+            (
+                "host_only",
+                vec!["macos-aarch64", "linux-aarch64", "linux-x86_64"],
+            )
         }
     };
     let runtime_functions = match semantics.runtime_functions {
@@ -182,6 +197,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         "ownership": {"kind": ownership, "argument_indexes": aliases},
         "requirements": requirements,
         "target_strategy": target_strategy,
+        "target_support_kind": target_support_kind,
         "target_support": target_support,
         "runtime_functions": runtime_functions,
         "argument_lowering": argument_lowering,
@@ -281,6 +297,53 @@ mod tests {
         assert!(arr.iter().all(|e| e["name"].as_str().map_or(false, |n| !n.starts_with("__elephc_"))));
         // The default export carries the `internal` flag, always false here.
         assert_eq!(strlen["internal"], false);
+    }
+
+    /// Verifies all-target metadata names both iOS targets while process-spawning
+    /// builtins retain the three-host surface enforced by their checker diagnostics.
+    #[test]
+    fn export_distinguishes_all_targets_from_host_only_process_builtins() {
+        let exported = super::export_builtins_json();
+        let records = exported.as_array().expect("top-level array");
+        let support_for = |name: &str| {
+            records
+                .iter()
+                .find(|record| record["name"] == name)
+                .unwrap_or_else(|| panic!("{name} present"))["semantics"]["target_support"]
+                .clone()
+        };
+
+        assert_eq!(
+            support_for("strlen"),
+            serde_json::json!([
+                "macos-aarch64",
+                "ios-arm64",
+                "ios-sim-arm64",
+                "linux-aarch64",
+                "linux-x86_64",
+            ])
+        );
+        let strlen = records
+            .iter()
+            .find(|record| record["name"] == "strlen")
+            .expect("strlen present");
+        assert_eq!(strlen["semantics"]["target_support_kind"], "all");
+        for name in ["system", "passthru", "exec", "shell_exec", "popen", "pclose"] {
+            let process_builtin = records
+                .iter()
+                .find(|record| record["name"] == name)
+                .unwrap_or_else(|| panic!("{name} present"));
+            assert_eq!(
+                process_builtin["semantics"]["target_support_kind"],
+                "host_only",
+                "{name} must declare the host-only support class",
+            );
+            assert_eq!(
+                support_for(name),
+                serde_json::json!(["macos-aarch64", "linux-aarch64", "linux-x86_64"]),
+                "{name} must remain host-only",
+            );
+        }
     }
 
     /// Verifies the include-internal export is a strict superset of the PHP-visible one and

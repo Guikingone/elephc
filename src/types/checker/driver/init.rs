@@ -10,11 +10,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::platform::Platform;
+use crate::codegen::platform::Target;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
+use crate::types::iconv_constants::ICONV_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
@@ -42,7 +43,7 @@ impl Checker {
     ///
     /// # Returns
     /// A `Checker` instance ready for the program to be loaded into.
-    pub(super) fn new(target_platform: Platform) -> Self {
+    pub(super) fn new(target: Target) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
         // The PHP version surface. Only the TYPES are declared here — the values are baked per
@@ -100,6 +101,11 @@ impl Checker {
         for (name, _value) in crate::types::zlib_constants::ZLIB_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for (name, _value) in ICONV_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        constants.insert("ICONV_IMPL".to_string(), PhpType::Str);
+        constants.insert("ICONV_VERSION".to_string(), PhpType::Str);
         for (name, _value) in JSON_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
@@ -149,7 +155,7 @@ impl Checker {
         constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
 
         Self {
-            target_platform,
+            target,
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),

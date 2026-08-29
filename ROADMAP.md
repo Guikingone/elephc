@@ -1071,7 +1071,7 @@ and 0.x validation rather than by speculative pass work.
 - [x] `static $x;` function-static declarations without an initializer — desugar to `= null` in both the native and Magician `eval()` parsers, matching PHP
 - [x] Purity / may-throw v2 — closed-world instance dispatch now unions concrete override summaries (with exact fixed-construction/final/private targets), named and dynamic property reads distinguish declared untyped slots, typed-slot throws, missing-property warnings, hooks, and `__get`, known array offsets separate silent reads from undefined-key warnings, and registry/runtime builtin effects use shared argument-sensitive contracts instead of the previous blanket barrier. A final whole-module fixed point writes these summaries onto refinable EIR call/property instructions before validation, while unresolved/eval/external targets retain conservative defaults
 - [x] Guard reasoning v2 for dead-code elimination — integer interval facts from `$x <op> int` relational branches when `$x` has a proven integer domain from an exact `int` parameter, typed local, or literal guard (intersected across nested paths and discharged for transitive relational / strict-int contradictions and impossible `switch` int cases); cross-variable relational / strict-equality atoms with safe complements, full exact coupling after strict substitution, and pure non-throwing `while` / `for` body-entry strengthening, still under the path-local AST `GuardState` protocol with write invalidation, float/string-domain refusal, NaN-safe false-branch policy, and no general CFG join
-- [ ] Exception-aware DCE v2 — exact thrown-type / handler reachability, nested try rethrow modeling, and less conservative finally-path invalidation
+- [x] Exception-aware DCE v2 — exact and constrained thrown-type domains now route source-order handlers through the checker-provided class/interface hierarchy; fixed-point direct-call summaries, exact explicit/operator failures, nested caught-variable rethrows, and type-specific catch guard invalidation remove disjoint paths without closing dynamic dispatch unsafely. Finally invalidation now follows only paths that execute it, excluding unconditional `exit`/`die` branches while retaining conservative fallbacks for unresolved calls, open receivers, external or trait-provided constructors, and complex control flow.
 - [ ] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes
 - [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
 - [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
@@ -1184,15 +1184,16 @@ statics, and static class properties all reset between requests). Run it with
 
 ## v0.27.x — Shared and static libraries (C ABI)
 
-- [x] `--emit cdylib` flag, export PHP functions as C-callable symbols via `#[Export]` (shipped early; supersedes the planned `--lib` spelling)
+- [x] `--emit cdylib` flag, export PHP functions as C-callable symbols via `#[Export]`
 - [x] `#[Export]` attribute for symbol selection (supersedes the planned `--export` flag spelling)
-- [x] `.dylib` / `.so` output on all supported targets (macOS aarch64, Linux aarch64, Linux x86_64)
-- [ ] `.a` static library output
+- [x] `.dylib` / `.so` output on all supported targets (macOS aarch64, iOS device/simulator aarch64, Linux aarch64, Linux x86_64)
+- [x] `.a` static library output through `--emit staticlib` (`--emit lib` is its alias, not a cdylib spelling)
 - [ ] Multi-file library compilation
-- [x] Symbol visibility control — ELF cdylibs hide every internal global; the dynamic symbol table exposes only `#[Export]` trampolines and the `elephc_init`/`elephc_shutdown`/`elephc_last_error`/`elephc_free` lifecycle entry points
-- [ ] String return values from exported functions (host frees via `elephc_free`)
-- [ ] Auto-generated C header file
-- [ ] Null-terminated string convention for C interop
+- [x] Symbol visibility control — ELF hidden and Mach-O private-extern directives keep every compiler/runtime/CRT implementation symbol private; the public table contains only `#[Export]` trampolines plus `elephc_abi_version`, `elephc_init`, `elephc_shutdown`, `elephc_last_status`, `elephc_last_error`, and `elephc_free`
+- [x] Binary-safe string return values for the exact `string -> string` export ABI — status/out-parameters, independent caller ownership through `elephc_free`, and recoverable PHP-exception/allocation failures
+- [x] Deterministic auto-generated C header beside each cdylib, including ABI/status constants, resolved prototypes, C++ guards, and ownership/lifetime comments
+- [x] Recoverable scalar export boundary without changing scalar C signatures — zero sentinel plus `elephc_last_status`, stable diagnostics, frame cleanup, and nested boundary-depth/concat restoration
+- [ ] Null-terminated string convention for C interop (owned string results currently include a convenience trailing NUL, but pointer/length remains the authoritative binary-safe ABI)
 - [x] Stateful FFI callback trampolines — generate C-ABI-compatible trampoline symbols for descriptor-backed callables passed to extern `callable` parameters, retaining descriptor/capture/receiver environments for supported scalar/ptr signatures and documenting constraints for C APIs without userdata/context slots
 - [ ] `pkg-config` generation
 - [ ] FFI documentation for C, Rust, Python, Go

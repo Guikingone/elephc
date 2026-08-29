@@ -3,10 +3,11 @@
 //! Provides small target-aware helpers for heap debug setup, frame copying, and process exit.
 //!
 //! Called from:
-//! - `crate::codegen::block_emit` and top-level program prologue emission.
+//! - `crate::codegen::block_emit`, top-level prologues, and runtime fatal emitters.
 //!
 //! Key details:
 //! - Register choices must match the platform entry convention before normal PHP frame setup begins.
+//! - Process exits first escape an active cdylib boundary so embedding hosts survive fatal paths.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -75,14 +76,14 @@ pub fn emit_enable_web_heap_guard_flag(emitter: &mut Emitter) {
 /// Copy the current frame pointer into the destination scratch register.
 #[cfg(test)]
 pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // copy the current frame pointer into the requested scratch register
         "mov {}, {}",
         dest,
         super::registers::frame_pointer_reg(emitter)
-    )); // copy the current frame pointer into the requested scratch register
+    ));
 }
 
-/// Emit a process-exit sequence for the current target, then return control to the OS.
+/// Emit a process-exit sequence, or escape through an active cdylib boundary.
 ///
 /// # Arguments
 /// - `code`: the exit code visible to the OS; must fit in the target's exit register.
@@ -93,8 +94,10 @@ pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {
 /// - **Linux x86_64**: loads `code` into `edi` and invokes syscall 231 (`exit_group`).
 /// - **macOS x86_64**: panics — not yet implemented.
 ///
-/// This routine never returns to the calling code. The syscall consumes the current execution context.
+/// Executable mode never returns. An active cdylib boundary records
+/// `ELEPHC_STATUS_RUNTIME_FAILURE` and unwinds through `__rt_throw_current` instead.
 pub fn emit_exit(emitter: &mut Emitter, code: u32) {
+    emit_cdylib_exit_escape(emitter);
     match (emitter.target.platform, emitter.target.arch) {
         (super::super::platform::Platform::MacOS, Arch::AArch64)
         | (super::super::platform::Platform::Linux, Arch::AArch64) => {
@@ -114,6 +117,52 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
         }
         (super::super::platform::Platform::Windows, _) => {
             panic!("Windows target is not yet supported (see issue #379)");
+        }
+    }
+}
+
+/// Converts an otherwise process-fatal exit into a runtime boundary escape for cdylibs.
+pub fn emit_cdylib_exit_escape(emitter: &mut Emitter) {
+    if !emitter.cdylib_boundary {
+        return;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            super::emit_load_symbol_to_reg(
+                emitter,
+                "x9",
+                crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
+                0,
+            );
+            emitter.instruction("cbz x9, 991f");                                // preserve process exit when no host boundary is active
+            super::emit_store_imm_to_symbol(
+                emitter,
+                crate::codegen_support::cdylib::BOUNDARY_STATUS,
+                0,
+                crate::codegen_support::cdylib::STATUS_RUNTIME_FAILURE as i64,
+            );
+            super::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+            emitter.instruction("b __rt_throw_current");                        // unwind the fatal path into the active host boundary
+            emitter.label("991");
+        }
+        Arch::X86_64 => {
+            super::emit_load_symbol_to_reg(
+                emitter,
+                "r10",
+                crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
+                0,
+            );
+            emitter.instruction("test r10, r10");                               // distinguish an active host boundary from executable mode
+            emitter.instruction("jz 991f");                                     // preserve process exit when no host boundary is active
+            super::emit_store_imm_to_symbol(
+                emitter,
+                crate::codegen_support::cdylib::BOUNDARY_STATUS,
+                0,
+                crate::codegen_support::cdylib::STATUS_RUNTIME_FAILURE as i64,
+            );
+            super::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+            emitter.instruction("jmp __rt_throw_current");                      // unwind the fatal path into the active host boundary
+            emitter.label("991");
         }
     }
 }

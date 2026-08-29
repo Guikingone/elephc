@@ -2,7 +2,7 @@
 title: "similar_text()"
 description: "Calculates the similarity between two strings."
 sidebar:
-  order: 469
+  order: 479
 ---
 
 ## similar_text()

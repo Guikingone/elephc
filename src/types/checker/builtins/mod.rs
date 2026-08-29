@@ -52,10 +52,43 @@ impl Checker {
     /// No-op on non-macOS targets. Used for libraries that live in libc on
     /// Linux (glibc/musl) but need explicit linkage on macOS — e.g. `iconv`.
     pub(crate) fn require_macos_builtin_library(&mut self, library: &str) {
-        if self.target_platform == crate::codegen::platform::Platform::MacOS
+        if self.target.platform == crate::codegen::platform::Platform::MacOS
             && !self.required_libraries.iter().any(|lib| lib == library)
         {
             self.required_libraries.push(library.to_string());
+        }
+    }
+
+    /// Records the link requirements of a builtin reached through first-class callable syntax.
+    ///
+    /// A direct call records them while checking its arguments, but `iconv_strlen(...)`
+    /// never takes that path even though the emitted callable wrapper references the same
+    /// bridge entry points. A first-class callable has no arguments to inspect, so a
+    /// source-dependent resolver is asked with an empty argument list, which is exactly
+    /// the conservative branch every resolver already answers for a non-literal argument.
+    pub(crate) fn require_first_class_callable_builtin_libraries(&mut self, name: &str) {
+        let Some(def) = crate::builtins::registry::lookup(name) else {
+            return;
+        };
+        let requirements = match def.spec.semantics.requirements {
+            crate::builtins::semantics::BuiltinRequirements::Static(requirements) => {
+                requirements.to_vec()
+            }
+            crate::builtins::semantics::BuiltinRequirements::Shared(resolve) => {
+                resolve(&crate::builtins::semantics::BuiltinRequirementInput { args: &[] })
+            }
+        };
+        for requirement in requirements {
+            match requirement {
+                crate::builtins::semantics::BuiltinRequirement::Bridge(library)
+                | crate::builtins::semantics::BuiltinRequirement::SystemLibrary(library) => {
+                    self.require_builtin_library(library);
+                }
+                crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
+                    self.require_macos_builtin_library(library);
+                }
+                crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
+            }
         }
     }
 

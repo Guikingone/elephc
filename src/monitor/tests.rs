@@ -53,6 +53,60 @@
         assert_eq!(resolved, std::path::PathBuf::from("/usr/bin/true"));
     }
 
+    /// Empty exact captures distinguish an unavailable control channel, an
+    /// interrupted window, and an acknowledged run that published no frames.
+    #[test]
+    fn empty_exact_capture_reasons_name_the_observed_outcome() {
+        let binary = std::path::Path::new("shop");
+        let clean = std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .status()
+            .expect("clean fixture");
+        let failed = std::process::Command::new("sh")
+            .args(["-c", "exit 17"])
+            .status()
+            .expect("failed fixture");
+
+        let unavailable = super::no_profile_reason(&clean, binary, false);
+        assert!(unavailable.contains("control channel"), "{unavailable}");
+        assert!(unavailable.contains("unavailable"), "{unavailable}");
+
+        let empty = super::no_profile_reason(&clean, binary, true);
+        assert!(empty.contains("acknowledged monitoring"), "{empty}");
+        assert!(empty.contains("selective instrumentation"), "{empty}");
+        assert!(empty.contains("did not close or publish"), "{empty}");
+
+        let ended = super::no_profile_reason(&failed, binary, true);
+        assert!(ended.contains("status 17"), "{ended}");
+        assert!(ended.contains("before the active capture window"), "{ended}");
+        let ended_without_ack = super::no_profile_reason(&failed, binary, false);
+        assert!(
+            ended_without_ack.contains("status 17"),
+            "process termination is not misdiagnosed as a channel failure: {ended_without_ack}"
+        );
+    }
+
+    /// The parent distinguishes a socketpair it merely created from a child
+    /// that reached and acknowledged the runtime activation point.
+    #[test]
+    fn the_control_ack_proves_the_capture_was_activated() {
+        let channel = super::open_control_channel().expect("control socketpair");
+        assert!(
+            !super::control_channel_activated(&channel),
+            "creation alone must not count as activation"
+        );
+        let sent = unsafe {
+            libc::send(
+                channel.child,
+                super::CONTROL_ACK.as_ptr() as *const libc::c_void,
+                super::CONTROL_ACK.len(),
+                0,
+            )
+        };
+        assert_eq!(sent, super::CONTROL_ACK.len() as isize);
+        assert!(super::control_channel_activated(&channel));
+    }
+
     use super::*;
 
     /// The refusal of an unequipped target must not sit behind a platform
@@ -431,8 +485,8 @@ Total number in stack (recursive counted multiple, when >=5):
         }
     }
 
-    /// The I/O summary must survive a route containing spaces, and must say that
-    /// its numbers are of a different kind from the sampled table above it.
+    /// The database summary must survive a route containing spaces, and must say
+    /// that its numbers are of a different kind from the sampled table above it.
     #[test]
     fn the_io_summary_reads_counters_off_the_end_of_the_line() {
         let text = "elephc-probe: a;b 3\n\
@@ -440,6 +494,7 @@ Total number in stack (recursive counted multiple, when >=5):
                     elephc-probe-io: <untagged> ops=551 wait_ns=3449131\n\
                     elephc-probe-io: GET /a b/c ops=2 wait_ns=1000\n";
         let out = probe_io_summary(text);
+        assert!(out.contains("Database"), "{out}");
         // A route can contain spaces, so the counters are read from the RIGHT;
         // splitting from the left would truncate the route and lose the row.
         assert!(out.contains("GET /a b/c"), "{out}");
@@ -457,18 +512,16 @@ Total number in stack (recursive counted multiple, when >=5):
         assert!(probe_io_summary("elephc-probe-io: x ops=nope wait_ns=1\n").is_empty());
     }
 
-    /// The allocation summary must separate the two claims it makes.
-    ///
-    /// The total is exact — each sample charges the counter delta since the last,
-    /// and those telescope back to the counter. The attribution is sampled. Saying
-    /// only one of those, or neither, is what would mislead.
+    /// The allocation summary distinguishes exact counter deltas from sampled
+    /// attribution and from the unobserved edges of the capture window.
     #[test]
-    fn the_allocation_summary_separates_the_exact_total_from_sampled_attribution() {
+    fn the_allocation_summary_states_its_sampled_coverage_limits() {
         let text = "elephc-probe-alloc: a;b;load_price 900\n\
                     elephc-probe-alloc: a;record_audit 100\n";
         let out = probe_alloc_summary(text);
-        assert!(out.contains("1000 total, exact"), "{out}");
-        assert!(out.contains("attribution below is sampled"), "{out}");
+        assert!(out.contains("1000 observed between samples"), "{out}");
+        assert!(out.contains("attribution is sampled"), "{out}");
+        assert!(out.contains("after the final sample are outside"), "{out}");
         // Busiest first, named by the innermost PHP frame rather than the raw stack.
         let hot = out.find("load_price").unwrap();
         let cold = out.find("record_audit").unwrap();

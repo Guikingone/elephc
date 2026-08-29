@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::platform::Platform;
+use crate::codegen::platform::Target;
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind};
@@ -80,10 +80,10 @@ use declaration_metadata::{
 /// `options` is copied onto the constructed `Checker` (e.g. `strict_locals`) before any phase runs.
 pub(super) fn check_types_impl(
     program: &Program,
-    target_platform: Platform,
+    target: Target,
     options: CheckOptions,
 ) -> Result<(Checker, TypeEnv), CompileError> {
-    let mut checker = Checker::new(target_platform);
+    let mut checker = Checker::new(target);
     checker.strict_locals = options.strict_locals;
     // Program-wide and computed once, BEFORE any body is walked: the top-level `unset` that has to
     // consult it can sit textually above the `function w() { global $a; }` that makes the name
@@ -480,7 +480,10 @@ mod tests {
         let program = crate::parser::parse(&tokens).expect("parse");
         let checked = crate::types::checker::check_types(
             &program,
-            crate::codegen_support::platform::Platform::MacOS,
+            crate::codegen_support::platform::Target::new(
+                crate::codegen_support::platform::Platform::MacOS,
+                crate::codegen_support::platform::Arch::AArch64,
+            ),
         )
         .expect("check");
 

@@ -20,7 +20,7 @@ pub enum RuntimeFnBackendMapping {
 /// Supported-target availability declared by a runtime function descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeFnTargetSupport {
-    /// Implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
+    /// Implemented by the backend for all five supported targets; builtin semantics may narrow it.
     AllSupported,
 }
 
@@ -473,6 +473,16 @@ pub enum RuntimeFnId {
     OpensslDecrypt,
     OpensslEncrypt,
     OpensslGetCipherMethods,
+    Iconv,
+    IconvGetEncoding,
+    IconvMimeDecode,
+    IconvMimeDecodeHeaders,
+    IconvMimeEncode,
+    IconvSetEncoding,
+    IconvStrlen,
+    IconvStrpos,
+    IconvStrrpos,
+    IconvSubstr,
     Htmlentities,
     Htmlspecialchars,
     Implode,
@@ -1057,7 +1067,11 @@ impl RuntimeFnId {
                         | crate::ir::Effects::ALLOC_HEAP.bits(),
                 )
             }
-            RuntimeFnId::Getenv | RuntimeFnId::Gethostname => {
+            RuntimeFnId::Getenv => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
+            RuntimeFnId::Gethostname => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
                         | crate::ir::Effects::ALLOC_CONCAT.bits(),
@@ -1093,13 +1107,53 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_CONCAT.bits(),
             ),
-            RuntimeFnId::Sprintf | RuntimeFnId::Vsprintf => {
+            // A `%s` conversion can invoke arbitrary userland `__toString()` code. Keep the
+            // full externally observable call surface here so AST try/catch pruning retains
+            // handlers and propagation never treats state touched by that method as stable.
+            RuntimeFnId::Fprintf
+            | RuntimeFnId::Printf
+            | RuntimeFnId::Sprintf
+            | RuntimeFnId::Vfprintf
+            | RuntimeFnId::Vprintf
+            | RuntimeFnId::Vsprintf => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::WRITES_HEAP.bits()
+                        | crate::ir::Effects::READS_GLOBAL.bits()
+                        | crate::ir::Effects::WRITES_GLOBAL.bits()
+                        | crate::ir::Effects::READS_FS.bits()
+                        | crate::ir::Effects::WRITES_FS.bits()
+                        | crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::WRITES_PROCESS.bits()
+                        | crate::ir::Effects::OUTPUT.bits()
+                        | crate::ir::Effects::ALLOC_HEAP.bits()
                         | crate::ir::Effects::ALLOC_CONCAT.bits()
+                        | crate::ir::Effects::MAY_THROW.bits()
+                        | crate::ir::Effects::MAY_FATAL.bits()
                         | crate::ir::Effects::MAY_WARN.bits(),
                 )
             }
+            // The iconv family reads string payloads, allocates its results, consults and
+            // updates the process-wide encoding trio, prints php-src's diagnostics, and can
+            // throw the out-of-range `$offset` ValueError.
+            RuntimeFnId::Iconv
+            | RuntimeFnId::IconvGetEncoding
+            | RuntimeFnId::IconvMimeDecode
+            | RuntimeFnId::IconvMimeDecodeHeaders
+            | RuntimeFnId::IconvMimeEncode
+            | RuntimeFnId::IconvSetEncoding
+            | RuntimeFnId::IconvStrlen
+            | RuntimeFnId::IconvStrpos
+            | RuntimeFnId::IconvStrrpos
+            | RuntimeFnId::IconvSubstr => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::OUTPUT.bits()
+                    | crate::ir::Effects::MAY_WARN.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
@@ -1197,6 +1251,19 @@ impl RuntimeFnId {
             | RuntimeFnId::OpensslGetCipherMethods => {
                 &[BuiltinRequirement::Bridge("elephc_crypto")]
             }
+            RuntimeFnId::Iconv
+            | RuntimeFnId::IconvGetEncoding
+            | RuntimeFnId::IconvMimeDecode
+            | RuntimeFnId::IconvMimeDecodeHeaders
+            | RuntimeFnId::IconvMimeEncode
+            | RuntimeFnId::IconvSetEncoding
+            | RuntimeFnId::IconvStrlen
+            | RuntimeFnId::IconvStrpos
+            | RuntimeFnId::IconvStrrpos
+            | RuntimeFnId::IconvSubstr => &[
+                BuiltinRequirement::Bridge("elephc_iconv"),
+                BuiltinRequirement::MacOsLibrary("iconv"),
+            ],
             RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
@@ -1383,9 +1450,29 @@ impl RuntimeFnId {
         // for `Strpos` and `Strtr` below.
         if matches!(
             self,
-            RuntimeFnId::IntvalBase | RuntimeFnId::BcComp | RuntimeFnId::BcScale
+            RuntimeFnId::IntvalBase
+                | RuntimeFnId::BcComp
+                | RuntimeFnId::BcScale
+                // `iconv_set_encoding()` answers with a bare boolean.
+                | RuntimeFnId::IconvSetEncoding
         ) {
             return BuiltinResultOwnership::NonHeap;
+        }
+        // Every other iconv entry point boxes a freshly built string, integer, or array,
+        // so its result never aliases an argument.
+        if matches!(
+            self,
+            RuntimeFnId::Iconv
+                | RuntimeFnId::IconvGetEncoding
+                | RuntimeFnId::IconvMimeDecode
+                | RuntimeFnId::IconvMimeDecodeHeaders
+                | RuntimeFnId::IconvMimeEncode
+                | RuntimeFnId::IconvStrlen
+                | RuntimeFnId::IconvStrpos
+                | RuntimeFnId::IconvStrrpos
+                | RuntimeFnId::IconvSubstr
+        ) {
+            return BuiltinResultOwnership::Fresh;
         }
         if matches!(
             self,
@@ -1470,6 +1557,10 @@ impl RuntimeFnId {
                 // its release, leaking one block per call — measured unbounded, 10 calls left
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
+                // `getenv()` boxes `false` or an owned copy made by `__rt_str_persist` in a
+                // fresh Mixed cell. Neither result can alias the variable-name argument, so
+                // retaining an owned name temporary leaks one block per call.
+                | RuntimeFnId::Getenv
                 | RuntimeFnId::GetObjectVars
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
@@ -1955,6 +2046,16 @@ impl RuntimeFnId {
             RuntimeFnId::OpensslDecrypt => "openssl_decrypt",
             RuntimeFnId::OpensslEncrypt => "openssl_encrypt",
             RuntimeFnId::OpensslGetCipherMethods => "openssl_get_cipher_methods",
+            RuntimeFnId::Iconv => "iconv",
+            RuntimeFnId::IconvGetEncoding => "iconv_get_encoding",
+            RuntimeFnId::IconvMimeDecode => "iconv_mime_decode",
+            RuntimeFnId::IconvMimeDecodeHeaders => "iconv_mime_decode_headers",
+            RuntimeFnId::IconvMimeEncode => "iconv_mime_encode",
+            RuntimeFnId::IconvSetEncoding => "iconv_set_encoding",
+            RuntimeFnId::IconvStrlen => "iconv_strlen",
+            RuntimeFnId::IconvStrpos => "iconv_strpos",
+            RuntimeFnId::IconvStrrpos => "iconv_strrpos",
+            RuntimeFnId::IconvSubstr => "iconv_substr",
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
             RuntimeFnId::Implode => "implode",

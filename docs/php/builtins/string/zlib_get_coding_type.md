@@ -2,7 +2,7 @@
 title: "zlib_get_coding_type()"
 description: "Returns the compression the output layer applied, or false when none did."
 sidebar:
-  order: 510
+  order: 520
 ---
 
 ## zlib_get_coding_type()

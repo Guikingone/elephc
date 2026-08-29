@@ -2,7 +2,7 @@
 title: "__elephc_zip_stat_entries() — internals"
 description: "Compiler internals for __elephc_zip_stat_entries(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 578
+  order: 588
 ---
 
 ## `__elephc_zip_stat_entries()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_zip_stat_entries.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_zip_stat_entries.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:551](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L551) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:560](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L560) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -29,7 +29,7 @@ sidebar:
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (1 requirements)`
 - **Callable policy**: `static_only`
-- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 

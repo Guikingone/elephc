@@ -463,6 +463,11 @@ pub(crate) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             abi::emit_load_int_immediate(ctx.emitter, "rdi", (inst.operands.len() - 2) as i64);
         }
     }
+    let context_arg = match ctx.emitter.target.arch {
+        Arch::AArch64 => 3,
+        Arch::X86_64 => 1,
+    };
+    super::super::strings::load_optional_sprintf_eval_context(ctx, context_arg)?;
     abi::emit_call_label(ctx.emitter, "__rt_sprintf");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -492,6 +497,7 @@ pub(crate) fn lower_vfprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             ctx.emitter.instruction("stp x1, x2, [sp, #8]");                    // save the format pointer and length
             ctx.load_value_to_result(values)?;
             ctx.emitter.instruction("ldp x1, x2, [sp, #8]");                    // restore the format pointer and length
+            super::super::strings::load_optional_sprintf_eval_context(ctx, 3)?;
             abi::emit_call_label(ctx.emitter, "__rt_vsprintf");
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the destination descriptor
             abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");
@@ -507,6 +513,7 @@ pub(crate) fn lower_vfprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             ctx.emitter.instruction("mov rdi, rax");                            // pass the values array to vsprintf
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // restore the format pointer
             ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 16]");           // restore the format byte length
+            super::super::strings::load_optional_sprintf_eval_context(ctx, 1)?;
             abi::emit_call_label(ctx.emitter, "__rt_vsprintf");
             ctx.emitter.instruction("mov rsi, rax");                            // pass the formatted string pointer to fwrite
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload the destination descriptor

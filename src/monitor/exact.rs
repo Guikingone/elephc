@@ -532,10 +532,10 @@ pub(crate) fn instrument_table(graph: &crate::call_graph::CallGraph) -> String {
         } else {
             String::new()
         };
-        // Self time splits into the part spent blocked and the rest (CPU).
+        // Self time splits into recorded DB wait and the unclassified remainder.
         let wait = if has_wait {
             format!(
-                "  wait {} cpu {}",
+                "  wait {} non-DB {}",
                 fmt_ns(node.wait_exclusive),
                 fmt_ns(node.exclusive.saturating_sub(node.wait_exclusive))
             )

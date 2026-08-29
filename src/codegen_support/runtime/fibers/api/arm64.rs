@@ -313,12 +313,17 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
     emitter.instruction("mov x20, x0");                                         // x20 = yielded value, parked across the state check
     abi::emit_load_symbol_to_reg(emitter, "x19", "_fiber_current", 0);          // x19 = currently running fiber* (NULL means called from main)
     emitter.instruction("cbnz x19, __rt_fiber_suspend_state_ok");               // proceed when we are actually executing inside a fiber
+    // Raises without returning, so the suspension site's second hook never runs.
+    // x19 is NULL on this path, which is exactly what the park recorded.
+    super::common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_outside_no_instr", "x19");
     abi::emit_symbol_address(emitter, "x0", "_fiber_msg_suspend_outside");      // x0 = pointer to the static error message
     emitter.instruction("mov x1, #33");                                         // x1 = error message length in bytes
     emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise FiberError; this call does not return
     emitter.label("__rt_fiber_suspend_state_ok");
     abi::emit_load_symbol_to_reg(emitter, "x9", "_unser_active", 0);          // x9 = active unserialize nesting count
     emitter.instruction("cbz x9, __rt_fiber_suspend_unserialize_ok");           // switching is safe only when no parser context is live
+    // Also raises without returning, and also before the switch.
+    super::common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_unser_no_instr", "x19");
     abi::emit_symbol_address(emitter, "x0", "_fiber_msg_suspend_unserialize"); // x0 = stable FiberError message for the forbidden switch
     emitter.instruction("mov x1, #52");                                         // x1 = error message length in bytes
     emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise before publishing a yielded value or Suspended state
@@ -347,6 +352,10 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
     emitter.instruction("cbz x10, __rt_fiber_suspend_no_throw");                // skip the raise path when no exception is pending
     emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // clear pending_throw before re-raising so resume() can fire again
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_value", 0);             // _exc_value = the Throwable to raise; matches normal `throw` runtime contract
+    // We are back on this fiber's stack and about to unwind into ITS handlers,
+    // so the activation has to be live again first — the resume half of the
+    // suspension site's hook is past this point and will never run.
+    super::common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_pending_no_instr", "x19");
     emitter.instruction("bl __rt_throw_current");                               // unwind into the active try/catch on the fiber's stack (no return)
 
     emitter.label("__rt_fiber_suspend_no_throw");

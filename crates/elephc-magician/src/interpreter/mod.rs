@@ -299,6 +299,25 @@ pub fn execute_context_method_call_outcome(
     }
 }
 
+/// Converts one boxed value through eval's PHP string-context semantics.
+///
+/// Dynamic objects dispatch their eval-declared `__toString()` implementation, while an
+/// exception raised by that method is returned as an uncaught throwable outcome for the C ABI.
+pub fn execute_context_string_outcome(
+    context: &mut ElephcEvalContext,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    match eval_string_context_value(value, context, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
 /// Calls a static method on a class-like symbol known to the shared eval context.
 pub fn execute_context_static_method_call_outcome(
     context: &mut ElephcEvalContext,

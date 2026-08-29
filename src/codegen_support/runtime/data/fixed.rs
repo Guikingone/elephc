@@ -13,7 +13,8 @@ use super::{
     COPY_SOURCE_IS_DIR_MSG, FGC_READ_FAILED_HEAD, FGC_READ_FAILED_MID, RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
-    HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, MB_STRLEN_UNKNOWN_ENCODING_MSG,
+    HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
+    MB_STRLEN_UNKNOWN_ENCODING_MSG,
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
@@ -21,6 +22,8 @@ use super::{
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
+    SPRINTF_ARRAY_TO_STRING_WARNING, SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX,
+    SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX, SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX,
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
     GAI_MSG_MIDDLE, GAI_MSG_PREFIX, SOCKET_GAI_MSG_CAPACITY,
     DIAG_NEWLINE, DISK_FREE_SPACE_WARNING, DISK_TOTAL_SPACE_WARNING,
@@ -158,6 +161,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ));
     }
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
+    out.push_str(&format!(
+        ".globl _diag_sprintf_array_to_string\n_diag_sprintf_array_to_string:\n    .ascii {SPRINTF_ARRAY_TO_STRING_WARNING:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _diag_sprintf_object_numeric_prefix\n_diag_sprintf_object_numeric_prefix:\n    .ascii {SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _diag_sprintf_object_to_int_suffix\n_diag_sprintf_object_to_int_suffix:\n    .ascii {SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _diag_sprintf_object_to_float_suffix\n_diag_sprintf_object_to_float_suffix:\n    .ascii {SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX:?}\n"
+    ));
     out.push_str(".globl _incomplete_class_property_name\n_incomplete_class_property_name:\n    .ascii \"__PHP_Incomplete_Class_Name\"\n");
     // print_r($value, true) return-mode capture state. _print_r_mode is a flag
     // (0 = write to stdout, 1 = append to _print_r_buf) consulted by
@@ -464,6 +480,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // whatever threw. Null in a binary without the capability, where the helper
     // pays one load and a branch on a path taken only by throws.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_throw_fn"), 8, target));
+    // elephc_instr_unpark_fn: filled with elephc_instr_unpark under monitoring.
+    // The suspend helper calls it on the three paths that leave without returning
+    // to the suspension site — `Fiber::suspend()` outside a fiber, a live
+    // `unserialize()`, and a pending `Fiber::throw()` delivered on resume — so the
+    // activation is back on the profiler's stack before the handler runs. Null in
+    // a binary without the capability, where those paths pay one load and a
+    // branch, and only when they are already raising.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_unpark_fn"), 8, target));
     // elephc_monitor_active: 1 once this process has been asked to profile —
     // written by the probe's init, read by the exact profiler's, which runs after
     // it. One check, in one place: repeating it would consume the control
@@ -495,8 +519,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_stream_fn"), 8, target));
     // elephc_instr_wait_fn: third companion slot, filled with elephc_instr_wait
     // under --instrument. The PDO bridge times the actual driver call and
-    // reports the nanoseconds through it, which is what splits each function's
-    // self time into CPU and I/O wait. Zero (inert) in a normal binary.
+    // reports the nanoseconds through it, which separates recorded DB wait from
+    // each function's remaining wall time. Zero (inert) in a normal binary.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_wait_fn"), 8, target));
     // elephc_instr_trace_fn: fourth companion slot, filled with
     // elephc_instr_trace_begin under --instrument. The web bridge calls it at
@@ -736,6 +760,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&format!(
         ".globl _sprintf_unknown_spec_msg\n_sprintf_unknown_spec_msg:\n    .ascii {:?}\n",
         SPRINTF_UNKNOWN_SPEC_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _iconv_strpos_offset_msg\n_iconv_strpos_offset_msg:\n    .ascii {:?}\n",
+        ICONV_STRPOS_OFFSET_MSG
     ));
     out.push_str(&format!(
         ".globl _hash_unknown_algo_msg\n_hash_unknown_algo_msg:\n    .ascii {:?}\n",
@@ -1145,6 +1173,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // only at a hash() call site so the shared runtime __rt_hash can call through
     // it without the runtime itself naming elephc-crypto. Programs that never
     // call hash() leave the slot null and do not pull in -lelephc_crypto.
+    // _elephc_iconv_call_fn / _elephc_iconv_release_fn: indirect pointers to the iconv
+    // bridge, published only at an iconv*() call site so the shared runtime never names
+    // elephc-iconv. Programs that never call one leave the slots null and do not pull in
+    // -lelephc_iconv.
+    out.push_str(&comm_directive("_elephc_iconv_call_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_iconv_release_fn", 8, target));
     out.push_str(&comm_directive("_elephc_crypto_hash_fn", 8, target));
     // _elephc_crypto_hmac_fn: indirect pointer to elephc_crypto_hmac, published
     // only at a hash_hmac() call site so the shared runtime __rt_hash_hmac can call
@@ -2243,7 +2277,7 @@ mod tests {
             (Platform::Linux, Arch::AArch64, "8"),
             (Platform::Linux, Arch::X86_64, "8"),
         ] {
-            let target = Target { platform, arch };
+            let target = Target::new(platform, arch);
             let asm = emit_runtime_data_fixed(8_388_608, target);
 
             let mut seen = 0usize;
@@ -2271,10 +2305,7 @@ mod tests {
     fn test_stack_limit_is_eight_byte_aligned_on_elf() {
         let asm = emit_runtime_data_fixed(
             8_388_608,
-            Target {
-                platform: Platform::Linux,
-                arch: Arch::AArch64,
-            },
+            Target::new(Platform::Linux, Arch::AArch64),
         );
 
         assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
@@ -2306,7 +2337,7 @@ mod tests {
             (Platform::Linux, Arch::AArch64, ""),
             (Platform::Linux, Arch::X86_64, ""),
         ] {
-            let target = Target { platform, arch };
+            let target = Target::new(platform, arch);
             let asm = emit_runtime_data_fixed(8_388_608, target);
             for slot in &bridge_slots {
                 let wanted = format!(".comm {prefix}{slot}, 8, ");

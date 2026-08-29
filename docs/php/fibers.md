@@ -7,7 +7,7 @@ sidebar:
 
 A `Fiber` is a cooperative coroutine: a callable that owns its own call stack and can suspend execution at arbitrary depth. Control alternates explicitly between the caller and the fiber — there is no preemption.
 
-elephc supports Fibers on the supported native target matrix: macOS ARM64, Linux ARM64, and Linux x86_64.
+elephc supports Fibers on the three executable/release hosts: macOS ARM64, Linux ARM64, and Linux x86_64. The iOS compile targets are library-only and do not run Fibers.
 
 ## Class summary
 

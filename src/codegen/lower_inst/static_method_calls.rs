@@ -233,7 +233,14 @@ pub(super) fn lower_static_fiber_suspend(ctx: &mut FunctionContext<'_>, inst: &I
     emit_optional_mixed_arg(ctx, value)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed suspend value for target-specific argument loading
     abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0)); // pass the boxed suspend value as runtime helper argument 1
+    // The same park a `yield` gets, for the same reason: this call switches
+    // stacks rather than returning, so the frame stays open across whatever the
+    // fiber's caller does next and is read as that work's caller.
+    let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    crate::codegen::frame::emit_instr_suspend(ctx, &[value_arg]);
     abi::emit_call_label(ctx.emitter, "__rt_fiber_suspend");
+    crate::codegen::frame::emit_instr_resume(ctx, &[result_reg]);
     store_if_result(ctx, inst)
 }
 
