@@ -85,6 +85,13 @@ class ContractPipelineTests(unittest.TestCase):
         self.assertIn('hash_init(string $algo, int $flags = 0, string $key = "")', rendered)
         self.assertNotIn("Compiled (AOT)**: not available", rendered)
 
+    def test_host_only_process_availability_keeps_eval_independent(self) -> None:
+        """Label iOS AOT refusal without implying the Magician path is target-gated."""
+        rendered = render._availability_section(self.render_by_name["system"])
+        self.assertIn("three executable/release hosts", rendered)
+        self.assertIn("refused at compile time for iOS library targets", rendered)
+        self.assertIn("`eval()` (magician interpreter)**: supported", rendered)
+
     def test_user_renderer_owns_section_spacing_once(self) -> None:
         """Join empty optional sections without accumulating blank-line runs."""
         builtin = {

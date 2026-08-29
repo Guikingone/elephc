@@ -956,7 +956,8 @@ impl std::fmt::Display for Target {
     /// Formats the target as its canonical string representation.
     ///
     /// Equivalent to calling `as_str()`, returning one of:
-    /// `"macos-aarch64"`, `"macos-x86_64"`, `"linux-aarch64"`, `"linux-x86_64"`.
+    /// `"macos-aarch64"`, `"macos-x86_64"`, `"linux-aarch64"`,
+    /// `"linux-x86_64"`, `"ios-arm64"`, `"ios-sim-arm64"`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
