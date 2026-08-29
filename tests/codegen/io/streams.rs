@@ -19993,3 +19993,50 @@ fclose($h);
         out.stdout
     );
 }
+
+/// Verifies php's TWO refusal sentences: a name it cannot find, and one it found and could not
+/// make a filter from.
+///
+/// MEASURED on `php -n` 8.5.6 — `Unable to locate filter "nope.nothing"` for an unregistered
+/// name, `Unable to create or locate filter "no"` for a registration whose `onCreate()` returns
+/// false. elephc said "Unable to locate" for both, so a filter that refused itself read as a
+/// typo. The attach helper answers 0 either way, so the failure path asks the registry again.
+#[test]
+fn test_a_filter_that_refused_itself_is_not_a_filter_php_could_not_find() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class No extends php_user_filter {
+    public function onCreate(): bool { return false; }
+    public function filter($in, $out, &$consumed, $closing): int { return PSFS_PASS_ON; }
+}
+stream_filter_register("no", "No");
+$h = fopen("php://memory", "w+");
+var_dump(stream_filter_append($h, "no"));
+var_dump(stream_filter_prepend($h, "no"));
+var_dump(stream_filter_append($h, "no", STREAM_FILTER_READ));
+var_dump(stream_filter_append($h, "nope.nothing"));
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.diagnostics
+            .matches("stream_filter_append(): Unable to create or locate filter \"no\"")
+            .count(),
+        2,
+        "unexpected diagnostics: {}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics
+            .contains("stream_filter_prepend(): Unable to create or locate filter \"no\""),
+        "prepend reported the wrong sentence: {}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics
+            .contains("stream_filter_append(): Unable to locate filter \"nope.nothing\""),
+        "an unknown name lost its own sentence: {}",
+        out.diagnostics
+    );
+}

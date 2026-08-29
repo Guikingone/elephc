@@ -897,6 +897,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // composer appends the name, the closing quote and the newline.
     out.push_str(".globl _diag_filter_missing_append_prefix\n_diag_filter_missing_append_prefix:\n    .ascii \"Warning: stream_filter_append(): Unable to locate filter \\\"\"\n");
     out.push_str(".globl _diag_filter_missing_prepend_prefix\n_diag_filter_missing_prepend_prefix:\n    .ascii \"Warning: stream_filter_prepend(): Unable to locate filter \\\"\"\n");
+    // php distinguishes a name it cannot FIND from one it found and could not MAKE — a filter
+    // whose `onCreate()` returned false, or whose class is not defined. Same composer, same
+    // trailing quote; only the sentence differs.
+    out.push_str(".globl _diag_filter_uncreatable_append_prefix\n_diag_filter_uncreatable_append_prefix:\n    .ascii \"Warning: stream_filter_append(): Unable to create or locate filter \\\"\"\n");
+    out.push_str(".globl _diag_filter_uncreatable_prepend_prefix\n_diag_filter_uncreatable_prepend_prefix:\n    .ascii \"Warning: stream_filter_prepend(): Unable to create or locate filter \\\"\"\n");
     out.push_str(".globl _diag_open_failed_middle\n_diag_open_failed_middle:\n    .ascii \"): Failed to open stream: \"\n");
     // The four sentences php-src's `php_stream_url_wrap_rfc2397` refuses a `data://` URI with, and
     // the one `php_stream_url_wrap_php` uses for a php:// target it does not recognise. Each is a

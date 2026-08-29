@@ -553,25 +553,37 @@ fn emit_filter_handle_or_param_refusal(
     Ok(())
 }
 
-/// Reports a filter name that resolves to nothing, the way php-src does.
+/// Reports a filter name that produced no filter, the way php-src does.
 ///
 /// The message names the filter, so it is composed at run time. Each function names
 /// ITSELF in the prefix, chosen here, so the runtime composer needs no branch.
+///
+/// `registered` picks between php's two sentences: a name it cannot FIND is `Unable to locate
+/// filter`, and a name it found but could not MAKE a filter from — `onCreate()` returned false —
+/// is `Unable to create or locate filter`. MEASURED on `php -n` 8.5.6.
 fn emit_missing_filter_warning(
     ctx: &mut FunctionContext<'_>,
     filter: ValueId,
     prepend: bool,
+    registered: bool,
 ) -> Result<()> {
-    let (symbol, text): (&str, &str) = if prepend {
-        (
+    let (symbol, text): (&str, &str) = match (prepend, registered) {
+        (true, false) => (
             "_diag_filter_missing_prepend_prefix",
             "Warning: stream_filter_prepend(): Unable to locate filter \"",
-        )
-    } else {
-        (
+        ),
+        (false, false) => (
             "_diag_filter_missing_append_prefix",
             "Warning: stream_filter_append(): Unable to locate filter \"",
-        )
+        ),
+        (true, true) => (
+            "_diag_filter_uncreatable_prepend_prefix",
+            "Warning: stream_filter_prepend(): Unable to create or locate filter \"",
+        ),
+        (false, true) => (
+            "_diag_filter_uncreatable_append_prefix",
+            "Warning: stream_filter_append(): Unable to create or locate filter \"",
+        ),
     };
     load_string_to_result(ctx, filter, "stream_filter_append filter")?;
     match ctx.emitter.target.arch {
@@ -699,6 +711,8 @@ fn lower_user_stream_filter_attach_node(
     let filter = expect_operand(inst, 1)?;
     let fail = ctx.next_label("sfan_false");
     let fail_unused_params = ctx.next_label("sfan_false_params");
+    let uncreatable = ctx.next_label("sfan_uncreatable");
+    let warned = ctx.next_label("sfan_warned");
     let first_made = ctx.next_label("sfan_read_made");
     let one_direction = ctx.next_label("sfan_one_direction");
     let linked = ctx.next_label("sfan_linked");
@@ -844,7 +858,32 @@ fn lower_user_stream_filter_attach_node(
     abi::emit_release_temporary_stack(ctx.emitter, 64);
     // php-src names the filter it could not find. Returning false silently left a
     // misspelled name indistinguishable from one that attached.
-    emit_missing_filter_warning(ctx, filter, prepend)?;
+    //
+    // WHICH sentence depends on whether the name is registered: a registration that exists and
+    // still produced no filter is php's `Unable to create or locate filter`, and only an unknown
+    // name is `Unable to locate filter`. The attach helper answers 0 for both, so the question is
+    // put again here — to the registry, which is the only thing that can tell them apart.
+    load_string_to_result(ctx, filter, "stream_filter_append filter")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // filter-name pointer
+            ctx.emitter.instruction("mov x1, x2");                              // filter-name length
+            abi::emit_call_label(ctx.emitter, "__rt_resolve_user_filter_id");
+            ctx.emitter.instruction(&format!("cbnz x0, {}", uncreatable));      // registered: php blames the creation
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // filter-name pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // filter-name length
+            abi::emit_call_label(ctx.emitter, "__rt_resolve_user_filter_id");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jnz {}", uncreatable));           // registered: php blames the creation
+        }
+    }
+    emit_missing_filter_warning(ctx, filter, prepend, false)?;
+    abi::emit_jump(ctx.emitter, &warned);
+    ctx.emitter.label(&uncreatable);
+    emit_missing_filter_warning(ctx, filter, prepend, true)?;
+    ctx.emitter.label(&warned);
     emit_boxed_bool(ctx, false);
     ctx.emitter.label(&done);
     Ok(())
