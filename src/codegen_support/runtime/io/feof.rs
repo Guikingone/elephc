@@ -10,7 +10,7 @@
 //!   to their `stream_eof` callback through the synthetic backend descriptor.
 
 use crate::codegen_support::runtime::resources::layout::{
-    STREAM_PENDING_LEN_OFFSET, STREAM_PENDING_POS_OFFSET,
+    STREAM_EOF_OFFSET, STREAM_PENDING_LEN_OFFSET, STREAM_PENDING_POS_OFFSET,
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -86,7 +86,20 @@ pub fn emit_feof(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x0, #{STREAM_PENDING_LEN_OFFSET}]")); // held byte count
     emitter.instruction(&format!("ldr x10, [x0, #{STREAM_PENDING_POS_OFFSET}]")); // how many were already handed out
     emitter.instruction("subs x9, x9, x10");                                    // what remains
-    emitter.instruction("b.le __rt_feof_wrapper_call");                         // nothing held: ask the wrapper
+    // -- and php never asks twice: the read already did --
+    //
+    // `stream_read()` is followed by `stream_eof()`, whose answer lives on the stream, and
+    // `feof()` reads it rather than asking the class again. MEASURED: a `while (!feof($h))` loop
+    // over a 10-byte wrapper asks the class TWICE — once before the first read, once after it —
+    // and never again. A seek is what clears the answer.
+    emitter.instruction("b.gt __rt_feof_holding");                              // holding bytes: not at end
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_EOF_OFFSET}]"));        // what the read remembered
+    emitter.instruction("cbz x9, __rt_feof_wrapper_call");                      // nothing remembered: ask the class
+    emitter.instruction("mov x0, #1");                                          // remembered: php answers from this
+    emitter.instruction("ldp x29, x30, [sp, #32]");
+    emitter.instruction("add sp, sp, #48");
+    emitter.instruction("ret");
+    emitter.label("__rt_feof_holding");
     emitter.instruction("mov x0, #0");                                          // holding bytes: not at end
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and return address
     emitter.instruction("add sp, sp, #48");                                     // release helper scratch storage
@@ -139,7 +152,16 @@ fn emit_feof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}]")); // already handed out
     emitter.instruction("sub r9, r10");                                         // what remains
     emitter.instruction("cmp r9, 0");
-    emitter.instruction("jle __rt_feof_wrapper_call_x86");                      // nothing held: ask the wrapper
+    // See the AArch64 twin: php answers from what the read remembered.
+    emitter.instruction("jg __rt_feof_holding_x86");                            // holding bytes: not at end
+    emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_EOF_OFFSET}]")); // what the read remembered
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_feof_wrapper_call_x86");                       // nothing remembered: ask the class
+    emitter.instruction("mov eax, 1");                                          // remembered: php answers from this
+    emitter.instruction("add rsp, 32");
+    emitter.instruction("pop rbp");
+    emitter.instruction("ret");
+    emitter.label("__rt_feof_holding_x86");
     emitter.instruction("xor eax, eax");                                        // holding bytes: not at end
     emitter.instruction("add rsp, 32");                                         // release stream-handle storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

@@ -147,9 +147,19 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.label("__rt_fread_wrapper_direct");
     emitter.instruction("ldr x0, [sp, #32]");                                   // the wrapper descriptor the probe clobbered
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the requested byte count for stream_read
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the caller frame before wrapper tail dispatch
+    emitter.instruction("bl __rt_user_wrapper_fread");                          // x0 = verdict, x1/x2 = the bytes
+    // php asks the wrapper whether THAT read reached the end, and remembers the answer; see
+    // `emit_uw_post_read_eof`. The tail call becomes a call so the question can be asked after it.
+    emitter.instruction("str x0, [sp, #40]");                                   // the read's verdict outlives the question
+    emitter.instruction("stp x1, x2, [sp, #48]");                               // and so do its bytes
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("ldr x1, [sp, #32]");                                   // the wrapper descriptor
+    emitter.instruction("bl __rt_uw_post_read_eof");
+    emitter.instruction("ldr x0, [sp, #40]");
+    emitter.instruction("ldp x1, x2, [sp, #48]");
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the caller frame
     emitter.instruction("add sp, sp, #80");                                     // release native-read scratch storage
-    emitter.instruction("b __rt_user_wrapper_fread");                           // wrapper backend tail-calls stream_read
+    emitter.instruction("ret");                                                 // return the read's own answer
     emitter.label("__rt_fread_real_fd");
 
     // -- reserve a destination sized for the whole requested read --
@@ -423,11 +433,24 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("ldr x1, [sp, #32]");
             emitter.instruction("mov x2, x0");
             emitter.instruction("bl __rt_concat_publish");                      // claim the window they occupy
-            // EOF is the CALLER's question, not the fill's. The raw helper judged a short read
-            // against the CHUNK it was asked for, which is short almost every time, so a stream
-            // with plenty left reported end of file. php judges it against what the program
-            // asked for — MEASURED on `php://memory`: a 1-byte stream read with `fread($h, 2)`
-            // leaves `feof()` true, a 3-byte stream read with `fread($h, 3)` leaves it FALSE.
+            // -- the short-read judgement, for backends that cannot be ASKED --
+            //
+            // A class answers for itself: `__rt_fread` puts its `stream_eof()` on the stream right
+            // after the read, and guessing over that reports end of file for a wrapper that simply
+            // hands back small pieces. Every other backend has only this judgement, and needs it:
+            // MEASURED on `php://memory`, a 3-byte stream read with `fread($h, 3)` leaves `feof()`
+            // FALSE and a 1-byte stream read with `fread($h, 2)` leaves it TRUE.
+            emitter.instruction("ldr x0, [sp, #0]");                            // the opaque stream handle
+            emitter.instruction("bl __rt_stream_fd");                           // its backend descriptor
+            emitter.instruction("mov w9, #0x4000");                             // USER_WRAPPER_FD_BASE, high half
+            emitter.instruction("lsl w9, w9, #16");
+            emitter.instruction("cmp x0, x9");
+            emitter.instruction("b.lo __rt_uwfc_guess");                        // a native descriptor: judge it
+            super::emit_load_handles_cap(emitter, "x10");
+            emitter.instruction("add x10, x9, x10");                            // the wrapper range ends at the handle capacity
+            emitter.instruction("cmp x0, x10");
+            emitter.instruction("b.lo __rt_uwfc_no_guess");                     // a wrapper: it already answered
+            emitter.label("__rt_uwfc_guess");
             emitter.instruction("ldr x9, [sp, #8]");                            // the caller's request
             emitter.instruction("ldr x10, [sp, #40]");                          // what it received
             emitter.instruction("cmp x10, x9");
@@ -439,6 +462,7 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.label("__rt_uwfc_eof_set");
             emitter.instruction("ldr x0, [sp, #0]");                            // the opaque stream handle
             emitter.instruction("bl __rt_stream_eof_set");
+            emitter.label("__rt_uwfc_no_guess");
             emitter.instruction("mov x0, #1");                                  // a real result, not a failed read
             emitter.instruction("ldr x1, [sp, #32]");
             emitter.instruction("ldr x2, [sp, #40]");
@@ -518,8 +542,17 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("mov rdx, rax");                                // publish takes the length in RDX
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // and the pointer in RAX
             emitter.instruction("call __rt_concat_publish");                    // claim the window they occupy
-            // See the AArch64 counterpart: EOF is judged against the CALLER's request, not
-            // against the chunk the fill asked for.
+            // See the AArch64 counterpart: the judgement is for backends that cannot be asked.
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // the opaque stream handle
+            emitter.instruction("call __rt_stream_fd");                         // its backend descriptor
+            emitter.instruction("mov r9d, 0x40000000");                         // USER_WRAPPER_FD_BASE
+            emitter.instruction("cmp rax, r9");
+            emitter.instruction("jb __rt_uwfc_guess_x86");                      // a native descriptor: judge it
+            super::emit_load_handles_cap(emitter, "r10");
+            emitter.instruction("add r10, r9");                                 // the wrapper range ends at the handle capacity
+            emitter.instruction("cmp rax, r10");
+            emitter.instruction("jb __rt_uwfc_no_guess_x86");                   // a wrapper: it already answered
+            emitter.label("__rt_uwfc_guess_x86");
             emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                // what the caller received
             emitter.instruction("cmp r9, QWORD PTR [rbp - 16]");                // against what it asked for
             emitter.instruction("jl __rt_uwfc_short_x86");                      // less than asked: the source is spent
@@ -530,6 +563,7 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.label("__rt_uwfc_eof_set_x86");
             emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // the opaque stream handle
             emitter.instruction("call __rt_stream_eof_set");
+            emitter.label("__rt_uwfc_no_guess_x86");
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
             emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");
             emitter.instruction("mov rcx, 1");                                  // a real result, not a failed read
@@ -649,9 +683,21 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fread_wrapper_direct_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the wrapper descriptor the probe clobbered
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
+    emitter.instruction("call __rt_user_wrapper_fread");                        // rax/rdx = the bytes, rcx = verdict
+    // php asks the wrapper whether THAT read reached the end, and remembers the answer; see
+    // `emit_uw_post_read_eof`. The tail call becomes a call so the question can be asked after it.
+    emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // the read's verdict outlives the question
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // and so do its bytes
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // the wrapper descriptor
+    emitter.instruction("call __rt_uw_post_read_eof");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");
     emitter.instruction("add rsp, 64");                                         // release native-read scratch storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("jmp __rt_user_wrapper_fread");                         // wrapper backend tail-calls stream_read
+    emitter.instruction("ret");                                                 // return the read's own answer
     emitter.label("__rt_fread_real_fd_x86");
     emitter.instruction("cmp rax, 0");                                          // did descriptor resolution produce a valid backend?
     emitter.instruction("jge __rt_fread_fd_ok_x86");                            // continue to the normal read path for non-negative descriptors

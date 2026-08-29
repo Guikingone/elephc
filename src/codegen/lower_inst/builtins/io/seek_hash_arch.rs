@@ -87,6 +87,14 @@ pub(super) fn lower_fseek_aarch64(
     ctx.emitter.instruction("ldr x1, [sp, #24]");                               // the synthetic wrapper fd
     emit_wrapper_seek_head_aarch64(ctx, false);
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_seek_reconcile");      // 0, or -1 with php's warning
+    // A seek starts the reading again, so php discards the end-of-file answer the read left
+    // behind — the native path above has always done this, and the wrapper path never did.
+    // The verdict rides in the slot the descriptor used; x19/rbx hold live allocator state.
+    ctx.emitter.instruction("str x0, [sp, #24]");                               // the reconciliation verdict
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the opaque stream handle
+    ctx.emitter.instruction("mov x1, #0");
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("ldr x0, [sp, #24]");
     ctx.emitter.label(&after_dispatch_label);
     ctx.emitter.instruction("add sp, sp, #32");                                 // release seek scratch storage
 }
@@ -187,6 +195,14 @@ pub(super) fn lower_fseek_x86_64(
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");                   // the synthetic wrapper fd
     emit_wrapper_seek_head_x86_64(ctx, false);
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_seek_reconcile");      // 0, or -1 with php's warning
+    // A seek starts the reading again, so php discards the end-of-file answer the read left
+    // behind — the native path above has always done this, and the wrapper path never did.
+    // The verdict rides in the slot the descriptor used; x19/rbx hold live allocator state.
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // the reconciliation verdict
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the opaque stream handle
+    ctx.emitter.instruction("mov rsi, 0");
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 24]");
     ctx.emitter.label(&after_dispatch_label);
     ctx.emitter.instruction("add rsp, 32");                                     // release seek scratch storage
 }
@@ -243,6 +259,14 @@ pub(super) fn lower_rewind_aarch64(
     ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the opaque stream handle
     emit_wrapper_seek_head_aarch64(ctx, true);
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_seek_reconcile");      // 0, or -1 with php's warning
+    // A seek starts the reading again, so php discards the end-of-file answer the read left
+    // behind — the native path above has always done this, and the wrapper path never did.
+    // The verdict rides in the slot the descriptor used; x19/rbx hold live allocator state.
+    ctx.emitter.instruction("str x0, [sp, #8]");                                // the reconciliation verdict
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the opaque stream handle
+    ctx.emitter.instruction("mov x1, #0");
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("ldr x0, [sp, #8]");
     // Only THIS arm answers 0/-1; the native path above already produced the bool and jumps
     // straight to the label below, so the conversion cannot live there.
     ctx.emitter.instruction("cmp x0, #0");
@@ -304,6 +328,14 @@ pub(super) fn lower_rewind_x86_64(
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the opaque stream handle
     emit_wrapper_seek_head_x86_64(ctx, true);
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_seek_reconcile");      // 0, or -1 with php's warning
+    // A seek starts the reading again, so php discards the end-of-file answer the read left
+    // behind — the native path above has always done this, and the wrapper path never did.
+    // The verdict rides in the slot the descriptor used; x19/rbx hold live allocator state.
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // the reconciliation verdict
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the opaque stream handle
+    ctx.emitter.instruction("mov rsi, 0");
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");
     // Only THIS arm answers 0/-1; the native path above already produced the bool and jumps
     // straight to the label below, so the conversion cannot live there.
     ctx.emitter.instruction("cmp rax, 0");

@@ -609,6 +609,60 @@ fn emit_user_wrapper_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return 0 bytes written
 }
 
+/// Emits `__rt_uw_post_read_eof(handle, fd)`: php's question after every wrapper read.
+///
+/// A wrapper cannot set the stream's end-of-file state itself, so php asks `stream_eof()` straight
+/// after each `stream_read()` and keeps the answer — `feof()` then never asks again while it
+/// stands. MEASURED on `php -n` 8.5.6.
+///
+/// The answer is only ever SET, never cleared: php does the same, and clearing here would discard
+/// the read-ahead buffer that `__rt_stream_eof_set` empties on a false. A seek is what clears it.
+///
+/// Asked QUIETLY: a class with no `stream_eof` has already had its read refused, under the name of
+/// the function the user called, and a second warning here would name this probe instead.
+pub fn emit_uw_post_read_eof(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: uw_post_read_eof ---");
+    emitter.label_global("__rt_uw_post_read_eof");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #32");
+            emitter.instruction("stp x29, x30, [sp, #16]");
+            emitter.instruction("add x29, sp, #16");
+            emitter.instruction("str x0, [sp, #0]");                            // the opaque stream handle
+            emitter.instruction("mov x0, x1");                                  // the synthetic wrapper descriptor
+            emitter.instruction("mov x1, #1");                                  // elephc is asking, so say nothing
+            emitter.instruction("bl __rt_user_wrapper_feof");
+            emitter.instruction("cbz x0, __rt_uwpre_done");                     // not at the end: php remembers nothing
+            emitter.instruction("ldr x0, [sp, #0]");                            // the opaque stream handle
+            emitter.instruction("mov x1, #1");
+            emitter.instruction("bl __rt_stream_eof_set");                      // and `feof()` answers from this
+            emitter.label("__rt_uwpre_done");
+            emitter.instruction("ldp x29, x30, [sp, #16]");
+            emitter.instruction("add sp, sp, #32");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 16");
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // the opaque stream handle
+            emitter.instruction("mov rdi, rsi");                                // the synthetic wrapper descriptor
+            emitter.instruction("mov esi, 1");                                  // elephc is asking, so say nothing
+            emitter.instruction("call __rt_user_wrapper_feof");
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_uwpre_done_x86");                      // not at the end: php remembers nothing
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // the opaque stream handle
+            emitter.instruction("mov esi, 1");
+            emitter.instruction("call __rt_stream_eof_set");                    // and `feof()` answers from this
+            emitter.label("__rt_uwpre_done_x86");
+            emitter.instruction("add rsp, 16");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
 /// `__rt_user_wrapper_feof`: invoke the wrapper's `stream_eof()` and return
 /// its declared bool result. When the method is absent, returns 1 (EOF) so
 /// callers that loop until feof terminate instead of spinning.

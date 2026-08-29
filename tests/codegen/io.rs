@@ -27,6 +27,8 @@ mod wrapper_read_buffer;
 mod wrapper_without_stream_eof;
 #[path = "io/wrapper_stat_cache.rs"]
 mod wrapper_stat_cache;
+#[path = "io/wrapper_eof_conversation.rs"]
+mod wrapper_eof_conversation;
 #[path = "io/wrapper_chunk_reads.rs"]
 mod wrapper_chunk_reads;
 #[path = "io/read_buffer.rs"]
