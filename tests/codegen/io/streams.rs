@@ -19875,3 +19875,121 @@ foreach ([0, 1] as $which) {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ABC\nNOP\n");
 }
+
+/// Verifies a user filter attached to BOTH directions is instantiated TWICE.
+///
+/// php creates one filter per chain and each runs its own `onCreate()`; `stream_filter_remove()`
+/// closes the one the resource names and the other closes at `fclose()`. MEASURED on `php -n`
+/// 8.5.6 — the second `onClose` arriving at the close is what says two instances existed.
+#[test]
+fn test_an_all_user_filter_makes_two_instances() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class C extends php_user_filter {
+    public function onCreate(): bool { echo "  onCreate\n"; return true; }
+    public function onClose(): void { echo "  onClose\n"; }
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("cc", "C");
+echo "== all ==\n";
+$h = fopen("php://memory", "w+");
+$f = stream_filter_append($h, "cc");
+echo " -- remove --\n";
+var_dump(stream_filter_remove($f));
+echo " -- close --\n";
+fclose($h);
+echo "== write only ==\n";
+$h = fopen("php://memory", "w+");
+$f = stream_filter_append($h, "cc", STREAM_FILTER_WRITE);
+echo " -- remove --\n";
+var_dump(stream_filter_remove($f));
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "== all ==\n  onCreate\n  onCreate\n -- remove --\n  onClose\nbool(true)\n",
+            " -- close --\n  onClose\n",
+            "== write only ==\n  onCreate\n -- remove --\n  onClose\nbool(true)\n",
+        ),
+    );
+}
+
+/// Verifies the two halves are SEPARATE objects, not one instance on two chains.
+///
+/// A counter on the instance tells them apart: one bucket through the write side and one
+/// through the read side, and each filter counts its own first bucket. php answers `a[1][1]`;
+/// a single shared instance would answer `a[1][2]`.
+#[test]
+fn test_the_two_halves_of_an_all_user_filter_are_separate_objects() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Counting extends php_user_filter {
+    public $seen = 0;
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $this->seen++;
+            $b->data = $b->data . "[" . $this->seen . "]";
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("counting", "Counting");
+$h = fopen("php://memory", "w+");
+stream_filter_append($h, "counting");
+fwrite($h, "a");
+rewind($h);
+echo stream_get_contents($h), "\n";
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "a[1][1]\n");
+}
+
+/// Verifies a refused `onCreate()` stops at the FIRST instance.
+///
+/// php never tries the other direction once a filter refuses to be created: one `onCreate`,
+/// a warning, and `false`. The second instantiation therefore sits after the first has
+/// succeeded rather than beside it — and the `$params` reference taken for it goes back.
+#[test]
+fn test_a_refused_oncreate_stops_before_the_second_instance() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class No extends php_user_filter {
+    public function onCreate(): bool { echo "  onCreate\n"; return false; }
+    public function filter($in, $out, &$consumed, $closing): int { return PSFS_PASS_ON; }
+}
+stream_filter_register("no", "No");
+$h = fopen("php://memory", "w+");
+var_dump(stream_filter_append($h, "no"));
+fwrite($h, "abc");
+rewind($h);
+var_dump(stream_get_contents($h));
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout.matches("onCreate").count(),
+        1,
+        "onCreate ran more than once for a refused attach: {}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("bool(false)"), "unexpected output: {}", out.stdout);
+    assert!(
+        out.stdout.contains("string(3) \"abc\""),
+        "the refused filter still ran: {}",
+        out.stdout
+    );
+}
