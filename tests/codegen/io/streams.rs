@@ -19625,3 +19625,78 @@ var_dump(scandir("dn://y", SCANDIR_SORT_DESCENDING));
          array(2) {\n  [0]=>\n  string(2) \"zz\"\n  [1]=>\n  string(2) \"aa\"\n}\n",
     );
 }
+
+/// Verifies a filter registered as a FAMILY answers for its members.
+///
+/// `stream_filter_register("p.*", "F")` registers a family, and php finds it for `p.one`. elephc
+/// compared names byte for byte and answered
+/// `Warning: stream_filter_append(): Unable to locate filter "p.one"`, so the whole family
+/// mechanism did nothing.
+///
+/// The prefix that must match INCLUDES the dot: MEASURED on `php -n` 8.5.6, `p.one`, `p.` and
+/// `p.a.b` match, `p` and `pX` do not.
+#[test]
+fn test_a_filter_family_answers_for_its_members() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class F extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = "[" . $b->data . "]";
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("p.*", "F");
+foreach (["p.one", "p.", "p.a.b", "p", "pX"] as $name) {
+    $h = fopen("php://memory", "w+");
+    $ok = @stream_filter_append($h, $name);
+    fwrite($h, "x");
+    rewind($h);
+    echo $name, " ", var_export((bool) $ok, true), " ", stream_get_contents($h), "\n";
+    fclose($h);
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "p.one true [[x]]\np. true [[x]]\np.a.b true [[x]]\np false x\npX false x\n",
+    );
+}
+
+/// Verifies an EXACT registration is still exact: `q` does not answer for `q.x`.
+///
+/// The family rule keys on the trailing `*`, so a name without one keeps comparing whole.
+#[test]
+fn test_an_exact_filter_name_stays_exact() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class F extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = "[" . $b->data . "]";
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("q", "F");
+foreach (["q", "q.x", "qq"] as $name) {
+    $h = fopen("php://memory", "w+");
+    $ok = @stream_filter_append($h, $name);
+    fwrite($h, "x");
+    rewind($h);
+    echo $name, " ", var_export((bool) $ok, true), " ", stream_get_contents($h), "\n";
+    fclose($h);
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    // `stream_filter_append()` defaults to STREAM_FILTER_ALL, so the same filter runs on the
+    // write and again on the read — MEASURED, php brackets twice too.
+    assert_eq!(out.stdout, "q true [[x]]\nq.x false x\nqq false x\n");
+}

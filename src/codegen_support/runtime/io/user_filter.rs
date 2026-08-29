@@ -259,13 +259,30 @@ pub fn emit_resolve_user_filter_id(emitter: &mut Emitter) {
     emitter.instruction("ldr x7, [x6]");                                        // stored filter-name pointer
     emitter.instruction("cbz x7, __rt_rufi_next");                              // skip empty slots
     emitter.instruction("ldr x8, [x6, #8]");                                    // stored filter-name length
-    emitter.instruction("cmp x8, x1");                                          // do the lengths match?
-    emitter.instruction("b.ne __rt_rufi_next");                                 // length mismatch — try the next slot
+    emitter.instruction("cbz x8, __rt_rufi_next");                              // an empty registration matches nothing
+    // -- a registered name ending in `*` answers for the whole family --
+    //
+    // `stream_filter_register("p.*", "F")` then `stream_filter_append($h, "p.one")` finds it:
+    // MEASURED on `php -n` 8.5.6, where `p.one`, `p.` and `p.a.b` all match and `p` and `pX` do
+    // not — the prefix that must match INCLUDES the dot. Comparing byte for byte answered
+    // `Unable to locate filter`.
+    emitter.instruction("sub x12, x8, #1");                                     // the prefix a `*` would stand for
+    emitter.instruction("ldrb w13, [x7, x12]");                                 // the registration's last byte
+    emitter.instruction("cmp w13, #0x2A");                                      // '*'
+    emitter.instruction("b.eq __rt_rufi_prefix");                               // a family: match what comes before it
+    emitter.instruction("cmp x8, x1");                                          // an exact name: the lengths must agree
+    emitter.instruction("b.ne __rt_rufi_next");
+    emitter.instruction("mov x12, x8");                                         // compare all of it
+    emitter.instruction("b __rt_rufi_bytes");
+    emitter.label("__rt_rufi_prefix");
+    emitter.instruction("cmp x1, x12");                                         // the request must carry the whole prefix
+    emitter.instruction("b.lt __rt_rufi_next");
 
-    // -- lengths match: compare the bytes --
+    // -- compare the bytes that have to agree --
+    emitter.label("__rt_rufi_bytes");
     emitter.instruction("mov x9, #0");                                          // byte compare index
     emitter.label("__rt_rufi_cmp");
-    emitter.instruction("cmp x9, x1");                                          // compared every byte?
+    emitter.instruction("cmp x9, x12");                                         // compared every byte that matters?
     emitter.instruction("b.ge __rt_rufi_match");                                // bytes fully match
     emitter.instruction("ldrb w10, [x7, x9]");                                  // stored byte
     emitter.instruction("ldrb w11, [x0, x9]");                                  // input byte
@@ -369,6 +386,11 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     // registered under two names answers each in turn. The bytes come from the registry slot
     // rather than the caller's argument because the registry owns a persisted copy, so the
     // property cannot outlive the string it names.
+    //
+    // ⚠️ For a FAMILY that costs the member: the registry holds `p.*` and php reports `p.one`,
+    // which is how a family implementation tells its members apart. MEASURED on `php -n` 8.5.6.
+    // Reporting the caller's name means persisting it — the very thing the registry copy avoids —
+    // and the frame here has one free slot, already scratch for the property offset below.
     emitter.instruction("ldr x6, [x0]");                                        // class_id at the head of the obj
     abi::emit_symbol_address(emitter, "x7", "_user_filter_vtable_ptrs");
     emitter.instruction("ldr x7, [x7, x6, lsl #3]");                            // per-class user-filter vtable
@@ -845,13 +867,26 @@ fn emit_resolve_user_filter_id_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // is this slot empty?
     emitter.instruction("jz __rt_rufi_next_x86");                               // skip empty slots
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // stored filter-name length
-    emitter.instruction("cmp r11, rsi");                                        // do the lengths match?
-    emitter.instruction("jne __rt_rufi_next_x86");                              // length mismatch — try the next slot
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_rufi_next_x86");                               // an empty registration matches nothing
+    // See the AArch64 arm: a registered name ending in `*` answers for the whole family.
+    emitter.instruction("lea r8, [r11 - 1]");                                   // the prefix a `*` would stand for
+    emitter.instruction("movzx edx, BYTE PTR [rax + r8]");                      // the registration's last byte
+    emitter.instruction("cmp dl, 0x2A");                                        // '*'
+    emitter.instruction("je __rt_rufi_prefix_x86");                             // a family: match what comes before it
+    emitter.instruction("cmp r11, rsi");                                        // an exact name: the lengths must agree
+    emitter.instruction("jne __rt_rufi_next_x86");
+    emitter.instruction("mov r8, r11");                                         // compare all of it
+    emitter.instruction("jmp __rt_rufi_bytes_x86");
+    emitter.label("__rt_rufi_prefix_x86");
+    emitter.instruction("cmp rsi, r8");                                         // the request must carry the whole prefix
+    emitter.instruction("jl __rt_rufi_next_x86");
 
-    // -- lengths match: compare the bytes --
+    // -- compare the bytes that have to agree --
+    emitter.label("__rt_rufi_bytes_x86");
     emitter.instruction("xor rcx, rcx");                                        // byte compare index
     emitter.label("__rt_rufi_cmp_x86");
-    emitter.instruction("cmp rcx, rsi");                                        // compared every byte?
+    emitter.instruction("cmp rcx, r8");                                         // compared every byte that matters?
     emitter.instruction("jge __rt_rufi_match_x86");                             // bytes fully match
     emitter.instruction("movzx edx, BYTE PTR [rax + rcx]");                     // stored byte
     emitter.instruction("movzx r11d, BYTE PTR [rdi + rcx]");                    // input byte

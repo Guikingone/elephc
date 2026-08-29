@@ -1019,6 +1019,35 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let fields = expect_operand(inst, 1)?;
     let arch = ctx.emitter.target.arch;
 
+    // php's `fclose()` flushes a wrapper it OWES a flush, and a write through `fputcsv()` owes one
+    // exactly as `fwrite()` does — MEASURED, `fputcsv($h, ["a","b"]); fclose($h);` calls `flush`
+    // then `close`. This wrote through the descriptor helper, which cannot reach the debt: it
+    // lives on the StreamState, and only the HANDLE resolves that.
+    load_stream_handle_to_result(ctx, stream, "fputcsv")?;
+    let debt_marked = ctx.next_label("fputcsv_debt_marked");
+    match arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            ctx.emitter.instruction(&format!("cbz x0, {}", debt_marked));
+            ctx.emitter.instruction("mov x9, #1");
+            ctx.emitter.instruction(&format!(
+                "str x9, [x0, #{}]",
+                crate::codegen_support::runtime::resources::layout::STREAM_WRITTEN_SINCE_FLUSH_OFFSET
+            ));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", debt_marked));
+            ctx.emitter.instruction(&format!(
+                "mov QWORD PTR [rax + {}], 1",
+                crate::codegen_support::runtime::resources::layout::STREAM_WRITTEN_SINCE_FLUSH_OFFSET
+            ));
+        }
+    }
+    ctx.emitter.label(&debt_marked);
+
     load_stream_fd_to_result(ctx, stream, "fputcsv")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));            // save stream fd on stack
     // `scandir()`, `glob()` and `file()` answer `array<string>|false`, which is stored boxed, so

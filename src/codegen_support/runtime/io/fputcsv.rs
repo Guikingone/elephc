@@ -31,6 +31,13 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
 /// Signature: `__rt_fputcsv(fd: x0, arr: x1, csv_opts: x2, eol_ptr: x3, eol_len: x4)
 /// -> bytes_written: x0`.
 ///
+/// ⚠️ It writes the row PIECE BY PIECE — separator, quote, escaped byte, field, end of line — and
+/// php composes the row and writes it ONCE. Invisible on a descriptor, where the kernel buffers;
+/// visible through a userspace wrapper, which sees a `stream_write()` per piece:
+/// `fputcsv($h, ["a", "b"])` is FOUR calls here and one in php. MEASURED on `php -n` 8.5.6.
+/// The bytes are identical either way. Composing into a buffer first is the fix, and it is a
+/// restructure of this whole emitter rather than a change at one site.
+///
 /// Writes each array element as a CSV field, quoting fields that contain the
 /// separator, enclosure, escape, or whitespace characters. Internal quotes are
 /// escaped by doubling (RFC 4180, `esc == 0`) or by the escape char (`esc != 0`).
