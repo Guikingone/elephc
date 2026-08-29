@@ -161,7 +161,7 @@ That tradeoff is intentional:
 - **No hidden external PHP runtime dependency**: the generated binary does not need PHP, the Zend Engine, or a loader extension. A program that needs dynamic `eval()` embeds its optional interpreter bridge directly in the standalone binary.
 - **Native-oriented extensions**: `extern`, `ptr`, `buffer<T>`, and `packed class` let PHP-shaped code cross into systems, FFI, game, and performance-sensitive workloads.
 
-That does not mean elephc has to live outside the existing PHP ecosystem. The current CLI path produces standalone executables and shared libraries (`--emit cdylib`), and the roadmap adds static library output and an experimental PHP extension bridge. That opens a practical middle path: keep a framework such as WordPress, Laravel, or Symfony running on PHP, then compile static, performance-sensitive modules into native libraries or PHP extensions.
+That does not mean elephc has to live outside the existing PHP ecosystem. The current CLI path produces standalone executables, shared libraries (`--emit cdylib`), and static libraries (`--emit staticlib`; `--emit lib` is an alias), while the roadmap includes an experimental PHP extension bridge. That opens a practical middle path: keep a framework such as WordPress, Laravel, or Symfony running on PHP, then compile static, performance-sensitive modules into native libraries or PHP extensions.
 
 So elephc is not a drop-in replacement for an entire dynamic framework today. The longer-term goal is more useful: make it possible to move the parts of PHP code that are static enough to compile into inspectable native code, while the rest of the application can stay in ordinary PHP.
 
@@ -229,7 +229,7 @@ The binary is at `./target/release/elephc`.
 
 ### Manual download (alternative)
 
-Pre-built binaries are available on the [Releases](https://github.com/illegalstudio/elephc/releases) page. Every release ships per-platform tarballs — `elephc-<version>-aarch64-apple-darwin.tar.gz`, `elephc-<version>-x86_64-unknown-linux-gnu.tar.gz`, and `elephc-<version>-aarch64-unknown-linux-gnu.tar.gz` — each bundling the compiler and its bridge staticlibs; the Linux builds target glibc 2.35 or newer. If macOS blocks the binary, run:
+Pre-built compiler binaries are available on the [Releases](https://github.com/illegalstudio/elephc/releases) page. Every release ships per-host-platform tarballs — `elephc-<version>-aarch64-apple-darwin.tar.gz`, `elephc-<version>-x86_64-unknown-linux-gnu.tar.gz`, and `elephc-<version>-aarch64-unknown-linux-gnu.tar.gz` — each bundling the compiler and its bridge staticlibs; the Linux builds target glibc 2.35 or newer. These archives describe where the compiler runs, not its output target matrix: iOS libraries are cross-compiled from the macOS host. If macOS blocks the binary, run:
 
 ```bash
 xattr -cr elephc
@@ -324,7 +324,10 @@ elephc --with-regex eval_regex.php
 elephc native install --locked
 
 # Explicit target selection
-# Supported targets today: macos-aarch64, linux-aarch64, linux-x86_64
+# Supported targets today: macos-aarch64, ios-arm64, ios-sim-arm64,
+# linux-aarch64, linux-x86_64
+elephc --target ios-arm64 --emit staticlib module.php
+elephc --target ios-sim-arm64 --emit staticlib module.php
 elephc --target linux-aarch64 hello.php
 elephc --target linux-x86_64 hello.php
 

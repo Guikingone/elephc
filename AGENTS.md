@@ -2,7 +2,7 @@
 
 ## What is this
 
-A PHP-to-native compiler written in Rust. Compiles a static subset of PHP to native assembly for the supported target matrix, producing standalone binaries. No interpreter, no VM, no runtime dependencies.
+A PHP-to-native compiler written in Rust. Compiles a static subset of PHP to native assembly for the supported target matrix, producing standalone binaries or host-consumable libraries. No interpreter, no VM, no runtime dependencies.
 
 ## Read CONTRIBUTING.md first
 
@@ -10,7 +10,7 @@ Before contributing, read `CONTRIBUTING.md` in full. It holds the complete step-
 
 ## Supported target policy
 
-All supported targets are first-class targets. The supported target matrix is currently `macos-aarch64`, `linux-aarch64`, and `linux-x86_64`.
+All supported targets are first-class targets. The supported target matrix is currently `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, and `linux-x86_64`.
 
 Do not design or land codegen/runtime features as ARM64-first with x86_64 treated as a later port. New features, builtins, runtime helpers, optimizer assumptions that affect emitted code, ABI behavior, and ownership/GC paths must either support every supported target in the same change or clearly isolate an intentionally unsupported path with diagnostics, tests, and documentation. A feature is not considered done while any supported target has a missing runtime symbol, reduced semantics, stale documentation, or an untested target-specific lowering path.
 
@@ -60,7 +60,7 @@ Some tests are marked `#[ignore]` because they require external libraries (e.g.,
 
 ### Test strategy during development
 
-The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs the complete supported matrix (`macos-aarch64`, `linux-x86_64`, and `linux-aarch64`) with sharded codegen tests, so local implementation work should optimize for fast, relevant signal:
+The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs sharded executable codegen tests on `macos-aarch64`, `linux-x86_64`, and `linux-aarch64`, and covers `ios-arm64` and `ios-sim-arm64` through target-specific compile and emitter tests. Local implementation work should optimize for fast, relevant signal:
 
 1. **While developing a feature**: run only the tests for that feature or regression (`cargo test test_my_feature`).
 2. **Scope to a single test binary**: prefer `cargo test --test codegen_tests <filter>` over a bare `cargo test <filter>`. A bare filter rebuilds and links all six test binaries every cycle (~2.5s of wasted link time); `--test <binary>` links only the one you need. Most codegen work lives in `codegen_tests`.

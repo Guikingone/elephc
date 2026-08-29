@@ -481,6 +481,8 @@ mod tests {
     fn preserves_owned_string_host_arguments_across_lazy_stack_init_for_all_targets() {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
             Target::new(Platform::Linux, Arch::AArch64),
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
