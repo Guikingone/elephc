@@ -159,4 +159,4 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 
 **Coverage measured against a pinned baseline.** Builtin percentages are computed against the vendored PHP CLI snapshot (version and extension set recorded in the page header). PHP modules outside that snapshot are not counted.
 
-**Three native targets.** Binaries target macOS ARM64, Linux ARM64, and Linux x86_64; PHP itself runs on many more platforms.
+**Five native compile targets.** Standalone binaries target macOS ARM64, Linux ARM64, and Linux x86_64; macOS also cross-compiles libraries for iOS ARM64 devices and the iOS ARM64 Simulator. PHP itself runs on many more platforms.

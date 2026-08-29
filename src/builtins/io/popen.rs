@@ -18,7 +18,7 @@ use crate::types::PhpType;
 builtin! {
     contract: "popen",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
+    semantics: crate::builtins::semantics::host_only_runtime_fn_semantics(
         crate::ir::RuntimeFnId::Popen,
     ),
 }

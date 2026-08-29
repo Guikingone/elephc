@@ -21,11 +21,11 @@
 </p>
 
 <p align="center">
-  <strong>3 native targets &middot; no Zend Engine &middot; no external PHP runtime &middot; single standalone binary</strong>
+  <strong>5 compile targets &middot; 3 release hosts &middot; no Zend Engine &middot; no external PHP runtime</strong>
 </p>
 
 <p align="center">
-  A PHP-to-native compiler that takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for <strong>macOS ARM64</strong>, <strong>Linux ARM64</strong>, and <strong>Linux x86_64</strong>. Ordinary source is AOT-compiled with no opcode fallback; experimental <code>eval()</code> can embed an optional interpreter bridge when runtime parsing is required.
+  A PHP-to-native compiler that takes a subset of PHP and compiles it directly to native assembly. Standalone executables and compiler release archives target <strong>macOS ARM64</strong>, <strong>Linux ARM64</strong>, and <strong>Linux x86_64</strong>; a macOS host also cross-compiles libraries for <strong>iOS ARM64</strong> devices and the <strong>iOS ARM64 Simulator</strong>. Ordinary source is AOT-compiled with no opcode fallback; experimental <code>eval()</code> can embed an optional interpreter bridge when runtime parsing is required.
 </p>
 
 <p align="center">

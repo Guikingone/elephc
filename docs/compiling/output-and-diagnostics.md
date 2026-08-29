@@ -18,6 +18,7 @@ Selects the kind of artifact to produce.
 ```bash
 elephc --emit executable app.php   # default: a native binary
 elephc --emit cdylib lib.php       # a C-ABI shared library
+elephc --emit staticlib lib.php    # a C-ABI static archive
 ```
 
 Accepted values and aliases:
@@ -26,9 +27,12 @@ Accepted values and aliases:
 |---|---|---|
 | `executable` | `exe`, `bin` | A standalone native binary. |
 | `cdylib` | `dylib`, `shared` | A C-ABI shared library (`.dylib`/`.so`). |
+| `staticlib` | `static`, `lib` | A C-ABI static archive (`.a`). |
 
-The inline form `--emit=cdylib` also works. For exporting C-ABI functions from a
-`cdylib`, see [Shared Libraries (cdylib)](../beyond-php/cdylib.md).
+The inline forms such as `--emit=cdylib` also work. `--emit lib` is an alias of
+`staticlib`, not `cdylib`. Both library kinds emit the same C-ABI exports and
+generated header; see [Shared Libraries (cdylib)](../beyond-php/cdylib.md) for
+the boundary contract and the static-linking distinction.
 
 ### `--emit-asm`
 

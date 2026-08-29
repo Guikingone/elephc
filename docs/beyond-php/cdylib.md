@@ -13,9 +13,11 @@ namespaced names replace namespace separators with underscores, so
 resulting public-name collision and writes a deterministic C header containing
 the exact mapped ABI.
 
-The mode supports macOS aarch64 (`.dylib`), Linux aarch64 (`.so`), and Linux
-x86_64 (`.so`). The ABI is single-threaded: a host must not call the same
-Elephc library concurrently. Boundary depth and concat scratch state are
+The mode supports macOS aarch64 (`.dylib`), iOS device and Simulator aarch64
+(`.dylib`), Linux aarch64 (`.so`), and Linux x86_64 (`.so`). iOS libraries are
+cross-compiled from macOS with the matching Xcode SDK; `staticlib` remains the
+usual Xcode delivery form. The ABI is single-threaded: a host must not call the
+same Elephc library concurrently. Boundary depth and concat scratch state are
 nest-safe, so internal recovery cannot accidentally deactivate an outer
 boundary.
 

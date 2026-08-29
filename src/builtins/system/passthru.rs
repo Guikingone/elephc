@@ -16,7 +16,7 @@ use crate::types::PhpType;
 builtin! {
     contract: "passthru",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
+    semantics: crate::builtins::semantics::host_only_runtime_fn_semantics(
         crate::ir::RuntimeFnId::Passthru,
     ),
 }

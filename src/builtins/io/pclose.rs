@@ -15,7 +15,7 @@ use crate::types::PhpType;
 builtin! {
     contract: "pclose",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
+    semantics: crate::builtins::semantics::host_only_runtime_fn_semantics(
         crate::ir::RuntimeFnId::Pclose,
     ),
 }

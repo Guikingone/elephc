@@ -20,7 +20,7 @@ pub enum RuntimeFnBackendMapping {
 /// Supported-target availability declared by a runtime function descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeFnTargetSupport {
-    /// Implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
+    /// Implemented by the backend for all five supported targets; builtin semantics may narrow it.
     AllSupported,
 }
 
