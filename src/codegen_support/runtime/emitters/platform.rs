@@ -136,6 +136,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_box_wrapper_stat_result(emitter);
     io::emit_user_wrapper_fstat(emitter);
     io::emit_user_wrapper_url_stat(emitter);
+    io::emit_clear_stat_cache(emitter);
     io::emit_user_wrapper_url_stat_readers(emitter);
     io::emit_user_wrapper_url_stat_field(emitter);
     io::emit_stat_mode_access(emitter);

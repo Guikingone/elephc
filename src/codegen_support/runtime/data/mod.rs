@@ -220,6 +220,13 @@ pub(crate) const PF_WARN_OPEN_MID: &str = "(";
 /// `stream_read` is deliberately absent: php 8.5.6 emits NO warning for a missing `stream_read`,
 /// measured with `stream_eof` present so the read is really attempted. The audit that prompted
 /// this listed one; the measurement refuses it.
+/// How long a path the wrapper stat cache will answer for.
+///
+/// The slot is a fixed buffer rather than an allocation because nothing owns the lifetime of a
+/// cached path: the caller's pointer can be freed the moment it returns. A path that does not fit
+/// is not cached, which costs a repeated `url_stat()` call and nothing else.
+pub(crate) const US_CACHE_PATH_CAP: usize = 1024;
+
 pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FWRITE: &str = "Warning: fwrite(): ";
 
 /// `feof()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].

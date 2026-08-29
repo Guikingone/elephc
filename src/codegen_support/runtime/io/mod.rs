@@ -401,7 +401,7 @@ pub(crate) use notification::emit_fire_notification;
 pub(crate) use touch_meta_array::emit_touch_meta_array;
 pub(crate) use user_wrapper_set_option::emit_user_wrapper_set_option;
 pub(crate) use user_wrapper_url_stat::{
-    emit_user_wrapper_url_stat, emit_user_wrapper_url_stat_field,
+    emit_clear_stat_cache, emit_user_wrapper_url_stat, emit_user_wrapper_url_stat_field,
 };
 pub(crate) use user_wrapper_url_stat_fields::{
     emit_user_wrapper_url_stat_readers, STAT_FIELD_ATIME, STAT_FIELD_CTIME, STAT_FIELD_GID,

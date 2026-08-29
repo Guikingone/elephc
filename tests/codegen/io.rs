@@ -25,6 +25,8 @@ mod gz_streams;
 mod wrapper_read_buffer;
 #[path = "io/wrapper_without_stream_eof.rs"]
 mod wrapper_without_stream_eof;
+#[path = "io/wrapper_stat_cache.rs"]
+mod wrapper_stat_cache;
 #[path = "io/wrapper_chunk_reads.rs"]
 mod wrapper_chunk_reads;
 #[path = "io/read_buffer.rs"]

@@ -298,6 +298,10 @@ pub(crate) fn lower_clearstatcache(
             inst.operands.len()
         )));
     }
+    // php's stat cache is what makes `filesize()` then `is_dir()` call a wrapper's `url_stat()`
+    // ONCE, and this is the only thing that empties it. Its arguments are accepted and ignored:
+    // MEASURED, `clearstatcache(true, "other://path")` clears an unrelated cached path too.
+    abi::emit_call_label(ctx.emitter, "__rt_clear_stat_cache");
     store_if_result(ctx, inst)
 }
 

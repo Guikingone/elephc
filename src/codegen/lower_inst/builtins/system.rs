@@ -773,6 +773,12 @@ fn lower_shell_exec_like(
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 1)?;
     let command = expect_operand(inst, 0)?;
+    // Spawning a process empties php's stat cache. MEASURED on `php -n` 8.5.6: `shell_exec()`,
+    // `exec()`, `system()` and `passthru()` all make the next stat ask again — a `popen()`/
+    // `pclose()` pair does NOT. Anything the command did to the filesystem is invisible otherwise.
+    // Emitted BEFORE the command is materialized: the helper clobbers the result register, which
+    // by then holds the command string.
+    abi::emit_call_label(ctx.emitter, "__rt_clear_stat_cache");
     require_string(ctx.load_value_to_result(command)?.codegen_repr(), "shell command")?;
     abi::emit_call_label(ctx.emitter, "__rt_shell_exec");
     store_if_result(ctx, inst)
@@ -787,6 +793,12 @@ fn lower_direct_system_call(
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 1)?;
     let command = expect_operand(inst, 0)?;
+    // Spawning a process empties php's stat cache. MEASURED on `php -n` 8.5.6: `shell_exec()`,
+    // `exec()`, `system()` and `passthru()` all make the next stat ask again — a `popen()`/
+    // `pclose()` pair does NOT. Anything the command did to the filesystem is invisible otherwise.
+    // Emitted BEFORE the command is materialized: the helper clobbers the result register, which
+    // by then holds the command string.
+    abi::emit_call_label(ctx.emitter, "__rt_clear_stat_cache");
     require_string(ctx.load_value_to_result(command)?.codegen_repr(), "system command")?;
     abi::emit_call_label(ctx.emitter, "__rt_cstr");
     if ctx.emitter.target.arch == Arch::X86_64 {

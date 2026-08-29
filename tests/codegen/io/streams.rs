@@ -13162,22 +13162,27 @@ is_executable("flagw://executable");
 ///
 /// ```text
 ///                                                       php   elephc
-/// file_exists($p); file_exists($p);                      1      2
-/// file_exists($p); filesize($p); is_file($p);            1      3
+/// file_exists($p); file_exists($p);                      1      1
+/// file_exists($p); filesize($p); is_file($p);            1      1
 /// file_exists($p); clearstatcache(); file_exists($p);    2      2
 /// is_file($p);                                           1      1
 /// file_exists($e); file_exists($f); file_exists($e);     3      3
 /// ```
 ///
-/// Only the first two rows diverge, and only because php's cache HITS there. The last three agree
-/// by construction: with no cache, elephc always pays N calls, which is what php also pays
-/// whenever its single entry misses.
+/// This used to be a DELIBERATE gap, pinned at 2/3/2/1/3, on the reasoning that php's cache "is
+/// invalidated by very nearly everything — a stat of any other path, `touch`, `unlink`, `rename`,
+/// `chmod`, `mkdir`, `rmdir`, a bare `fopen()`/`fclose()` pair, even `shell_exec()`", so that
+/// missing ONE invalidation point would return a stale stat silently.
 ///
-/// This is a DELIBERATE gap, pinned so it stays visible. php's cache is invalidated by very
-/// nearly everything — a stat of any other path, `touch`, `unlink`, `rename`, `chmod`, `mkdir`,
-/// `rmdir`, a bare `fopen()`/`fclose()` pair, even `shell_exec()` — so reproducing it by
-/// enumerating invalidation points is the wrong shape of risk: missing ONE returns a stale stat
-/// silently, which is strictly worse than the syscall it saves.
+/// MEASURED on `php -n` 8.5.6, of that list exactly TWO are true: a stat of another path, and
+/// `shell_exec()`. `touch()`, `unlink()`, `rename()`, `chmod()`, `mkdir()`, `rmdir()`, a bare
+/// `fopen()`/`fclose()` pair AND a write through `fopen()` all leave the cached answer standing —
+/// nothing but `clearstatcache()` and eviction empties it. The enumeration that looked unbounded
+/// is two entries long, and the risk it was avoiding was not there.
+///
+/// The one place elephc still asks where php does not is a plain-path `file_exists()` or
+/// `is_readable()`, which fill no cache in php and evict here. That is the safe direction: over-
+/// eviction costs a call, under-eviction answers from a stale entry.
 #[test]
 fn test_stat_family_url_stat_call_counts() {
     let out = compile_and_run(
@@ -13224,8 +13229,8 @@ echo "alternating=", W::$n, "\n";
     );
     assert_eq!(
         out,
-        "same=2\nthree=3\ncleared=2\nsingle=1\nalternating=3\n",
-        "elephc re-asks where php's one-entry cache would have answered; php gives 1/1/2/1/3"
+        "same=1\nthree=1\ncleared=2\nsingle=1\nalternating=3\n",
+        "php's one-entry stat cache, measured: 1/1/2/1/3"
     );
 }
 

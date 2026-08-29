@@ -69,6 +69,7 @@ use super::{
 };
 use super::super::system;
 use super::RT_DIAG_BUF_BYTES;
+use super::US_CACHE_PATH_CAP;
 use super::super::exceptions::{TRACE_BUF_BYTES, TRACE_LITERALS};
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::runtime::strings::{
@@ -1626,6 +1627,25 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_uw_pending_flush", 8, target));
     out.push_str(&comm_directive("_uwmh_head", 16, target));
     out.push_str(&comm_directive("_uwmh_tail", 16, target));
+    // php's stat cache, as a wrapper sees it. MEASURED on `php -n` 8.5.6: `filesize()`,
+    // `file_exists()`, `is_dir()`, `is_file()` and `filemtime()` on one path call `url_stat()`
+    // ONCE between them, and nothing but `clearstatcache()` empties it — not `unlink()`, not
+    // `rename()`, not `touch()`, not `chmod()`, not a write through `fopen()`.
+    //
+    // Two slots, because a LINK query (`is_link()`, `lstat()`) and an ordinary one do not share:
+    // `filesize()` then `is_link()` calls `url_stat` twice. Each slot holds the path it answers
+    // for and ONE owned reference to the boxed result; a hit hands out another via `__rt_incref`,
+    // since every caller of this helper releases what it gets.
+    //
+    // A path longer than the buffer is simply not cached: the alternative is an allocation whose
+    // lifetime nothing owns, and the miss is correct, only slower. A wrapper that reports the path
+    // ABSENT is never cached either — measured, php asks again every time.
+    out.push_str(&comm_directive("_us_cache_stat_len", 8, target));
+    out.push_str(&comm_directive("_us_cache_stat_box", 8, target));
+    out.push_str(&comm_directive("_us_cache_stat_path", US_CACHE_PATH_CAP, target));
+    out.push_str(&comm_directive("_us_cache_lstat_len", 8, target));
+    out.push_str(&comm_directive("_us_cache_lstat_box", 8, target));
+    out.push_str(&comm_directive("_us_cache_lstat_path", US_CACHE_PATH_CAP, target));
     // _user_filter_consumed_scratch: the storage `filter()`'s by-reference `&$consumed` binds to.
     // An untyped by-ref parameter is an Int by-ref, so the method writes a plain i64 THROUGH the
     // address it is handed — exactly like `stream_open`'s `&$opened_path` scratch. It used to be
