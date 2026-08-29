@@ -254,6 +254,10 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
     emitter.instruction("cbz x0, __rt_uus_false");                              // unknown class → boxed false
     emitter.instruction("str x0, [sp, #48]");                                   // save the throwaway wrapper instance
+    // php assigns `$context` to this instance too, so a class that declares no such property is
+    // deprecated here exactly as it is for `fopen()` — MEASURED, once per instantiation.
+    emitter.instruction("bl __rt_wrapper_context_notice");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // the notice clobbers nothing it needs back
 
     // -- look up url_stat in the per-class user-wrapper vtable (slot 9) --
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
@@ -530,6 +534,11 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_uus_false_x86");                               // unknown class → boxed false
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the throwaway wrapper instance
+    // php assigns `$context` to this instance too, so a class that declares no such property is
+    // deprecated here exactly as it is for `fopen()` — MEASURED, once per instantiation.
+    emitter.instruction("mov rdi, rax");
+    emitter.instruction("call __rt_wrapper_context_notice");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the instance the lookup below reads
 
     // -- look up url_stat in the per-class user-wrapper vtable (slot 9) --
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object

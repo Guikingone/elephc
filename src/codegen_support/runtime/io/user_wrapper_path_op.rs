@@ -122,6 +122,9 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
     emitter.instruction("cbz x0, __rt_uwpo_false");                             // unknown class → false
     emitter.instruction("str x0, [sp, #56]");                                   // save the throwaway wrapper instance
+    // php assigns `$context` to this instance too; see `emit_wrapper_context_notice`.
+    emitter.instruction("bl __rt_wrapper_context_notice");
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload for the vtable lookup below
 
     // -- look up the method in the per-class vtable at the requested slot --
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
@@ -255,6 +258,10 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_uwpo_false_x86");                              // unknown class → false
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the throwaway wrapper instance
+    // php assigns `$context` to this instance too; see `emit_wrapper_context_notice`.
+    emitter.instruction("mov rdi, rax");
+    emitter.instruction("call __rt_wrapper_context_notice");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                   // reload for the vtable lookup below
 
     // -- look up the method in the per-class vtable at the requested slot --
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object
@@ -412,6 +419,9 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
     emitter.instruction("cbz x0, __rt_uwrn_false");                             // unknown class → false
     emitter.instruction("str x0, [sp, #48]");                                   // save the throwaway wrapper instance
+    // php assigns `$context` to this instance too; see `emit_wrapper_context_notice`.
+    emitter.instruction("bl __rt_wrapper_context_notice");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // reload for the vtable lookup below
 
     // -- look up rename in the per-class user-wrapper vtable (slot 16) --
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
@@ -539,6 +549,10 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_uwrn_false_x86");                              // unknown class → false
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the throwaway wrapper instance
+    // php assigns `$context` to this instance too; see `emit_wrapper_context_notice`.
+    emitter.instruction("mov rdi, rax");
+    emitter.instruction("call __rt_wrapper_context_notice");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload for the vtable lookup below
 
     // -- look up rename in the per-class user-wrapper vtable (slot 16) --
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object

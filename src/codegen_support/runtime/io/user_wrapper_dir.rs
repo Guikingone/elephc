@@ -125,6 +125,9 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
     emitter.instruction("cbz x0, __rt_uwod_fail_noobj");                        // unknown class → false (no object to free)
     emitter.instruction("str x0, [sp, #32]");                                   // save the wrapper instance
+    // php assigns `$context` to this instance too; see `emit_wrapper_context_notice`.
+    emitter.instruction("bl __rt_wrapper_context_notice");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload for the vtable lookup below
 
     // -- look up dir_opendir (vtable slot 19) for the object's class --
     emitter.instruction("ldr x9, [x0]");                                        // class_id at the head of every wrapper object
@@ -254,6 +257,10 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did instantiation fail?
     emitter.instruction("jz __rt_uwod_failnoobj_x86");                          // unknown class → false (no object to free)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the wrapper instance
+    // php assigns `$context` to this instance too; see `emit_wrapper_context_notice`.
+    emitter.instruction("mov rdi, rax");
+    emitter.instruction("call __rt_wrapper_context_notice");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                   // reload for the vtable lookup below
 
     // -- look up dir_opendir (vtable slot 19) for the object's class --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of every wrapper object

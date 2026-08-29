@@ -341,6 +341,63 @@ pub fn emit_stream_filtered_pos_set(emitter: &mut Emitter) {
     }
 }
 
+/// Emits `__rt_wrapper_context_notice(obj)`: php's deprecation for the `$context` property it
+/// invents on a wrapper instance whose class did not declare one.
+///
+/// php assigns `$context` to EVERY wrapper instance it creates, so the notice belongs to every
+/// instantiation — the one `url_stat()` makes and the one a path operation makes, not only
+/// `fopen()`'s. MEASURED: a class without the property is deprecated once per instance.
+///
+/// Takes the object rather than the class id, because every caller has the object in hand and the
+/// vtable lookup is the part that is easy to get subtly wrong twice.
+pub fn emit_wrapper_context_notice(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: wrapper_context_notice ---");
+    emitter.label_global("__rt_wrapper_context_notice");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #16");
+            emitter.instruction("stp x29, x30, [sp, #0]");
+            emitter.instruction("mov x29, sp");
+            emitter.instruction("cbz x0, __rt_wcn_done");                       // no object, nothing invented
+            emitter.instruction("ldr x9, [x0]");                                // its class id
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
+            emitter.instruction("ldr x10, [x10, x9, lsl #3]");
+            emitter.instruction(&format!(
+                "ldr x11, [x10, #{}]",
+                crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_CONTEXT_OFFSET
+            ));                                                                 // the offset PLUS ONE; zero means undeclared
+            emitter.instruction("cbnz x11, __rt_wcn_done");                     // declared: php invents nothing
+            emitter.instruction("mov x0, x9");                                  // the class php names
+            emitter.instruction("bl __rt_dynamic_context_deprecation");
+            emitter.label("__rt_wcn_done");
+            emitter.instruction("ldp x29, x30, [sp, #0]");
+            emitter.instruction("add sp, sp, #16");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("test rdi, rdi");
+            emitter.instruction("jz __rt_wcn_done_x86");                        // no object, nothing invented
+            emitter.instruction("mov r9, QWORD PTR [rdi]");                     // its class id
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_user_wrapper_vtable_ptrs");
+            emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");
+            emitter.instruction(&format!(
+                "mov r11, QWORD PTR [r10 + {}]",
+                crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_CONTEXT_OFFSET
+            ));                                                                 // the offset PLUS ONE; zero means undeclared
+            emitter.instruction("test r11, r11");
+            emitter.instruction("jnz __rt_wcn_done_x86");                       // declared: php invents nothing
+            emitter.instruction("mov rdi, r9");                                 // the class php names, in the register it reads
+            emitter.instruction("call __rt_dynamic_context_deprecation");
+            emitter.label("__rt_wcn_done_x86");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
 /// Emits `__rt_dynamic_context_deprecation(class_id)`, PHP 8.2's notice for an invented property.
 ///
 /// A stream wrapper that declares no `$context` still receives one, and since PHP 8.2 the

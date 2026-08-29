@@ -213,3 +213,67 @@ fn test_a_popen_pclose_pair_does_not_evict() {
     let out = run(r#"filesize("sc://f"); $h = @popen("true", "r"); @pclose($h); filesize("sc://f");"#);
     assert_trace(&out, &["url_stat(sc://f,4)"]);
 }
+
+/// Verifies php's `$context` deprecation is printed for EVERY wrapper instance, not just the one
+/// `fopen()` opens.
+///
+/// php assigns `$context` to each instance it makes, so a class that declares no such property is
+/// deprecated once per instantiation — for `url_stat()`, for `unlink()`, for `mkdir()`. elephc
+/// printed it for `fopen()` alone, so four of five instantiations were silent.
+#[test]
+fn test_every_wrapper_instantiation_deprecates_the_invented_context() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class NoCtx {
+    public function url_stat($p, $f) { return ["size" => 10, "mode" => 0100644]; }
+    public function stream_open($p, $m, $o, &$x) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_close() {}
+    public function unlink($p) { return true; }
+    public function mkdir($p, $m, $o) { return true; }
+}
+stream_wrapper_register("nc", "NoCtx");
+filesize("nc://a");
+$h = fopen("nc://c", "r"); fclose($h);
+unlink("nc://d");
+mkdir("nc://e");
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert_eq!(
+        out.diagnostics
+            .matches("Creation of dynamic property NoCtx::$context is deprecated")
+            .count(),
+        4,
+        "one per instantiation, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies a class that DOES declare `$context` is never deprecated.
+#[test]
+fn test_a_declared_context_is_not_deprecated() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class WithCtx {
+    public $context;
+    public function url_stat($p, $f) { return ["size" => 10, "mode" => 0100644]; }
+    public function unlink($p) { return true; }
+}
+stream_wrapper_register("wc", "WithCtx");
+filesize("wc://a");
+unlink("wc://b");
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(
+        !out.diagnostics.contains("dynamic property"),
+        "a declared property must not be deprecated, got diagnostics={}",
+        out.diagnostics
+    );
+}
