@@ -95,5 +95,5 @@ does arithmetic and string work needs none — that is why
 |---|---|
 | `probe.php` | every check, and the report format |
 | `ProbeApp.swift` | renders the report and prints it to stdout |
-| `probe_abi.h` | C declarations of `ElephcStr` and the entry points |
+| `probe_abi.h` | Swift bridging wrapper around the generated ABI-v3 `libprobe.h` |
 | `run.sh` | build, bundle, sign, install, launch — both modes |

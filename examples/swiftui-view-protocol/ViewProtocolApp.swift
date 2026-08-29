@@ -20,37 +20,54 @@ import SwiftUI
 /// `elephc_free`, which is why each call copies into a Swift `String` and frees
 /// immediately rather than holding the pointer.
 enum Elephc {
-    /// Prepares heap and globals. Safe to call more than once.
+    /// Verifies ABI v3, then prepares heap, globals, and the host stack guard.
     static func start() -> Bool {
-        elephc_init() == 0
+        elephc_abi_version() == 3 && elephc_init() == 0
     }
 
-    /// Copies an elephc-owned buffer into a Swift `String` and releases it.
+    /// Copies a successful ABI-v3 output into Swift and releases the owned buffer.
     ///
     /// The buffer is a PHP byte string, so the length is authoritative — it is
-    /// not NUL-terminated and may legitimately contain interior zero bytes.
-    private static func take(_ result: ElephcStr) -> String {
-        guard let ptr = result.ptr else { return "" }
-        let bytes = UnsafeRawPointer(ptr).assumingMemoryBound(to: UInt8.self)
-        let text = String(decoding: UnsafeBufferPointer(start: bytes, count: result.len), as: UTF8.self)
-        elephc_free(UnsafeMutableRawPointer(mutating: ptr))
+    /// allowed to contain interior zero bytes, and any optional trailing NUL is
+    /// outside that length.
+    private static func take(
+        status: Int32,
+        output: UnsafeMutablePointer<CChar>?,
+        length: Int
+    ) -> String {
+        guard status == 0 else {
+            let detail = elephc_last_error().map { String(cString: $0) } ?? "no diagnostic"
+            return "elephc export failed (status \(status)): \(detail)"
+        }
+        guard let output else { return "" }
+        let bytes = UnsafeRawPointer(output).assumingMemoryBound(to: UInt8.self)
+        let text = String(decoding: UnsafeBufferPointer(start: bytes, count: length), as: UTF8.self)
+        elephc_free(UnsafeMutableRawPointer(output))
         return text
     }
 
-    static func render() -> String { take(render_view()) }
+    static func render() -> String {
+        var output: UnsafeMutablePointer<CChar>? = nil
+        var length = 0
+        let status = render_view(&output, &length)
+        return take(status: status, output: output, length: length)
+    }
 
     static func dispatch(_ action: String) -> String {
         let utf8 = Array(action.utf8).map { CChar(bitPattern: $0) }
         return utf8.withUnsafeBufferPointer { buffer in
-            take(elephc_dispatch(buffer.baseAddress, action.utf8.count))
+            var output: UnsafeMutablePointer<CChar>? = nil
+            var length = 0
+            let status = elephc_dispatch(
+                buffer.baseAddress,
+                buffer.count,
+                &output,
+                &length
+            )
+            return take(status: status, output: output, length: length)
         }
     }
 }
-
-/// `dispatch` collides with Swift's Dispatch module at the call site, so the C
-/// symbol is reached through a renamed shim.
-@_silgen_name("dispatch")
-func elephc_dispatch(_ action: UnsafePointer<CChar>?, _ length: Int) -> ElephcStr
 
 // MARK: - The view protocol
 

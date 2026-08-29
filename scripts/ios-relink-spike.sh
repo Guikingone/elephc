@@ -100,22 +100,28 @@ echo "==> archive members and their Mach-O platform"
 done)
 
 cat > "$WORK/host.c" <<'C'
-#include <stdint.h>
+#include "libspike.h"
 #include <stdio.h>
-#include <stddef.h>
-
-typedef struct { const char *ptr; size_t len; } elephc_str;
-
-extern int32_t elephc_init(void);
-extern void elephc_free(void *);
-extern int64_t spike_add(int64_t, int64_t);
-extern elephc_str spike_greet(const char *, size_t);
 
 int main(void) {
+    if (elephc_abi_version() != ELEPHC_ABI_VERSION) return 1;
     if (elephc_init() != 0) return 1;
-    elephc_str g = spike_greet("iOS", 3);
-    printf("%lld %.*s %zu\n", (long long)spike_add(40, 2), (int)g.len, g.ptr, g.len);
-    elephc_free((void *)g.ptr);
+
+    int64_t sum = spike_add(40, 2);
+    if (elephc_last_status() != ELEPHC_STATUS_OK) return 2;
+
+    char *greeting = NULL;
+    size_t greeting_len = 0;
+    int32_t status = spike_greet("iOS", 3, &greeting, &greeting_len);
+    if (status != ELEPHC_STATUS_OK) {
+        fprintf(stderr, "spike_greet failed (%d): %s\n", status,
+                elephc_last_error() ? elephc_last_error() : "no diagnostic");
+        return 3;
+    }
+
+    printf("%lld %.*s %zu\n", (long long)sum, (int)greeting_len, greeting, greeting_len);
+    elephc_free(greeting);
+    elephc_shutdown();
     return 0;
 }
 C

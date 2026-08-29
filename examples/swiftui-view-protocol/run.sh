@@ -26,8 +26,8 @@ echo "==> compiling view.php to a native static library"
 (cd "$HERE" && "$ELEPHC" --emit staticlib view.php)
 
 echo "==> compiling the SwiftUI host"
-# -import-objc-header brings in the C declaration of ElephcStr, without which
-# the @convention(c) signatures are rejected as not C-representable.
+# -import-objc-header includes the freshly generated ABI-v3 libview.h through a
+# thin wrapper that also gives the `dispatch` export a collision-free Swift name.
 # -parse-as-library is required by @main: it tells swiftc the file defines a
 # module rather than a script with top-level code.
 # The library is linked statically, the same delivery form an Xcode project

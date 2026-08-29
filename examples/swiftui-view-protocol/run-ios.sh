@@ -55,8 +55,8 @@ echo "==> archive members and their Mach-O platform"
 done)
 
 echo "==> compiling the SwiftUI host for the simulator"
-# -import-objc-header brings in the C declarations of ElephcStr and the exports;
-# without it the @convention(c) types are rejected as not C-representable.
+# -import-objc-header includes the freshly generated ABI-v3 libview.h through a
+# thin wrapper that also gives the `dispatch` export a collision-free Swift name.
 # -parse-as-library is required by @main.
 # -sdk covers compilation, but swiftc drives clang for the link step and that
 # driver defaults to the host sysroot -- hence the explicit -isysroot, without

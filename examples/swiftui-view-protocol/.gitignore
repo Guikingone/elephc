@@ -3,6 +3,7 @@
 *.a
 *.so
 *.dylib
+libview.h
 ViewProtocol
 ViewProtocolIOS
 ViewProtocol.app/

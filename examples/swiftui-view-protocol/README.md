@@ -51,8 +51,10 @@ of the UI problem where being AOT costs nothing at all.
 ## What the spike actually demonstrates
 
 - **A string crosses the boundary in both directions.** `render_view(): string`
-  returns a `(ptr, len)` pair the host owns and releases through `elephc_free`;
-  `dispatch(string $action)` passes one in.
+  returns ABI-v3 status plus caller-owned `output_ptr`/`output_len`; the host
+  copies the bytes and releases the buffer through `elephc_free`.
+  `dispatch(string $action)` passes one input pointer/length pair and receives
+  the same status/out-parameter result shape.
 - **State lives in PHP.** `counter()` uses a function `static`, which persists in
   the loaded library's own memory across host calls. Swift holds no counter.
 - **The host stays dumb.** Every string the user sees — including `"2 items"`
@@ -72,20 +74,26 @@ PASS: the view tree, the string ABI and PHP-side state all round-trip
 |---|---|
 | `view.php` | the whole application: tree builders, state, action handling |
 | `ViewProtocolApp.swift` | JSON → SwiftUI, event dispatch, the self-test |
-| `elephc_abi.h` | the C declarations of `ElephcStr` and the exports |
+| `elephc_abi.h` | Swift bridging wrapper around the generated ABI-v3 `libview.h` |
 | `run.sh` | macOS: compile both sides, assemble and sign a `.app` |
 | `run-ios.sh` | iOS: same, then install, launch and screenshot on a simulator |
 
-## Two things that will bite you
+## ABI and toolchain details
 
-**`ElephcStr` has to be a C type.** Swift rejects a Swift-declared struct in a
-`@convention(c)` signature — only a C type carries the guarantee that the value
-rides the platform's aggregate-return registers. Hence `elephc_abi.h` and
-`-import-objc-header`.
+**Use the generated header.** String exports return `int32_t` status and append
+`char **output_ptr, size_t *output_len`; they do not return a C aggregate.
+`elephc_abi.h` includes the freshly generated `libview.h` instead of copying its
+declarations. Its only adapter renames the source export `dispatch` for Swift;
+the inline C call is type-checked against the generated prototype. Successful
+buffers are caller-owned; failed calls leave the outputs `NULL`/zero.
 
-**Returned strings are not NUL-terminated.** They are PHP byte strings and may
-contain interior zero bytes, so the returned length is authoritative and
-`strlen` is wrong.
+**Returned lengths are authoritative.** PHP strings may contain interior zero
+bytes. ABI v3 may provide an optional trailing NUL for convenience, but that
+byte is outside `output_len`; `strlen` is still wrong.
+
+**Call `elephc_init`.** Besides runtime state, it arms the stack-overflow floor
+for host calls. The export boundary has a lazy fallback, but explicit startup
+also verifies clean lifecycle handling in the example.
 
 **`-sdk` does not reach the link step.** `swiftc` drives `clang` to link, and
 that driver defaults to the *host* sysroot — so an iOS build warns *"using

@@ -893,6 +893,71 @@ fn test_staticlib_links_directly_into_a_host_binary() {
     fs::remove_dir_all(&dir).ok();
 }
 
+/// Regenerates both iOS showcase headers and compiles their Swift bridging
+/// wrappers against ABI v3 so no host can retain a copied obsolete signature.
+#[test]
+fn test_ios_showcase_bridging_headers_compile_against_generated_abi_v3() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (label, source_path, wrapper_path, expected_prototype) in [
+        (
+            "view",
+            "examples/swiftui-view-protocol/view.php",
+            "examples/swiftui-view-protocol/elephc_abi.h",
+            "int32_t render_view(char **output_ptr, size_t *output_len);",
+        ),
+        (
+            "probe",
+            "examples/ios-device-probe/probe.php",
+            "examples/ios-device-probe/probe_abi.h",
+            "int32_t probe(const char *writableDir_ptr, size_t writableDir_len, char **output_ptr, size_t *output_len);",
+        ),
+    ] {
+        let dir = make_test_dir(&format!("elephc_ios_{label}_header"));
+        let source_name = format!("{label}.php");
+        fs::write(dir.join(&source_name), fs::read(root.join(source_path)).unwrap()).unwrap();
+        let wrapper_name = Path::new(wrapper_path).file_name().unwrap();
+        fs::write(dir.join(wrapper_name), fs::read(root.join(wrapper_path)).unwrap()).unwrap();
+
+        let output = elephc_command(&dir)
+            .args(["--emit", "staticlib", &source_name])
+            .output()
+            .expect("failed to run elephc");
+        assert!(
+            output.status.success(),
+            "{label} staticlib compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let generated = fs::read_to_string(dir.join(format!("lib{label}.h"))).unwrap();
+        assert!(
+            generated.contains("#define ELEPHC_ABI_VERSION UINT32_C(3)")
+                && generated.contains(expected_prototype),
+            "generated {label} header did not expose the expected ABI-v3 contract:\n{generated}"
+        );
+
+        let host = dir.join("header-host.c");
+        fs::write(
+            &host,
+            format!("#include \"{}\"\nint main(void) {{ return 0; }}\n", wrapper_name.to_string_lossy()),
+        )
+        .unwrap();
+        let compile = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only"])
+            .arg("-I")
+            .arg(&dir)
+            .arg(&host)
+            .output()
+            .expect("failed to compile the showcase bridging header");
+        assert!(
+            compile.status.success(),
+            "{wrapper_path} disagrees with the generated header:\n{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
 /// Verifies process-spawning builtins are rejected during iOS type checking
 /// while remaining available on the ordinary host target.
 #[test]
