@@ -226,7 +226,7 @@ use super::*;
             .find("cache_path.exists()")
             .expect("runtime cache lookup remains explicit");
         let generation = source
-            .find("generate_runtime_with_features_pic")
+            .find("generate_runtime_with_features_mode")
             .expect("runtime assembly generator remains explicit");
 
         assert!(

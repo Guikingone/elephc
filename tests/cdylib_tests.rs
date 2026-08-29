@@ -1396,6 +1396,35 @@ fn test_export_with_unsupported_parameter_type_is_rejected() {
     fs::remove_dir_all(&dir).ok();
 }
 
+/// Rejects scalar functions declared to return by reference because the public
+/// C ABI exposes only values and cannot preserve PHP reference identity.
+#[test]
+fn test_export_with_by_reference_return_is_rejected() {
+    let dir = make_test_dir("elephc_cdylib_by_ref_return");
+    fs::write(
+        dir.join("bad.php"),
+        "<?php\n#[Export]\nfunction &borrowed(): int {\n    $value = 1;\n    return $value;\n}\n",
+    )
+    .unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", "bad.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        !output.status.success(),
+        "compilation must fail for a by-reference exported result"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("returns by reference")
+            && stderr.contains("#[Export] accepts only by-value results"),
+        "expected the by-value result diagnostic, got:\n{stderr}"
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// Rejects `exit`/`die` when transitively reachable from a string-returning
 /// export, because those process-termination constructs cannot produce a
 /// recoverable cdylib status for the embedding host.

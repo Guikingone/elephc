@@ -181,6 +181,15 @@ fn validate_signature(
             ),
         ));
     }
+    if sig.by_ref_return {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "exported function '{}' returns by reference; #[Export] accepts only by-value results",
+                name
+            ),
+        ));
+    }
     for (i, (_, ty)) in sig.params.iter().enumerate() {
         if !is_scalar_param_type(ty) {
             return Err(CompileError::new(
@@ -194,15 +203,6 @@ fn validate_signature(
         }
     }
     if sig.return_type == PhpType::Str {
-        if sig.by_ref_return {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "exported function '{}' returns by reference; #[Export] accepts only by-value results",
-                    name
-                ),
-            ));
-        }
         return Ok(());
     }
     if !is_scalar_return_type(&sig.return_type) {
@@ -282,16 +282,18 @@ mod tests {
         }
     }
 
-    /// Rejects by-reference string results because the caller-owned ABI returns values only.
+    /// Rejects every by-reference result because the public ABI returns values only.
     #[test]
-    fn rejects_by_reference_string_returns() {
-        let mut sig = signature(Vec::new(), PhpType::Str);
-        sig.by_ref_return = true;
+    fn rejects_by_reference_returns() {
+        for return_type in [PhpType::Int, PhpType::Float, PhpType::Bool, PhpType::Str] {
+            let mut sig = signature(Vec::new(), return_type);
+            sig.by_ref_return = true;
 
-        let error = validate_signature("borrowed", &sig, Span::dummy())
-            .expect_err("by-reference string result must be rejected");
-        assert!(error.message.contains("returns by reference"));
-        assert!(!is_string_return_signature(&sig));
+            let error = validate_signature("borrowed", &sig, Span::dummy())
+                .expect_err("by-reference result must be rejected");
+            assert!(error.message.contains("returns by reference"));
+            assert!(!is_string_return_signature(&sig));
+        }
     }
 
     /// Preserves the existing scalar-return export contract unchanged.
