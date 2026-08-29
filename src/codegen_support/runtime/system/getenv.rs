@@ -50,7 +50,7 @@ pub fn emit_getenv(emitter: &mut Emitter) {
     emitter.bl_c("getenv");                                          // getenv(name) → x0=value ptr or NULL
 
     // -- check for NULL return --
-    emitter.instruction("cbz x0, __rt_getenv_empty");                           // if NULL, return empty string
+    emitter.instruction("cbz x0, __rt_getenv_unset");                           // libc says NULL only for a name that is not set
 
     // -- scan for null terminator to compute length --
     emitter.instruction("mov x1, x0");                                          // x1 = value ptr (start)
@@ -74,7 +74,7 @@ pub fn emit_getenv(emitter: &mut Emitter) {
     emitter.instruction("b __rt_getenv_done");                                  // skip the not-found path after persisting a real value
 
     // -- a null pointer, not an empty string: the variable is NOT SET --
-    emitter.label("__rt_getenv_empty");
+    emitter.label("__rt_getenv_unset");
     emitter.instruction("mov x1, #0");                                          // null pointer: the caller boxes this as PHP false
     emitter.instruction("mov x2, #0");                                          // no length to report for a variable that is not set
 
@@ -88,9 +88,11 @@ pub fn emit_getenv(emitter: &mut Emitter) {
 /// Emits `__rt_getenv` helper for x86_64 Linux targets.
 ///
 /// Converts a PHP string (name in rdi via `__rt_cstr`) to a null-terminated C
-/// string, calls libc `getenv`, and returns the value as a PHP string (rax=ptr,
-/// rdx=len) or an empty string (rax=0, rdx=0) when not found. Uses the System V
-/// AMD64 ABI for register conventions and frame layout.
+/// string, calls libc `getenv`, and returns the value as an owned PHP string
+/// (rax=ptr, rdx=len), or a null pointer (rax=0, rdx=0) when the variable is
+/// not set — the same two answers as the ARM64 helper above, and for the same
+/// reason. Uses the System V AMD64 ABI for register conventions and frame
+/// layout.
 fn emit_getenv_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: getenv ---");
@@ -104,7 +106,7 @@ fn emit_getenv_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("getenv");                                                     // getenv(name) → rax=value ptr or NULL
 
     emitter.instruction("test rax, rax");                                       // did libc return a real environment-value pointer?
-    emitter.instruction("je __rt_getenv_empty");                                // missing environment variables map to the empty PHP string
+    emitter.instruction("je __rt_getenv_unset");                                // a name that is not set is not a name set to ""
 
     emitter.instruction("mov r8, rax");                                         // preserve the start of the returned environment string for the final PHP string pointer result
     emitter.instruction("mov rdx, 0");                                          // seed the returned PHP string length counter at zero bytes
@@ -115,11 +117,11 @@ fn emit_getenv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rdx, 1");                                          // advance the returned PHP string length by one byte
     emitter.instruction("jmp __rt_getenv_len");                                 // continue scanning until the C string terminator is found
 
-    emitter.label("__rt_getenv_empty");
+    emitter.label("__rt_getenv_unset");
     emitter.instruction("mov rax, 0");                                          // null pointer: the caller boxes this as PHP false
     emitter.instruction("mov rdx, 0");                                          // no length to report for a variable that is not set
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the empty-string result
-    emitter.instruction("ret");                                                 // return to the caller with the empty PHP string result
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the not-set answer
+    emitter.instruction("ret");                                                 // return the null pointer the caller boxes as PHP false
 
     emitter.label("__rt_getenv_done");
     emitter.instruction("mov rax, r8");                                         // move the environment-block pointer into str_persist's source register
