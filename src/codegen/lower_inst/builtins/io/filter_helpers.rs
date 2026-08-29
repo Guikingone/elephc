@@ -106,15 +106,39 @@ pub(super) fn lower_builtin_stream_filter_attach(
     store_if_result(ctx, inst)
 }
 
+/// Which direction bits a node is created with.
+enum NodeDirection {
+    /// Whatever the mode asked for, as parked in the attach frame.
+    Requested,
+    /// One fixed direction: the half of a `STREAM_FILTER_ALL` this node serves.
+    Fixed(i64),
+}
+
 /// Creates a filter node and links it into the direction chains the mode selects.
 ///
 /// On entry the stream handle is on the stack and the mode bits are in the int
 /// result register. On exit the new filter handle is in the result register, ready
 /// to be boxed as the resource `stream_filter_append()` returns.
 ///
-/// A node attached with `STREAM_FILTER_ALL` is linked into both chains, which is
-/// why the direction bits are stored on the node rather than inferred from which
-/// list it sits in.
+/// A mode naming BOTH directions mints TWO nodes, one per chain, because that is what php does:
+/// `apply_filter_to_stream` creates a filter for the read chain, then a second one for the write
+/// chain, and hands back the one it created LAST. MEASURED on `php -n` 8.5.6 with a user filter
+/// that uppercases:
+///
+/// ```text
+/// $r = stream_filter_append($h, "up");   // no mode: the default names both directions
+/// stream_filter_remove($r);
+/// fwrite($h, "abc");                     // ON DISK  : abc   — the write filter went
+/// rewind($h); stream_get_contents($h);   // READ BACK: ABC   — the read filter stayed
+/// ```
+///
+/// So the returned resource names the WRITE node, and removing it leaves the read side
+/// filtering. One node linked into both chains could not express that: removing it stopped
+/// both, which is what elephc did.
+///
+/// A USER filter still mints one node for both chains. php instantiates the class once per
+/// direction — `onCreate()` runs twice — and that second instance is not this function's to
+/// make: it comes from the attach helper the caller ran before parking the object here.
 ///
 /// With `user_object`, the node carries a `php_user_filter` instance parked on the
 /// stack under the stream handle, and its built-in id stays 0. The node retains no
@@ -134,134 +158,223 @@ fn emit_attach_filter_node(
 ) -> Result<()> {
     let skip_read = ctx.next_label("sf_chain_skip_read");
     let skip_write = ctx.next_label("sf_chain_skip_write");
-    let prepend_flag = i64::from(prepend);
+    let one_node = ctx.next_label("sf_chain_one_node");
+    let linked = ctx.next_label("sf_chain_linked");
+    let has_params = params_inst.is_some();
+    // Frame: [0]=stream handle [8]=requested direction bits [16]=the node
+    //        [24]=params box or user-filter instance [32]=run-time built-in id
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_pop_reg(ctx.emitter, "x4");                               // recover the owning stream handle
             if user_object {
                 abi::emit_pop_reg(ctx.emitter, "x5");                           // recover the php_user_filter instance
             }
-            abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+            abi::emit_reserve_temporary_stack(ctx.emitter, 48);
             ctx.emitter.instruction("str x4, [sp, #0]");                        // preserve the stream handle across the calls
             ctx.emitter.instruction("str x0, [sp, #8]");                        // preserve the requested direction bits
             if user_object {
                 ctx.emitter.instruction("str x5, [sp, #24]");                   // preserve the instance across the calls
             }
             if filter_id.is_none() && !user_object {
-                ctx.emitter.instruction("str x9, [sp, #16]");                    // park the run-time id: the params call clobbers x9
+                ctx.emitter.instruction("str x9, [sp, #32]");                    // park the run-time id: the params call clobbers x9
             }
             if let Some(params_inst) = params_inst {
                 materialize_stream_filter_params(ctx, params_inst)?;             // the boxed `$params` the node retains
                 ctx.emitter.instruction("str x0, [sp, #24]");                    // a built-in node has this slot free
             }
-            ctx.emitter.instruction("ldr x2, [sp, #8]");                         // direction bits, past any params call
-            match filter_id {
-                // A literal name resolves at compile time; a dynamic one arrives in
-                // x9 from __rt_builtin_filter_id.
-                Some(id) => ctx.emitter.instruction(&format!("mov x0, #{id}")),  // built-in filter id
-                None if user_object => ctx.emitter.instruction("mov x0, #0"),    // a user filter has no built-in id
-                None => ctx.emitter.instruction("ldr x0, [sp, #16]"),            // run-time resolved filter id, reparked above
-            }
-            if user_object {
-                ctx.emitter.instruction("ldr x1, [sp, #24]");                   // the instance this node owns
-            } else {
-                ctx.emitter.instruction("mov x1, #0");                          // built-ins carry no user-filter object
-            }
-            match params_inst {
-                // php's built-in filters read `$params`; a user filter reads it off its instance.
-                Some(_) => ctx.emitter.instruction("ldr x3, [sp, #24]"),         // the retained params box
-                None => ctx.emitter.instruction("mov x3, #0"),                   // params live on the instance
-            }
-            abi::emit_call_label(ctx.emitter, "__rt_filter_create");            // x0 = the new filter handle
-            ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the filter handle
-
-            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // direction bits
-            ctx.emitter.instruction("tst x9, #1");                              // is STREAM_FILTER_READ set?
-            ctx.emitter.instruction(&format!("b.eq {}", skip_read));
-            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // owning stream handle
-            ctx.emitter.instruction("ldr x1, [sp, #16]");                       // filter handle
-            ctx.emitter.instruction(&format!("mov x2, #{STREAM_READ_FILTER_HEAD_OFFSET}"));
-            ctx.emitter.instruction(&format!("mov x3, #{prepend_flag}"));       // prepend selects head insertion
-            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
-            ctx.emitter.label(&skip_read);
-
-            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // direction bits
-            ctx.emitter.instruction("tst x9, #2");                              // is STREAM_FILTER_WRITE set?
-            ctx.emitter.instruction(&format!("b.eq {}", skip_write));
-            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // owning stream handle
-            ctx.emitter.instruction("ldr x1, [sp, #16]");                       // filter handle
-            ctx.emitter.instruction(&format!("mov x2, #{STREAM_WRITE_FILTER_HEAD_OFFSET}"));
-            ctx.emitter.instruction(&format!("mov x3, #{prepend_flag}"));       // prepend selects head insertion
-            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
-            ctx.emitter.label(&skip_write);
-
-            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // return the filter handle
-            abi::emit_release_temporary_stack(ctx.emitter, 32);
         }
         Arch::X86_64 => {
             abi::emit_pop_reg(ctx.emitter, "rcx");                              // recover the owning stream handle
             if user_object {
                 abi::emit_pop_reg(ctx.emitter, "r14");                          // recover the php_user_filter instance
             }
-            abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+            abi::emit_reserve_temporary_stack(ctx.emitter, 48);
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rcx");            // preserve the stream handle across the calls
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // preserve the requested direction bits
             if user_object {
                 ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r14");       // preserve the instance across the calls
             }
             if filter_id.is_none() && !user_object {
-                ctx.emitter.instruction("mov QWORD PTR [rsp + 16], r13");        // park the run-time id: the params call clobbers r13
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 32], r13");        // park the run-time id: the params call clobbers r13
             }
             if let Some(params_inst) = params_inst {
                 materialize_stream_filter_params(ctx, params_inst)?;             // the boxed `$params` the node retains
                 ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");        // a built-in node has this slot free
             }
-            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");             // direction bits, past any params call
+        }
+    }
+
+    if !user_object {
+        // -- both directions: one node each, read first, and the write one is the answer --
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x9, [sp, #8]");                    // requested direction bits
+                ctx.emitter.instruction("and x9, x9, #3");                      // only the two chain bits decide
+                ctx.emitter.instruction("cmp x9, #3");
+                ctx.emitter.instruction(&format!("b.ne {}", one_node));         // a single direction takes the plain path
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");         // requested direction bits
+                ctx.emitter.instruction("and r9, 3");                           // only the two chain bits decide
+                ctx.emitter.instruction("cmp r9, 3");
+                ctx.emitter.instruction(&format!("jne {}", one_node));          // a single direction takes the plain path
+            }
+        }
+        if has_params {
+            // Two nodes, two owners: the box is released once per node when the chain goes.
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("ldr x0, [sp, #24]");               // the retained params box
+                    abi::emit_call_label(ctx.emitter, "__rt_incref");
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 24]");   // the retained params box
+                    abi::emit_call_label(ctx.emitter, "__rt_incref");
+                }
+            }
+        }
+        emit_filter_node_create(ctx, filter_id, user_object, has_params, NodeDirection::Fixed(1));
+        emit_filter_node_link(ctx, STREAM_READ_FILTER_HEAD_OFFSET, prepend);
+        emit_filter_node_create(ctx, filter_id, user_object, has_params, NodeDirection::Fixed(2));
+        emit_filter_node_link(ctx, STREAM_WRITE_FILTER_HEAD_OFFSET, prepend);
+        abi::emit_jump(ctx.emitter, &linked);
+        ctx.emitter.label(&one_node);
+    }
+
+    emit_filter_node_create(ctx, filter_id, user_object, has_params, NodeDirection::Requested);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // direction bits
+            ctx.emitter.instruction("tst x9, #1");                              // is STREAM_FILTER_READ set?
+            ctx.emitter.instruction(&format!("b.eq {}", skip_read));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");             // direction bits
+            ctx.emitter.instruction("test r9, 1");                              // is STREAM_FILTER_READ set?
+            ctx.emitter.instruction(&format!("jz {}", skip_read));
+        }
+    }
+    emit_filter_node_link(ctx, STREAM_READ_FILTER_HEAD_OFFSET, prepend);
+    ctx.emitter.label(&skip_read);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // direction bits
+            ctx.emitter.instruction("tst x9, #2");                              // is STREAM_FILTER_WRITE set?
+            ctx.emitter.instruction(&format!("b.eq {}", skip_write));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");             // direction bits
+            ctx.emitter.instruction("test r9, 2");                              // is STREAM_FILTER_WRITE set?
+            ctx.emitter.instruction(&format!("jz {}", skip_write));
+        }
+    }
+    emit_filter_node_link(ctx, STREAM_WRITE_FILTER_HEAD_OFFSET, prepend);
+    ctx.emitter.label(&skip_write);
+
+    ctx.emitter.label(&linked);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // return the filter handle
+            abi::emit_release_temporary_stack(ctx.emitter, 48);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // return the filter handle
+            abi::emit_release_temporary_stack(ctx.emitter, 48);
+        }
+    }
+    Ok(())
+}
+
+/// Emits one `__rt_filter_create` call, reading its arguments out of the attach frame.
+///
+/// The node it makes lands in [16], which is both the answer `stream_filter_append()` boxes and
+/// the handle the link below needs — so a second create overwrites the first, and the LAST node
+/// created is the one the caller receives. That is php's own order: it returns the filter it
+/// created last, the write-side one.
+fn emit_filter_node_create(
+    ctx: &mut FunctionContext<'_>,
+    filter_id: Option<u8>,
+    user_object: bool,
+    has_params: bool,
+    direction: NodeDirection,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            match direction {
+                NodeDirection::Requested => ctx.emitter.instruction("ldr x2, [sp, #8]"), // direction bits, past any params call
+                NodeDirection::Fixed(bits) => ctx.emitter.instruction(&format!("mov x2, #{bits}")), // this node's own half
+            }
             match filter_id {
-                // A literal name resolves at compile time; a dynamic one arrives in
-                // r13 from __rt_builtin_filter_id.
+                // A literal name resolves at compile time; a dynamic one was parked from x9.
+                Some(id) => ctx.emitter.instruction(&format!("mov x0, #{id}")),  // built-in filter id
+                None if user_object => ctx.emitter.instruction("mov x0, #0"),    // a user filter has no built-in id
+                None => ctx.emitter.instruction("ldr x0, [sp, #32]"),            // run-time resolved filter id
+            }
+            if user_object {
+                ctx.emitter.instruction("ldr x1, [sp, #24]");                   // the instance this node owns
+            } else {
+                ctx.emitter.instruction("mov x1, #0");                          // built-ins carry no user-filter object
+            }
+            if has_params {
+                // php's built-in filters read `$params`; a user filter reads it off its instance.
+                ctx.emitter.instruction("ldr x3, [sp, #24]");                   // the retained params box
+            } else {
+                ctx.emitter.instruction("mov x3, #0");                          // params live on the instance
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_filter_create");            // x0 = the new filter handle
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the filter handle
+        }
+        Arch::X86_64 => {
+            match direction {
+                NodeDirection::Requested => {
+                    ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");    // direction bits, past any params call
+                }
+                NodeDirection::Fixed(bits) => {
+                    ctx.emitter.instruction(&format!("mov rdx, {bits}"));       // this node's own half
+                }
+            }
+            match filter_id {
+                // A literal name resolves at compile time; a dynamic one was parked from r13.
                 Some(id) => ctx.emitter.instruction(&format!("mov rdi, {id}")),  // built-in filter id
                 None if user_object => ctx.emitter.instruction("xor edi, edi"),  // a user filter has no built-in id
-                None => ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]"), // run-time resolved filter id, reparked above
+                None => ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]"), // run-time resolved filter id
             }
             if user_object {
                 ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");       // the instance this node owns
             } else {
                 ctx.emitter.instruction("xor esi, esi");                        // built-ins carry no user-filter object
             }
-            match params_inst {
+            if has_params {
                 // php's built-in filters read `$params`; a user filter reads it off its instance.
-                Some(_) => ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 24]"), // the retained params box
-                None => ctx.emitter.instruction("xor ecx, ecx"),                  // params live on the instance
+                ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 24]");       // the retained params box
+            } else {
+                ctx.emitter.instruction("xor ecx, ecx");                        // params live on the instance
             }
             abi::emit_call_label(ctx.emitter, "__rt_filter_create");            // rax = the new filter handle
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the filter handle
-
-            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");             // direction bits
-            ctx.emitter.instruction("test r9, 1");                              // is STREAM_FILTER_READ set?
-            ctx.emitter.instruction(&format!("jz {}", skip_read));
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // owning stream handle
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");           // filter handle
-            ctx.emitter.instruction(&format!("mov rdx, {STREAM_READ_FILTER_HEAD_OFFSET}"));
-            ctx.emitter.instruction(&format!("mov rcx, {prepend_flag}"));       // prepend selects head insertion
-            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
-            ctx.emitter.label(&skip_read);
-
-            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");             // direction bits
-            ctx.emitter.instruction("test r9, 2");                              // is STREAM_FILTER_WRITE set?
-            ctx.emitter.instruction(&format!("jz {}", skip_write));
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // owning stream handle
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");           // filter handle
-            ctx.emitter.instruction(&format!("mov rdx, {STREAM_WRITE_FILTER_HEAD_OFFSET}"));
-            ctx.emitter.instruction(&format!("mov rcx, {prepend_flag}"));       // prepend selects head insertion
-            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
-            ctx.emitter.label(&skip_write);
-
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // return the filter handle
-            abi::emit_release_temporary_stack(ctx.emitter, 32);
         }
     }
-    Ok(())
+}
+
+/// Links the node parked in [16] into one direction's chain.
+fn emit_filter_node_link(ctx: &mut FunctionContext<'_>, head_offset: i64, prepend: bool) {
+    let prepend_flag = i64::from(prepend);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // owning stream handle
+            ctx.emitter.instruction("ldr x1, [sp, #16]");                       // filter handle
+            ctx.emitter.instruction(&format!("mov x2, #{head_offset}"));
+            ctx.emitter.instruction(&format!("mov x3, #{prepend_flag}"));       // prepend selects head insertion
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // owning stream handle
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");           // filter handle
+            ctx.emitter.instruction(&format!("mov rdx, {head_offset}"));
+            ctx.emitter.instruction(&format!("mov rcx, {prepend_flag}"));       // prepend selects head insertion
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
+        }
+    }
 }
 
 /// Materializes the stream-filter mode operand, deducing php's `$mode = 0`

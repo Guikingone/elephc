@@ -19772,3 +19772,106 @@ fclose($h);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "<solo>\n");
 }
+
+/// Verifies `STREAM_FILTER_ALL` attaches ONE FILTER PER DIRECTION, as php does.
+///
+/// php's `apply_filter_to_stream` creates a filter for the read chain and a second one for the
+/// write chain, and hands back the one it made last — the write-side one. So removing the
+/// returned resource stops the stream from filtering what it WRITES while what it READS still
+/// goes through the other filter. MEASURED on `php -n` 8.5.6: the file holds `abc` and reading
+/// it back through the same handle answers `ABC`.
+///
+/// elephc attached one node to both chains, so removing it stopped both and the read came back
+/// `abc`. The on-disk half is what makes this test decisive: with a single filter, uppercase
+/// bytes reach the file, and every probe that only reads its own stream back cannot tell the two
+/// designs apart.
+#[test]
+fn test_an_all_filter_is_one_filter_per_direction() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$h = fopen("split.txt", "w+");
+$r = stream_filter_append($h, "string.toupper");
+var_dump(stream_filter_remove($r));
+fwrite($h, "abc");
+rewind($h);
+echo "read back: ", stream_get_contents($h), "\n";
+fclose($h);
+echo "on disk  : ", file_get_contents("split.txt"), "\n";
+unlink("split.txt");
+"#,
+    );
+    assert_eq!(out, "bool(true)\nread back: ABC\non disk  : abc\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_filter_prepend` splits the same way.
+///
+/// The insertion end is the only thing that differs between the two functions, so a fix that
+/// only reached `stream_filter_append` would leave a caller that prepends with the old shape.
+#[test]
+fn test_a_prepended_all_filter_splits_too() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$h = fopen("pre.txt", "w+");
+$r = stream_filter_prepend($h, "string.rot13");
+stream_filter_remove($r);
+fwrite($h, "abc");
+rewind($h);
+echo "read back: ", stream_get_contents($h), "\n";
+fclose($h);
+echo "on disk  : ", file_get_contents("pre.txt"), "\n";
+unlink("pre.txt");
+"#,
+    );
+    assert_eq!(out, "read back: nop\non disk  : abc\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an EXPLICIT single direction still mints exactly one filter.
+///
+/// The split is for the mode that names both chains. A mode naming one keeps one node, and
+/// removing it leaves nothing behind — which is what says the split did not simply double
+/// every attach.
+#[test]
+fn test_a_one_direction_filter_stays_a_single_filter() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = fopen("php://memory", "w+");
+$r = stream_filter_append($h, "string.toupper", STREAM_FILTER_READ);
+fwrite($h, "abc");
+rewind($h);
+echo "with: ", stream_get_contents($h), "\n";
+var_dump(stream_filter_remove($r));
+rewind($h);
+echo "without: ", stream_get_contents($h), "\n";
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "with: ABC\nbool(true)\nwithout: abc\n");
+}
+
+/// Verifies two `STREAM_FILTER_ALL` filters, one removed, leave the other's two halves running.
+///
+/// This is the shape that first showed the defect: `toupper` and `rot13` both attached with the
+/// default mode, then one removed. php answers `'NOP'` either way — the surviving filter still
+/// runs on both sides — where a single-node elephc dropped a whole direction.
+#[test]
+fn test_removing_one_of_two_all_filters_keeps_the_other_whole() {
+    let out = compile_and_run_capture(
+        r#"<?php
+foreach ([0, 1] as $which) {
+    $h = fopen("php://memory", "w+");
+    $a = stream_filter_append($h, "string.toupper");
+    $b = stream_filter_append($h, "string.rot13");
+    stream_filter_remove($which === 0 ? $a : $b);
+    fwrite($h, "abc");
+    rewind($h);
+    echo stream_get_contents($h), "\n";
+    fclose($h);
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ABC\nNOP\n");
+}
