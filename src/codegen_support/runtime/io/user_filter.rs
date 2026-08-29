@@ -341,6 +341,12 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #8]");                                    // save mode
     emitter.instruction("str x4, [sp, #16]");                                   // save boxed filter params
 
+    // -- no class has gone missing yet --
+    // The lowering reads this to decide whether php's FIRST warning is due; clearing it here is
+    // what keeps an earlier attach's class out of a later attach's diagnostic.
+    abi::emit_symbol_address(emitter, "x9", "_sfau_class_ptr");
+    emitter.instruction("str xzr, [x9]");
+
     // -- resolve filter name → id --
     // The name is preserved so an unknown user filter can still be matched
     // against the built-in table. The lowering only recognises built-ins when the
@@ -375,7 +381,7 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x10, #16]");                                  // class_name pointer
     emitter.instruction("ldr x2, [x10, #24]");                                  // class_name length
     emitter.instruction("bl __rt_new_by_name");                                 // x0 = obj or 0
-    emitter.instruction("cbz x0, __rt_sfau_fail_release_params");               // class missing → fail and release params
+    emitter.instruction("cbz x0, __rt_sfau_no_class");                          // class missing → name it, then fail
     emitter.instruction("str x0, [sp, #32]");                                   // save the obj pointer for the instances table
 
     // -- seed php_user_filter::$params before onCreate() observes $this --
@@ -512,6 +518,28 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to the caller
 
+    // -- the registration names a class nobody declared --
+    //
+    // php warns TWICE here and the first sentence names both the filter and the class, so the
+    // class travels out to the lowering, which knows which function to blame. Falls through into
+    // the params release: this failure owes everything the other one owes.
+    emitter.label("__rt_sfau_no_class");
+    emitter.instruction("ldr x0, [sp, #40]");                                   // the boxed attach name no object will take
+    emitter.instruction("cbz x0, __rt_sfau_no_class_named");
+    emitter.instruction("bl __rt_decref_any");
+    emitter.instruction("str xzr, [sp, #40]");
+    emitter.label("__rt_sfau_no_class_named");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the resolved user-filter id
+    emitter.instruction("sub x9, x0, #128");                                    // slot_index = id - USER_FILTER_ID_BASE
+    abi::emit_symbol_address(emitter, "x10", "_user_filter_registry");
+    emitter.instruction("add x10, x10, x9, lsl #5");                            // registry entry = base + slot_index * 32
+    emitter.instruction("ldr x11, [x10, #16]");                                 // the class name the registration named
+    emitter.instruction("ldr x12, [x10, #24]");
+    abi::emit_symbol_address(emitter, "x13", "_sfau_class_ptr");
+    emitter.instruction("str x11, [x13]");
+    abi::emit_symbol_address(emitter, "x13", "_sfau_class_len");
+    emitter.instruction("str x12, [x13]");
+
     emitter.label("__rt_sfau_fail_release_params");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload boxed params that were never transferred
     emitter.instruction("bl __rt_decref_any");                                  // release params before reporting attach failure
@@ -540,6 +568,10 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save mode
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // save boxed filter params
+
+    // -- no class has gone missing yet; see the AArch64 arm --
+    abi::emit_symbol_address(emitter, "r9", "_sfau_class_ptr");
+    emitter.instruction("mov QWORD PTR [r9], 0");
 
     // -- resolve filter name → id --
     // The name is preserved so an unknown user filter can still be matched
@@ -580,7 +612,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");                       // class_name length
     emitter.instruction("call __rt_new_by_name");                               // rax = obj or 0
     emitter.instruction("test rax, rax");                                       // class missing?
-    emitter.instruction("jz __rt_sfau_fail_release_params_x86");                // fail and release params without touching state
+    emitter.instruction("jz __rt_sfau_no_class_x86");                           // name it, then fail
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the obj pointer
 
     // -- seed php_user_filter::$params before onCreate() observes $this --
@@ -708,6 +740,26 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // report a successful attach
     emitter.instruction("leave");                                               // restore rbp + rsp
     emitter.instruction("ret");                                                 // return to the caller
+
+    // -- the registration names a class nobody declared; see the AArch64 arm --
+    emitter.label("__rt_sfau_no_class_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // the boxed attach name no object will take
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_sfau_no_class_named_x86");
+    emitter.instruction("call __rt_decref_any");
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");
+    emitter.label("__rt_sfau_no_class_named_x86");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // the resolved user-filter id
+    emitter.instruction("sub r9, 128");                                         // slot_index = id - USER_FILTER_ID_BASE
+    emitter.instruction("shl r9, 5");                                           // slot offset = slot_index * 32
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_registry");
+    emitter.instruction("add r10, r9");                                         // registry entry
+    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // the class name the registration named
+    abi::emit_symbol_address(emitter, "r9", "_sfau_class_ptr");
+    emitter.instruction("mov QWORD PTR [r9], r11");
+    emitter.instruction("mov r11, QWORD PTR [r10 + 24]");
+    abi::emit_symbol_address(emitter, "r9", "_sfau_class_len");
+    emitter.instruction("mov QWORD PTR [r9], r11");
 
     emitter.label("__rt_sfau_fail_release_params_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload boxed params that were never transferred

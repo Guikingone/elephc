@@ -105,6 +105,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // buffer-sized pieces rather than being refused.
     out.push_str(&comm_directive("_fputcsv_row_buf", 65536, target));
     out.push_str(&comm_directive("_fputcsv_row_len", 8, target));
+    // The class a filter attach could not find, published by `__rt_stream_filter_attach_user` so
+    // the lowering can name it in php's first warning. A null pointer means the attach failed for
+    // another reason — an unknown name, or an `onCreate()` that refused.
+    out.push_str(&comm_directive("_sfau_class_ptr", 8, target));
+    out.push_str(&comm_directive("_sfau_class_len", 8, target));
     out.push_str(&comm_directive("_unser_depth", 8, target));
     out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
     out.push_str(&comm_directive("_unser_allowed_mode", 8, target));

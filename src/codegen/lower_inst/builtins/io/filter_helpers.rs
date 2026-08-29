@@ -856,6 +856,18 @@ fn lower_user_stream_filter_attach_node(
     abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     ctx.emitter.label(&fail);
     abi::emit_release_temporary_stack(ctx.emitter, 64);
+    // -- the line php stamps on these warnings is THIS call's, not the last one that ran --
+    //
+    // The location is published before an instruction that may warn, and the user's `onCreate()`
+    // ran in between: its own statements published THEIR lines, so a refused attach was reported
+    // ` on line 4` — inside the filter class — where php names line 10, the call site. php stamps
+    // a diagnostic with the frame that RAISED it, and returning from a php frame restores the
+    // caller's. Publishing again here is that restore, for the one family that runs user code
+    // between the publish and the warning.
+    if let Some(span) = inst.span {
+        crate::codegen::lower_inst::publish_diagnostic_line(ctx, span.line);
+    }
+    emit_missing_filter_class_warning(ctx, filter, prepend)?;
     // php-src names the filter it could not find. Returning false silently left a
     // misspelled name indistinguishable from one that attached.
     //
@@ -887,6 +899,95 @@ fn lower_user_stream_filter_attach_node(
     emit_boxed_bool(ctx, false);
     ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Reports a registration whose CLASS is not defined, the way php-src does — first.
+///
+/// MEASURED on `php -n` 8.5.6: an attach against a registration naming an undeclared class prints
+/// TWO warnings, and the first is
+/// `User-filter "p.one" requires class "MissingFamilyClass", but that class is not defined`.
+/// It names the ATTACH name — `p.one`, not the registered pattern `p.*` — and the class the
+/// registration named, which only the registry knows; `__rt_stream_filter_attach_user` publishes
+/// it, leaving a null pointer for every other failure so this warning stays off those paths.
+///
+/// Five pieces, because two of them are run-time strings: `__rt_diag_warning` accumulates and
+/// writes the line once a piece ends it with a newline.
+fn emit_missing_filter_class_warning(
+    ctx: &mut FunctionContext<'_>,
+    filter: ValueId,
+    prepend: bool,
+) -> Result<()> {
+    let head_text = if prepend {
+        "Warning: stream_filter_prepend(): User-filter \""
+    } else {
+        "Warning: stream_filter_append(): User-filter \""
+    };
+    let (head, head_len) = ctx.data.add_string(head_text.as_bytes());
+    let (middle, middle_len) = ctx.data.add_string(b"\" requires class \"");
+    let (tail, tail_len) = ctx
+        .data
+        .add_string(b"\", but that class is not defined\n");
+    let present = ctx.next_label("sfan_class_present");
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_sfau_class_ptr");
+            ctx.emitter.instruction("ldr x9, [x9]");                            // the class the attach could not find
+            ctx.emitter.instruction(&format!("cbz x9, {}", present));           // it found one: this warning is not due
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_sfau_class_ptr");
+            ctx.emitter.instruction("mov r9, QWORD PTR [r9]");                  // the class the attach could not find
+            ctx.emitter.instruction("test r9, r9");
+            ctx.emitter.instruction(&format!("jz {}", present));                // it found one: this warning is not due
+        }
+    }
+
+    emit_diag_piece_from_symbol(ctx, &head, head_len);
+    load_string_to_result(ctx, filter, "stream_filter_append filter")?;
+    match ctx.emitter.target.arch {
+        // The name arrives where the composer wants it on AArch64, and needs one move on x86_64.
+        Arch::AArch64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");
+            ctx.emitter.instruction("mov rsi, rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    emit_diag_piece_from_symbol(ctx, &middle, middle_len);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", "_sfau_class_ptr");
+            ctx.emitter.instruction("ldr x1, [x1]");
+            abi::emit_symbol_address(ctx.emitter, "x2", "_sfau_class_len");
+            ctx.emitter.instruction("ldr x2, [x2]");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_sfau_class_ptr");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");
+            abi::emit_symbol_address(ctx.emitter, "rsi", "_sfau_class_len");
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsi]");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    emit_diag_piece_from_symbol(ctx, &tail, tail_len);                          // the newline writes the line
+    ctx.emitter.label(&present);
+    Ok(())
+}
+
+/// Hands `__rt_diag_warning` one constant piece of a composed message.
+fn emit_diag_piece_from_symbol(ctx: &mut FunctionContext<'_>, symbol: &str, len: usize) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", symbol);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", symbol);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
 }
 
 /// Instantiates the filter class for ONE direction, from the frame above.

@@ -10,6 +10,22 @@
 use super::*;
 
 /// Lowers `stream_wrapper_register(protocol, class, flags?)`.
+///
+/// A LITERAL class name that no class in the module answers to throws php's `TypeError` instead
+/// of registering. MEASURED on `php -n` 8.5.6:
+///
+/// ```text
+/// Fatal error: Uncaught TypeError: stream_wrapper_register(): Argument #2 ($class) must be a
+/// valid class name, NoSuchWrapperClass given
+/// ```
+///
+/// The throw is CATCHABLE, which is why the refusal belongs here and not in the checker: a
+/// program that wraps the call in `try`/`catch` is valid php, and refusing it at compile time
+/// made it unbuildable. The class question is asked of `class_infos` — the same set `class_exists`
+/// folds against, so the two cannot disagree.
+///
+/// ⚠️ A class name that is not a literal still registers unchecked. Refusing it needs the name
+/// at RUN time: a table walk to answer the question and a composed message to name the class.
 pub(crate) fn lower_stream_wrapper_register(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -17,6 +33,32 @@ pub(crate) fn lower_stream_wrapper_register(
     ensure_arg_count_between(inst, "stream_wrapper_register", 2, 3)?;
     let protocol = expect_operand(inst, 0)?;
     let class = expect_operand(inst, 1)?;
+    if let Some(class_name) = optional_const_string_operand(ctx, class)? {
+        if !crate::codegen::lower_inst::builtins::contains_folded(
+            ctx.module
+                .class_infos
+                .keys()
+                .filter(|name| {
+                    !crate::codegen::lower_inst::builtins::is_internal_synthetic_class_name(name)
+                }),
+            &class_name,
+        ) {
+            let location = ctx
+                .module
+                .source_path
+                .clone()
+                .map(|file| (file, inst.span.map_or(0, |span| span.line)));
+            super::super::super::exceptions::emit_type_error_at(
+                ctx,
+                &format!(
+                    "stream_wrapper_register(): Argument #2 ($class) must be a valid class name, \
+                     {class_name} given"
+                ),
+                location,
+            );
+            return Ok(());
+        }
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_to_result(ctx, protocol, "stream_wrapper_register protocol")?;

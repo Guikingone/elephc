@@ -516,13 +516,15 @@ fn test_error_stream_wrapper_register_wrong_args() {
     );
 }
 
-/// Verifies the invalid-call diagnostic for error stream wrapper register unknown class.
+/// Verifies a `stream_wrapper_register()` naming an undeclared class COMPILES.
+///
+/// It used to be a compile error, which is the one thing php never makes it: MEASURED on
+/// `php -n` 8.5.6 it throws a `TypeError` at run time, and a throw is catchable — so a program
+/// that wraps the call in `try`/`catch` is valid php and has to build. The throw itself is
+/// pinned by `test_a_wrapper_class_that_does_not_exist_throws_a_catchable_type_error`.
 #[test]
-fn test_error_stream_wrapper_register_unknown_class() {
-    expect_error(
-        r#"<?php stream_wrapper_register("missing", "MissingWrapper");"#,
-        "stream_wrapper_register(): undefined class 'MissingWrapper'",
-    );
+fn test_error_stream_wrapper_register_unknown_class_is_not_a_compile_error() {
+    expect_no_error(r#"<?php stream_wrapper_register("missing", "MissingWrapper");"#);
 }
 
 /// Verifies the invalid-call diagnostic for error stream wrapper unregister wrong args.
@@ -561,13 +563,15 @@ fn test_error_stream_filter_register_wrong_args() {
     );
 }
 
-/// Verifies the invalid-call diagnostic for error stream filter register unknown class.
+/// Verifies a `stream_filter_register()` naming an undeclared class COMPILES.
+///
+/// php REGISTERS it — MEASURED on `php -n` 8.5.6, the call answers `true` — and only the attach
+/// fails, with two warnings. Refusing the program made a php script that runs unbuildable. The
+/// run-time half is pinned by
+/// `test_a_filter_class_that_does_not_exist_registers_and_fails_at_the_attach`.
 #[test]
-fn test_error_stream_filter_register_unknown_class() {
-    expect_error(
-        r#"<?php stream_filter_register("missing.filter", "MissingFilter");"#,
-        "stream_filter_register(): undefined class 'MissingFilter'",
-    );
+fn test_error_stream_filter_register_unknown_class_is_not_a_compile_error() {
+    expect_no_error(r#"<?php stream_filter_register("missing.filter", "MissingFilter");"#);
 }
 
 /// Verifies the invalid-call diagnostic for error stream socket accept wrong args.

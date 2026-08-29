@@ -20155,3 +20155,132 @@ unlink("big.csv");
     assert_eq!(out, "100006|xxx|,tail\n\n");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a filter registered against an UNDECLARED class compiles, registers, and fails at
+/// the attach — the way php does.
+///
+/// MEASURED on `php -n` 8.5.6: `stream_filter_register("ghost", "NoSuchClass")` answers `true`,
+/// and the attach prints TWO warnings — first the class, then the filter — and answers `false`,
+/// leaving the stream unfiltered. elephc REFUSED THE PROGRAM at compile time, so a php script
+/// that runs could not be built; registering a filter you never attach is ordinary defensive
+/// code.
+#[test]
+fn test_a_filter_class_that_does_not_exist_registers_and_fails_at_the_attach() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(stream_filter_register("ghost", "NoSuchFilterClass"));
+$h = fopen("php://memory", "w+");
+var_dump(stream_filter_append($h, "ghost"));
+fwrite($h, "abc");
+rewind($h);
+var_dump(stream_get_contents($h));
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\nstring(3) \"abc\"\n");
+    assert!(
+        out.diagnostics.contains(
+            "stream_filter_append(): User-filter \"ghost\" requires class \"NoSuchFilterClass\", \
+             but that class is not defined"
+        ),
+        "the class went unnamed: {}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics
+            .contains("stream_filter_append(): Unable to create or locate filter \"ghost\""),
+        "the second warning is missing: {}",
+        out.diagnostics
+    );
+}
+
+/// Verifies the class-missing warning names the ATTACH name, not the registered pattern.
+///
+/// A family registers `p.*` and php's warning says `User-filter "p.one"` — the name the caller
+/// asked for — while the CLASS is the registry's. Two different sources in one sentence, which
+/// is why the attach helper publishes the class and the lowering supplies the name.
+#[test]
+fn test_a_family_whose_class_is_missing_names_the_member() {
+    let out = compile_and_run_capture(
+        r#"<?php
+stream_filter_register("p.*", "MissingFamilyClass");
+$h = fopen("php://memory", "w+");
+var_dump(stream_filter_prepend($h, "p.one"));
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
+    assert!(
+        out.diagnostics.contains(
+            "stream_filter_prepend(): User-filter \"p.one\" requires class \"MissingFamilyClass\", \
+             but that class is not defined"
+        ),
+        "expected the member's name and the registry's class: {}",
+        out.diagnostics
+    );
+}
+
+/// Verifies `stream_wrapper_register()` with an undeclared class THROWS, and is catchable.
+///
+/// php refuses this one at run time — `TypeError: Argument #2 ($class) must be a valid class
+/// name, NoSuchWrapperClass given` — and a program that catches it keeps running with the
+/// protocol unregistered. MEASURED on `php -n` 8.5.6. elephc refused the program at compile
+/// time, which no `try`/`catch` could rescue.
+#[test]
+fn test_a_wrapper_class_that_does_not_exist_throws_a_catchable_type_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+try {
+    stream_wrapper_register("gw", "NoSuchWrapperClass");
+    echo "registered\n";
+} catch (TypeError $e) {
+    echo "caught: ", $e->getMessage(), "\n";
+}
+var_dump(in_array("gw", stream_get_wrappers(), true));
+echo "still alive\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "caught: stream_wrapper_register(): Argument #2 ($class) must be a valid class name, ",
+            "NoSuchWrapperClass given\n",
+            "bool(false)\n",
+            "still alive\n",
+        ),
+    );
+}
+
+/// Verifies a refused attach is stamped with the CALL SITE's line, not the last line that ran.
+///
+/// The diagnostic location is published before an instruction that may warn, and the user's
+/// `onCreate()` runs in between — its own statements publish THEIR lines. A refused attach was
+/// therefore reported ` on line 4`, inside the filter class, where php names line 9: php stamps a
+/// warning with the frame that RAISED it. The `self::$n++` matters — an `onCreate()` that only
+/// echoes a local publishes nothing and hid this for two fixtures.
+#[test]
+fn test_a_refused_attach_names_the_call_site_line() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class No extends php_user_filter {
+    public static $n = 0;
+    public function onCreate(): bool { self::$n++; echo "  onCreate #", self::$n, "\n"; return false; }
+    public function filter($in, $out, &$consumed, $closing): int { return PSFS_PASS_ON; }
+}
+stream_filter_register("no", "No");
+$h = fopen("php://memory", "w+");
+var_dump(stream_filter_append($h, "no"));
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "  onCreate #1\nbool(false)\n");
+    assert!(
+        out.located_diagnostics.contains(" on line 9"),
+        "the warning was stamped with the wrong line: {}",
+        out.located_diagnostics
+    );
+}
