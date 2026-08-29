@@ -10,10 +10,10 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-/// Emits the `__rt_ptr_check_nonnull` runtime helper that aborts on null pointer dereference.
+/// Emits the `__rt_ptr_check_nonnull` runtime helper for null pointer dereferences.
 ///
 /// Dispatches to the platform-specific x86_64 Linux implementation. For ARM64, emits
-/// the null-check logic inline with a write+exit syscall sequence on failure.
+/// the null-check logic inline and escapes an active cdylib boundary before the fallback exit.
 ///
 /// Input:  x0 = pointer value
 /// Output: x0 unchanged on success; process exits with code 1 on null
@@ -37,6 +37,7 @@ pub(crate) fn emit_ptr_check_nonnull(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x1", "_ptr_null_err_msg");               // load page of null dereference message
     emitter.instruction("mov x2, #38");                                         // message length: "Fatal error: null pointer dereference\n"
     emitter.syscall(4);
+    abi::emit_cdylib_exit_escape(emitter);
     emitter.instruction("mov x0, #1");                                          // exit code 1
     emitter.syscall(1);
 
@@ -66,6 +67,7 @@ fn emit_ptr_check_nonnull_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edx, 38");                                         // describe the full fatal null-dereference message byte length to write(2)
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall number 1 = write
     emitter.instruction("syscall");                                             // emit the fatal null-dereference message before terminating the process
+    abi::emit_cdylib_exit_escape(emitter);
     emitter.instruction("mov edi, 1");                                          // return process exit code 1 for the fatal null-dereference abort path
     emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process after reporting the fatal null-dereference

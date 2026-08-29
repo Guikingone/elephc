@@ -14,8 +14,8 @@
 //! - `_stack_limit_main` remembers the OS-thread floor so `__rt_fiber_switch` can restore
 //!   it when control leaves a coroutine stack; fiber stacks get their own floor derived
 //!   from the fiber's mmap base.
-//! - `__rt_stack_overflow` never returns and never needs a valid frame: prologues reach it
-//!   with a plain branch, so it is safe to enter with almost no stack left.
+//! - `__rt_stack_overflow` never returns normally and never needs a valid frame: prologues
+//!   reach it with a plain branch, and cdylibs escape through the active host boundary.
 
 use crate::codegen_support::runtime::data::STACK_OVERFLOW_MSG;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -182,8 +182,8 @@ fn emit_stack_limit_init_x86_64(emitter: &mut Emitter) {
 ///
 /// Reached by a plain branch (never a call) from a function prologue that found the stack
 /// pointer below `_stack_limit`, so it must not assume a usable frame and never returns.
-/// Writes PHP's stack-overflow wording to stderr and exits with status 255, the status PHP
-/// uses for an uncaught fatal error.
+/// Writes PHP's stack-overflow wording to stderr, then escapes an active cdylib boundary or
+/// exits a standalone process with status 255, the status PHP uses for an uncaught fatal.
 pub fn emit_stack_overflow(emitter: &mut Emitter) {
     let msg_len = STACK_OVERFLOW_MSG.len();
     emitter.blank();
@@ -195,6 +195,7 @@ pub fn emit_stack_overflow(emitter: &mut Emitter) {
             emitter.instruction(&format!("mov x2, #{}", msg_len));              // byte length of the call-stack overflow message
             emitter.instruction("mov x0, #2");                                  // write the diagnostic to stderr
             emitter.syscall(4);
+            abi::emit_cdylib_exit_escape(emitter);
             emitter.instruction("mov x0, #255");                                // exit status 255, matching PHP's uncaught fatal error
             emitter.syscall(1);
         }
@@ -204,6 +205,7 @@ pub fn emit_stack_overflow(emitter: &mut Emitter) {
             emitter.instruction("mov edi, 2");                                  // write the diagnostic to stderr
             emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall number 1 = write
             emitter.instruction("syscall");                                     // emit the call-stack overflow diagnostic
+            abi::emit_cdylib_exit_escape(emitter);
             emitter.instruction("mov edi, 255");                                // exit status 255, matching PHP's uncaught fatal error
             emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall number 60 = exit
             emitter.instruction("syscall");                                     // terminate the process after reporting the overflow
@@ -235,6 +237,38 @@ mod tests {
             assert!(asm.contains("_stack_limit"), "{target:?}: {asm}");
             assert!(asm.contains("_stack_limit_main"), "{target:?}: {asm}");
             assert!(asm.contains("_stack_err_msg"), "{target:?}: {asm}");
+        }
+    }
+
+    /// Cdylib stack exhaustion must unwind through the active host boundary while
+    /// retaining the standalone exit sequence as the inactive-boundary fallback.
+    #[test]
+    fn test_stack_overflow_escapes_active_cdylib_boundary() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            emit_stack_overflow(&mut emitter);
+            let asm = emitter.output();
+            assert!(
+                asm.contains(crate::codegen_support::cdylib::BOUNDARY_ACTIVE),
+                "{target:?}: {asm}"
+            );
+            assert!(
+                asm.contains(crate::codegen_support::cdylib::BOUNDARY_STATUS),
+                "{target:?}: {asm}"
+            );
+            assert!(asm.contains("__rt_throw_current"), "{target:?}: {asm}");
+            assert!(
+                asm.contains(if target.arch == Arch::X86_64 {
+                    "mov edi, 255"
+                } else {
+                    "mov x0, #255"
+                }),
+                "{target:?}: {asm}"
+            );
         }
     }
 

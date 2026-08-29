@@ -105,8 +105,8 @@ PHP source (.php)
 ┌──────────────┐
 │   Exports    │  src/exports.rs
 │    Scan      │  Collects #[Export]-marked functions and validates their
-│              │  C-ABI signatures for --emit cdylib (warns and ignores
-│              │  them in executable mode).
+│              │  C-ABI signatures and post-lowering safety graph (warns and
+│              │  ignores them only in normal executable emission).
 └─────┬────────┘
       │
       ▼
@@ -358,6 +358,7 @@ src/
 │   ├── interface_wrappers.rs  Interface dispatch return-shape adapters
 │   ├── dynamic_new.rs         Builtin-class allow-list metadata for dynamic object construction
 │   ├── hash_crypto.rs         `hash()` / `hash_hmac()` routing through the elephc-crypto staticlib
+│   ├── iconv_bridge.rs        `iconv*()` entry-point publication into runtime function-pointer slots
 │   ├── phar_stream.rs         `phar://` URL and PHAR archive metadata parsing for I/O lowering
 │   ├── runtime_features.rs    Runtime helper-family derivation keeping optional native link deps pay-for-use
 │   ├── stream_filters/        zlib/bzip2/iconv stream-filter attachment helper emitters
@@ -382,11 +383,12 @@ src/
 │   │   ├── target.rs          Platform / Arch / Target definitions and derived codegen properties
 │   │   ├── linux_transform.rs Linux post-emit transforms, syscall mapping, C-symbol remapping
 │   │   └── toolchain.rs       Assembler / linker invocation
-│   ├── cdylib.rs              C-ABI export trampolines + lifecycle symbols for --emit cdylib
-│   ├── visibility.rs          Hidden-visibility directives (ELF .hidden / Mach-O .private_extern) for internal globals in cdylib emission
+│   ├── cdylib.rs              Owned-string boundary orchestration + lifecycle/status/error/memory symbols
+│   ├── cdylib/boundary.rs     Recoverable scalar wrappers + nested boundary/concat state
+│   ├── visibility.rs          ELF hidden / Mach-O private visibility for internal cdylib globals
 │   ├── sentinels.rs           Null representation selection (sentinel vs tagged) and constants
 │   ├── data_section.rs        String/float literal .data section
-│   ├── emit.rs                Assembly text buffer
+│   ├── emit.rs                Assembly text buffer plus independent PIC/cdylib-boundary modes
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Runtime module boundary; re-exports the emission entry points
@@ -423,6 +425,7 @@ src/
 crates/
 ├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
+├── elephc-iconv/              Charset-conversion and RFC 2047 MIME bridge staticlib behind PHP `iconv*()`
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude

@@ -464,6 +464,16 @@ pub enum RuntimeFnId {
     OpensslDecrypt,
     OpensslEncrypt,
     OpensslGetCipherMethods,
+    Iconv,
+    IconvGetEncoding,
+    IconvMimeDecode,
+    IconvMimeDecodeHeaders,
+    IconvMimeEncode,
+    IconvSetEncoding,
+    IconvStrlen,
+    IconvStrpos,
+    IconvStrrpos,
+    IconvSubstr,
     Htmlentities,
     Htmlspecialchars,
     Implode,
@@ -1097,6 +1107,27 @@ impl RuntimeFnId {
                         | crate::ir::Effects::MAY_WARN.bits(),
                 )
             }
+            // The iconv family reads string payloads, allocates its results, consults and
+            // updates the process-wide encoding trio, prints php-src's diagnostics, and can
+            // throw the out-of-range `$offset` ValueError.
+            RuntimeFnId::Iconv
+            | RuntimeFnId::IconvGetEncoding
+            | RuntimeFnId::IconvMimeDecode
+            | RuntimeFnId::IconvMimeDecodeHeaders
+            | RuntimeFnId::IconvMimeEncode
+            | RuntimeFnId::IconvSetEncoding
+            | RuntimeFnId::IconvStrlen
+            | RuntimeFnId::IconvStrpos
+            | RuntimeFnId::IconvStrrpos
+            | RuntimeFnId::IconvSubstr => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::OUTPUT.bits()
+                    | crate::ir::Effects::MAY_WARN.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
@@ -1193,6 +1224,19 @@ impl RuntimeFnId {
             | RuntimeFnId::OpensslGetCipherMethods => {
                 &[BuiltinRequirement::Bridge("elephc_crypto")]
             }
+            RuntimeFnId::Iconv
+            | RuntimeFnId::IconvGetEncoding
+            | RuntimeFnId::IconvMimeDecode
+            | RuntimeFnId::IconvMimeDecodeHeaders
+            | RuntimeFnId::IconvMimeEncode
+            | RuntimeFnId::IconvSetEncoding
+            | RuntimeFnId::IconvStrlen
+            | RuntimeFnId::IconvStrpos
+            | RuntimeFnId::IconvStrrpos
+            | RuntimeFnId::IconvSubstr => &[
+                BuiltinRequirement::Bridge("elephc_iconv"),
+                BuiltinRequirement::MacOsLibrary("iconv"),
+            ],
             RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
@@ -1348,9 +1392,29 @@ impl RuntimeFnId {
         // for `Strpos` and `Strtr` below.
         if matches!(
             self,
-            RuntimeFnId::IntvalBase | RuntimeFnId::BcComp | RuntimeFnId::BcScale
+            RuntimeFnId::IntvalBase
+                | RuntimeFnId::BcComp
+                | RuntimeFnId::BcScale
+                // `iconv_set_encoding()` answers with a bare boolean.
+                | RuntimeFnId::IconvSetEncoding
         ) {
             return BuiltinResultOwnership::NonHeap;
+        }
+        // Every other iconv entry point boxes a freshly built string, integer, or array,
+        // so its result never aliases an argument.
+        if matches!(
+            self,
+            RuntimeFnId::Iconv
+                | RuntimeFnId::IconvGetEncoding
+                | RuntimeFnId::IconvMimeDecode
+                | RuntimeFnId::IconvMimeDecodeHeaders
+                | RuntimeFnId::IconvMimeEncode
+                | RuntimeFnId::IconvStrlen
+                | RuntimeFnId::IconvStrpos
+                | RuntimeFnId::IconvStrrpos
+                | RuntimeFnId::IconvSubstr
+        ) {
+            return BuiltinResultOwnership::Fresh;
         }
         if matches!(
             self,
@@ -1918,6 +1982,16 @@ impl RuntimeFnId {
             RuntimeFnId::OpensslDecrypt => "openssl_decrypt",
             RuntimeFnId::OpensslEncrypt => "openssl_encrypt",
             RuntimeFnId::OpensslGetCipherMethods => "openssl_get_cipher_methods",
+            RuntimeFnId::Iconv => "iconv",
+            RuntimeFnId::IconvGetEncoding => "iconv_get_encoding",
+            RuntimeFnId::IconvMimeDecode => "iconv_mime_decode",
+            RuntimeFnId::IconvMimeDecodeHeaders => "iconv_mime_decode_headers",
+            RuntimeFnId::IconvMimeEncode => "iconv_mime_encode",
+            RuntimeFnId::IconvSetEncoding => "iconv_set_encoding",
+            RuntimeFnId::IconvStrlen => "iconv_strlen",
+            RuntimeFnId::IconvStrpos => "iconv_strpos",
+            RuntimeFnId::IconvStrrpos => "iconv_strrpos",
+            RuntimeFnId::IconvSubstr => "iconv_substr",
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
             RuntimeFnId::Implode => "implode",

@@ -485,7 +485,11 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     timings.record_since("exports-scan", phase_started);
-    if matches!(emit, Emit::Executable) && !exported_functions.is_empty() {
+    if matches!(emit, Emit::Executable)
+        && !check_only
+        && !emit_ir
+        && !exported_functions.is_empty()
+    {
         let names: Vec<&str> = exported_functions.keys().map(String::as_str).collect();
         eprintln!(
             "warning: ignoring #[Export] on functions {:?} — --emit cdylib is required to expose them",
@@ -493,7 +497,7 @@ pub(crate) fn compile(config: CliConfig) {
         );
     }
 
-    if check_only {
+    if check_only && exported_functions.is_empty() {
         crate::progress::clear();
         timings.report();
         crate::progress::finish_ok(&format!("Checked '{}'", filename), timings.elapsed());
@@ -502,7 +506,12 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("opt-prop");
     let phase_started = Instant::now();
-    let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new(&ast);
+    let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new_with_type_metadata(
+        &ast,
+        &check_result.functions,
+        &check_result.classes,
+        &check_result.interfaces,
+    );
     // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
     // lowering a concrete type the checker never approved for that name, so the pass is told which
     // names those are and refuses to record a fact for them.
@@ -559,6 +568,7 @@ pub(crate) fn compile(config: CliConfig) {
             filename,
             web,
             ir_opt,
+            &exported_functions,
             &mut timings,
         );
         return;
@@ -580,6 +590,21 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     timings.record_since("ir-lower", phase_started);
+
+    if matches!(emit, Emit::Cdylib) || (check_only && !exported_functions.is_empty()) {
+        if let Err(error) = exports::validate_cdylib_call_graph(&ir_module, &exported_functions) {
+            crate::progress::clear();
+            errors::report(&error.with_file(filename.to_string()));
+            process::exit(1);
+        }
+    }
+
+    if check_only {
+        crate::progress::clear();
+        timings.report();
+        crate::progress::finish_ok(&format!("Checked '{}'", filename), timings.elapsed());
+        return;
+    }
 
     crate::progress::phase("ir-opt");
     let phase_started = Instant::now();
