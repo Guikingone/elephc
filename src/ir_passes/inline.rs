@@ -1088,12 +1088,22 @@ mod tests {
 /// slot whose type is `mixed` can still hold a hash at run time — `getdate()`
 /// and `getenv()` return exactly that — and it is the stored VALUE's ownership
 /// that decides whether anything was abandoned.
+///
+/// `may_require_release()` rather than an exact `Owned`, so a `MaybeOwned` heap
+/// store is refused too. I could not build a case that leaks through the narrower
+/// check: a callee storing a MaybeOwned heap value also stores an Owned one in
+/// every shape I tried — an aliased local, a reassignment from a builtin, an
+/// alias behind a branch — and the Owned store already refuses it. The wider test
+/// is kept anyway because it costs nothing measurable (both only fire on HEAP
+/// values, so scalar callees inline exactly as before) and because being wrong in
+/// this direction only loses an inline, while being wrong in the other loses
+/// memory on every iteration.
 fn callee_stores_a_container_local(callee: &Function) -> bool {
     callee.instructions.iter().any(|inst| {
         inst.op == Op::StoreLocal
             && inst.operands.iter().any(|operand| {
                 callee.value(*operand).is_some_and(|value| {
-                    value.ownership == Ownership::Owned
+                    value.ownership.may_require_release()
                         && matches!(value.ir_type, crate::ir::IrType::Heap(_))
                 })
             })
