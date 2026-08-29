@@ -49,6 +49,14 @@
 //! - `fscanf()` reads ONE LINE per call through `fgets()`, newline included, exactly as php's
 //!   `php_stream_get_line` does: `fscanf($h, '%[^z]')` on `"a\n"` returns `["a\n"]`. End of file
 //!   is `false`; an EMPTY line is `NULL`, since scanning `"\n"` reaches EOF without assigning.
+//! - BECAUSE IT REALLY CALLS `fgets()`, a diagnostic raised inside that read names `fgets`, not
+//!   `fscanf`. MEASURED against a userspace wrapper with no `stream_eof`: php says
+//!   `Warning: fscanf(): C::stream_eof is not implemented!` and this says `fgets()`. It is the
+//!   one caller of eleven that does not name itself, and the two ways to fix it are both worse
+//!   than the symptom — a global "the caller is really fscanf" pin leaks on an exception and then
+//!   MIS-names other warnings, and a private `fgets`-shaped builtin that publishes `fscanf` costs
+//!   a contract entry, a catalog entry and a docs regeneration for one word. Left as it is,
+//!   deliberately: the warning describes what elephc actually did.
 //! - THE BY-REF `$vars` FORM lives here too, as one wrapper per arity — see
 //!   `scanf_vars_wrappers`. It could not before for two reasons, both now gone: the contract's
 //!   `variadic: Some("vars")` was a bare NAME with no way to say the tail is written, so
