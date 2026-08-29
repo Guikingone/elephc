@@ -58,6 +58,60 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
     emitter.instruction("str x0, [sp, #48]");                                   // hold $sorting_order across the listing
 
+    // -- a registered wrapper lists its own directory --
+    //
+    // `opendir()` has dispatched here since it was written; `scandir()` went straight to the
+    // filesystem and reported the directory missing. MEASURED on `php -n` 8.5.6: php calls
+    // `dir_opendir`, walks `dir_readdir` to false, and calls `dir_closedir` — the same three the
+    // opendir/readdir pair makes, so the class cannot tell which builtin asked.
+    //
+    // The frame slots below are the native path's, and this arm returns before that path runs.
+    emitter.instruction("stp x1, x2, [sp, #0]");                                // the path outlives the probe
+    emitter.instruction("bl __rt_user_wrapper_opendir");                        // fd, -1 (its own failure), or -2 (no scheme)
+    emitter.instruction("cmn x0, #2");                                          // -2: no registered scheme owns this path
+    emitter.instruction("b.eq __rt_scandir_native");
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.lt __rt_scandir_wrapper_failed");                    // a scheme matched and refused
+    emitter.instruction("str x0, [sp, #16]");                                   // the synthetic directory handle
+    emitter.instruction("mov x0, #128");                                        // initial capacity, as the native path asks for
+    emitter.instruction("mov x1, #16");                                         // element size = 16 bytes (ptr + len)
+    emitter.instruction("bl __rt_array_new");                                   // the listing this arm answers with
+    emitter.instruction("str x0, [sp, #24]");
+    emitter.label("__rt_scandir_wrapper_loop");
+    emitter.instruction("ldr x0, [sp, #16]");
+    emitter.instruction("bl __rt_user_wrapper_dir_readdir");                    // x1/x2 = the name, x1 = 0 at the end
+    emitter.instruction("cbz x1, __rt_scandir_wrapper_done");
+    emitter.instruction("ldr x0, [sp, #24]");
+    emitter.instruction("bl __rt_array_push_str");                              // it persists the pair itself
+    emitter.instruction("str x0, [sp, #24]");                                   // growth may have moved the array
+    emitter.instruction("b __rt_scandir_wrapper_loop");
+    emitter.label("__rt_scandir_wrapper_done");
+    emitter.instruction("ldr x0, [sp, #16]");
+    emitter.instruction("bl __rt_user_wrapper_dir_closedir");
+    emitter.instruction("ldr x0, [sp, #24]");
+    emitter.instruction("ldr x9, [sp, #48]");                                   // $sorting_order, held above
+    emitter.instruction("cmp x9, #1");                                          // SCANDIR_SORT_DESCENDING
+    emitter.instruction("b.eq __rt_scandir_wrapper_rsort");
+    emitter.instruction("cmp x9, #2");                                          // SCANDIR_SORT_NONE
+    emitter.instruction("b.eq __rt_scandir_wrapper_ret");
+    emitter.instruction("bl __rt_sort_str");                                    // ascending, php's default
+    emitter.instruction("b __rt_scandir_wrapper_ret");
+    emitter.label("__rt_scandir_wrapper_rsort");
+    emitter.instruction("bl __rt_rsort_str");
+    emitter.instruction("b __rt_scandir_wrapper_ret");
+    emitter.label("__rt_scandir_wrapper_failed");
+    emitter.instruction("str xzr, [sp, #24]");                                  // its own refusal, already warned about
+    emitter.label("__rt_scandir_wrapper_ret");
+    // From the SLOT, not from x0: sorting answers in place and clobbers the register, which is
+    // why the native path below reloads too.
+    emitter.instruction("ldr x0, [sp, #24]");
+    emitter.instruction("ldp x29, x30, [sp, #64]");
+    emitter.instruction("add sp, sp, #80");
+    emitter.instruction("ret");
+
+    emitter.label("__rt_scandir_native");
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // the path the probe walked
+
     // -- null-terminate path --
     emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("str x0, [sp, #24]");                                   // hold the C path across the result-array allocation
@@ -219,6 +273,56 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the C path, result array, and DIR* locals
     emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the C path, result array, DIR* handle, loop scratch, the failure diagnostic, and the sorting order
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // hold $sorting_order across the listing
+
+    // -- a registered wrapper lists its own directory; see the AArch64 counterpart --
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // the path outlives the probe
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");
+    emitter.instruction("call __rt_user_wrapper_opendir");                      // fd, -1 (its own failure), or -2 (no scheme)
+    emitter.instruction("cmp rax, -2");                                         // no registered scheme owns this path
+    emitter.instruction("je __rt_scandir_native_x86");
+    emitter.instruction("cmp rax, 0");
+    emitter.instruction("jl __rt_scandir_wrapper_failed_x86");                  // a scheme matched and refused
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // the synthetic directory handle
+    emitter.instruction("mov rdi, 128");                                        // initial capacity, as the native path asks for
+    emitter.instruction("mov rsi, 16");                                         // element size = 16 bytes (ptr + len)
+    emitter.instruction("call __rt_array_new");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");
+    emitter.label("__rt_scandir_wrapper_loop_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");
+    emitter.instruction("call __rt_user_wrapper_dir_readdir");                  // rax/rdx = the name, rax = 0 at the end
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_scandir_wrapper_done_x86");
+    emitter.instruction("mov rsi, rax");                                        // push takes the pair beside the array
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");
+    emitter.instruction("call __rt_array_push_str");                            // it persists the pair itself
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // growth may have moved the array
+    emitter.instruction("jmp __rt_scandir_wrapper_loop_x86");
+    emitter.label("__rt_scandir_wrapper_done_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");
+    emitter.instruction("call __rt_user_wrapper_dir_closedir");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // $sorting_order, held above
+    emitter.instruction("cmp r9, 2");                                           // SCANDIR_SORT_NONE keeps readdir order
+    emitter.instruction("je __rt_scandir_wrapper_ret_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");
+    emitter.instruction("cmp r9, 1");                                           // SCANDIR_SORT_DESCENDING
+    emitter.instruction("je __rt_scandir_wrapper_rsort_x86");
+    emitter.instruction("call __rt_sort_str");                                  // ascending, php's default
+    emitter.instruction("jmp __rt_scandir_wrapper_ret_x86");
+    emitter.label("__rt_scandir_wrapper_rsort_x86");
+    emitter.instruction("call __rt_rsort_str");
+    emitter.instruction("jmp __rt_scandir_wrapper_ret_x86");
+    emitter.label("__rt_scandir_wrapper_failed_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // its own refusal, already warned about
+    emitter.label("__rt_scandir_wrapper_ret_x86");
+    // From the SLOT, not from rax: sorting answers in place and clobbers the register.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");
+    emitter.instruction("mov rsp, rbp");
+    emitter.instruction("pop rbp");
+    emitter.instruction("ret");
+
+    emitter.label("__rt_scandir_native_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the path the probe walked
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");
     emitter.instruction("call __rt_path_cstr");                                 // convert the elephc directory string in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the C directory path pointer across the result-array allocation and opendir() call
     // See the AArch64 counterpart: php names the URL the program wrote, not the path it reduced to.

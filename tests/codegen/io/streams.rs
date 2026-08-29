@@ -19565,3 +19565,63 @@ var_dump(@stream_wrapper_unregister("nope"));
         out.diagnostics
     );
 }
+
+/// Verifies `scandir()` lists a registered wrapper's directory through its own hooks.
+///
+/// `opendir()`/`readdir()` have dispatched to a wrapper since they were written; `scandir()` went
+/// to the filesystem and reported the directory missing. MEASURED on `php -n` 8.5.6: php calls
+/// `dir_opendir`, walks `dir_readdir` to false, and calls `dir_closedir` — the same three the
+/// opendir/readdir pair makes, so the class cannot tell which builtin asked.
+#[test]
+fn test_scandir_lists_a_wrapper_directory() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class D {
+    public $context;
+    private $i = 0;
+    private $items = [".", "..", "bb", "aa"];
+    public function dir_opendir($path, $options) { echo "opendir\n"; $this->i = 0; return true; }
+    public function dir_readdir() { return $this->i < count($this->items) ? $this->items[$this->i++] : false; }
+    public function dir_closedir() { echo "closedir\n"; return true; }
+    public function url_stat($p, $f) { return ["mode" => 0040755]; }
+}
+stream_wrapper_register("dw", "D");
+var_dump(scandir("dw://y"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "opendir\nclosedir\narray(4) {\n  [0]=>\n  string(1) \".\"\n  [1]=>\n  string(2) \"..\"\n  [2]=>\n  string(2) \"aa\"\n  [3]=>\n  string(2) \"bb\"\n}\n",
+    );
+}
+
+/// Verifies `SCANDIR_SORT_NONE` keeps the wrapper's own order.
+///
+/// The sort is php's, not the class's: the entries above come back sorted although `dir_readdir`
+/// hands them over as `bb` then `aa`.
+#[test]
+fn test_scandir_sort_none_keeps_a_wrapper_order() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class D {
+    public $context;
+    private $i = 0;
+    private $items = ["zz", "aa"];
+    public function dir_opendir($path, $options) { $this->i = 0; return true; }
+    public function dir_readdir() { return $this->i < count($this->items) ? $this->items[$this->i++] : false; }
+    public function dir_closedir() { return true; }
+    public function url_stat($p, $f) { return ["mode" => 0040755]; }
+}
+stream_wrapper_register("dn", "D");
+var_dump(scandir("dn://y", SCANDIR_SORT_NONE));
+var_dump(scandir("dn://y", SCANDIR_SORT_DESCENDING));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "array(2) {\n  [0]=>\n  string(2) \"zz\"\n  [1]=>\n  string(2) \"aa\"\n}\n\
+         array(2) {\n  [0]=>\n  string(2) \"zz\"\n  [1]=>\n  string(2) \"aa\"\n}\n",
+    );
+}
