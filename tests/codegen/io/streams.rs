@@ -18430,6 +18430,37 @@ fclose($h);
     );
 }
 
+/// A `data:` URL may not dictate its own `mediatype`, and its `uri=` may not dictate the origin.
+///
+/// php's own bug71323. MEASURED on `php -n` 8.5.6 with php-src's test verbatim:
+/// `data:text/plain;z=y;uri=eviluri;mediatype=wut?;mediatype2=hello,somedata` reports
+/// `mediatype` = `text/plain` and `uri` = the WHOLE url, while `z` and `mediatype2` — names the
+/// wrapper does not own — are kept. elephc reported `wut?` and `eviluri`: a URL decided what a
+/// caller read back as the stream's media type and origin.
+///
+/// The rule is NOT symmetric, and the second half was measured separately: `mediatype=` is
+/// dropped outright, while `uri=` keeps its POSITION and loses its value —
+/// `data:text/plain;a=1;b=2,x` ends `...,seekable,uri` and `data:text/plain;a=1;uri=e;b=2,x` reads
+/// `mediatype,a,uri,b,...`, so php lets that parameter claim its slot and then writes over it.
+#[test]
+fn test_a_data_url_cannot_dictate_its_own_mediatype_or_uri() {
+    let out = compile_and_run(
+        r#"<?php
+$evil = "data:text/plain;z=y;uri=eviluri;mediatype=wut?;mediatype2=hello,somedata";
+$m = stream_get_meta_data(fopen($evil, "r"));
+echo $m["mediatype"], "|", $m["uri"], "|", $m["mediatype2"], "\n";
+echo implode(",", array_keys(stream_get_meta_data(fopen("data:text/plain;a=1;b=2,x", "r")))), "\n";
+echo implode(",", array_keys(stream_get_meta_data(fopen("data:text/plain;a=1;uri=e;b=2,x", "r")))), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "text/plain|data:text/plain;z=y;uri=eviluri;mediatype=wut?;mediatype2=hello,somedata|hello\n\
+         mediatype,a,b,base64,wrapper_type,stream_type,mode,unread_bytes,seekable,uri\n\
+         mediatype,a,uri,b,base64,wrapper_type,stream_type,mode,unread_bytes,seekable\n"
+    );
+}
+
 /// The PARAMS half of the same defect: an empty params array read as a hash.
 ///
 /// `stream_context_create([], [])` hands an EMPTY array, which is INDEXED. Both readers of the

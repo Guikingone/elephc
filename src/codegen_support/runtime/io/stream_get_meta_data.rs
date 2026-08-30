@@ -376,7 +376,29 @@ fn emit_data_uri_params_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #56]");                                   // the name starts at the segment
     emitter.instruction("sub x15, x14, x9");
     emitter.instruction("str x15, [sp, #64]");                                  // and runs up to the '='
+    emitter.instruction("str x14, [sp, #72]");                                  // the '=' itself, across the name compares
+
+    // -- a parameter may NOT take a name the wrapper sets itself --
+    //
+    // php's fix for its own bug71323. MEASURED on `php -n` 8.5.6:
+    // `data:text/plain;z=y;uri=eviluri;mediatype=wut?;mediatype2=hello,somedata` answers
+    // `mediatype` = `text/plain`, `uri` = the WHOLE url, `z` = `y` and `mediatype2` = `hello` —
+    // ten keys, no duplicate. `mediatype=` is DROPPED outright — a URL must not dictate what a
+    // caller reads back as the stream's own media type — while `uri=` is merely OVERWRITTEN: php
+    // lets it claim its position and then writes the real URL over it. MEASURED both ways,
+    // `data:text/plain;a=1;b=2,x` ends `…,seekable,uri` and `data:text/plain;a=1;uri=e;b=2,x`
+    // reads `mediatype,a,uri,b,…`, so the parameter keeps the SLOT and loses the VALUE. elephc
+    // kept both values, so `mediatype` came back `wut?`.
+    emitter.instruction("ldr x1, [sp, #56]");
+    emitter.instruction("ldr x2, [sp, #64]");
+    abi::emit_symbol_address(emitter, "x3", "_meta_key_mediatype");
+    emitter.instruction("mov x4, #9");                                          // length of "mediatype"
+    emitter.instruction("bl __rt_str_eq");
+    emitter.instruction("cbnz x0, __rt_sgmdp_next");                            // reserved: the wrapper's own value stands
+
+    emitter.instruction("ldr x14, [sp, #72]");                                  // the '=' again
     emitter.instruction("add x1, x14, #1");                                     // the value starts after the '='
+    emitter.instruction("ldr x11, [sp, #40]");                                  // the segment end, reloaded across the calls
     emitter.instruction("sub x2, x11, x1");                                     // and runs to the end of the segment
     emitter.instruction("bl __rt_str_persist");                                 // the array releases its values, so it needs its own
     emitter.instruction("mov x3, x1");                                          // value_lo
@@ -1226,7 +1248,20 @@ fn emit_data_uri_params_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, rax");
     emitter.instruction("sub rcx, r9");
     emitter.instruction("mov QWORD PTR [rbp - 72], rcx");                       // and runs up to the '='
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // the '=' itself, across the name compares
+
+    // See the AArch64 arm: a parameter may not take a name the wrapper sets itself.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");
+    abi::emit_symbol_address(emitter, "rcx", "_meta_key_mediatype");
+    emitter.instruction("mov r8, 9");                                           // length of "mediatype"
+    emitter.instruction("call __rt_str_eq");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jnz __rt_sgmdp_next_x86");                             // reserved: the wrapper's own value stands
+
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // the '=' again
     emitter.instruction("add rax, 1");                                          // the value starts after the '='
+    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // the segment end, reloaded across the calls
     emitter.instruction("mov rdx, r11");
     emitter.instruction("sub rdx, rax");                                        // and runs to the end of the segment
     emitter.instruction("call __rt_str_persist");                               // the array releases its values, so it needs its own
