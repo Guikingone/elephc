@@ -192,6 +192,55 @@ var_dump(file_get_contents("compress.zlib://puts.gz"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A compress:// stream reports the end as soon as a LINE read drains it; a plain file does not.
+///
+/// MEASURED on `php -n` 8.5.6 with `"one\ntwo\nthree\n"`, `feof()` after each `fgets()`:
+///
+/// ```text
+/// compress.zlib://   false, false, TRUE
+/// a plain file       false, false, false
+/// ```
+///
+/// and the sized readers agree with each other on both: `fread`, `fgetc` and
+/// `stream_get_contents` never see it early. It is the line reader alone, which is the signature
+/// `php://temp` already had — php fills a whole chunk to find a line, and for a stream php
+/// filters that fill drives the source one read past its last byte.
+///
+/// `gzeof()` IS `feof()`, so a `while (!gzeof($h)) { gzgets($h); }` loop ran one extra round
+/// answering false before this.
+#[test]
+fn test_gzeof_turns_true_on_the_line_that_drains_the_stream() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$h = gzopen("eof.gz", "w");
+gzwrite($h, "one
+two
+three
+");
+gzclose($h);
+
+$g = gzopen("eof.gz", "r");
+$parts = [];
+while (($l = gzgets($g)) !== false) { $parts[] = trim($l) . "=" . var_export(gzeof($g), true); }
+gzclose($g);
+
+file_put_contents("eof.txt", "one
+two
+three
+");
+$p = fopen("eof.txt", "rb");
+while (($l = fgets($p)) !== false) { $parts[] = trim($l) . "=" . var_export(feof($p), true); }
+fclose($p);
+echo implode("|", $parts);
+"#,
+    );
+    assert_eq!(
+        out,
+        "one=false|two=false|three=true|one=false|two=false|three=false"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Verifies a failed `gzopen` answers php's `false` rather than a resource.
 ///
 /// The WARNING php prints alongside is not asserted: this implementation warns in the words of the

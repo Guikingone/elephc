@@ -31,6 +31,10 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// The `php://` wrapper's StreamState id, whose `temp` sub-wrapper this module singles out.
 const WRAPPER_ID_PHP: u64 = 6;
 
+/// The two compress wrappers, which report end of file on the same rule `php://temp` does.
+const WRAPPER_ID_COMPRESS_ZLIB: u64 = 8;
+const WRAPPER_ID_COMPRESS_BZIP2: u64 = 9;
+
 /// Emits `__rt_stream_pending_put(handle, ptr, len)`, which retains a copy of `len` bytes.
 ///
 /// Replaces whatever was held: the only caller drained the buffer into its own accumulation first,
@@ -533,7 +537,7 @@ pub fn emit_stream_temp_eof_probe(emitter: &mut Emitter) {
             emitter.instruction("cbz x0, __rt_step_done");                      // no state: nothing to judge
             emitter.instruction(&format!("ldr x9, [x0, #{STREAM_WRAPPER_ID_OFFSET}]")); // which wrapper opened it
             emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_PHP}"));
-            emitter.instruction("b.ne __rt_step_done");                         // only the php:// wrapper has a temp
+            emitter.instruction("b.ne __rt_step_compress");                     // not php://: a compress wrapper reads the same way
             emitter.instruction(&format!("ldr x10, [x0, #{STREAM_URI_PTR_OFFSET}]")); // the recorded URI
             emitter.instruction(&format!("ldr x11, [x0, #{STREAM_URI_LEN_OFFSET}]")); // and its length
             emitter.instruction("cbz x10, __rt_step_done");                     // no URI: the sub-wrapper is unknown
@@ -542,6 +546,16 @@ pub fn emit_stream_temp_eof_probe(emitter: &mut Emitter) {
             emitter.instruction("ldrb w12, [x10, #6]");                         // the php:// sub-wrapper's initial
             emitter.instruction("cmp w12, #0x74");                              // 't' as in temp, and nothing else
             emitter.instruction("b.ne __rt_step_done");
+            emitter.instruction("b __rt_step_probe");
+            // A `compress.zlib://` or `compress.bzip2://` stream answers the same way — MEASURED,
+            // `fgets()` of the last of three lines leaves `feof()` TRUE through either, and false
+            // through a plain file. See the doc above for why one rule covers both.
+            emitter.label("__rt_step_compress");
+            emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_COMPRESS_ZLIB}"));
+            emitter.instruction("b.eq __rt_step_probe");
+            emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_COMPRESS_BZIP2}"));
+            emitter.instruction("b.ne __rt_step_done");
+            emitter.label("__rt_step_probe");
             emitter.instruction("ldr x0, [sp, #0]");
             emitter.instruction("bl __rt_stream_pending_held");                 // are there bytes still in hand?
             emitter.instruction("cbnz x0, __rt_step_done");                     // then the stream is plainly not finished
@@ -571,7 +585,7 @@ pub fn emit_stream_temp_eof_probe(emitter: &mut Emitter) {
                 "mov r9, QWORD PTR [rax + {STREAM_WRAPPER_ID_OFFSET}]"
             ));                                                                 // which wrapper opened it
             emitter.instruction(&format!("cmp r9, {WRAPPER_ID_PHP}"));
-            emitter.instruction("jne __rt_step_done_x");                        // only the php:// wrapper has a temp
+            emitter.instruction("jne __rt_step_compress_x");                    // not php://: a compress wrapper reads the same way
             emitter.instruction(&format!(
                 "mov r10, QWORD PTR [rax + {STREAM_URI_PTR_OFFSET}]"
             ));                                                                 // the recorded URI
@@ -582,9 +596,19 @@ pub fn emit_stream_temp_eof_probe(emitter: &mut Emitter) {
             emitter.instruction("jz __rt_step_done_x");                         // no URI: the sub-wrapper is unknown
             emitter.instruction("cmp r11, 7");                                  // "php://" plus the naming byte
             emitter.instruction("jl __rt_step_done_x");
-            emitter.instruction("movzx r9d, BYTE PTR [r10 + 6]");               // the php:// sub-wrapper's initial
-            emitter.instruction("cmp r9d, 0x74");                               // 't' as in temp, and nothing else
+            // r8, not r9: the wrapper id is still live for the compress arm below.
+            emitter.instruction("movzx r8d, BYTE PTR [r10 + 6]");               // the php:// sub-wrapper's initial
+            emitter.instruction("cmp r8d, 0x74");                               // 't' as in temp, and nothing else
             emitter.instruction("jne __rt_step_done_x");
+            emitter.instruction("jmp __rt_step_probe_x");
+            // See the AArch64 arm: a `compress.zlib://` or `compress.bzip2://` stream reports the
+            // end on the same rule, and MEASURED answers the same way through either.
+            emitter.label("__rt_step_compress_x");
+            emitter.instruction(&format!("cmp r9, {WRAPPER_ID_COMPRESS_ZLIB}"));
+            emitter.instruction("je __rt_step_probe_x");
+            emitter.instruction(&format!("cmp r9, {WRAPPER_ID_COMPRESS_BZIP2}"));
+            emitter.instruction("jne __rt_step_done_x");
+            emitter.label("__rt_step_probe_x");
             emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
             emitter.instruction("call __rt_stream_pending_held");               // are there bytes still in hand?
             emitter.instruction("test rax, rax");
