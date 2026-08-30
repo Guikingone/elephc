@@ -69,7 +69,7 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #0]");                                // the path outlives the probe
     emitter.instruction("bl __rt_user_wrapper_opendir");                        // fd, -1 (its own failure), or -2 (no scheme)
     emitter.instruction("cmn x0, #2");                                          // -2: no registered scheme owns this path
-    emitter.instruction("b.eq __rt_scandir_native");
+    emitter.instruction("b.eq __rt_scandir_try_glob");
     emitter.instruction("cmp x0, #0");
     emitter.instruction("b.lt __rt_scandir_wrapper_failed");                    // a scheme matched and refused
     emitter.instruction("str x0, [sp, #16]");                                   // the synthetic directory handle
@@ -88,6 +88,7 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.label("__rt_scandir_wrapper_done");
     emitter.instruction("ldr x0, [sp, #16]");
     emitter.instruction("bl __rt_user_wrapper_dir_closedir");
+    emitter.label("__rt_scandir_sort");                                         // the glob arm joins the listing here
     emitter.instruction("ldr x0, [sp, #24]");
     emitter.instruction("ldr x9, [sp, #48]");                                   // $sorting_order, held above
     emitter.instruction("cmp x9, #1");                                          // SCANDIR_SORT_DESCENDING
@@ -108,6 +109,48 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #64]");
     emitter.instruction("add sp, sp, #80");
     emitter.instruction("ret");
+
+    // -- the builtin `glob://` wrapper lists its own directory too --
+    //
+    // php's `scandir()` is an `opendir` + `readdir` loop, so this is that loop over the same
+    // iterator `opendir()`/`readdir()` walk, ending in the sort tail above.
+    emitter.label("__rt_scandir_try_glob");
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // the path the probe walked
+    emitter.instruction("bl __rt_path_is_glob_url");
+    emitter.instruction("cbz x0, __rt_scandir_native");                         // no scheme: the filesystem lists it
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // the probe consumed the pair
+    emitter.instruction("bl __rt_opendir_glob");                                // x0 = fd, x1 = iterator state, x2 = kind
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.lt __rt_scandir_wrapper_failed");                    // a failed glob answers php false
+    emitter.instruction("str x0, [sp, #32]");                                   // the synthetic descriptor it minted
+    emitter.instruction("str x1, [sp, #40]");                                   // the glob iterator state
+    emitter.instruction("mov x0, #128");                                        // initial capacity, as the native path asks for
+    emitter.instruction("mov x1, #16");                                         // element size = 16 bytes (ptr + len)
+    emitter.instruction("bl __rt_array_new");
+    emitter.instruction("str x0, [sp, #24]");
+    emitter.label("__rt_scandir_glob_loop");
+    emitter.instruction("ldr x0, [sp, #40]");
+    emitter.instruction("bl __rt_glob_dir_next");                               // x1/x2 = the name, x1 = 0 at the end
+    emitter.instruction("cbz x1, __rt_scandir_glob_done");
+    emitter.instruction("ldr x0, [sp, #24]");
+    emitter.instruction("bl __rt_array_push_str");                              // it persists the pair, so globfree may follow
+    emitter.instruction("str x0, [sp, #24]");                                   // growth may have moved the array
+    emitter.instruction("b __rt_scandir_glob_loop");
+    emitter.label("__rt_scandir_glob_done");
+    // The same three pieces the resource rollback releases: the libc-owned matches, the
+    // descriptor `dup(2)` minted, and the state allocation itself.
+    emitter.instruction("ldr x10, [sp, #40]");
+    emitter.instruction("cbz x10, __rt_scandir_sort");                          // no state: nothing to release
+    emitter.instruction("add x0, x10, #24");                                    // the embedded glob_t
+    emitter.bl_c("globfree");
+    emitter.instruction("ldr x0, [sp, #32]");
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.lt __rt_scandir_glob_free");                         // no descriptor to close
+    emitter.syscall(6);                                                         // close the synthetic glob descriptor
+    emitter.label("__rt_scandir_glob_free");
+    emitter.instruction("ldr x0, [sp, #40]");
+    emitter.instruction("bl __rt_heap_free");
+    emitter.instruction("b __rt_scandir_sort");
 
     emitter.label("__rt_scandir_native");
     emitter.instruction("ldp x1, x2, [sp, #0]");                                // the path the probe walked
@@ -271,7 +314,7 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while scandir() uses directory and result-array spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the C path, result array, and DIR* locals
-    emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the C path, result array, DIR* handle, loop scratch, the failure diagnostic, and the sorting order
+    emitter.instruction("sub rsp, 80");                                         // the same slots, plus the glob arm's descriptor and iterator state
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // hold $sorting_order across the listing
 
     // -- a registered wrapper lists its own directory; see the AArch64 counterpart --
@@ -279,7 +322,7 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");
     emitter.instruction("call __rt_user_wrapper_opendir");                      // fd, -1 (its own failure), or -2 (no scheme)
     emitter.instruction("cmp rax, -2");                                         // no registered scheme owns this path
-    emitter.instruction("je __rt_scandir_native_x86");
+    emitter.instruction("je __rt_scandir_try_glob_x86");
     emitter.instruction("cmp rax, 0");
     emitter.instruction("jl __rt_scandir_wrapper_failed_x86");                  // a scheme matched and refused
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // the synthetic directory handle
@@ -300,6 +343,7 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_scandir_wrapper_done_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");
     emitter.instruction("call __rt_user_wrapper_dir_closedir");
+    emitter.label("__rt_scandir_sort_x86");                                     // the glob arm joins the listing here
     emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // $sorting_order, held above
     emitter.instruction("cmp r9, 2");                                           // SCANDIR_SORT_NONE keeps readdir order
     emitter.instruction("je __rt_scandir_wrapper_ret_x86");
@@ -319,6 +363,48 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");
     emitter.instruction("pop rbp");
     emitter.instruction("ret");
+
+    // -- the builtin `glob://` wrapper lists its own directory too; see the AArch64 arm --
+    emitter.label("__rt_scandir_try_glob_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the path the probe walked
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");
+    emitter.instruction("call __rt_path_is_glob_url");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_scandir_native_x86");                          // no scheme: the filesystem lists it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the probe consumed the pair
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");
+    emitter.instruction("call __rt_opendir_glob");                              // rax = fd, rdx = iterator state, rcx = kind
+    emitter.instruction("cmp rax, 0");
+    emitter.instruction("jl __rt_scandir_wrapper_failed_x86");                  // a failed glob answers php false
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // the synthetic descriptor it minted
+    emitter.instruction("mov QWORD PTR [rbp - 72], rdx");                       // the glob iterator state
+    emitter.instruction("mov rdi, 128");                                        // initial capacity, as the native path asks for
+    emitter.instruction("mov rsi, 16");                                         // element size = 16 bytes (ptr + len)
+    emitter.instruction("call __rt_array_new");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");
+    emitter.label("__rt_scandir_glob_loop_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 72]");
+    emitter.instruction("call __rt_glob_dir_next");                             // rsi/rdx = the name, rsi = 0 at the end
+    emitter.instruction("test rsi, rsi");
+    emitter.instruction("jz __rt_scandir_glob_done_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");
+    emitter.instruction("call __rt_array_push_str");                            // it persists the pair, so globfree may follow
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // growth may have moved the array
+    emitter.instruction("jmp __rt_scandir_glob_loop_x86");
+    emitter.label("__rt_scandir_glob_done_x86");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 72]");
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_scandir_sort_x86");                            // no state: nothing to release
+    emitter.instruction("lea rdi, [r11 + 24]");                                 // the embedded glob_t
+    emitter.instruction("call globfree");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("js __rt_scandir_glob_free_x86");                       // no descriptor to close
+    emitter.instruction("call close");                                          // close the synthetic glob descriptor
+    emitter.label("__rt_scandir_glob_free_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // the free helper reads RAX on this target
+    emitter.instruction("call __rt_heap_free");
+    emitter.instruction("jmp __rt_scandir_sort_x86");
 
     emitter.label("__rt_scandir_native_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the path the probe walked

@@ -1044,6 +1044,65 @@ rmdir("gw");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// `scandir()` lists a `glob://` directory, because php's `scandir()` IS opendir + readdir.
+///
+/// MEASURED on `php -n` 8.5.6 with this program: `array(2) { "a.txt", "b.txt" }` for the default
+/// order and the reverse for `SCANDIR_SORT_DESCENDING`. elephc went straight to the filesystem
+/// and answered `Warning: scandir(glob://g/*.txt): Failed to open directory` then `false` —
+/// `opendir()` had had a `glob://` arm since it was written and `scandir()` never grew one.
+#[test]
+fn test_glob_stream_wrapper_lists_through_scandir() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("gs");
+file_put_contents("gs/b.txt", "1");
+file_put_contents("gs/a.txt", "2");
+file_put_contents("gs/c.log", "3");
+echo implode(",", scandir("glob://gs/*.txt")), "|";
+echo implode(",", scandir("glob://gs/*.txt", SCANDIR_SORT_DESCENDING)), "|";
+$none = scandir("glob://gs/*.txt", SCANDIR_SORT_NONE);
+sort($none);
+echo implode(",", $none);
+unlink("gs/a.txt");
+unlink("gs/b.txt");
+unlink("gs/c.log");
+rmdir("gs");
+"#,
+    );
+    assert_eq!(out, "a.txt,b.txt|b.txt,a.txt|a.txt,b.txt");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A `glob://` pattern that matches nothing OPENS; it is an empty directory, not a failure.
+///
+/// MEASURED on `php -n` 8.5.6: `opendir("glob://ge/*.nope")` answers a handle whose first
+/// `readdir()` is false, `scandir()` of it is `array(0)`, and both hold for a pattern naming a
+/// directory that does not exist either. elephc answered `false` to all of them — libc `glob()`
+/// reports `GLOB_NOMATCH` and the opener bailed on any non-zero return, while `__rt_glob` (the
+/// `glob()` builtin) had always read the same return as an empty list.
+#[test]
+fn test_glob_stream_wrapper_opens_a_pattern_that_matches_nothing() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("ge");
+file_put_contents("ge/a.txt", "1");
+$h = opendir("glob://ge/*.nope");
+echo ($h === false ? "false" : "open"), "|";
+echo (readdir($h) === false ? "end" : "x"), "|";
+closedir($h);
+echo count(scandir("glob://ge/*.nope")), "|";
+echo count(scandir("glob://nosuchdir/*.txt")), "|";
+$m = opendir("glob://nosuchdir/*.txt");
+echo ($m === false ? "false" : "open");
+closedir($m);
+unlink("ge/a.txt");
+rmdir("ge");
+"#,
+    );
+    assert_eq!(out, "open|end|0|0|open");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies compiled PHP output for tempnam.
 #[test]
 fn test_tempnam() {

@@ -134,6 +134,10 @@ rmdir("many-globs");
 }
 
 /// Verifies request cleanup releases an abandoned glob iterator and its synthetic descriptor.
+///
+/// `readdir()` over `glob://` answers the entry NAME, not the pattern's whole match — MEASURED on
+/// `php -n` 8.5.6, `opendir("glob://gd/*.txt")` reads back `a.txt` where `glob("gd/*.txt")`
+/// answers `gd/a.txt`. A directory handle answers names, whichever wrapper opened it.
 #[test]
 fn test_stream_backend_registry_abandoned_glob_closes_at_scope_exit() {
     let out = compile_and_run(
@@ -146,7 +150,7 @@ unlink("abandoned-glob/marker.txt");
 rmdir("abandoned-glob");
 "#,
     );
-    assert_eq!(out, "abandoned-glob/marker.txt\n");
+    assert_eq!(out, "marker.txt\n");
 }
 
 /// Verifies `pclose()` returns the child process exit status after draining its output.

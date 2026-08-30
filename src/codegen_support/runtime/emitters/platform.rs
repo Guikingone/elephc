@@ -75,6 +75,8 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_popen(emitter);
     io::emit_pclose(emitter);
     io::emit_opendir(emitter);
+    io::emit_glob_dir_next(emitter);
+    io::emit_path_is_glob_url(emitter);
     io::emit_readdir(emitter);
     io::emit_closedir(emitter);
     io::emit_rewinddir(emitter);

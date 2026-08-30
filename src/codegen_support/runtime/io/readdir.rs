@@ -59,32 +59,11 @@ pub fn emit_readdir(emitter: &mut Emitter) {
     emitter.instruction("b __rt_readdir_native_strlen");                        // continue scanning the native name
 
     emitter.label("__rt_readdir_glob");
-    emitter.instruction("cbz x10, __rt_readdir_end");                           // a detached glob owner is already exhausted
-    emitter.instruction("ldr x11, [x10, #8]");                                  // load the glob match count
-    emitter.instruction("ldr x12, [x10, #16]");                                 // load the current glob iteration index
-    emitter.instruction("cmp x12, x11");                                        // has iteration reached the match count?
-    emitter.instruction("b.hs __rt_readdir_end");                               // report end once every match was consumed
-    emitter.instruction("ldr x13, [x10, #0]");                                  // load the glob path-vector pointer
-    emitter.instruction("ldr x1, [x13, x12, lsl #3]");                          // select the current matched path
-    emitter.instruction("add x12, x12, #1");                                    // advance the glob iterator
-    emitter.instruction("str x12, [x10, #16]");                                 // persist the next glob index
-    emitter.instruction("mov x2, #0");                                          // begin measuring the matched path length
-    emitter.instruction("mov x3, #0");                                          // one past the last '/', where the NAME starts
-    emitter.label("__rt_readdir_glob_strlen");
-    emitter.instruction("ldrb w9, [x1, x2]");                                   // load the next matched-path byte
-    emitter.instruction("cbz w9, __rt_readdir_glob_basename");                  // stop at the path terminator
-    emitter.instruction("add x4, x2, #1");                                      // where a name would start after this byte
-    emitter.instruction("cmp w9, #0x2F");                                       // '/'
-    emitter.instruction("csel x3, x4, x3, eq");                                 // remember the last separator seen
-    emitter.instruction("add x2, x2, #1");                                      // count one more matched-path byte
-    emitter.instruction("b __rt_readdir_glob_strlen");                          // continue scanning the matched path
-
-    emitter.label("__rt_readdir_glob_basename");
-    // php's `glob://` reads the NAME, not the path the pattern matched — MEASURED,
-    // `opendir("glob://g1/*.txt")` reads `a.txt`. The directory the pattern named is the
-    // caller's already.
-    emitter.instruction("add x1, x1, x3");                                      // step past the directory
-    emitter.instruction("sub x2, x2, x3");                                      // and shorten the name to match
+    // One step of the iterator, shared with `__rt_scandir` — see `__rt_glob_dir_next` for why the
+    // entry is a NAME and not the path the pattern matched.
+    emitter.instruction("mov x0, x10");                                         // the owned glob iterator state
+    emitter.instruction("bl __rt_glob_dir_next");                               // x1/x2 = the name, x1 = 0 at the end
+    emitter.instruction("cbz x1, __rt_readdir_end");                            // every match was consumed
     emitter.instruction("b __rt_readdir_persist");
 
     emitter.label("__rt_readdir_user");
@@ -143,33 +122,11 @@ fn emit_readdir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_readdir_native_strlen_x86");                  // continue scanning the native name
 
     emitter.label("__rt_readdir_glob_x86");
-    emitter.instruction("test r10, r10");                                       // is the glob owner still attached?
-    emitter.instruction("jz __rt_readdir_end_x86");                             // detached glob state is already exhausted
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the glob match count
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // load the current glob iteration index
-    emitter.instruction("cmp rdx, r11");                                        // has iteration reached the match count?
-    emitter.instruction("jae __rt_readdir_end_x86");                            // report end once every match was consumed
-    emitter.instruction("mov r8, QWORD PTR [r10]");                             // load the glob path-vector pointer
-    emitter.instruction("mov rsi, QWORD PTR [r8 + rdx * 8]");                   // select the current matched path
-    emitter.instruction("add rdx, 1");                                          // advance the glob iterator
-    emitter.instruction("mov QWORD PTR [r10 + 16], rdx");                       // persist the next glob index
-    emitter.instruction("xor edx, edx");                                        // begin measuring the matched path length
-    emitter.instruction("xor ecx, ecx");                                        // one past the last '/', where the NAME starts
-    emitter.label("__rt_readdir_glob_strlen_x86");
-    emitter.instruction("movzx r9d, BYTE PTR [rsi + rdx]");                     // the next matched-path byte
-    emitter.instruction("test r9b, r9b");
-    emitter.instruction("jz __rt_readdir_glob_basename_x86");                   // stop at the path terminator
-    emitter.instruction("cmp r9b, 0x2F");                                       // '/'
-    emitter.instruction("jne __rt_readdir_glob_next_x86");
-    emitter.instruction("lea rcx, [rdx + 1]");                                  // remember the last separator seen
-    emitter.label("__rt_readdir_glob_next_x86");
-    emitter.instruction("add rdx, 1");                                          // count one more matched-path byte
-    emitter.instruction("jmp __rt_readdir_glob_strlen_x86");                    // continue scanning the matched path
-
-    emitter.label("__rt_readdir_glob_basename_x86");
-    // See the AArch64 arm: php reads the NAME, not the path the pattern matched.
-    emitter.instruction("add rsi, rcx");                                        // step past the directory
-    emitter.instruction("sub rdx, rcx");                                        // and shorten the name to match
+    // See the AArch64 arm: one step of the iterator, shared with `__rt_scandir`.
+    emitter.instruction("mov rdi, r10");                                        // the owned glob iterator state
+    emitter.instruction("call __rt_glob_dir_next");                             // rsi/rdx = the name, rsi = 0 at the end
+    emitter.instruction("test rsi, rsi");                                       // every match consumed?
+    emitter.instruction("jz __rt_readdir_end_x86");
     emitter.instruction("jmp __rt_readdir_persist_x86");
 
     emitter.label("__rt_readdir_user_x86");

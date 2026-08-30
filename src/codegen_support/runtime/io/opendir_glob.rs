@@ -68,8 +68,11 @@ pub fn emit_opendir_glob(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // errfunc = NULL
     emitter.instruction("ldr x3, [sp, #40]");                                   // struct pointer
     emitter.instruction("add x3, x3, #24");                                     // &struct.glob_t starts at offset 24
-    emitter.bl_c("glob");                                                       // x0 = retcode (0 success, non-zero failure)
-    emitter.instruction("cbnz x0, __rt_opendir_glob_fail");                     // glob failed → bail
+    emitter.bl_c("glob");                                                       // x0 = retcode; GLOB_NOMATCH is one of them
+    // php OPENS a pattern that matches nothing — MEASURED, `opendir("glob://g/*.nope")` answers a
+    // handle whose first `readdir()` is false, and `scandir()` of it is `array(0)`. Bailing here
+    // answered false for both. `__rt_glob` already reads a non-zero return as an empty list.
+    emitter.instruction("cbnz x0, __rt_opendir_glob_empty");                    // no matches: an EMPTY directory
 
     // -- populate the glob_state metadata fields --
     emitter.instruction("ldr x9, [sp, #40]");                                   // struct pointer
@@ -81,6 +84,7 @@ pub fn emit_opendir_glob(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x9, #16]");                                  // struct.index = 0
 
     // -- dup(2) to mint a fresh fd we can hand out as the PHP resource value --
+    emitter.label("__rt_opendir_glob_mint");
     emitter.instruction("mov x0, #2");                                          // duplicate stderr (always available)
     emitter.bl_c("dup");                                                        // x0 = new fd (-1 on failure)
     emitter.instruction("cmp x0, #0");                                          // did dup fail?
@@ -90,6 +94,17 @@ pub fn emit_opendir_glob(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the freshly-minted fd
+
+    // -- an empty listing, and a `glob_t` with nothing for `globfree` to release --
+    emitter.label("__rt_opendir_glob_empty");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // struct pointer
+    emitter.instruction("str xzr, [x9, #0]");                                   // struct.pathv = NULL
+    emitter.instruction("str xzr, [x9, #8]");                                   // struct.pathc = 0
+    emitter.instruction("str xzr, [x9, #16]");                                  // struct.index = 0
+    emitter.instruction("str xzr, [x9, #24]");                                  // gl_pathc, at glob_t offset 0
+    emitter.instruction("add x11, x9, #24");                                    // &struct.glob_t
+    emitter.instruction(&format!("str xzr, [x11, #{}]", pathv_off));            // gl_pathv: nothing to free
+    emitter.instruction("b __rt_opendir_glob_mint");                            // the descriptor is minted either way
 
     emitter.label("__rt_opendir_glob_fail");
     emitter.instruction("mov x0, #-1");                                         // -1 signals a failed glob:// open
@@ -132,9 +147,10 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // errfunc = NULL
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // struct pointer
     emitter.instruction("add rcx, 24");                                         // &struct.glob_t starts at offset 24
-    emitter.instruction("call glob");                                           // rax = retcode (0 success, non-zero failure)
-    emitter.instruction("test rax, rax");                                       // glob failed?
-    emitter.instruction("jnz __rt_opendir_glob_fail_x86");                      // bail on failure
+    emitter.instruction("call glob");                                           // rax = retcode; GLOB_NOMATCH is one of them
+    emitter.instruction("test rax, rax");                                       // did anything match?
+    // See the AArch64 arm: php OPENS a pattern that matches nothing.
+    emitter.instruction("jnz __rt_opendir_glob_empty_x86");                     // no matches: an EMPTY directory
 
     // -- populate the glob_state metadata fields --
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // struct pointer
@@ -145,6 +161,7 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r9 + 16], 0");                          // struct.index = 0
 
     // -- dup(2) to mint a fresh fd we can hand out as the PHP resource value --
+    emitter.label("__rt_opendir_glob_mint_x86");
     emitter.instruction("mov edi, 2");                                          // duplicate stderr (always available)
     emitter.instruction("call dup");                                            // rax = new fd (-1 on failure)
     emitter.instruction("test rax, rax");                                       // did dup fail?
@@ -154,6 +171,16 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the freshly-minted fd
+
+    // -- an empty listing, and a `glob_t` with nothing for `globfree` to release --
+    emitter.label("__rt_opendir_glob_empty_x86");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // struct pointer
+    emitter.instruction("mov QWORD PTR [r9 + 0], 0");                           // struct.pathv = NULL
+    emitter.instruction("mov QWORD PTR [r9 + 8], 0");                           // struct.pathc = 0
+    emitter.instruction("mov QWORD PTR [r9 + 16], 0");                          // struct.index = 0
+    emitter.instruction("mov QWORD PTR [r9 + 24], 0");                          // gl_pathc, at glob_t offset 0
+    emitter.instruction(&format!("mov QWORD PTR [r9 + 24 + {}], 0", pathv_off));// gl_pathv: nothing to free
+    emitter.instruction("jmp __rt_opendir_glob_mint_x86");                      // the descriptor is minted either way
 
     emitter.label("__rt_opendir_glob_fail_x86");
     emitter.instruction("mov rax, -1");                                         // -1 signals a failed glob:// open
