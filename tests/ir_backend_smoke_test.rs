@@ -6632,8 +6632,9 @@ echo ":";
 file_put_contents("both.txt", "");
 echo touch("both.txt", 1000000000, 900000000) ? "B" : "!";
 "#;
+    // The four failing chown/chgrp calls each raise php's warning, on STDOUT where php puts it.
     assert_eq!(
-        compile_and_run_ir_backend("file_modify_builtins", source),
+        program_output_only(&compile_and_run_ir_backend("file_modify_builtins", source)),
         "C:OG:ug:U:TEN:1000000000:B"
     );
 }

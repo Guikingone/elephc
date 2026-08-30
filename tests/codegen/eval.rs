@@ -9022,8 +9022,10 @@ try {
 Error:Object of class EvalBuiltinSprintfPlain could not be converted to string|\
 Error:Object of class Closure could not be converted to string|"
     );
+    // php puts these on STDOUT — measured, `2>/dev/null` keeps them and `2>&1 >/dev/null` is
+    // empty — and the harness splits php's diagnostics out of stdout into `diagnostics`.
     assert_eq!(
-        output.stderr,
+        output.diagnostics,
         "Warning: Array to string conversion\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to int\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to float\n\
@@ -9044,8 +9046,9 @@ echo sprintf("%d|%f", $box, $box);
     );
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "1|1.000000");
+    // See the sibling test: php writes these on stdout, and the harness splits them out.
     assert_eq!(
-        output.stderr,
+        output.diagnostics,
         "Warning: Object of class EvalSprintfNumericWarning could not be converted to int\n\
 Warning: Object of class EvalSprintfNumericWarning could not be converted to float\n"
     );
