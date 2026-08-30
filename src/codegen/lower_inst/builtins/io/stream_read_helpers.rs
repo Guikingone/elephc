@@ -316,19 +316,40 @@ pub(super) fn lower_stream_copy_seek(
             ctx.emitter.instruction("add x10, x9, x10");                        // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
             ctx.emitter.instruction("cmp x0, x10");                             // is the backend above the wrapper range?
             ctx.emitter.instruction(&format!("b.lo {}", wrap_seek));            // dispatch wrapper backends to stream_seek
+            let native_done = ctx.next_label("scs_native_seek_done");
             ctx.emitter.label(&native_success);
             ctx.emitter.syscall(199);
             if ctx.emitter.platform.needs_cmp_before_error_branch() {
                 ctx.emitter.instruction("cmp x0, #0");                          // Linux reports lseek failure as a negative result
             }
             ctx.emitter.instruction(
-                &ctx.emitter.platform.branch_on_syscall_success(skip_seek)
+                &ctx.emitter.platform.branch_on_syscall_success(&native_done)
             );                                                                  // continue only when lseek succeeded
             ctx.emitter.instruction(&format!("b {}", seek_failed));             // failed native seek returns PHP false
+            // The descriptor moved; the bytes the stream was still HOLDING did not. Draining them
+            // first copied from the old position — MEASURED, a source read to 4 then copied from
+            // offset 8 answered the six held bytes plus the two real ones. `fseek()` reconciles
+            // the same two pieces of state after its own successful lseek, for the same reason.
+            ctx.emitter.label(&native_done);
+            ctx.emitter.instruction("str x0, [sp, #40]");                       // the absolute offset lseek landed on
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the opaque source handle
+            ctx.emitter.instruction("ldr x1, [sp, #40]");                       // the position the program restarts from
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filtered_pos_set");
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the opaque source handle
+            ctx.emitter.instruction("mov x1, #0");                              // a seek restarts reading: clear end-of-file
+            abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the opaque source handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_pending_clear");     // drop what the last read held
+            ctx.emitter.instruction(&format!("b {}", skip_seek));               // skip the wrapper arm
             ctx.emitter.label(wrap_seek);
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
             ctx.emitter.instruction("cmp x0, #0");                              // wrapper fseek returns zero on success
             ctx.emitter.instruction(&format!("b.ne {}", seek_failed));          // failed wrapper seek returns PHP false
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the opaque source handle
+            ctx.emitter.instruction("mov x1, #0");                              // the wrapper seek restarts reading too
+            abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the opaque source handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_pending_clear");     // drop what the last read held
             ctx.emitter.label(skip_seek);
         }
         Arch::X86_64 => {
@@ -351,11 +372,26 @@ pub(super) fn lower_stream_copy_seek(
             ctx.emitter.instruction("call lseek");                              // seek the native stream descriptor
             ctx.emitter.instruction("cmp rax, 0");                              // test whether lseek returned a non-negative offset
             ctx.emitter.instruction(&format!("jl {}", seek_failed));            // failed native seek returns PHP false
+            // See the AArch64 arm: the descriptor moved, the held read-ahead did not.
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 40], rax");           // the absolute offset lseek landed on
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the opaque source handle
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 40]");           // the position the program restarts from
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filtered_pos_set");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the opaque source handle
+            ctx.emitter.instruction("xor esi, esi");                            // a seek restarts reading: clear end-of-file
+            abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the opaque source handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_pending_clear");     // drop what the last read held
             ctx.emitter.instruction(&format!("jmp {}", skip_seek));             // continue after a successful native seek
             ctx.emitter.label(wrap_seek);
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
             ctx.emitter.instruction("cmp rax, 0");                              // wrapper fseek returns zero on success
             ctx.emitter.instruction(&format!("jne {}", seek_failed));           // failed wrapper seek returns PHP false
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the opaque source handle
+            ctx.emitter.instruction("xor esi, esi");                            // the wrapper seek restarts reading too
+            abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the opaque source handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_pending_clear");     // drop what the last read held
             ctx.emitter.label(skip_seek);
         }
     }
