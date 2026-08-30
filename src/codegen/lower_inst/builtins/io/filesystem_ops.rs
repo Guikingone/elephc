@@ -31,7 +31,21 @@ pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         .as_deref()
         .map(|path| path.starts_with("phar://"))
         .unwrap_or(true);
-    if can_be_phar {
+    // Publishing takes the ADDRESS of an extern only the `elephc-phar` staticlib defines, so it
+    // may only happen where that staticlib is coming. A LITERAL `phar://` path is its own answer
+    // — the same thing that makes `file_put_contents("phar://…")` publish its write bridge — and
+    // a path that only exists at run time is not: `unlink($name)` in an ordinary program asks for
+    // no bridge at all, and publishing there left CI unable to LINK any mysqli program
+    // (`Undefined symbols: _elephc_phar_delete_url`). For a dynamic path the program's own phar
+    // requirement decides instead.
+    //
+    // The DISPATCH shape below still keys off `can_be_phar`: it reads a `.quad 0` slot it already
+    // null-checks, so an unpublished bridge answers false rather than misbehaving.
+    let publishes_phar_bridge = match path_literal.as_deref() {
+        Some(literal) => literal.starts_with("phar://"),
+        None => ctx.module.required_runtime_features.phar_archive,
+    };
+    if publishes_phar_bridge {
         publish_phar_delete_function_pointer(ctx);
     }
     emit_publish_missing_hook_message(
