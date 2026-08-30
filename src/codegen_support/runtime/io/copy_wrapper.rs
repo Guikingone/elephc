@@ -232,8 +232,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_cpw_loop_x86");
 
     emitter.label("__rt_cpw_release_eof_x86");
-    emitter.instruction("mov rdi, rax");                                        // the final uncopied chunk
-    emitter.instruction("call __rt_decref_any");
+    emitter.instruction("call __rt_decref_any");                                // the final uncopied chunk, already in rax
 
     emitter.label("__rt_cpw_done_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");

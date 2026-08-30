@@ -159,6 +159,11 @@ fn emit_absorb_x86_64(emitter: &mut Emitter) {
     ));                                                                         // the retained `$params` box
     emitter.instruction("test rdi, rdi");
     emitter.instruction("jz __rt_fap_done_x86");                                // the argument was not supplied at all
+    // `__rt_mixed_unbox` reads its box from RAX on this target, not rdi. Passing it in rdi
+    // unboxed whatever rax happened to hold — the node pointer its own caller left there — so the
+    // tag was never 4 or 5 and the four `convert.*` filters refused an ARRAY they must accept.
+    // MEASURED in CI: `linux-x86_64` answered `arr=false` where php and aarch64 answer `arr=true`.
+    emitter.instruction("mov rax, rdi");                                        // the box the helper reads
     emitter.instruction("call __rt_mixed_unbox");                               // rax = tag, rdi = payload
     emitter.instruction("cmp rax, 5");                                          // runtime tag 5 identifies a hash
     emitter.instruction("je __rt_fap_array_x86");

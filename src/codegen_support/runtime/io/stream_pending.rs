@@ -233,8 +233,8 @@ fn emit_append_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spa_kept_ok_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // how many survive the append
 
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");
-    emitter.instruction("add rdi, r10");                                        // the whole area, after
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // __rt_heap_alloc reads its size in rax
+    emitter.instruction("add rax, r10");                                        // the whole area, after
     emitter.instruction("call __rt_heap_alloc");
     emitter.instruction("test rax, rax");
     emitter.instruction("jz __rt_spa_done_x86");                                // out of memory: keep what there is
@@ -789,7 +789,7 @@ fn emit_put_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r9");                                         // __rt_heap_free takes its pointer in rax
     emitter.instruction("call __rt_heap_free");                                 // the caller already drained it
     emitter.label("__rt_spp_alloc_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // the byte count
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the byte count, in the register it reads
     emitter.instruction("call __rt_heap_alloc");
     emitter.instruction("test rax, rax");
     emitter.instruction("jz __rt_spp_done_x86");                                // out of memory: retain nothing
