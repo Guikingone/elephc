@@ -90,7 +90,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         if is_user_function {
             prepare_by_ref_null_out_locals(ctx, sig.as_ref(), args);
         }
-        lower_args_with_signature(ctx, sig.as_ref(), args)
+        lower_args_with_signature_for(ctx, sig.as_ref(), args, Some(canonical))
     } else {
         promote_key_preserving_sort_receiver(ctx, canonical, args);
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)

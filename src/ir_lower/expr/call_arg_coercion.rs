@@ -21,6 +21,20 @@ pub(super) fn lower_arg_with_signature(
     index: usize,
     arg: &Expr,
 ) -> crate::ir::ValueId {
+    lower_arg_with_signature_for(ctx, sig, index, arg, None)
+}
+
+/// [`lower_arg_with_signature`] knowing the callee php would NAME in a TypeError.
+///
+/// Only the user-call sites can supply it, and only they need it: a builtin's own argument
+/// refusals are composed elsewhere.
+pub(super) fn lower_arg_with_signature_for(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+    callee: Option<&str>,
+) -> crate::ir::ValueId {
     if let Some(value) = lower_by_ref_array_element_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
@@ -28,7 +42,7 @@ pub(super) fn lower_arg_with_signature(
         return value;
     }
     let lowered = lower_expr(ctx, arg);
-    coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+    coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg, callee).value
 }
 
 /// Creates the variables a call's BY-REFERENCE parameters are about to bind.
@@ -197,6 +211,7 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     index: usize,
     value: LoweredValue,
     arg: &Expr,
+    callee: Option<&str>,
 ) -> LoweredValue {
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
@@ -214,12 +229,102 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return coerce_to_string(ctx, value, arg);
     }
+    if bindable
+        && matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        return coerce_mixed_to_array_param(ctx, sig, index, value, arg, callee);
+    }
     if bindable {
         if let Some(cast) = crate::types::param_binding::scalar_param_cast(&param_ty, &source_ty) {
             return apply_scalar_param_cast(ctx, cast, value, Some(arg.span));
         }
     }
     value
+}
+
+/// Unboxes a `Mixed` argument into a declared `array` parameter, throwing php's TypeError if it
+/// holds anything else.
+///
+/// TWO TYPE MAPS disagreed here, in silence. A foreach over a nested literal gives the loop
+/// variable the INNER array's inferred type while its STORAGE stays a boxed Mixed, so the checker
+/// was happy and the call handed the callee the BOX where it expected the array. MEASURED on
+/// `php -n` 8.5.6:
+///
+/// ```text
+/// function takesArray(array $f): string { return implode("|", $f); }
+/// foreach ([["plain", "two"]] as $r) { echo takesArray($r); }
+/// php:    plain|two
+/// elephc: |||
+/// ```
+///
+/// The callee read the box's own header as an array of FOUR empty strings, one of them
+/// `string(33794)`. The same value reaching `SplFileObject::fputcsv()` SEGFAULTED `__rt_fputcsv`
+/// on a null element pointer, while the plain `fputcsv($h, $r, …)` builtin took it correctly —
+/// which is what proved the value was fine and the BINDING was not.
+///
+/// `__rt_expect_array_arg` is the same helper the `array|false` builtin arguments use: it unboxes
+/// tag 4 (indexed) and tag 5 (assoc) and throws with the caller's message otherwise. The result is
+/// BORROWED — the unboxed pointer is the box's own storage, so an owned release would free the
+/// array under the box.
+fn coerce_mixed_to_array_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: LoweredValue,
+    arg: &Expr,
+    callee: Option<&str>,
+) -> LoweredValue {
+    let Some(callee) = callee else {
+        return value;
+    };
+    let Some((param, param_ty)) = sig.params.get(index) else {
+        return value;
+    };
+    let param_ty = param_ty.clone();
+    // php's own wording, MEASURED: `takesArray(): Argument #1 ($fields) must be of type array,
+    // string given, called in FILE on line N`. The location tail is the throw site's, which
+    // `__rt_expect_array_arg` appends from the instruction's own span.
+    let message = format!(
+        "{}(): Argument #{} (${}) must be of type array, given value is not an array",
+        callee,
+        index + 1,
+        param
+    );
+    let data = ctx.intern_string(&message);
+    let message = ctx
+        .builder
+        .emit_with_effects(
+            Op::ConstStr,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            IrType::Str,
+            PhpType::Str,
+            Ownership::Persistent,
+            Op::ConstStr.default_effects(),
+            Some(arg.span),
+        )
+        .expect("const_str produces a value");
+    let member_ir = crate::ir_lower::context::return_ir_type(&param_ty);
+    let unboxed = ctx
+        .builder
+        .emit_with_effects(
+            Op::RuntimeCall,
+            vec![value.value, message],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::builtins::array_or_false::EXPECT_ARRAY_ARG,
+            ))),
+            member_ir,
+            param_ty,
+            Ownership::Borrowed,
+            Op::RuntimeCall.default_effects(),
+            Some(arg.span),
+        )
+        .expect("expect_array_arg produces a value");
+    LoweredValue {
+        value: unboxed,
+        ir_type: member_ir,
+    }
 }
 
 /// Applies a declared-parameter scalar binding to an already-lowered argument value.
@@ -454,6 +559,19 @@ pub(super) fn lower_args_with_signature(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
+    lower_args_with_signature_for(ctx, sig, args, None)
+}
+
+/// [`lower_args_with_signature`] knowing the callee php would NAME in an argument TypeError.
+///
+/// Only the three USER-call sites — a function, an instance method, a static method — pass one.
+/// A builtin composes its own refusals, so it keeps the unnamed spelling.
+pub(super) fn lower_args_with_signature_for(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    callee: Option<&str>,
+) -> Vec<crate::ir::ValueId> {
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
@@ -489,14 +607,14 @@ pub(super) fn lower_args_with_signature(
         let operands = args
             .iter()
             .enumerate()
-            .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
+            .map(|(index, arg)| lower_arg_with_signature_for(ctx, sig, index, arg, callee))
             .collect();
         return coerce_operands_to_params(ctx, sig, operands);
     }
     let mut operands: Vec<crate::ir::ValueId> = args[..fixed_arg_count]
         .iter()
         .enumerate()
-        .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
+        .map(|(index, arg)| lower_arg_with_signature_for(ctx, sig, index, arg, callee))
         .collect();
     for idx in fixed_arg_count..regular_param_count {
         let Some(Some(default)) = sig.defaults.get(idx) else {
