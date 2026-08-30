@@ -1,15 +1,15 @@
 ---
-title: "__elephc_phar_gzip_archive() — internals"
-description: "Compiler internals for __elephc_phar_gzip_archive(): lowering path, type checks, and runtime helpers."
+title: "__elephc_deprecated() — internals"
+description: "Compiler internals for __elephc_deprecated(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 576
+  order: 551
 ---
 
-## `__elephc_phar_gzip_archive()` — internals
+## `__elephc_deprecated()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/io/__elephc_phar_gzip_archive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_gzip_archive.rs)
+- **Signature**: [`src/builtins/system/__elephc_deprecated.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_deprecated.rs)
 - **Lowering**: [`src/builtins/semantics.rs`:560](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L560) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
@@ -17,7 +17,7 @@ sidebar:
 ### Lowering notes
 
 - Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.__elephc_phar_gzip_archive` through `BuiltinLoweringContext`.
+- Emits the typed EIR target `runtime.__elephc_deprecated` through `BuiltinLoweringContext`.
 - The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
@@ -27,19 +27,19 @@ sidebar:
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
-- **Requirements**: `static (1 requirements)`
+- **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.__elephc_phar_gzip_archive`
+- **Typed EIR target**: `runtime.__elephc_deprecated`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 
 ```php
-function __elephc_phar_gzip_archive(string $src): string
+function __elephc_deprecated(string $message): void
 ```
 
 ## What the type checker enforces

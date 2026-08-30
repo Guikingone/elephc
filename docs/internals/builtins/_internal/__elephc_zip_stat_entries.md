@@ -2,7 +2,7 @@
 title: "__elephc_zip_stat_entries() — internals"
 description: "Compiler internals for __elephc_zip_stat_entries(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 588
+  order: 589
 ---
 
 ## `__elephc_zip_stat_entries()` — internals

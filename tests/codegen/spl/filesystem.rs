@@ -987,3 +987,131 @@ unlink("cur.txt");
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// php 8.4's `$escape` deprecation on `SplFileObject`'s three CSV methods.
+///
+/// MEASURED on `php -n` 8.5.6, and the two WORDINGS are not derived from each other:
+/// `setCsvControl()` reads "must be provided as its default value will change" and stops there,
+/// while `fgetcsv()` / `fputcsv()` read "must be provided, as its default value will change,
+/// either explicitly or via SplFileObject::setCsvControl()" — two commas and a tail. Getting one
+/// from the other by hand produces a message php never prints.
+///
+/// The rule is per OBJECT and it is STATE, not arity: a call that omits `$escape` is silent once
+/// `setCsvControl()` has been given one, and stays silent after a LATER two-argument
+/// `setCsvControl()` deprecates itself. php names the DECLARING class, so an `SplTempFileObject`
+/// still reports `SplFileObject::fgetcsv()`.
+///
+/// The notice cannot come from the CSV builtins these bodies call: their emitter keys on the
+/// BUILTIN's own name and argument count, and the bodies always forward an `$escape`. It is
+/// raised by `__elephc_deprecated`, which exists for this.
+#[test]
+fn test_spl_file_object_deprecates_an_omitted_csv_escape() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("dep.csv", "a,b\n");
+$a = new SplFileObject("dep.csv", "r");
+$a->fgetcsv();
+$b = new SplFileObject("dep.csv", "r");
+$b->fgetcsv(",", "\"", "\\");
+$c = new SplFileObject("dep.csv", "r");
+$c->setCsvControl(";");
+$d = new SplFileObject("dep.csv", "r");
+$d->setCsvControl(",", "\"", "\\");
+$d->fgetcsv();
+$e = new SplFileObject("dep_out.csv", "w");
+$e->fputcsv(["a"]);
+$f = new SplFileObject("dep_out.csv", "w");
+$f->fputcsv(["a"], ",", "\"", "\\");
+$t = new SplTempFileObject();
+$t->fwrite("a,b\n");
+$t->rewind();
+$t->fgetcsv();
+echo "done";
+unlink("dep.csv");
+unlink("dep_out.csv");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert_eq!(
+        out.diagnostics
+            .matches("the $escape parameter must be provided")
+            .count(),
+        4,
+        "four calls omit it and four pass or are covered by state, got diagnostics={}",
+        out.diagnostics
+    );
+    let read_write = "the $escape parameter must be provided, as its default value will change, \
+                      either explicitly or via SplFileObject::setCsvControl()";
+    for name in ["fgetcsv", "fputcsv"] {
+        assert!(
+            out.diagnostics
+                .contains(&format!("Deprecated: SplFileObject::{name}(): {read_write}")),
+            "missing the {name} notice, got diagnostics={}",
+            out.diagnostics
+        );
+    }
+    assert_eq!(
+        out.diagnostics.matches(read_write).count(),
+        3,
+        "fgetcsv twice — the plain object and the temp one — and fputcsv once: {}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics.contains(
+            "Deprecated: SplFileObject::setCsvControl(): the $escape parameter must be provided \
+             as its default value will change"
+        ),
+        "setCsvControl's wording has no comma after `provided` and no tail: {}",
+        out.diagnostics
+    );
+}
+
+/// The SPL `$escape` deprecation is VERSION-GATED, exactly as the builtins' is.
+///
+/// php 8.4 introduced it and 8.3 prints nothing, so a `--php-version=8.3` build that raised it
+/// would be noisier than the interpreter it imitates. The gate is in the BODY BUILDER rather than
+/// in emitted PHP — the profile is fixed before the parse — so below 8.4 the branch is not there
+/// at all, which is what the zero count pins.
+#[test]
+fn test_spl_csv_escape_deprecation_is_gated_by_php_version() {
+    let source = r#"<?php
+file_put_contents("gate.csv", "a,b\n");
+$f = new SplFileObject("gate.csv", "r");
+$f->fgetcsv();
+$f->setCsvControl(";");
+echo "done";
+unlink("gate.csv");
+"#;
+    let modern =
+        compile_and_run_capture_with_php_version(source, elephc::php_version::PhpVersion::Php84);
+    assert!(modern.success, "8.4 run failed: {}", modern.stderr);
+    assert_eq!(modern.stdout, "done");
+    assert_eq!(
+        modern
+            .diagnostics
+            .matches("the $escape parameter must be provided")
+            .count(),
+        2,
+        "8.4 must raise both notices, got diagnostics={}",
+        modern.diagnostics
+    );
+
+    for version in [
+        elephc::php_version::PhpVersion::Php82,
+        elephc::php_version::PhpVersion::Php83,
+    ] {
+        let older = compile_and_run_capture_with_php_version(source, version);
+        assert!(older.success, "{version:?} run failed: {}", older.stderr);
+        assert_eq!(older.stdout, "done");
+        assert_eq!(
+            older
+                .diagnostics
+                .matches("the $escape parameter must be provided")
+                .count(),
+            0,
+            "{version:?} must print nothing, got diagnostics={}",
+            older.diagnostics
+        );
+    }
+}

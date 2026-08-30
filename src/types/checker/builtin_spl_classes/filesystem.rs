@@ -251,6 +251,13 @@ fn spl_file_object_properties() -> Vec<ClassProperty> {
         protected_storage_property("delimiter", TypeExpr::Str),
         protected_storage_property("enclosure", TypeExpr::Str),
         protected_storage_property("escape", TypeExpr::Str),
+        // Whether `setCsvControl()` has ever been given an `$escape`. php 8.4 deprecates a CSV
+        // call that omits it, and this is the state that silences the notice: MEASURED on
+        // `php -n` 8.5.6, `$f->setCsvControl(",", '"', "\\"); $f->fgetcsv();` is silent, and a
+        // LATER `setCsvControl(";")` deprecates ITSELF without turning the flag back off — so it
+        // is sticky-on, per object, and never inherited by a second SplFileObject on the same
+        // file.
+        protected_storage_property("escapeProvided", TypeExpr::Bool),
         protected_storage_property("maxLineLen", TypeExpr::Int),
         // What a `seek()` past the last line left behind. php's `seek()` walks the stream line by
         // line, so a seek to or beyond the end consumes the read-ahead and the object reports
@@ -584,7 +591,12 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             vec![
                 param_default("separator", TypeExpr::Str, string_expr(",")),
                 param_default("enclosure", TypeExpr::Str, string_expr("\"")),
-                param_default("escape", TypeExpr::Str, string_expr("\\")),
+                // `?string = null` rather than php's `string = "\\"`: the 8.4 deprecation fires on
+                // an OMITTED `$escape`, and elephc refuses `func_num_args()` in a method whose
+                // parameters have defaults — "elephc cannot tell a passed argument from a
+                // defaulted one" — so the sentinel is what tells them apart. Same device the
+                // `fgetcsv` / `fputcsv` controls below already use, for the same reason.
+                param_default("escape", nullable_string_type(), null_expr()),
             ],
             Some(TypeExpr::Void),
             spl_file_object_set_csv_control_body(),
@@ -1048,6 +1060,7 @@ fn spl_file_object_construct_body_with_backing(path: Expr, backing_path: Expr, m
         property_assign_stmt(this_expr(), "delimiter", string_expr(",")),
         property_assign_stmt(this_expr(), "enclosure", string_expr("\"")),
         property_assign_stmt(this_expr(), "escape", string_expr("\\")),
+        property_assign_stmt(this_expr(), "escapeProvided", bool_expr(false)),
         property_assign_stmt(this_expr(), "maxLineLen", int_expr(0)),
         property_assign_stmt(this_expr(), "csvRecords", empty_array_expr()),
     ];
@@ -2054,12 +2067,88 @@ fn spl_file_object_fseek_body() -> Vec<Stmt> {
     ))
 }
 
+/// Builds php 8.4's `$escape` deprecation for one SPL CSV method.
+///
+/// The two wordings are php's own, MEASURED byte for byte on `php -n` 8.5.6 rather than guessed
+/// from each other: `setCsvControl()` has NO comma after "provided" and stops at "change", while
+/// `fgetcsv()` / `fputcsv()` put commas around "as its default value will change" and add the
+/// "either explicitly or via SplFileObject::setCsvControl()" tail. php names the DECLARING class,
+/// so an `SplTempFileObject` still reports `SplFileObject::fgetcsv()` — which is what this
+/// spelling gives, since both classes share these bodies.
+///
+/// `__rt_diag_warning` supplies the blank line before, php's ` in <file> on line <n>` after, and
+/// the `@` suppression, so the argument is the complete line and nothing else.
+///
+/// VERSION-GATED, like the notice the CSV builtins raise: php 8.4 introduced it and 8.2 / 8.3
+/// print nothing, so a `--php-version=8.3` build that emitted it would be noisier than the
+/// interpreter it imitates. The gate is here rather than in the emitted PHP because the profile
+/// is already fixed when these bodies are built — `pipeline::compile` records it before the
+/// parse — so the statement simply is not there at all below 8.4.
+fn spl_csv_escape_deprecation_stmts(method: &str, via_set_csv_control: bool) -> Vec<Stmt> {
+    if crate::codegen::compile_php_version() < crate::php_version::PhpVersion::Php84 {
+        return Vec::new();
+    }
+    let message = if via_set_csv_control {
+        format!(
+            "Deprecated: SplFileObject::{method}(): the $escape parameter must be provided, as \
+             its default value will change, either explicitly or via \
+             SplFileObject::setCsvControl()\n"
+        )
+    } else {
+        format!(
+            "Deprecated: SplFileObject::{method}(): the $escape parameter must be provided as \
+             its default value will change\n"
+        )
+    };
+    vec![expr_stmt(function_call(
+        "__elephc_deprecated",
+        vec![string_expr(&message)],
+    ))]
+}
+
+/// Guards one CSV read or write with php 8.4's `$escape` deprecation.
+///
+/// Empty below 8.4, so the branch itself is absent rather than merely never taken.
+fn spl_csv_escape_deprecation_guard(method: &str) -> Vec<Stmt> {
+    let notice = spl_csv_escape_deprecation_stmts(method, true);
+    if notice.is_empty() {
+        return Vec::new();
+    }
+    vec![if_stmt(spl_csv_escape_omitted_expr(), notice, None)]
+}
+
+/// Returns `$escape === null && !$this->escapeProvided` — when a CSV read or write deprecates.
+///
+/// Both halves are needed. MEASURED on `php -n` 8.5.6: `$f->fgetcsv()` on a fresh object
+/// deprecates, and the same call after `$f->setCsvControl(",", '"', "\\")` is silent.
+fn spl_csv_escape_omitted_expr() -> Expr {
+    binary_expr(
+        binary_expr(var_expr("escape"), BinOp::StrictEq, null_expr()),
+        BinOp::And,
+        not_expr(property_access(this_expr(), "escapeProvided")),
+    )
+}
+
 /// Builds SplFileObject setCsvControl().
+///
+/// An omitted `$escape` RESETS the stored one rather than keeping it: MEASURED, `setCsvControl(",",
+/// '"', "#")` then `setCsvControl(";")` answers `getCsvControl() === [";", "\"", "\\"]`, so the
+/// `"#"` is gone. The `escapeProvided` flag does NOT come back off with it — the `fgetcsv()` after
+/// that pair is silent — which is why the flag is only ever set, never cleared.
 fn spl_file_object_set_csv_control_body() -> Vec<Stmt> {
+    let mut omitted = vec![property_assign_stmt(this_expr(), "escape", string_expr("\\"))];
+    omitted.extend(spl_csv_escape_deprecation_stmts("setCsvControl", false));
     vec![
         property_assign_stmt(this_expr(), "delimiter", var_expr("separator")),
         property_assign_stmt(this_expr(), "enclosure", var_expr("enclosure")),
-        property_assign_stmt(this_expr(), "escape", var_expr("escape")),
+        if_stmt(
+            binary_expr(var_expr("escape"), BinOp::StrictEq, null_expr()),
+            omitted,
+            Some(vec![
+                property_assign_stmt(this_expr(), "escape", var_expr("escape")),
+                property_assign_stmt(this_expr(), "escapeProvided", bool_expr(true)),
+            ]),
+        ),
         spl_file_object_csv_refresh_stmt(),
     ]
 }
@@ -2087,7 +2176,8 @@ fn csv_control_or_state_expr(name: &str, property: &str) -> Expr {
 
 /// Builds SplFileObject fgetcsv().
 fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
-    vec![
+    let mut body = spl_csv_escape_deprecation_guard("fgetcsv");
+    body.extend(vec![
         assign_stmt(
             "row",
             function_call(
@@ -2143,7 +2233,8 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
             binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
         ),
         return_stmt(var_expr("row")),
-    ]
+    ]);
+    body
 }
 
 /// Builds SplFileObject fputcsv().
@@ -2153,7 +2244,8 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
 /// which answers 3 — still wrote a newline and answered 4, and a custom terminator was
 /// silently discarded.
 fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
-    let mut body = vec![
+    let mut body = spl_csv_escape_deprecation_guard("fputcsv");
+    body.extend(vec![
         assign_stmt(
             "bytes",
             function_call(
@@ -2168,7 +2260,7 @@ fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
                 ],
             ),
         ),
-    ];
+    ]);
     body.extend(file_object_load_lines_body(file_backing_path_arg_expr()));
     body.push(return_stmt(var_expr("bytes")));
     body

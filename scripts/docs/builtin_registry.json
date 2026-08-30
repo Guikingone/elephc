@@ -203,6 +203,125 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_deprecated",
+    "description": "Raises one php `Deprecated:` diagnostic from an injected prelude body.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 560,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_deprecated` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_deprecated.rs",
+      "sig_line": null
+    },
+    "name": "__elephc_deprecated",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_deprecated"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_deprecated"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "slug": "__elephc_deprecated",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "hour",
           "optional": false,
           "type": "int"
