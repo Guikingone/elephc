@@ -1166,10 +1166,12 @@ fn emit_stream_get_contents_wrapper_stat(ctx: &mut FunctionContext<'_>) {
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rax");                             // the handle outlives the stat
+            ctx.emitter.instruction("mov rdi, rax");                            // this helper takes its handle in RDI
             abi::emit_call_label(ctx.emitter, "__rt_stream_fd");                // the descriptor behind the handle
             ctx.emitter.instruction("mov r9, 0x40000000");                      // USER_WRAPPER_FD_BASE
             ctx.emitter.instruction("cmp rax, r9");
             ctx.emitter.instruction(&format!("jl {}", done));                   // a plain file has no wrapper to ask
+            ctx.emitter.instruction("mov rdi, rax");                            // and so does this one: the DESCRIPTOR in RDI
             abi::emit_symbol_address(ctx.emitter, "rsi", "_uwmh_head_sgc");     // php names the CALLER, not fstat()
             ctx.emitter.instruction(&format!("mov edx, {head_len}"));
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fstat");       // stream_stat($this)

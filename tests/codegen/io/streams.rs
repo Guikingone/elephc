@@ -20589,8 +20589,12 @@ unlink("m.txt");
 /// `copy(src)`.
 ///
 /// A USERSPACE destination is what routes the source through `fopen` rather than through
-/// `__rt_copy`, and an unreadable source is what makes that open fail. MEASURED on `php -n` 8.5.6:
-/// `Warning: copy(cpn.txt): Failed to open stream: Permission denied`, then `bool(false)`.
+/// `__rt_copy`, and a MISSING source is what makes that open fail.
+///
+/// Missing rather than unreadable: the first cut chmod'd the source to `0000`, which fails for an
+/// ordinary user and SUCCEEDS for root — CI's Linux containers run as root, so the copy went
+/// through and the test read `bool(true)` there while passing on macOS. A path that does not exist
+/// is refused for everyone.
 #[test]
 fn test_a_failed_copy_names_copy_not_the_helper_it_opens_through() {
     let out = compile_and_run_capture(
@@ -20605,18 +20609,14 @@ class Sink {
     public function url_stat($path, $flags) { return false; }
 }
 stream_wrapper_register("sink", Sink::class);
-file_put_contents("cpn.txt", "abc");
-chmod("cpn.txt", 0000);
 var_dump(copy("cpn.txt", "sink://dest"));
-chmod("cpn.txt", 0644);
-unlink("cpn.txt");
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\n");
     assert_eq!(
         out.diagnostics,
-        "Warning: copy(cpn.txt): Failed to open stream: Permission denied\n",
+        "Warning: copy(cpn.txt): Failed to open stream: No such file or directory\n",
         "php names the builtin the USER called, not the one it reads through"
     );
 }

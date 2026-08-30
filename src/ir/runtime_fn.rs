@@ -1558,6 +1558,12 @@ impl RuntimeFnId {
                 // its release, leaking one block per call — measured unbounded, 10 calls left
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
+                // `sys_get_temp_dir()` is `getcwd()`'s sibling and leaked the same way, one
+                // 80-byte block per call: `--heap-debug` over a five-iteration loop reported
+                // `live_blocks=5 live_bytes=400` where the same loop around `getcwd()` reported
+                // `clean`. It was the one the list above was missing, which is the shape
+                // `array_flip` had too.
+                | RuntimeFnId::SysGetTempDir
                 // `getenv()` boxes `false` or an owned copy made by `__rt_str_persist` in a
                 // fresh Mixed cell. Neither result can alias the variable-name argument, so
                 // retaining an owned name temporary leaks one block per call.
