@@ -1707,6 +1707,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // `filter()`. Every dispatch on the read/write path is a non-closing one; only the
     // flush `stream_filter_remove()` performs sets it, and clears it again straight away.
     out.push_str(&comm_directive("_user_filter_closing", 8, target));
+    // _user_filter_flush_only: raised for the duration of a write-chain FLUSH walk. php's
+    // `filter()` takes four arguments; the simple `filter(string $data)` form is elephc's own
+    // convenience and has no notion of being flushed, so a flush skips those nodes rather than
+    // handing them an empty buffer — which made a prefixing filter emit its prefix twice.
+    out.push_str(&comm_directive("_user_filter_flush_only", 8, target));
     // _user_filter_last_psfs: the PSFS code the last brigade dispatch returned. The
     // dispatcher itself answers with a buffer/length pair, so the code — which decides
     // whether a closing flush failed — has nowhere else to travel.

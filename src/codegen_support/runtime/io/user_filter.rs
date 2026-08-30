@@ -822,11 +822,22 @@ pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
 
     // -- check slot 3 (arity flag). 1 = PHP-canonical 4-arg brigade dispatch.
     emitter.instruction("ldr x9, [x7, #24]");                                   // slot 3 = brigade-arity flag (0 = simple-string, 1 = brigade)
-    emitter.instruction("cbz x9, __rt_aufs_simple");                            // flag=0 → fall through to the existing simple-string path
+    emitter.instruction("cbz x9, __rt_aufs_simple_probe");                     // flag=0 → the simple-string path, if this walk wants it
     emitter.instruction("mov x3, x8");                                          // method_ptr → 4th arg of brigade_invoke
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore caller frame before tail-call
     emitter.instruction("add sp, sp, #16");                                     // release this helper's frame
     emitter.instruction("b __rt_user_filter_brigade_invoke");                   // tail-call the brigade dispatcher with (x0=obj, x1=buf, x2=len, x3=method)
+
+    // A FLUSH has nothing to say to the simple `filter(string)` form. That form is elephc's own
+    // convenience — php's `filter()` takes four arguments and refuses a `string $data` signature
+    // with a TypeError — so it has no notion of being flushed, and `__rt_filter_node_closing_flush`
+    // already skips it for the same reason. Handing it the empty buffer made a filter that
+    // PREFIXES its input emit its prefix again: `>>x` became `>>x>>` the moment `rewind()` learned
+    // to flush the write chain.
+    emitter.label("__rt_aufs_simple_probe");
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_user_filter_flush_only", 0);
+    emitter.instruction("cbz x9, __rt_aufs_simple");                            // an ordinary write: run it
+    emitter.instruction("b __rt_aufs_passthrough");                             // a flush walk: leave it alone
 
     emitter.label("__rt_aufs_simple");
     // -- copy the input bytes into _stream_filter_buf so the method's concat_buf
@@ -891,11 +902,18 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     // -- slot 3 (arity flag): non-zero means PHP-canonical 4-arg brigade dispatch.
     emitter.instruction("mov r9, QWORD PTR [r10 + 24]");                        // slot 3 = brigade arity flag
     emitter.instruction("test r9, r9");                                         // check whether the runtime value is zero
-    emitter.instruction("jz __rt_aufs_simple_x");                               // 0 → fall through to existing simple-string path
+    emitter.instruction("jz __rt_aufs_simple_probe_x");                        // 0 → the simple-string path, if this walk wants it
     emitter.instruction("mov rcx, r8");                                         // method_ptr → SysV 4th arg of brigade_invoke
     // brigade_invoke takes (rdi=$this, rsi=buf, rdx=len, rcx=method); rdi/rsi/rdx already hold the right values.
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("jmp __rt_user_filter_brigade_invoke");                 // tail-call into the brigade dispatcher
+
+    // See the AArch64 counterpart: a flush walk skips the simple form entirely.
+    emitter.label("__rt_aufs_simple_probe_x");
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_user_filter_flush_only", 0);
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_aufs_simple_x");                               // an ordinary write: run it
+    emitter.instruction("jmp __rt_aufs_passthrough_x86");                       // a flush walk: leave it alone
 
     emitter.label("__rt_aufs_simple_x");
     emitter.instruction("mov r10, r8");                                         // existing simple-string path expects the method ptr in r10

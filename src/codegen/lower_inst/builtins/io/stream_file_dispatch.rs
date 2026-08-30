@@ -399,10 +399,33 @@ fn emit_clear_append_skip(ctx: &mut FunctionContext<'_>, stream: ValueId, name: 
 }
 
 /// Lowers `fseek(stream, offset, whence?)` and clears EOF state on success.
+/// Runs php's write-filter-chain flush, the one that is NOT the close.
+///
+/// MEASURED on `php -n` 8.5.6 against a filter that echoes its own calls: `fflush()`, `rewind()`
+/// and `fseek()` each add one `filter(closing = false)` with an EMPTY brigade, and `ftell()` and
+/// `feof()` add none. elephc made the call on none of the three, so a filter that accumulates
+/// until it is asked kept its bytes through every flush point php offers it.
+///
+/// Loads the handle itself and leaves the result register holding it again, so a caller can drop
+/// this line in wherever the handle is already what it wants.
+fn emit_write_chain_flush(
+    ctx: &mut FunctionContext<'_>,
+    stream: crate::ir::ValueId,
+    caller: &str,
+) -> Result<()> {
+    load_stream_handle_to_result(ctx, stream, caller)?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // the handle the chain walk resolves
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_write_chain_flush");
+    Ok(())
+}
+
 pub(crate) fn lower_fseek(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fseek", 2, 3)?;
     let stream = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
+    emit_write_chain_flush(ctx, stream, "fseek")?;
     load_open_stream_handle_to_result(ctx, stream, "fseek")?;
     let refused_label = ctx.next_label("fseek_no_seek");
     let finished_label = ctx.next_label("fseek_no_seek_done");
@@ -435,6 +458,7 @@ pub(crate) fn lower_fseek(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 pub(crate) fn lower_rewind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "rewind", 1)?;
     let stream = expect_operand(inst, 0)?;
+    emit_write_chain_flush(ctx, stream, "rewind")?;
     load_open_stream_handle_to_result(ctx, stream, "rewind")?;
     let refused_label = ctx.next_label("rewind_no_seek");
     let finished_label = ctx.next_label("rewind_no_seek_done");
@@ -549,6 +573,7 @@ pub(crate) fn lower_fflush(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     // MEASURED on `php -n` 8.5.6, `write; fflush; close` calls `stream_flush()` ONCE, while
     // `write; fflush; write; close` calls it twice. The debt lives on the StreamState, which only
     // the HANDLE reaches — the descriptor loaded below cannot.
+    emit_write_chain_flush(ctx, stream, "fflush")?;
     load_stream_handle_to_result(ctx, stream, "fflush")?;
     let debt_cleared = ctx.next_label("fflush_debt_cleared");
     match ctx.emitter.target.arch {

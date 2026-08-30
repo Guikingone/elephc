@@ -52,78 +52,123 @@ pub fn emit_stream_write_chain_close_flush(emitter: &mut Emitter) {
         return;
     }
 
+    // php flushes the WRITE chain on `fflush()`, `rewind()` and `fseek()` too, with `$closing`
+    // still FALSE — MEASURED on `php -n` 8.5.6 against a filter that echoes its own calls: each
+    // of the three adds one `filter(closing=false)` with an EMPTY brigade, while `ftell()` and
+    // `feof()` add none.
+    //
+    // TWO BODIES, not one with two entries. A first cut had the flush entry set a register and
+    // BRANCH into the close entry's body; on macOS the linker splits a section into atoms at
+    // every global label and moves them independently, so that branch left its target behind and
+    // `new SplFileObject(...)` SEGFAULTED before its constructor returned. The bodies differ in
+    // one instruction, and one instruction is cheaper than a branch that only works on one
+    // platform.
+    emit_stream_write_chain_flush_aarch64(emitter, false);
+    emit_stream_write_chain_flush_aarch64(emitter, true);
+}
+
+/// Emits one AArch64 write-chain flush body, closing or not.
+fn emit_stream_write_chain_flush_aarch64(emitter: &mut Emitter, closing: bool) {
+    let (symbol, tag) = if closing {
+        ("__rt_stream_write_chain_close_flush", "c")
+    } else {
+        ("__rt_stream_write_chain_flush", "f")
+    };
+    let done = format!("__rt_swccf_done_{tag}");
     emitter.blank();
-    emitter.comment("--- runtime: closing flush for a stream's write filter chain ---");
-    emitter.label_global("__rt_stream_write_chain_close_flush");
+    emitter.comment("--- runtime: flush a stream's write filter chain ---");
+    emitter.label_global(symbol);
     emitter.instruction("sub sp, sp, #32");                                     // frame holding the handle and its descriptor
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
-    emitter.instruction("cbz x0, __rt_swccf_done");                             // a null handle owns no chain
+    emitter.instruction(&format!("cbz x0, {done}"));                            // a null handle owns no chain
     emitter.instruction("str x0, [sp, #0]");                                    // the chain walk needs the handle, not the descriptor
 
     // -- an unfiltered stream is the common case and must cost nothing --
     emitter.instruction("bl __rt_stream_state");                                // x0 = the owning state, zero for a raw descriptor
-    emitter.instruction("cbz x0, __rt_swccf_done");                             // no state: no chain either
+    emitter.instruction(&format!("cbz x0, {done}"));                            // no state: no chain either
     emitter.instruction(&format!(
         "ldr x9, [x0, #{STREAM_WRITE_FILTER_HEAD_OFFSET}]"
     ));                                                                         // the head of the write chain
-    emitter.instruction("cbz x9, __rt_swccf_done");                             // nothing attached on the write side
+    emitter.instruction(&format!("cbz x9, {done}"));                            // nothing attached on the write side
 
     // -- resolve the descriptor before the walk: the dispatch clobbers everything --
     emitter.instruction("ldr x0, [sp, #0]");                                    // the handle
     emitter.instruction("bl __rt_stream_fd");                                   // x0 = the backend descriptor
     emitter.instruction("str x0, [sp, #8]");                                    // the flushed bytes are written back here
 
-    // -- raise $closing for exactly one chain walk --
+    // -- publish $closing for exactly one chain walk --
     abi::emit_symbol_address(emitter, "x9", "_user_filter_closing");
+    emitter.instruction(&format!("mov x10, #{}", u8::from(closing)));           // what this dispatch tells the filter
+    emitter.instruction("str x10, [x9]");
+    // And tell the walk it is a FLUSH: the simple `filter(string)` form has nothing to flush.
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_flush_only");
     emitter.instruction("mov x10, #1");
-    emitter.instruction("str x10, [x9]");                                       // this dispatch is the closing one
+    emitter.instruction("str x10, [x9]");
     emitter.instruction("ldr x0, [sp, #0]");                                    // the handle the chain walk resolves
     abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");              // an empty input: the flush feeds no bytes
     emitter.instruction("mov x2, #0");                                          // length 0
     emitter.instruction(&format!("mov x3, #{STREAM_WRITE_FILTER_HEAD_OFFSET}")); // select the write chain
     emitter.instruction("bl __rt_stream_apply_filter_chain");                   // x1/x2 = the bytes the chain finally emits
     abi::emit_symbol_address(emitter, "x9", "_user_filter_closing");
-    emitter.instruction("str xzr, [x9]");                                       // lower the flag again immediately
+    emitter.instruction("str xzr, [x9]");                                       // lower the flags again immediately
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_flush_only");
+    emitter.instruction("str xzr, [x9]");
 
     // -- write whatever the closing walk finally emitted --
-    emitter.instruction("cbz x2, __rt_swccf_done");                             // PSFS_FEED_ME and an empty flush both write nothing
+    emitter.instruction(&format!("cbz x2, {done}"));                            // PSFS_FEED_ME and an empty flush both write nothing
     emitter.instruction("ldr x0, [sp, #8]");                                    // the descriptor, still open at this point
     emitter.instruction("cmp x0, #0");
-    emitter.instruction("b.lt __rt_swccf_done");                                // a failed open left no descriptor to write to
+    emitter.instruction(&format!("b.lt {done}"));                               // a failed open left no descriptor to write to
     emitter.instruction("mov w9, #0x4000");                                     // high half of the first synthetic descriptor
     emitter.instruction("lsl w9, w9, #16");                                     // form the synthetic descriptor base
     emitter.instruction("cmp x0, x9");
-    emitter.instruction("b.ge __rt_swccf_done");                                // synthetic descriptors own their own close path
+    emitter.instruction(&format!("b.ge {done}"));                               // synthetic descriptors own their own close path
     emitter.syscall(4);                                                         // write(fd, ptr, len); a short write is the caller's own risk
 
-    emitter.label("__rt_swccf_done");
+    emitter.label(&done);
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper frame
-    emitter.instruction("ret");                                                 // return to the close path
+    emitter.instruction("ret");                                                 // return to the close or flush path
 }
 
 /// Emits the Linux x86_64 variant of [`emit_stream_write_chain_close_flush`].
 fn emit_stream_write_chain_close_flush_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: closing flush for a stream's write filter chain ---");
-    emitter.label_global("__rt_stream_write_chain_close_flush");
+    // See the AArch64 counterpart: TWO bodies, because a branch across a global label does not
+    // survive macOS's atom splitting and the two arches are kept the same shape on purpose.
+    emit_stream_write_chain_flush_x86_64(emitter, false);
+    emit_stream_write_chain_flush_x86_64(emitter, true);
+}
+
+/// Emits one x86_64 write-chain flush body, closing or not.
+fn emit_stream_write_chain_flush_x86_64(emitter: &mut Emitter, closing: bool) {
+    let (symbol, tag) = if closing {
+        ("__rt_stream_write_chain_close_flush", "c")
+    } else {
+        ("__rt_stream_write_chain_flush", "f")
+    };
+    let done = format!("__rt_swccf_done_x{tag}");
+    emitter.blank();
+    emitter.comment("--- runtime: flush a stream's write filter chain ---");
+    emitter.label_global(symbol);
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
     emitter.instruction("sub rsp, 48");                                         // slots for the handle, its descriptor, and the flushed pair
     emitter.instruction("test rdi, rdi");
-    emitter.instruction("jz __rt_swccf_done_x");                                // a null handle owns no chain
+    emitter.instruction(&format!("jz {done}"));                                 // a null handle owns no chain
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // the chain walk needs the handle, not the descriptor
 
     // -- an unfiltered stream is the common case and must cost nothing --
     emitter.instruction("call __rt_stream_state");                              // rax = the owning state, zero for a raw descriptor
     emitter.instruction("test rax, rax");
-    emitter.instruction("jz __rt_swccf_done_x");                                // no state: no chain either
+    emitter.instruction(&format!("jz {done}"));                                 // no state: no chain either
     emitter.instruction(&format!(
         "mov r10, QWORD PTR [rax + {STREAM_WRITE_FILTER_HEAD_OFFSET}]"
     ));                                                                         // the head of the write chain
     emitter.instruction("test r10, r10");
-    emitter.instruction("jz __rt_swccf_done_x");                                // nothing attached on the write side
+    emitter.instruction(&format!("jz {done}"));                                 // nothing attached on the write side
 
     // -- resolve the descriptor before the walk: the dispatch clobbers everything --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the handle
@@ -132,7 +177,10 @@ fn emit_stream_write_chain_close_flush_x86_64(emitter: &mut Emitter) {
 
     // -- raise $closing for exactly one chain walk --
     abi::emit_symbol_address(emitter, "r10", "_user_filter_closing");
-    emitter.instruction("mov QWORD PTR [r10], 1");                              // this dispatch is the closing one
+    emitter.instruction(&format!("mov QWORD PTR [r10], {}", u8::from(closing))); // what this dispatch tells the filter
+    // See the AArch64 arm: the walk is a FLUSH, so the simple form is skipped.
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_flush_only");
+    emitter.instruction("mov QWORD PTR [r10], 1");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the handle the chain walk resolves
     abi::emit_symbol_address(emitter, "rax", "_stream_filter_buf");             // an empty input: the flush feeds no bytes
     emitter.instruction("xor edx, edx");                                        // length 0
@@ -143,22 +191,24 @@ fn emit_stream_write_chain_close_flush_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the flushed payload pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // preserve the flushed payload length
     abi::emit_symbol_address(emitter, "r10", "_user_filter_closing");
-    emitter.instruction("mov QWORD PTR [r10], 0");                              // lower the flag again immediately
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // lower the flags again immediately
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_flush_only");
+    emitter.instruction("mov QWORD PTR [r10], 0");
 
     // -- write whatever the closing walk finally emitted --
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // the flushed payload length
     emitter.instruction("test rdx, rdx");
-    emitter.instruction("jz __rt_swccf_done_x");                                // PSFS_FEED_ME and an empty flush both write nothing
+    emitter.instruction(&format!("jz {done}"));                                 // PSFS_FEED_ME and an empty flush both write nothing
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // the descriptor, still open at this point
     emitter.instruction("cmp rdi, 0");
-    emitter.instruction("jl __rt_swccf_done_x");                                // a failed open left no descriptor to write to
+    emitter.instruction(&format!("jl {done}"));                                 // a failed open left no descriptor to write to
     emitter.instruction(&format!("mov r10, {SYNTHETIC_FD_BASE}"));              // the first synthetic descriptor value
     emitter.instruction("cmp rdi, r10");
-    emitter.instruction("jge __rt_swccf_done_x");                               // synthetic descriptors own their own close path
+    emitter.instruction(&format!("jge {done}"));                                // synthetic descriptors own their own close path
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // the flushed payload pointer
     emitter.instruction("call write");                                          // write(fd, ptr, len) through libc
 
-    emitter.label("__rt_swccf_done_x");
+    emitter.label(&done);
     emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the close path
@@ -169,24 +219,48 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
-    /// Verifies the ARM64 closing flush raises `_user_filter_closing` around exactly one write
-    /// chain walk, skips unfiltered streams, and balances its frame.
+    /// Verifies both ARM64 write-chain flushes publish `_user_filter_closing`, skip unfiltered
+    /// streams, balance their frames, and — the part that matters — never branch out of their own
+    /// symbol.
+    ///
+    /// A first cut had the flush entry set a register and BRANCH into the close entry's body. On
+    /// macOS the linker splits a section into atoms at every global label and moves them
+    /// independently, so that branch left its target behind and `new SplFileObject(...)`
+    /// SEGFAULTED before its constructor returned. The last assertion here is what would have
+    /// caught it: nothing jumps to a label the other body owns.
     #[test]
-    fn test_stream_write_chain_close_flush_arm64_shape() {
+    fn test_stream_write_chain_flush_arm64_shape() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
         emit_stream_write_chain_close_flush(&mut emitter);
         let asm = emitter.output();
         assert!(asm.contains("__rt_stream_write_chain_close_flush:\n"));
-        assert!(asm.contains(&format!(
-            "ldr x9, [x0, #{STREAM_WRITE_FILTER_HEAD_OFFSET}]"
-        )));
-        assert!(asm.contains("bl __rt_stream_apply_filter_chain"));
-        assert!(asm.contains("cbz x2, __rt_swccf_done"));
-        // the flag is raised once and lowered once
-        assert_eq!(asm.matches("str x10, [x9]").count(), 1);
-        assert_eq!(asm.matches("str xzr, [x9]").count(), 1);
-        assert_eq!(asm.matches("sub sp, sp, #32").count(), 1);
-        assert_eq!(asm.matches("add sp, sp, #32").count(), 1);
+        assert!(asm.contains("__rt_stream_write_chain_flush:\n"));
+        assert_eq!(
+            asm.matches(&format!("ldr x9, [x0, #{STREAM_WRITE_FILTER_HEAD_OFFSET}]"))
+                .count(),
+            2,
+            "each body reads the write-chain head once"
+        );
+        assert_eq!(asm.matches("bl __rt_stream_apply_filter_chain").count(), 2);
+        // One body says `$closing = 0`, the other `$closing = 1`, and each lowers it after.
+        assert_eq!(asm.matches("mov x10, #0").count(), 1);
+        assert_eq!(asm.matches("mov x10, #1").count(), 1);
+        assert_eq!(asm.matches("str x10, [x9]").count(), 2);
+        assert_eq!(asm.matches("str xzr, [x9]").count(), 2);
+        assert_eq!(asm.matches("sub sp, sp, #32").count(), 2);
+        assert_eq!(asm.matches("add sp, sp, #32").count(), 2);
+        // Each body owns its own exit label, and neither jumps into the other's.
+        let (flush, close) = asm
+            .split_once("__rt_stream_write_chain_close_flush:")
+            .expect("both entries are emitted");
+        assert!(
+            !flush.contains("__rt_swccf_done_c"),
+            "the flush body must not branch into the close body's atom"
+        );
+        assert!(
+            !close.contains("__rt_swccf_done_f"),
+            "and the close body must not branch into the flush body's atom"
+        );
     }
 
     /// Verifies the x86_64 closing flush selects the write chain, preserves the flushed pair
@@ -197,14 +271,27 @@ mod tests {
         emit_stream_write_chain_close_flush(&mut emitter);
         let asm = emitter.output();
         assert!(asm.contains("__rt_stream_write_chain_close_flush:\n"));
-        assert!(asm.contains(&format!("mov rsi, {STREAM_WRITE_FILTER_HEAD_OFFSET}")));
-        assert!(asm.contains("call __rt_stream_apply_filter_chain"));
+        assert!(asm.contains("__rt_stream_write_chain_flush:\n"));
+        assert_eq!(
+            asm.matches(&format!("mov rsi, {STREAM_WRITE_FILTER_HEAD_OFFSET}"))
+                .count(),
+            2
+        );
+        assert_eq!(asm.matches("call __rt_stream_apply_filter_chain").count(), 2);
         // the flushed pair is spilled to the frame, never to callee-saved r14/r15
-        assert!(asm.contains("mov QWORD PTR [rbp - 24], rax"));
-        assert!(asm.contains("mov QWORD PTR [rbp - 32], rdx"));
+        assert_eq!(asm.matches("mov QWORD PTR [rbp - 24], rax").count(), 2);
+        assert_eq!(asm.matches("mov QWORD PTR [rbp - 32], rdx").count(), 2);
         assert!(!asm.contains("r14"));
         assert!(!asm.contains("r15"));
-        assert!(asm.contains("mov QWORD PTR [r10], 0"));
-        assert!(asm.contains("call write"));
+        // One body publishes 0 for `$closing`, the other 1, and both lower it after the walk.
+        assert_eq!(asm.matches("mov QWORD PTR [r10], 0").count(), 3);
+        assert_eq!(asm.matches("mov QWORD PTR [r10], 1").count(), 1);
+        assert_eq!(asm.matches("call write").count(), 2);
+        // See the AArch64 counterpart: neither body branches into the other's atom.
+        let (flush, close) = asm
+            .split_once("__rt_stream_write_chain_close_flush:")
+            .expect("both entries are emitted");
+        assert!(!flush.contains("__rt_swccf_done_xc"));
+        assert!(!close.contains("__rt_swccf_done_xf"));
     }
 }
