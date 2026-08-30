@@ -40,6 +40,7 @@ pub(crate) mod class_relations;
 pub(crate) mod ctype;
 pub(crate) mod curl;
 pub(crate) mod debug;
+pub(crate) mod extensions;
 mod eval;
 mod eval_facade;
 pub(crate) mod iconv;

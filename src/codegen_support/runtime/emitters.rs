@@ -158,14 +158,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_getenv(emitter);
     system::emit_getenv_all(emitter);
     system::emit_shell_exec(emitter);
-    system::emit_date(emitter);
+    if features.timelib {
+        system::emit_date(emitter);
+    }
     system::emit_date_default_timezone(emitter);
     system::emit_checkdate(emitter);
     system::emit_getdate(emitter);
     system::emit_localtime(emitter);
     system::emit_hrtime(emitter);
     system::emit_mktime(emitter);
-    system::emit_strtotime(emitter);
+    system::emit_strtotime(emitter, features.timelib);
     system::emit_pcntl_rusage_array(emitter);
     system::emit_pcntl_siginfo_array(emitter);
     system::emit_pcntl_signal_dispatch(emitter);

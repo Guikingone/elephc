@@ -59,6 +59,7 @@ pub(crate) fn collect_constants(
     let str_const = |value: String| (ExprKind::StringLiteral(value), PhpType::Str);
     let int_const = |value: i64| (ExprKind::IntLiteral(value), PhpType::Int);
     let computed = [
+        ("E_ALL", int_const(php_version.all_error_levels())),
         ("PHP_OS", str_const(target_platform.php_os_name().to_string())),
         ("PHP_OS_FAMILY", str_const(target_platform.php_os_family_name().to_string())),
         ("PHP_VERSION", str_const(php_version.version_string().to_string())),

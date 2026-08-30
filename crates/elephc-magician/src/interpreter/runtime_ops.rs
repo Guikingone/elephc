@@ -519,6 +519,12 @@ pub trait RuntimeValueOps {
         Ok(None)
     }
 
+    /// Emits or suppresses one PHP runtime deprecation through the target runtime.
+    fn deprecated(&mut self, message: &str) -> Result<(), EvalStatus>;
+
+    /// Returns the active PHP error mask and optionally replaces it.
+    fn error_reporting(&mut self, level: Option<i64>) -> Result<i64, EvalStatus>;
+
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;
 

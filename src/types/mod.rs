@@ -22,6 +22,8 @@ pub(crate) mod call_args;
 pub(crate) mod fibers;
 /// C FFI type mapping utilities.
 mod ffi;
+/// Reflection signatures for procedural date aliases lowered before builtin lookup.
+mod date_reflection_signatures;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
 pub(crate) mod param_binding;
 /// Target-aware `ext/pcntl` integer constants shared by checker and codegen.
@@ -54,7 +56,14 @@ pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conv
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{
-    collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,
+    collect_return_alias_summaries, extend_return_alias_summaries_with_classes,
+    ReturnAliasSummaries, ReturnArgAlias,
+};
+pub(crate) use date_reflection_signatures::{
+    php_src_date_method_canonical_name, php_src_date_method_names,
+    php_src_date_method_parameter_type, php_src_date_method_visible,
+    php_src_date_method_return_type, php_src_date_property_names,
+    reflection_builtin_function_sig,
 };
 pub(crate) use result::LoopStorageTypes;
 pub use checker::CheckOptions;

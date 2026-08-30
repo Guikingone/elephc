@@ -1072,9 +1072,10 @@ pub fn emit_var_dump_close_container(emitter: &mut Emitter) {
 /// (indexed array) and 5 (hash) open a nested `array(N) {` block, bump the
 /// indent, recurse into `__rt_var_dump_indexed` / `__rt_var_dump_hash`, then
 /// restore the indent and close the block — the mutual recursion is what gives
-/// arbitrary nesting depth. Tag 7 unboxes a Mixed cell and redispatches. A null
-/// container/cell pointer and tag 8 (null) render `NULL`; tag 10 renders the
-/// callable descriptor through PHP's object-shaped `Closure` presentation.
+/// arbitrary nesting depth. Tag 6 offers objects to the program-owned ext/date
+/// dispatcher before the generic property walker. Tag 7 unboxes Mixed cells.
+/// Null container/cell pointers and tag 8 render NULL; tag 10 renders callable
+/// descriptors through PHP's object-shaped Closure presentation.
 ///
 /// Input: AArch64 x0=tag x1=lo x2=hi / x86_64 rdi=tag rsi=lo rdx=hi.
 pub fn emit_var_dump_value(emitter: &mut Emitter) {
@@ -1086,6 +1087,12 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_value ---");
     emitter.label_global("__rt_var_dump_value");
+
+    emitter.instruction("cmp x0, #11");                                         // inline TaggedScalar property descriptor?
+    emitter.instruction("b.ne __rt_vd_value_input_ready");                     // ordinary tags already use canonical value words
+    emitter.instruction("mov x0, x2");                                         // dispatch using the slot's int/null runtime tag
+    emitter.instruction("mov x2, xzr");                                        // tagged scalar payloads have no third word
+    emitter.label("__rt_vd_value_input_ready");
 
     // Frame (48 bytes): [0]lo [8]hi [32]x29 [40]x30.
     emitter.instruction("sub sp, sp, #48");                                     // allocate the value frame
@@ -1170,6 +1177,9 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
     emitter.label("__rt_vd_val_obj_plain");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("bl __elephc_var_dump_datetime_object");                // let program-specific ext/date handlers render virtual fields
+    emitter.instruction("cbnz x0, __rt_vd_val_done");                           // the special handler emitted the complete object block
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer after special dispatch
     emitter.instruction("bl __rt_vd_seen_find");                                // is this object already on the walk stack?
     emitter.instruction("cbnz x0, __rt_vd_val_recursion");                      // PHP renders a revisited object as *RECURSION*
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
@@ -1214,6 +1224,12 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_value ---");
     emitter.label_global("__rt_var_dump_value");
+
+    emitter.instruction("cmp rdi, 11");                                        // inline TaggedScalar property descriptor?
+    emitter.instruction("jne __rt_vd_value_input_ready_x86");                  // ordinary tags already use canonical value words
+    emitter.instruction("mov rdi, rdx");                                       // dispatch using the slot's int/null runtime tag
+    emitter.instruction("xor edx, edx");                                       // tagged scalar payloads have no third word
+    emitter.label("__rt_vd_value_input_ready_x86");
 
     // rbp-relative frame: [-8]lo [-16]hi.
     emitter.instruction("push rbp");                                            // save caller frame pointer
@@ -1302,6 +1318,10 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
     emitter.label("__rt_vd_val_obj_plain_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("call __elephc_var_dump_datetime_object");              // let program-specific ext/date handlers render virtual fields
+    emitter.instruction("test rax, rax");                                       // did the special handler consume the object?
+    emitter.instruction("jnz __rt_vd_val_done_x86");                            // the handler emitted the complete object block
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer after special dispatch
     emitter.instruction("call __rt_vd_seen_find");                              // is this object already on the walk stack?
     emitter.instruction("test rax, rax");                                       // did the guard report a revisit?
     emitter.instruction("jnz __rt_vd_val_recursion_x86");                       // PHP renders a revisited object as *RECURSION*

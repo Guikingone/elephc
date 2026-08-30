@@ -345,6 +345,17 @@ pub fn e_method_call(object: Expr, method_name: &str, args: Vec<Expr>) -> Expr {
     )
 }
 
+/// `name: value` inside an argument list or attribute argument list.
+pub fn e_named_arg(name: &str, value: Expr) -> Expr {
+    Expr::new(
+        ExprKind::NamedArg {
+            name: name.to_string(),
+            value: Box::new(value),
+        },
+        Span::dummy(),
+    )
+}
+
 /// `left ?? right`.
 pub fn e_null_coalesce(value: Expr, default: Expr) -> Expr {
     Expr::new(
@@ -362,6 +373,16 @@ pub fn e_prop(object: Expr, property: &str) -> Expr {
         ExprKind::PropertyAccess {
             object: Box::new(object),
             property: property.to_string(),
+        },
+        Span::dummy(),
+    )
+}
+
+/// `$object::class`.
+pub fn e_object_class_name(object: Expr) -> Expr {
+    Expr::new(
+        ExprKind::ObjectClassName {
+            object: Box::new(object),
         },
         Span::dummy(),
     )
@@ -466,6 +487,16 @@ pub fn e_instance_of(value: Expr, class_name: &str) -> Expr {
 /// `!value`.
 pub fn e_not(value: Expr) -> Expr {
     Expr::new(ExprKind::Not(Box::new(value)), Span::dummy())
+}
+
+/// `@value` error suppression.
+pub fn e_error_suppress(value: Expr) -> Expr {
+    Expr::new(ExprKind::ErrorSuppress(Box::new(value)), Span::dummy())
+}
+
+/// `clone value`.
+pub fn e_clone(value: Expr) -> Expr {
+    Expr::new(ExprKind::Clone(Box::new(value)), Span::dummy())
 }
 
 /// `-value`, the unary minus.
@@ -971,7 +1002,15 @@ pub fn s_else_if(arms: Vec<(Expr, Vec<Stmt>)>, fallback: Option<Vec<Stmt>>) -> S
 }
 
 /// `for (init; condition; update) { body }`.
-pub fn s_for(init: Option<Stmt>, condition: Option<Expr>, update: Option<Stmt>, body: Vec<Stmt>) -> Stmt {
+///
+/// The parser canonicalizes simple local-variable assignment clauses to `StmtKind::Assign`,
+/// while preserving genuinely expression-shaped clauses such as post-increment.
+pub fn s_for(
+    init: Option<Stmt>,
+    condition: Option<Expr>,
+    update: Option<Stmt>,
+    body: Vec<Stmt>,
+) -> Stmt {
     Stmt::new(
         StmtKind::For {
             init: init.map(Box::new),
@@ -1398,6 +1437,7 @@ pub struct MethodBuilder {
     visibility: Visibility,
     is_static: bool,
     is_final: bool,
+    attributes: Vec<AttributeGroup>,
     signature: Signature,
     /// Attribute groups per parameter, aligned with `signature.params` and grown lazily by
     /// `param_attr`. Left empty when no parameter carries one, so the common method pays
@@ -1412,12 +1452,19 @@ pub fn method(name: &str) -> MethodBuilder {
         visibility: Visibility::Public,
         is_static: false,
         is_final: false,
+        attributes: Vec::new(),
         signature: Signature::default(),
         param_attributes: Vec::new(),
     }
 }
 
 impl MethodBuilder {
+    /// Attaches one PHP attribute group to the method declaration.
+    pub fn attr(mut self, name: &str, args: Vec<Expr>) -> Self {
+        self.attributes.push(attr(name, args));
+        self
+    }
+
     /// Attaches a PHP 8 attribute to the parameter added LAST (`#[\SensitiveParameter] $pw`).
     ///
     /// Written as a separate call rather than an argument to every `param*` because a
@@ -1584,6 +1631,13 @@ impl MethodBuilder {
         self
     }
 
+    /// Preserves an exact transcribed body without synthesizing parameter reads.
+    pub fn body_exact(mut self, body: Vec<Stmt>) -> Self {
+        self.signature.keep_unread_params = true;
+        self.signature.body = body;
+        self
+    }
+
     /// Builds the method as a bodiless SIGNATURE, for an interface.
     ///
     /// The parameters are NOT consumed: `$_unused = $p;` is a statement, and a signature has no
@@ -1614,7 +1668,7 @@ impl MethodBuilder {
             by_ref_return: false,
             body: Vec::new(),
             span: Span::dummy(),
-            attributes: Vec::new(),
+            attributes: self.attributes,
         }
     }
 
@@ -1653,7 +1707,7 @@ impl MethodBuilder {
             by_ref_return: false,
             body,
             span: Span::dummy(),
-            attributes: Vec::new(),
+            attributes: self.attributes,
         }
     }
 }
@@ -1766,6 +1820,13 @@ impl FunctionBuilder {
     /// `MethodBuilder::keep_unread_params` (same reason: parse parity for a transcription).
     pub fn keep_unread_params(mut self) -> Self {
         self.signature.keep_unread_params = true;
+        self
+    }
+
+    /// Preserves an exact transcribed body without synthesizing parameter reads.
+    pub fn body_exact(mut self, body: Vec<Stmt>) -> Self {
+        self.signature.keep_unread_params = true;
+        self.signature.body = body;
         self
     }
 
@@ -2251,16 +2312,27 @@ impl ClassBuilder {
     /// today, and it matters: the attribute is what makes reference PHP warn on the constant,
     /// so dropping it silently changes what a program is told.
     pub fn constant_attributed(
+        self,
+        name: &str,
+        value: Expr,
+        attributes: Vec<AttributeGroup>,
+    ) -> Self {
+        self.constant_full(name, value, None, attributes)
+    }
+
+    /// Adds a `public` class constant with its complete reflection-visible metadata.
+    pub fn constant_full(
         mut self,
         name: &str,
         value: Expr,
+        type_expr: Option<TypeExpr>,
         attributes: Vec<AttributeGroup>,
     ) -> Self {
         self.constants.push(ClassConst {
             name: name.to_string(),
             visibility: Visibility::Public,
             is_final: false,
-            type_expr: None,
+            type_expr,
             value,
             span: Span::dummy(),
             attributes,
@@ -2269,22 +2341,38 @@ impl ClassBuilder {
     }
 
     /// Adds a `public` class constant.
-    pub fn constant(mut self, name: &str, value: Expr) -> Self {
-        self.constants.push(ClassConst {
-            name: name.to_string(),
-            visibility: Visibility::Public,
-            is_final: false,
-            type_expr: None,
-            value,
-            span: Span::dummy(),
-            attributes: Vec::new(),
-        });
-        self
+    pub fn constant(self, name: &str, value: Expr) -> Self {
+        self.constant_full(name, value, None, Vec::new())
     }
 
     /// Adds a `public` property with a declared type and an optional default.
     pub fn prop(self, name: &str, ty: TypeExpr, default: Option<Expr>) -> Self {
         self.property(name, Some(ty), default, Visibility::Public)
+    }
+
+    /// Adds a public virtual get-only property backed by the class's synthetic getter method.
+    pub fn virtual_get_prop(mut self, name: &str, ty: TypeExpr) -> Self {
+        self.properties.push(ClassProperty {
+            name: name.to_string(),
+            visibility: Visibility::Public,
+            set_visibility: None,
+            type_expr: Some(ty),
+            hooks: PropertyHooks {
+                get: true,
+                set: false,
+                get_by_ref: false,
+            },
+            readonly: false,
+            is_final: false,
+            is_static: false,
+            is_abstract: false,
+            by_ref: false,
+            is_promoted: false,
+            default: None,
+            span: Span::dummy(),
+            attributes: Vec::new(),
+        });
+        self
     }
 
     /// Adds a `private` property with a declared type and an optional default.
@@ -2458,15 +2546,26 @@ impl InterfaceBuilder {
     }
 
     /// Adds an interface constant.
-    pub fn constant(mut self, name: &str, value: Expr) -> Self {
+    pub fn constant(self, name: &str, value: Expr) -> Self {
+        self.constant_full(name, value, None, Vec::new())
+    }
+
+    /// Adds an interface constant with its complete reflection-visible metadata.
+    pub fn constant_full(
+        mut self,
+        name: &str,
+        value: Expr,
+        type_expr: Option<TypeExpr>,
+        attributes: Vec<AttributeGroup>,
+    ) -> Self {
         self.constants.push(ClassConst {
             name: name.to_string(),
             value,
             visibility: Visibility::Public,
             is_final: false,
-            type_expr: None,
+            type_expr,
             span: Span::dummy(),
-            attributes: Vec::new(),
+            attributes,
         });
         self
     }

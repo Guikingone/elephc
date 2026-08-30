@@ -383,9 +383,9 @@ mod tests {
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(eval_registry, 519 + curl_surface);
-        // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
+        // 85 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
-        assert_eq!(eval_internal, 99);
+        assert_eq!(eval_internal, 102);
         // 31 registry builtins awaiting eval homes, plus the 326 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 357);
@@ -393,7 +393,7 @@ mod tests {
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts, thirty-five PCNTL contracts, and forty-three
         // internal `__elephc_curl_*` entry points.
-        assert_eq!(aot_registry, 619);
+        assert_eq!(aot_registry, 622);
         // Ten constructs/dedicated-syntax/hash surfaces, the 343 prelude-provided and
         // name-resolver-rewritten contracts, and the curl prelude when published.
         assert_eq!(aot_external, 353 + curl_surface);
@@ -445,7 +445,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 498 + curl_surface);
-        assert_eq!(unsupported, 456);
+        assert_eq!(unsupported, 459);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {
