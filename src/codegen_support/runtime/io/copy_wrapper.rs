@@ -43,12 +43,34 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: copy through a userspace wrapper ---");
     emitter.label_global("__rt_copy_wrapper");
     // Frame: [0]=src fd [8]=dst fd [16]=chunk ptr [24]=dst path ptr [32]=dst path len
-    emitter.instruction("sub sp, sp, #64");                                     // reserve the copy frame
+    //        [64]=src path ptr [72]=src path len — both paths outlive the stats and the opens
+    emitter.instruction("sub sp, sp, #80");                                     // reserve the copy frame
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
     emitter.instruction("stp x3, x4, [sp, #24]");                               // the destination path outlives the first open
+    emitter.instruction("stp x1, x2, [sp, #64]");                               // and the source path outlives its own stat
+
+    // -- php stats BOTH ends before it opens either --
+    //
+    // MEASURED on `php -n` 8.5.6, wrapper to wrapper: `url_stat(src, 0)`, `url_stat(dst, 2)`,
+    // then the two opens. The flags differ because the destination is the one php expects may
+    // not exist — 2 is STREAM_URL_STAT_QUIET. A path with no registered scheme matches nothing
+    // and the helper answers 0, so an end served by the filesystem produces no call at all,
+    // which is exactly what php's trace shows for a disk-to-wrapper copy.
+    //
+    // The boxed answer is released: this stat is asked for the CALL, not for its value, and the
+    // cache the helper fills is php's own — it caches this stat too.
+    emitter.instruction("ldp x0, x1, [sp, #64]");                               // the source path
+    emitter.instruction("mov x2, #0");                                          // php's flags for the source
+    emitter.instruction("bl __rt_user_wrapper_url_stat");
+    emitter.instruction("bl __rt_decref_any");                                  // the answer is not what this asks for
+    emitter.instruction("ldp x0, x1, [sp, #24]");                               // the destination path
+    emitter.instruction("mov x2, #2");                                          // STREAM_URL_STAT_QUIET
+    emitter.instruction("bl __rt_user_wrapper_url_stat");
+    emitter.instruction("bl __rt_decref_any");
 
     // -- open the source "rb" --
+    emitter.instruction("ldp x1, x2, [sp, #64]");                               // reload it past the stats
     abi::emit_symbol_address(emitter, "x3", "_meta_mode_rb");
     emitter.instruction("mov x4, #2");                                          // strlen("rb")
     emitter.instruction("bl __rt_fopen");                                       // x0 = fd, or negative on refusal
@@ -65,11 +87,12 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_cpw_close_src");                             // destination refused: release the source
     emitter.instruction("str x0, [sp, #8]");                                    // keep the destination fd
 
-    // -- feof-gated drain, exactly the shape `__rt_readfile_wrapper` uses --
+    // -- READ, then ask: php reads once before it believes any EOF --
+    //
+    // The `feof`-first shape `__rt_readfile_wrapper` uses skipped the read entirely for a
+    // wrapper whose `stream_eof()` answers true from the start, where php still performs one
+    // `stream_read()`. Asking after the read is also what the rest of the wrapper protocol does.
     emitter.label("__rt_cpw_loop");
-    emitter.instruction("ldr x0, [sp, #0]");
-    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
-    emitter.instruction("cbnz x0, __rt_cpw_done");
     emitter.instruction("ldr x0, [sp, #0]");
     emitter.instruction("mov x1, #4096");                                       // one chunk at a time
     emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = length
@@ -83,6 +106,9 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_fwrite");                                      // reaches the wrapper's stream_write
     emitter.instruction("ldr x0, [sp, #16]");
     emitter.instruction("bl __rt_decref_any");                                  // release the chunk
+    emitter.instruction("ldr x0, [sp, #0]");
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
+    emitter.instruction("cbnz x0, __rt_cpw_done");
     emitter.instruction("b __rt_cpw_loop");
 
     emitter.label("__rt_cpw_release_eof");
@@ -142,11 +168,27 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_copy_wrapper");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");
-    emitter.instruction("sub rsp, 48");                                         // src fd / dst fd / chunk / dst path
+    emitter.instruction("sub rsp, 64");                                         // src fd / dst fd / chunk / both paths
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // the destination path outlives the first open
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // and the source path outlives its own stat
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");
+
+    // -- php stats BOTH ends before it opens either; see the AArch64 arm --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // the source path
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");
+    emitter.instruction("xor edx, edx");                                        // php's flags for the source
+    emitter.instruction("call __rt_user_wrapper_url_stat");
+    emitter.instruction("call __rt_decref_any");                                // the answer is not what this asks for
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // the destination path
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");
+    emitter.instruction("mov rdx, 2");                                          // STREAM_URL_STAT_QUIET
+    emitter.instruction("call __rt_user_wrapper_url_stat");
+    emitter.instruction("call __rt_decref_any");
 
     // -- open the source "rb" --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload it past the stats
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");
     abi::emit_symbol_address(emitter, "rdi", "_meta_mode_rb");
     emitter.instruction("mov rsi, 2");                                          // strlen("rb")
     emitter.instruction("call __rt_fopen");                                     // rax = fd, or negative on refusal
@@ -164,11 +206,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_cpw_close_src_x86");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // keep the destination fd
 
+    // -- READ, then ask; see the AArch64 arm --
     emitter.label("__rt_cpw_loop_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
-    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
-    emitter.instruction("test rax, rax");
-    emitter.instruction("jnz __rt_cpw_done_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
     emitter.instruction("mov rsi, 4096");                                       // one chunk at a time
     emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = length
@@ -181,8 +220,15 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, r10");
     emitter.instruction("mov rdx, r11");
     emitter.instruction("call __rt_fwrite");                                    // reaches the wrapper's stream_write
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");
+    // `__rt_decref_any` reads RAX on this target, not rdi — passing it in rdi released whatever
+    // `__rt_fwrite` had left in rax, which the heap-range check then rejected, and every copied
+    // chunk leaked.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
     emitter.instruction("call __rt_decref_any");                                // release the chunk
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jnz __rt_cpw_done_x86");
     emitter.instruction("jmp __rt_cpw_loop_x86");
 
     emitter.label("__rt_cpw_release_eof_x86");

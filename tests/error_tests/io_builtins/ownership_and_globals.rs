@@ -18,14 +18,22 @@ use super::*;
 ///
 /// `"abc"` is the case that survives, because php refuses it as well —
 /// `chmod(): Argument #2 ($permissions) must be of type int, string given` — so elephc's compile
-/// refusal is the same verdict, earlier. A NUMERIC string is a different matter: php coerces
-/// `chmod($f, "0644")` to mode 644 and answers `bool(true)`, which elephc still refuses.
+/// refusal is the same verdict, earlier. So is `"12abc"`: MEASURED, a LEADING-numeric string
+/// throws too. A NUMERIC string is a different matter — php coerces `chmod($f, "0644")` to mode
+/// 644 — and elephc now coerces it as well, pinned by
+/// `test_chmod_coerces_its_mode_the_way_php_does`.
 #[test]
 fn test_error_chmod_rejects_a_mode_php_rejects_too() {
     expect_error(
         r#"<?php chmod("file.txt", "abc");"#,
         "chmod() mode must be int",
     );
+    expect_error(
+        r#"<?php chmod("file.txt", "12abc");"#,
+        "chmod() mode must be int",
+    );
+    expect_no_error(r#"<?php chmod("file.txt", "0644");"#);
+    expect_no_error(r#"<?php chmod("file.txt", " 644");"#);
 }
 
 /// Verifies lchown()/lchgrp() reject the wrong number of arguments.

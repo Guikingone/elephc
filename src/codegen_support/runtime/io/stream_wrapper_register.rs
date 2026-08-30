@@ -57,6 +57,19 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #40]");                                   // spill the class-name length
     emitter.instruction("str x4, [sp, #48]");                                   // spill the registration flags
 
+    // -- php burns a resource id here, and elephc must burn it too --
+    //
+    // php allocates a registration resource userland never sees. Nothing reads it, but the id
+    // CURSOR is observable: every `var_dump()` of a later stream, and the `$context` handed to a
+    // wrapper, reported one less than php. MEASURED — a REFUSED registration burns one as well,
+    // an unregistration burns none, and a call that throws for an undefined class burns none
+    // because the throw comes first, which is why this sits at the top of the helper the throw
+    // path never reaches.
+    abi::emit_symbol_address(emitter, "x9", "_resource_id_next");
+    emitter.instruction("ldr x10, [x9]");
+    emitter.instruction("add x10, x10, #1");                                    // the id php spends on the registration
+    emitter.instruction("str x10, [x9]");
+
     // -- php refuses a protocol holding a byte outside [A-Za-z0-9+.-] --
     // An EMPTY protocol registers successfully (measured), so the scan must be a per-byte filter
     // rather than a "looks like a scheme" test.
@@ -221,6 +234,12 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // spill the protocol length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // spill the borrowed class-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // spill the class-name length
+
+    // -- php burns a resource id here; see the AArch64 arm --
+    abi::emit_symbol_address(emitter, "r9", "_resource_id_next");
+    emitter.instruction("mov r10, QWORD PTR [r9]");
+    emitter.instruction("inc r10");                                             // the id php spends on the registration
+    emitter.instruction("mov QWORD PTR [r9], r10");
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // spill the registration flags
 
     // -- php refuses a protocol holding a byte outside [A-Za-z0-9+.-] --

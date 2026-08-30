@@ -20357,3 +20357,156 @@ echo "instances: ", P::$n, "\n";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(true)\nbool(true)\ninstances: 2\n");
 }
+
+/// Verifies `chmod()` COERCES its mode, where elephc refused the program.
+///
+/// MEASURED on `php -n` 8.5.6: `chmod($f, "0644")` answers `true` and leaves the file at `0204`,
+/// because php reads the string as DECIMAL 644 — a trap worth being able to hit, since `"0644"`
+/// is written by people who believe it is octal. `"420"` gives `0644`, and `true` gives `01`.
+/// elephc answered `chmod() mode must be int` at COMPILE time, so a php script that runs could
+/// not be built.
+#[test]
+fn test_chmod_coerces_its_mode_the_way_php_does() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("m.txt", "x");
+var_dump(chmod("m.txt", "0644"));
+clearstatcache();
+printf("%o\n", fileperms("m.txt") & 0777);
+var_dump(chmod("m.txt", "420"));
+clearstatcache();
+printf("%o\n", fileperms("m.txt") & 0777);
+var_dump(chmod("m.txt", true));
+clearstatcache();
+printf("%o\n", fileperms("m.txt") & 0777);
+unlink("m.txt");
+"#,
+    );
+    assert_eq!(out, "bool(true)\n204\nbool(true)\n644\nbool(true)\n1\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `copy()` stats BOTH ends before it opens either, and reads before it believes EOF.
+///
+/// MEASURED on `php -n` 8.5.6, wrapper to wrapper: `url_stat(src, 0)`, `url_stat(dst, 2)`, then
+/// the two opens, then one `stream_read` — even from a wrapper whose `stream_eof()` answers true
+/// from the start. elephc opened straight away and, because its loop asked `feof()` FIRST, never
+/// read at all. The flags differ because the destination is the end php expects may not exist:
+/// 2 is `STREAM_URL_STAT_QUIET`.
+#[test]
+fn test_copy_stats_both_ends_before_it_opens_either() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W {
+    public $context;
+    public function stream_open($p, $m, $o, &$x) { echo "open($p,$m)\n"; return true; }
+    public function stream_read($n) { echo "read\n"; return ""; }
+    public function stream_write($d) { return strlen($d); }
+    public function stream_eof() { return true; }
+    public function stream_close() { echo "close\n"; }
+    public function url_stat($p, $f) { echo "url_stat($p,$f)\n"; return []; }
+}
+stream_wrapper_register("cw", "W");
+var_dump(copy("cw://a", "cw://b"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "url_stat(cw://a,0)\n",
+            "url_stat(cw://b,2)\n",
+            "open(cw://a,rb)\n",
+            "open(cw://b,wb)\n",
+            "read\n",
+            "close\n",
+            "close\n",
+            "bool(true)\n",
+        ),
+    );
+}
+
+/// Verifies a wrapper's `$context` arrives however the property is SPELLED.
+///
+/// php fills `streamWrapper::$context` between constructing the wrapper and calling
+/// `stream_open()`. Under elephc only `public mixed $context;` saw it: an untyped
+/// `public $context;` — the spelling php's own manual uses — read back NULL, and so did
+/// `public $context = null;`.
+///
+/// The value was never the problem. An untyped property with a null default is typed `Void`, so
+/// every read of it FOLDED to null at compile time — `gettype()` answered `"NULL"`, which is the
+/// compiler talking rather than the slot. For an ordinary property that is harmless, because the
+/// checker widens on the first PHP assignment; `$context` has none, since the ENGINE writes it.
+#[test]
+fn test_a_wrapper_receives_its_context_however_the_property_is_spelled() {
+    for decl in [
+        "public $context;",
+        "public $context = null;",
+        "public mixed $context;",
+        "public mixed $context = null;",
+    ] {
+        let src = format!(
+            r#"<?php
+class K {{
+    {decl}
+    public function stream_open($p, $m, $o, &$x) {{
+        echo get_resource_type($this->context), "|", (is_resource($this->context) ? "yes" : "no"), "\n";
+        return true;
+    }}
+    public function stream_read($n) {{ return ""; }}
+    public function stream_eof() {{ return true; }}
+    public function stream_close() {{}}
+}}
+stream_wrapper_register("kw", "K");
+$h = fopen("kw://x", "r");
+fclose($h);
+"#
+        );
+        let out = compile_and_run_capture(&src);
+        assert!(out.success, "`{decl}` failed: {}", out.stderr);
+        assert_eq!(out.stdout, "stream-context|yes\n", "for `{decl}`");
+    }
+}
+
+/// Verifies `var_dump()` names a stream CONTEXT, and that registering a wrapper spends an id.
+///
+/// Two measurements in one program because they were two halves of the same wrong number.
+/// `var_dump($ctx)` printed `of type (stream)` where php prints `(stream-context)` — while
+/// `get_resource_type()` already answered correctly, so the two disagreed about one resource.
+/// And `stream_wrapper_register()` BURNS a resource id in php — it allocates a registration
+/// resource userland never sees — so every id observed afterwards was one lower here.
+/// MEASURED: a refused registration burns one too; an unregistration burns none.
+#[test]
+fn test_a_context_names_itself_and_a_registration_spends_an_id() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class A {
+    public $context;
+    public function stream_open($p, $m, $o, &$x) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_close() {}
+}
+var_dump(stream_context_create([]));
+var_dump(stream_wrapper_register("wa", "A"));
+var_dump(stream_context_create([]));
+var_dump(@stream_wrapper_register("wa", "A"));
+var_dump(stream_context_create([]));
+var_dump(stream_wrapper_unregister("wa"));
+var_dump(stream_context_create([]));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "resource(4) of type (stream-context)\n",
+            "bool(true)\n",
+            "resource(6) of type (stream-context)\n",
+            "bool(false)\n",
+            "resource(8) of type (stream-context)\n",
+            "bool(true)\n",
+            "resource(9) of type (stream-context)\n",
+        ),
+    );
+}

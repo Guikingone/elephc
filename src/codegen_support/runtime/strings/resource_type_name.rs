@@ -52,7 +52,8 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::resources::layout::{
-    RESOURCE_KIND_FILTER, RESOURCE_STATUS_LIVE, SLOT_KIND_OFFSET, SLOT_STATUS_OFFSET,
+    RESOURCE_KIND_CONTEXT, RESOURCE_KIND_FILTER, RESOURCE_STATUS_LIVE, SLOT_KIND_OFFSET,
+    SLOT_STATUS_OFFSET,
 };
 
 /// Byte length of the open-resource type name `"stream"`.
@@ -65,6 +66,13 @@ const RESOURCE_TYPE_STREAM_LEN: i64 = 6;
 /// for it made the two kinds indistinguishable from PHP even though the registry has told them
 /// apart since filters became resources.
 const RESOURCE_TYPE_STREAM_FILTER_LEN: i64 = 13;
+
+/// Byte length of the context-resource type name `"stream-context"`.
+///
+/// php gives a context its own type: `var_dump(stream_context_create([]))` prints
+/// `resource(6) of type (stream-context)`. `get_resource_type()` already answered that here,
+/// through a different path, so the two disagreed about the same resource.
+const RESOURCE_TYPE_STREAM_CONTEXT_LEN: i64 = 14;
 
 /// Byte length of the closed-resource type name `"Unknown"`.
 const RESOURCE_TYPE_UNKNOWN_LEN: i64 = 7;
@@ -111,6 +119,8 @@ pub fn emit_resource_type_name(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SLOT_KIND_OFFSET));       // which kind of resource is in this slot?
     emitter.instruction(&format!("cmp x9, #{}", RESOURCE_KIND_FILTER));
     emitter.instruction("b.eq __rt_resource_type_name_filter_pop");             // a filter names itself
+    emitter.instruction(&format!("cmp x9, #{}", RESOURCE_KIND_CONTEXT));
+    emitter.instruction("b.eq __rt_resource_type_name_context_pop");            // and so does a context
     emitter.label("__rt_resource_type_name_open_pop");
     emitter.instruction("ldr x30, [sp, #8]");                                   // restore the caller link register
     emitter.instruction("add sp, sp, #16");                                     // release the lookup frame
@@ -124,6 +134,13 @@ pub fn emit_resource_type_name(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x1", "_resource_type_stream_filter");
     abi::emit_load_int_immediate(emitter, "x2", RESOURCE_TYPE_STREAM_FILTER_LEN); // php's own name for a filter
     emitter.instruction("ret");                                                 // return the filter type name
+
+    emitter.label("__rt_resource_type_name_context_pop");
+    emitter.instruction("ldr x30, [sp, #8]");                                   // restore the caller link register
+    emitter.instruction("add sp, sp, #16");                                     // release the lookup frame
+    abi::emit_symbol_address(emitter, "x1", "_resource_type_stream_context");
+    abi::emit_load_int_immediate(emitter, "x2", RESOURCE_TYPE_STREAM_CONTEXT_LEN); // php's own name for a context
+    emitter.instruction("ret");                                                 // return the context type name
 
     emitter.label("__rt_resource_type_name_closed_pop");
     emitter.instruction("ldr x30, [sp, #8]");                                   // restore the caller link register
@@ -158,6 +175,10 @@ fn emit_resource_type_name_x86_64(emitter: &mut Emitter) {
         "cmp QWORD PTR [rax + {}], {}", SLOT_KIND_OFFSET, RESOURCE_KIND_FILTER
     ));                                                                         // which kind of resource is in this slot?
     emitter.instruction("je __rt_resource_type_name_filter_pop_x86");           // a filter names itself
+    emitter.instruction(&format!(
+        "cmp QWORD PTR [rax + {}], {}", SLOT_KIND_OFFSET, RESOURCE_KIND_CONTEXT
+    ));
+    emitter.instruction("je __rt_resource_type_name_context_pop_x86");          // and so does a context
     emitter.label("__rt_resource_type_name_open_x86");
     emitter.instruction("add rsp, 8");                                          // release the alignment padding
     abi::emit_symbol_address(emitter, "rax", "_resource_type_stream");
@@ -169,6 +190,12 @@ fn emit_resource_type_name_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rax", "_resource_type_stream_filter");
     abi::emit_load_int_immediate(emitter, "rdx", RESOURCE_TYPE_STREAM_FILTER_LEN); // php's own name for a filter
     emitter.instruction("ret");                                                 // return the filter type name
+
+    emitter.label("__rt_resource_type_name_context_pop_x86");
+    emitter.instruction("add rsp, 8");                                          // release the alignment padding
+    abi::emit_symbol_address(emitter, "rax", "_resource_type_stream_context");
+    abi::emit_load_int_immediate(emitter, "rdx", RESOURCE_TYPE_STREAM_CONTEXT_LEN); // php's own name for a context
+    emitter.instruction("ret");                                                 // return the context type name
 
     emitter.label("__rt_resource_type_name_closed_pop_x86");
     emitter.instruction("add rsp, 8");                                          // release the alignment padding
@@ -213,6 +240,8 @@ mod tests {
             "    ldr x9, [x0, #8]\n",
             "    cmp x9, #3\n",
             "    b.eq __rt_resource_type_name_filter_pop\n",
+            "    cmp x9, #2\n",
+            "    b.eq __rt_resource_type_name_context_pop\n",
             "__rt_resource_type_name_open_pop:\n",
             "    ldr x30, [sp, #8]\n",
             "    add sp, sp, #16\n",
@@ -226,6 +255,13 @@ mod tests {
             "    adrp x1, _resource_type_stream_filter@PAGE\n",
             "    add x1, x1, _resource_type_stream_filter@PAGEOFF\n",
             "    mov x2, #13\n",
+            "    ret\n",
+            "__rt_resource_type_name_context_pop:\n",
+            "    ldr x30, [sp, #8]\n",
+            "    add sp, sp, #16\n",
+            "    adrp x1, _resource_type_stream_context@PAGE\n",
+            "    add x1, x1, _resource_type_stream_context@PAGEOFF\n",
+            "    mov x2, #14\n",
             "    ret\n",
             "__rt_resource_type_name_closed_pop:\n",
             "    ldr x30, [sp, #8]\n",
@@ -259,6 +295,8 @@ mod tests {
             "    jne __rt_resource_type_name_closed_pop_x86\n",
             "    cmp QWORD PTR [rax + 8], 3\n",
             "    je __rt_resource_type_name_filter_pop_x86\n",
+            "    cmp QWORD PTR [rax + 8], 2\n",
+            "    je __rt_resource_type_name_context_pop_x86\n",
             "__rt_resource_type_name_open_x86:\n",
             "    add rsp, 8\n",
             "    lea rax, [rip + _resource_type_stream]\n",
@@ -268,6 +306,11 @@ mod tests {
             "    add rsp, 8\n",
             "    lea rax, [rip + _resource_type_stream_filter]\n",
             "    mov rdx, 13\n",
+            "    ret\n",
+            "__rt_resource_type_name_context_pop_x86:\n",
+            "    add rsp, 8\n",
+            "    lea rax, [rip + _resource_type_stream_context]\n",
+            "    mov rdx, 14\n",
             "    ret\n",
             "__rt_resource_type_name_closed_pop_x86:\n",
             "    add rsp, 8\n",
@@ -344,8 +387,8 @@ mod tests {
         );
         assert_eq!(
             asm.matches("    ldr x30, [sp, #8]\n").count(),
-            3,
-            "all three post-lookup arms must restore the link register:\n{asm}"
+            4,
+            "every post-lookup arm must restore the link register:\n{asm}"
         );
         assert_eq!(
             asm.matches("    sub sp, sp, #16\n").count(),
@@ -354,8 +397,8 @@ mod tests {
         );
         assert_eq!(
             asm.matches("    add sp, sp, #16\n").count(),
-            3,
-            "all three post-lookup arms must release the frame:\n{asm}"
+            4,
+            "every post-lookup arm must release the frame:\n{asm}"
         );
         assert!(asm.contains("    ret\n"), "must return with ret:\n{asm}");
     }

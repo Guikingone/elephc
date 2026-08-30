@@ -567,7 +567,9 @@ pub(super) fn lower_chmod_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Ins
             ctx.emitter.instruction("sub sp, sp, #32");                         // reserve path and mode scratch storage
             ctx.emitter.instruction("str x1, [sp, #0]");                        // preserve the path pointer
             ctx.emitter.instruction("str x2, [sp, #8]");                        // preserve the path length
-            require_int(ctx.load_value_to_result(mode)?.codegen_repr(), "chmod mode")?;
+            // php coerces `$permissions` from any scalar — `"0644"` reads as DECIMAL 644 — so the
+            // same helper every other int-taking builtin uses does the work here too.
+            crate::codegen::lower_inst::builtins::strings::load_as_int(ctx, mode, "chmod mode")?;
             ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the requested mode
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // pass path pointer to wrapper-scheme probe
             ctx.emitter.instruction("ldr x1, [sp, #8]");                        // pass path length to wrapper-scheme probe
@@ -605,7 +607,9 @@ pub(super) fn lower_chmod_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Ins
             ctx.emitter.instruction("sub rsp, 32");                             // reserve path and mode scratch storage
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the path pointer
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // preserve the path length
-            require_int(ctx.load_value_to_result(mode)?.codegen_repr(), "chmod mode")?;
+            // php coerces `$permissions` from any scalar — `"0644"` reads as DECIMAL 644 — so the
+            // same helper every other int-taking builtin uses does the work here too.
+            crate::codegen::lower_inst::builtins::strings::load_as_int(ctx, mode, "chmod mode")?;
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the requested mode
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass path pointer to wrapper-scheme probe
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass path length to wrapper-scheme probe

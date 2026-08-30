@@ -1985,6 +1985,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // `get_resource_type()` both read this, and a filter answering `stream` made the two
     // resource kinds indistinguishable from PHP.
     out.push_str(".globl _resource_type_stream_filter\n_resource_type_stream_filter:\n    .ascii \"stream filter\"\n");
+    out.push_str(".globl _resource_type_stream_context\n_resource_type_stream_context:\n    .ascii \"stream-context\"\n");
     out.push_str(".globl _resource_type_unknown\n_resource_type_unknown:\n    .ascii \"Unknown\"\n");
     out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
     out.push_str(".globl _fmt_star_e\n_fmt_star_e:\n    .asciz \"%.*e\"\n");
