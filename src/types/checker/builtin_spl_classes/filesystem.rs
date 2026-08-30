@@ -234,6 +234,18 @@ fn spl_file_object_properties() -> Vec<ClassProperty> {
         protected_storage_property("backingPath", TypeExpr::Str),
         protected_storage_property("stream", mixed_type()),
         protected_storage_property("lines", array_type()),
+        // Where each line ENDED, as the descriptor saw it. php's iteration reads through the
+        // stream, so `current()` leaves it past the line it answered and `ftell()` reports that;
+        // this object reads every line once and restores the position, so the stream never moves
+        // on its own. These are absolute offsets, which is what lets SKIP_EMPTY filter them
+        // beside `lines` without renumbering anything.
+        protected_storage_property("lineEnds", array_type()),
+        // Whether the stream was ALREADY at its end when the last line came back. php drives its
+        // iteration from the stream, so a file whose last byte is a newline gives one more read
+        // before the end — but `php://temp` reports EOF the moment a line read drains it. The
+        // plain-line loader reads this from a local; the CSV builder re-runs from `setFlags()`
+        // long after that local is gone, so the answer lives here.
+        protected_storage_property("loadedAtEnd", TypeExpr::Bool),
         protected_storage_property("lineNumber", TypeExpr::Int),
         protected_storage_property("flags", TypeExpr::Int),
         protected_storage_property("delimiter", TypeExpr::Str),
@@ -1059,6 +1071,7 @@ fn spl_file_object_construct_body_with_backing(path: Expr, backing_path: Expr, m
 fn file_object_load_lines_body(_path: Expr) -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "lines", empty_array_expr()),
+        property_assign_stmt(this_expr(), "lineEnds", empty_array_expr()),
         assign_stmt("__splPos", function_call("ftell", vec![file_stream_expr()])),
         expr_stmt(function_call("rewind", vec![file_stream_expr()])),
         // Whether the stream was already at its end when the LAST line came back. That is the
@@ -1073,6 +1086,11 @@ fn file_object_load_lines_body(_path: Expr) -> Vec<Stmt> {
             ),
             vec![
                 property_array_push_stmt(this_expr(), "lines", var_expr("__splLine")),
+                property_array_push_stmt(
+                    this_expr(),
+                    "lineEnds",
+                    function_call("ftell", vec![file_stream_expr()]),
+                ),
                 assign_stmt("__splAtEnd", function_call("feof", vec![file_stream_expr()])),
             ],
         ),
@@ -1080,6 +1098,7 @@ fn file_object_load_lines_body(_path: Expr) -> Vec<Stmt> {
             "fseek",
             vec![file_stream_expr(), var_expr("__splPos")],
         )),
+        property_assign_stmt(this_expr(), "loadedAtEnd", var_expr("__splAtEnd")),
         spl_file_object_skip_empty_stmt(),
         spl_file_object_trailing_line_stmt(),
         spl_file_object_csv_refresh_stmt(),
@@ -1112,9 +1131,10 @@ fn spl_file_object_skip_empty_stmt() -> Stmt {
         ),
         vec![
             assign_stmt("__splKept", empty_array_expr()),
+            assign_stmt("__splKeptEnds", empty_array_expr()),
             foreach_stmt(
                 file_lines_expr(),
-                None,
+                Some("__splIdx"),
                 "__splLine",
                 vec![if_stmt(
                     binary_expr(
@@ -1122,11 +1142,22 @@ fn spl_file_object_skip_empty_stmt() -> Stmt {
                         BinOp::StrictNotEq,
                         string_expr(""),
                     ),
-                    vec![array_push_stmt("__splKept", var_expr("__splLine"))],
+                    vec![
+                        array_push_stmt("__splKept", var_expr("__splLine")),
+                        // Absolute, so a surviving line keeps the offset it always had.
+                        array_push_stmt(
+                            "__splKeptEnds",
+                            array_access(
+                                property_access(this_expr(), "lineEnds"),
+                                var_expr("__splIdx"),
+                            ),
+                        ),
+                    ],
                     None,
                 )],
             ),
             property_assign_stmt(this_expr(), "lines", var_expr("__splKept")),
+            property_assign_stmt(this_expr(), "lineEnds", var_expr("__splKeptEnds")),
         ],
         None,
     )
@@ -1184,7 +1215,36 @@ fn spl_file_object_trailing_line_stmt() -> Stmt {
                 ),
             ),
         ),
-        vec![property_array_push_stmt(this_expr(), "lines", string_expr(""))],
+        vec![
+            property_array_push_stmt(this_expr(), "lines", string_expr("")),
+            // It consumed nothing, so it ends where the line before it did. Read from the
+            // RECORDED ends, not from `ftell()`: the loader has already restored the position it
+            // started from by the time this runs, so a live probe answers where the reading
+            // began rather than where it stopped.
+            property_array_push_stmt(
+                this_expr(),
+                "lineEnds",
+                expr(crate::parser::ast::ExprKind::Ternary {
+                    condition: Box::new(binary_expr(
+                        count_expr(property_access(this_expr(), "lineEnds")),
+                        BinOp::Gt,
+                        int_expr(0),
+                    )),
+                    then_expr: Box::new(function_call(
+                        "intval",
+                        vec![array_access(
+                            property_access(this_expr(), "lineEnds"),
+                            binary_expr(
+                                count_expr(property_access(this_expr(), "lineEnds")),
+                                BinOp::Sub,
+                                int_expr(1),
+                            ),
+                        )],
+                    )),
+                    else_expr: Box::new(int_expr(0)),
+                }),
+            ),
+        ],
         None,
     )
 }
@@ -1253,6 +1313,31 @@ fn spl_temp_file_object_construct_body() -> Vec<Stmt> {
 /// from the same line storage the rest of the class uses, but a RECORD may span several lines.
 fn spl_file_object_current_body() -> Vec<Stmt> {
     vec![
+        // php READS the line to answer this, so the descriptor ends past it — MEASURED, the
+        // `current()` after `seek(1)` answers `ftell() === 8`. The index-backed model answers the
+        // same line without moving anything, so the move is made here.
+        if_stmt(
+            binary_expr(
+                count_expr(property_access(this_expr(), "lineEnds")),
+                BinOp::Gt,
+                file_line_number_expr(),
+            ),
+            vec![expr_stmt(function_call(
+                "fseek",
+                vec![
+                    file_stream_expr(),
+                    // The element is a `mixed` slot; `fseek` takes an int.
+                    function_call(
+                        "intval",
+                        vec![array_access(
+                            property_access(this_expr(), "lineEnds"),
+                            file_line_number_expr(),
+                        )],
+                    ),
+                ],
+            ))],
+            None,
+        ),
         if_stmt(
             flag_enabled_expr(file_object_flags_expr(), SPL_FILE_READ_CSV),
             vec![
@@ -1390,6 +1475,13 @@ fn spl_file_object_csv_build_body() -> Vec<Stmt> {
                 ),
                 if_stmt(
                     binary_expr(
+                        // Not for a stream that was already at its end: see `loadedAtEnd`. The
+                        // plain-line path drops the same element for the same reason, and the
+                        // builder above has already dropped the trailing empty LINE this record
+                        // would have paired with.
+                        not_expr(property_access(this_expr(), "loadedAtEnd")),
+                        BinOp::And,
+                    binary_expr(
                         binary_expr(var_expr("tail"), BinOp::StrictEq, string_expr("")),
                         BinOp::Or,
                         binary_expr(
@@ -1404,6 +1496,7 @@ fn spl_file_object_csv_build_body() -> Vec<Stmt> {
                             BinOp::StrictEq,
                             string_expr("\n"),
                         ),
+                    ),
                     ),
                     vec![
                         // The trailing record is never SKIPPED, only reshaped: php answers
@@ -1724,7 +1817,43 @@ fn spl_file_object_seek_body() -> Vec<Stmt> {
             vec![property_assign_stmt(this_expr(), "lineNumber", int_expr(0))],
             None,
         ),
+        // php's `seek()` walks the stream, so the descriptor ends at the START of the line it
+        // selected — MEASURED, `seek(1)` alone answers `ftell() === 4` on `"one\ntwo\nthree\n"`.
+        spl_file_object_seek_stream_to_line_start_stmt(),
     ]
+}
+
+/// Puts the descriptor at the start of `$this->lineNumber`, which is where line `n - 1` ended.
+fn spl_file_object_seek_stream_to_line_start_stmt() -> Stmt {
+    if_stmt(
+        binary_expr(file_line_number_expr(), BinOp::Lt, int_expr(1)),
+        vec![expr_stmt(function_call(
+            "fseek",
+            vec![file_stream_expr(), int_expr(0)],
+        ))],
+        Some(vec![if_stmt(
+            binary_expr(
+                count_expr(property_access(this_expr(), "lineEnds")),
+                BinOp::GtEq,
+                file_line_number_expr(),
+            ),
+            vec![expr_stmt(function_call(
+                "fseek",
+                vec![
+                    file_stream_expr(),
+                    // The element is a `mixed` slot; `fseek` takes an int.
+                    function_call(
+                        "intval",
+                        vec![array_access(
+                            property_access(this_expr(), "lineEnds"),
+                            binary_expr(file_line_number_expr(), BinOp::Sub, int_expr(1)),
+                        )],
+                    ),
+                ],
+            ))],
+            None,
+        )]),
+    )
 }
 
 /// Builds SplFileObject valid().

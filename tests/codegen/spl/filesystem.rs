@@ -377,6 +377,85 @@ unlink("stream.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// `ftell()` reports where the READ left the descriptor, not where the object was constructed.
+///
+/// MEASURED on `php -n` 8.5.6 over `"one\ntwo\nthree\n"`: 0 for a fresh object, 4 after
+/// `seek(1)` alone — the START of line 1 — 8 after the `current()` that follows it, and 0 again
+/// after `rewind(); next(); next()`, because `next()` reads nothing. Iterating with a `ftell()`
+/// per element gives 4, 8, 14, 14.
+///
+/// The object reads every line ONCE into an array and restores the position it started from, so
+/// the index moved and the descriptor never did: elephc answered 0 at every one of them.
+#[test]
+fn test_spl_file_object_ftell_follows_the_line_the_iteration_read() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("t.txt", "one
+two
+three
+");
+$f = new SplFileObject("t.txt", "r");
+$parts = [$f->ftell()];
+$f->seek(1);
+$parts[] = $f->ftell();
+$f->current();
+$parts[] = $f->ftell();
+$f->rewind();
+$f->next();
+$f->next();
+$parts[] = $f->ftell();
+unset($f);
+$g = new SplFileObject("t.txt", "r");
+foreach ($g as $line) { $parts[] = $g->ftell(); }
+echo implode(",", $parts);
+unlink("t.txt");
+"#,
+    );
+    assert_eq!(out, "0,4,8,0,4,8,14,14");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// READ_CSV over a `php://temp` stream yields no trailing record, because it has no trailing line.
+///
+/// MEASURED on `php -n` 8.5.6, `"a,b\nc,d\n"`: an `SplFileObject` answers THREE records — the
+/// third is `[null]`, which `implode()` renders as `""` — and an `SplTempFileObject` answers TWO.
+/// elephc gave the temp one three as well.
+///
+/// php drives iteration from the stream: a plain file whose last byte is a newline gives one more
+/// read before the end, and `php://temp` reports EOF the moment that last line drains it. The
+/// plain-line loader already knew; the CSV builder appended its trailing record unconditionally,
+/// which cancelled out only on the stream that HAD a trailing empty line to drop.
+#[test]
+fn test_spl_read_csv_trailing_record_follows_the_streams_own_end() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$t = new SplTempFileObject();
+$t->fwrite("a,b
+c,d
+");
+$t->rewind();
+$t->setFlags(SplFileObject::READ_CSV);
+$rows = [];
+foreach ($t as $row) { $rows[] = implode("+", $row); }
+echo count($rows), ":", implode("|", $rows), " ";
+unset($t);
+
+file_put_contents("c.csv", "a,b
+c,d
+");
+$g = new SplFileObject("c.csv", "r");
+$g->setFlags(SplFileObject::READ_CSV);
+$plain = [];
+foreach ($g as $row) { $plain[] = implode("+", $row); }
+echo count($plain), ":", implode("|", $plain);
+unset($g);
+unlink("c.csv");
+"#,
+    );
+    assert_eq!(out, "2:a+b|c+d 3:a+b|c+d|");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies SplTempFileObject uses a writable stream for basic read/write cycles.
 #[test]
 fn test_spl_temp_file_object_stream_read_write() {
