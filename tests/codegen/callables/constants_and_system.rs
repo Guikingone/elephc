@@ -2219,6 +2219,20 @@ fn test_directory_separator() {
     assert_eq!(out, "/");
 }
 
+/// `PATH_SEPARATOR` separates ENTRIES in a path LIST, and is not its neighbour above.
+///
+/// MEASURED on `php -n` 8.5.6: `":"` while `DIRECTORY_SEPARATOR` is `"/"`. Without it
+/// `set_include_path("." . PATH_SEPARATOR . "inc")` — the spelling every program with more than
+/// one include directory uses — failed to compile with `Undefined constant: PATH_SEPARATOR`.
+#[test]
+fn test_path_separator_is_a_list_separator_not_a_directory_one() {
+    let out = compile_and_run(
+        "<?php echo PATH_SEPARATOR, '|', DIRECTORY_SEPARATOR, '|', strlen(PATH_SEPARATOR), '|',
+        implode(',', explode(PATH_SEPARATOR, 'a:b:c'));",
+    );
+    assert_eq!(out, ":|/|1|a,b,c");
+}
+
 // -- v0.8 time / microtime --
 
 // Tests `time()` returns a Unix timestamp greater than 1 billion (valid date after ~2001).

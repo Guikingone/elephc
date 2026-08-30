@@ -388,6 +388,12 @@ pub(crate) fn collect_constants(
             PhpType::Str,
         ),
     );
+    // MEASURED on `php -n` 8.5.6: `":"`. `MAIN_SEPARATOR` has no path-list counterpart in std, and
+    // every target elephc emits is POSIX, so the value is written out.
+    constants.insert(
+        "PATH_SEPARATOR".to_string(),
+        (ExprKind::StringLiteral(":".to_string()), PhpType::Str),
+    );
     collect_constant_decls(program, &mut constants);
     constants
 }

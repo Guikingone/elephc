@@ -153,6 +153,7 @@ impl Checker {
         constants.insert("M_LOG10E".to_string(), PhpType::Float);
         constants.insert("PHP_EOL".to_string(), PhpType::Str);
         constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
+        constants.insert("PATH_SEPARATOR".to_string(), PhpType::Str);
 
         Self {
             target,

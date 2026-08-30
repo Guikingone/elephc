@@ -403,6 +403,7 @@ fn is_builtin_global_constant(name: &str) -> bool {
                 | "M_LOG10E"
                 | "PHP_EOL"
                 | "DIRECTORY_SEPARATOR"
+                | "PATH_SEPARATOR"
                 | "ICONV_IMPL"
                 | "ICONV_VERSION"
         ) {
