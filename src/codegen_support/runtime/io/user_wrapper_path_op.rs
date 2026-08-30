@@ -120,6 +120,7 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
     emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
+    emitter.instruction("bl __rt_user_wrapper_construct");                      // php constructs before it asks
     emitter.instruction("cbz x0, __rt_uwpo_false");                             // unknown class → false
     emitter.instruction("str x0, [sp, #56]");                                   // save the throwaway wrapper instance
     // php assigns `$context` to this instance too; see `emit_wrapper_context_notice`.
@@ -255,6 +256,7 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
     emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length (new_by_name reads rax/rdx)
     emitter.instruction("call __rt_new_by_name");                               // instantiate the wrapper class → rax = obj, or 0 when unknown
+    emitter.instruction("call __rt_user_wrapper_construct");                    // php constructs before it asks
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_uwpo_false_x86");                              // unknown class → false
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the throwaway wrapper instance
@@ -417,6 +419,7 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
     emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
+    emitter.instruction("bl __rt_user_wrapper_construct");                      // php constructs before it asks
     emitter.instruction("cbz x0, __rt_uwrn_false");                             // unknown class → false
     emitter.instruction("str x0, [sp, #48]");                                   // save the throwaway wrapper instance
     // php assigns `$context` to this instance too; see `emit_wrapper_context_notice`.
@@ -546,6 +549,7 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
     emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length (new_by_name reads rax/rdx)
     emitter.instruction("call __rt_new_by_name");                               // instantiate the wrapper class → rax = obj, or 0 when unknown
+    emitter.instruction("call __rt_user_wrapper_construct");                    // php constructs before it asks
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_uwrn_false_x86");                              // unknown class → false
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the throwaway wrapper instance

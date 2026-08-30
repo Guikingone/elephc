@@ -703,7 +703,8 @@ pub(crate) fn emit_runtime_data_user(
     // The method pointers plus BOTH trailing quads — the boxed-result mask and the `$context`
     // offset — so a class with no wrapper method shares a table the helpers can read to the same
     // extent. A short table here would let a helper read past its end.
-    for _ in 0..USER_WRAPPER_VTABLE_SLOTS + 2 {
+    // +3: the boxed-result mask, the `$context` offset, and the constructor pointer.
+    for _ in 0..USER_WRAPPER_VTABLE_SLOTS + 3 {
         out.push_str("    .quad 0\n");
     }
     out.push_str("    .p2align 3\n");
@@ -2369,6 +2370,18 @@ pub(crate) const USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET: usize = USER_WRAPPER_VTA
 /// `$context` may legitimately live at offset zero.
 pub(crate) const USER_WRAPPER_VTABLE_CONTEXT_OFFSET: usize = USER_WRAPPER_VTABLE_SLOTS * 8 + 8;
 
+/// Byte offset of the class's `__construct` pointer, which follows the `$context` quad. Zero
+/// when the class declares no constructor.
+///
+/// php constructs a wrapper BEFORE it assigns `$context` and before `stream_open()` — measured,
+/// `construct: context=NULL` then `open: tag=built`. A wrapper that prepares its state in the
+/// constructor is therefore ready by the time php uses it, and elephc started it empty.
+///
+/// It is a trailing quad rather than a 24th method slot because `USER_WRAPPER_METHOD_NAMES`
+/// doubles as the "does this class look like a stream wrapper" test: adding `__construct` there
+/// would make every class with a constructor look like one.
+pub(crate) const USER_WRAPPER_VTABLE_CTOR_OFFSET: usize = USER_WRAPPER_VTABLE_SLOTS * 8 + 16;
+
 /// The number of fixed-slot stream-filter methods recorded per class in
 /// `_user_filter_vtable_<class_id>` (Phase 10 tier 3). Slot order:
 /// 0 filter, 1 onCreate, 2 onClose. Slot 3 is a non-method "arity" flag:
@@ -2648,6 +2661,14 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
         .copied()
         .map_or(0, |offset| offset + 1);
     out.push_str(&format!("    .quad {}\n", context_offset));
+    // A third: the constructor php runs before it asks the wrapper anything, or 0.
+    match class_info.method_impl_classes.get("__construct") {
+        Some(impl_class) => out.push_str(&format!(
+            "    .quad {}\n",
+            method_symbol(impl_class, "__construct")
+        )),
+        None => out.push_str("    .quad 0\n"),
+    }
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.

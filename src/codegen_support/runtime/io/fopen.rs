@@ -372,6 +372,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
     emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
     emitter.instruction("bl __rt_new_by_name");                                 // returns obj pointer in x0, or 0 when the class is unknown
+    emitter.instruction("bl __rt_user_wrapper_construct");                      // php constructs before it asks
     emitter.instruction("cbz x0, __rt_fopen_uw_fail");                          // unknown class → silent fail with -1
     emitter.instruction("str x0, [sp, #32]");                                   // save the wrapper object pointer for later
 
@@ -726,6 +727,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
     emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length from the registry slot
     emitter.instruction("call __rt_new_by_name");                               // returns obj pointer in rax, or 0 when the class is unknown
+    emitter.instruction("call __rt_user_wrapper_construct");                    // php constructs before it asks
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // unknown class → silent fail with -1
     emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // save the wrapper object pointer for later

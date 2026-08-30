@@ -123,6 +123,7 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
     emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
+    emitter.instruction("bl __rt_user_wrapper_construct");                      // php constructs before it asks
     emitter.instruction("cbz x0, __rt_uwod_fail_noobj");                        // unknown class → false (no object to free)
     emitter.instruction("str x0, [sp, #32]");                                   // save the wrapper instance
     // php assigns `$context` to this instance too; see `emit_wrapper_context_notice`.
@@ -254,6 +255,7 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
     emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length from the registry slot
     emitter.instruction("call __rt_new_by_name");                               // instantiate the wrapper class → rax = obj, or 0 when unknown
+    emitter.instruction("call __rt_user_wrapper_construct");                    // php constructs before it asks
     emitter.instruction("test rax, rax");                                       // did instantiation fail?
     emitter.instruction("jz __rt_uwod_failnoobj_x86");                          // unknown class → false (no object to free)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the wrapper instance

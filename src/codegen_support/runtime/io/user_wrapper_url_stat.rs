@@ -244,6 +244,7 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
     emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
+    emitter.instruction("bl __rt_user_wrapper_construct");                      // php constructs before it asks
     emitter.instruction("cbz x0, __rt_uus_false");                              // unknown class → boxed false
     emitter.instruction("str x0, [sp, #48]");                                   // save the throwaway wrapper instance
     // php assigns `$context` to this instance too, so a class that declares no such property is
@@ -540,6 +541,7 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
     emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length (new_by_name reads rax/rdx)
     emitter.instruction("call __rt_new_by_name");                               // instantiate the wrapper class → rax = obj, or 0 when unknown
+    emitter.instruction("call __rt_user_wrapper_construct");                    // php constructs before it asks
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_uus_false_x86");                               // unknown class → boxed false
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the throwaway wrapper instance

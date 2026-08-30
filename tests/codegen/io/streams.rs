@@ -20284,3 +20284,76 @@ fclose($h);
         out.located_diagnostics
     );
 }
+
+/// Verifies php runs a wrapper class's `__construct()` — and runs it FIRST.
+///
+/// MEASURED on `php -n` 8.5.6: `construct: context=NULL` then `open: tag=built`. The constructor
+/// runs before the context is assigned and before `stream_open()`, so a wrapper that prepares
+/// its state there is ready by the time php uses it. elephc allocated the object and seeded its
+/// property DEFAULTS but never called the constructor, so such a wrapper started empty —
+/// `open: tag=unset`, a silently different program.
+///
+/// The FILTER half is the contrast that keeps the rule honest: php does NOT construct a
+/// `php_user_filter`, and elephc was already right there.
+#[test]
+fn test_a_wrapper_class_is_constructed_before_it_is_asked_anything() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class K {
+    public $context;
+    public $tag = "unset";
+    public function __construct() { echo "construct\n"; $this->tag = "built"; }
+    public function stream_open($p, $m, $o, &$x) { echo "open tag=", $this->tag, "\n"; return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_close() {}
+}
+stream_wrapper_register("kw", "K");
+$h = fopen("kw://x", "r");
+fclose($h);
+
+class F extends php_user_filter {
+    public $tag = "unset";
+    public function __construct() { echo "filter construct\n"; $this->tag = "built"; }
+    public function onCreate(): bool { echo "onCreate tag=", $this->tag, "\n"; return true; }
+    public function filter($in, $out, &$c, $closing): int { return PSFS_PASS_ON; }
+}
+stream_filter_register("kf", "F");
+$g = fopen("php://memory", "w+");
+stream_filter_append($g, "kf", STREAM_FILTER_WRITE);
+fclose($g);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "construct\nopen tag=built\nonCreate tag=unset\n");
+}
+
+/// Verifies the constructor runs for the PATH operations too, not only `fopen()`.
+///
+/// A wrapper is instantiated afresh for every call php routes to it — `url_stat` behind
+/// `file_exists()`, the directory family, `unlink()` — and each of those instantiations is its
+/// own `__construct()`. MEASURED on `php -n` 8.5.6.
+#[test]
+fn test_every_wrapper_entry_point_constructs_its_instance() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class P {
+    public static $n = 0;
+    public $context;
+    public function __construct() { self::$n++; }
+    public function stream_open($p, $m, $o, &$x) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_close() {}
+    public function url_stat($p, $f) { return []; }
+    public function unlink($p) { return true; }
+}
+stream_wrapper_register("pw", "P");
+var_dump(file_exists("pw://a"));
+var_dump(unlink("pw://b"));
+echo "instances: ", P::$n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\ninstances: 2\n");
+}

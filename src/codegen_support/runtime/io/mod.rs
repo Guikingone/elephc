@@ -175,6 +175,7 @@ mod user_wrapper_unbox;
 mod user_wrapper_cast;
 mod user_wrapper_dir;
 mod user_wrapper_path_op;
+mod user_wrapper_construct;
 mod user_wrapper_set_option;
 mod user_wrapper_table;
 mod user_wrapper_url_stat;
@@ -401,6 +402,7 @@ pub(crate) use user_wrapper_path_op::{emit_user_wrapper_path_op, emit_user_wrapp
 pub(crate) use stash_connect_host::emit_stash_connect_host;
 pub(crate) use notification::emit_fire_notification;
 pub(crate) use touch_meta_array::emit_touch_meta_array;
+pub(crate) use user_wrapper_construct::emit_user_wrapper_construct;
 pub(crate) use user_wrapper_set_option::emit_user_wrapper_set_option;
 pub(crate) use user_wrapper_url_stat::{
     emit_clear_stat_cache, emit_user_wrapper_url_stat, emit_user_wrapper_url_stat_field,
