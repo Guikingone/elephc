@@ -310,6 +310,11 @@ impl PostTypecheckOptimizer {
         program: Program,
         binding_decision_spans: HashSet<Span>,
     ) -> Program {
+        if crate::types::checker::set_state_contract_error(&program).is_some()
+            || !crate::types::checker::set_state_visibility_warnings(&program).is_empty()
+        {
+            return program;
+        }
         with_local_binding_decision_spans(binding_decision_spans, || {
             with_callable_effect_analysis(&self.callable_effects, || {
                 with_exception_flow_analysis(&self.exception_flow, || {

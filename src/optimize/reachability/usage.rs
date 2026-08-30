@@ -461,6 +461,16 @@ impl Scanner<'_> {
                 self.scan_expr(object);
                 self.scan_expr(value);
             }
+            StmtKind::DynamicPropertyArrayPush {
+                object,
+                property,
+                value,
+            } => {
+                self.usage.hazards.dynamic_method = true;
+                self.scan_expr(object);
+                self.scan_expr(property);
+                self.scan_expr(value);
+            }
             StmtKind::PropertyArrayAssign {
                 object,
                 property,

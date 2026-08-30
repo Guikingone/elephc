@@ -44,6 +44,20 @@ pub fn transcribe(program: &Program) -> String {
 /// per declaration keeps each frame small, and it reads better besides — the aggregator is a
 /// table of contents.
 pub fn transcribe_split(program: &Program, aggregator: &str) -> String {
+    transcribe_split_with_wrapper(program, aggregator, true)
+}
+
+/// Emits split builder functions without marking the resulting declarations as internal source.
+pub fn transcribe_split_plain(program: &Program, aggregator: &str) -> String {
+    transcribe_split_with_wrapper(program, aggregator, false)
+}
+
+/// Implements split transcription with an optional internal-declaration wrapper.
+fn transcribe_split_with_wrapper(
+    program: &Program,
+    aggregator: &str,
+    internal: bool,
+) -> String {
     let mut helpers = String::new();
     let mut calls = String::new();
     let mut used: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -79,10 +93,14 @@ pub fn transcribe_split(program: &Program, aggregator: &str) -> String {
         calls.push_str(&format!("            {base}(),\n"));
     }
 
+    let body = if internal {
+        format!("    internal_declarations(|| {{\n        vec![\n{calls}        ]\n    }})")
+    } else {
+        format!("    vec![\n{calls}    ]")
+    };
     format!(
         "{helpers}/// Builds the whole surface, one declaration per helper above.\n\
-         pub(crate) fn {aggregator}() -> Program {{\n    \
-         internal_declarations(|| {{\n        vec![\n{calls}        ]\n    }})\n}}\n"
+         pub(crate) fn {aggregator}() -> Program {{\n{body}\n}}\n"
     )
 }
 
@@ -189,11 +207,12 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
                     Visibility::Public,
                     "only public class constants are modelled"
                 );
+                assert!(!constant.is_final, "final class constants are not modelled");
                 // A constant's ATTRIBUTES were being dropped here without a word — the same
                 // shape that swallowed parameter attributes. `#[\Deprecated("…")]` on
                 // `PDO::TRANSACTION_*` is what makes reference PHP warn about it, so losing it
                 // silently changes what a program is told.
-                if constant.attributes.is_empty() {
+                if constant.type_expr.is_none() && constant.attributes.is_empty() {
                     out.push_str(&format!(
                         "\n{}.constant({}, {})",
                         pad(depth + 1),
@@ -201,21 +220,68 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
                         expr(&constant.value, depth + 2)
                     ));
                 } else {
+                    let type_expr = constant
+                        .type_expr
+                        .as_ref()
+                        .map(|ty| format!("Some({})", ty_expr(ty)))
+                        .unwrap_or_else(|| "None".to_string());
                     out.push_str(&format!(
-                        "\n{}.constant_attributed({}, {}, vec![{}])",
+                        "\n{}.constant_full({}, {}, {}, vec![{}])",
                         pad(depth + 1),
                         lit(&constant.name),
                         expr(&constant.value, depth + 2),
+                        type_expr,
                         attribute_groups(&constant.attributes, depth + 2)
                     ));
                 }
             }
             for property in properties {
+                assert!(
+                    property.set_visibility.is_none(),
+                    "asymmetric property visibility is not modelled: {}",
+                    property.name
+                );
+                assert!(
+                    !property.is_final,
+                    "final properties are not modelled: {}",
+                    property.name
+                );
+                assert!(
+                    !property.is_abstract,
+                    "abstract properties are not modelled: {}",
+                    property.name
+                );
+                assert!(
+                    !property.by_ref,
+                    "by-ref properties are not modelled: {}",
+                    property.name
+                );
+                assert!(
+                    !property.is_promoted,
+                    "promoted properties are not modelled: {}",
+                    property.name
+                );
+                assert!(
+                    property.attributes.is_empty(),
+                    "property attributes are not modelled: {}",
+                    property.name
+                );
                 let default = match &property.default {
                     Some(value) => format!("Some({})", expr(value, depth + 2)),
                     None => "None".to_string(),
                 };
+                let virtual_get_only = property.hooks.get
+                    && !property.hooks.set
+                    && !property.hooks.get_by_ref;
                 let call = match (&property.visibility, &property.type_expr) {
+                    (Visibility::Public, Some(ty))
+                        if virtual_get_only
+                            && !property.readonly
+                            && !property.is_static
+                            && property.default.is_none() =>
+                    {
+                        format!(".virtual_get_prop({}, {})", lit(&property.name), ty_expr(ty))
+                    }
                     (Visibility::Public, Some(ty)) if property.readonly => format!(
                         ".readonly_prop({}, {})",
                         lit(&property.name),
@@ -272,6 +338,11 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
                         format!(".protected_untyped_prop({}, {})", lit(&property.name), default)
                     }
                 };
+                assert!(
+                    virtual_get_only || property.hooks == crate::parser::ast::PropertyHooks::none(),
+                    "unsupported property hooks on {}",
+                    property.name
+                );
                 out.push_str(&format!("\n{}{}", pad(depth + 1), call));
             }
             for class_method in methods {
@@ -294,11 +365,6 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
                     "a by-ref return is not modelled: {}",
                     class_method.name
                 );
-                assert!(
-                    class_method.attributes.is_empty(),
-                    "attributes on a method are not modelled: {}",
-                    class_method.name
-                );
                 let mut m = format!("method({})", lit(&class_method.name));
                 match class_method.visibility {
                     Visibility::Public => {}
@@ -312,6 +378,16 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
                 }
                 if class_method.is_final {
                     m.push_str(&format!("\n{}.final_()", pad(depth + 3)));
+                }
+                for group in &class_method.attributes {
+                    for attribute in &group.attributes {
+                        m.push_str(&format!(
+                            "\n{}.attr({}, {})",
+                            pad(depth + 3),
+                            lit(&name_source(&attribute.name)),
+                            expr_vec(&attribute.args, depth + 3),
+                        ));
+                    }
                 }
                 m.push_str(&params_calls(
                     &class_method.params,
@@ -396,12 +472,34 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
                 ));
             }
             for constant in constants {
-                out.push_str(&format!(
-                    "\n{}.constant({}, {})",
-                    pad(depth + 1),
-                    lit(&constant.name),
-                    expr(&constant.value, depth + 2)
-                ));
+                assert_eq!(
+                    constant.visibility,
+                    Visibility::Public,
+                    "only public interface constants are modelled"
+                );
+                assert!(!constant.is_final, "final interface constants are not modelled");
+                if constant.type_expr.is_none() && constant.attributes.is_empty() {
+                    out.push_str(&format!(
+                        "\n{}.constant({}, {})",
+                        pad(depth + 1),
+                        lit(&constant.name),
+                        expr(&constant.value, depth + 2)
+                    ));
+                } else {
+                    let type_expr = constant
+                        .type_expr
+                        .as_ref()
+                        .map(|ty| format!("Some({})", ty_expr(ty)))
+                        .unwrap_or_else(|| "None".to_string());
+                    out.push_str(&format!(
+                        "\n{}.constant_full({}, {}, {}, vec![{}])",
+                        pad(depth + 1),
+                        lit(&constant.name),
+                        expr(&constant.value, depth + 2),
+                        type_expr,
+                        attribute_groups(&constant.attributes, depth + 2)
+                    ));
+                }
             }
             for signature in methods {
                 assert!(
@@ -409,12 +507,53 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
                     "an interface method is a signature: {}",
                     signature.name
                 );
+                assert_eq!(
+                    signature.visibility,
+                    Visibility::Public,
+                    "only public interface methods are modelled"
+                );
+                assert!(!signature.is_final, "final interface methods are not modelled");
+                assert!(
+                    !signature.variadic_by_ref,
+                    "a by-ref interface variadic is not modelled: {}",
+                    signature.name
+                );
+                assert!(
+                    !signature.by_ref_return,
+                    "a by-ref interface return is not modelled: {}",
+                    signature.name
+                );
                 let mut m = format!("method({})", lit(&signature.name));
+                if signature.is_static {
+                    m.push_str(&format!("\n{}.static_()", pad(depth + 3)));
+                }
+                for group in &signature.attributes {
+                    for attribute in &group.attributes {
+                        m.push_str(&format!(
+                            "\n{}.attr({}, {})",
+                            pad(depth + 3),
+                            lit(&name_source(&attribute.name)),
+                            expr_vec(&attribute.args, depth + 3),
+                        ));
+                    }
+                }
                 m.push_str(&params_calls(
                     &signature.params,
                     &signature.param_attributes,
                     depth + 3,
                 ));
+                if let Some(tail) = &signature.variadic {
+                    let element = match &signature.variadic_type {
+                        Some(ty) => format!("Some({})", ty_expr(ty)),
+                        None => "None".to_string(),
+                    };
+                    m.push_str(&format!(
+                        "\n{}.variadic({}, {})",
+                        pad(depth + 3),
+                        lit(tail),
+                        element
+                    ));
+                }
                 if let Some(ty) = &signature.return_type {
                     m.push_str(&format!("\n{}.returns({})", pad(depth + 3), ty_expr(ty)));
                 }
@@ -560,12 +699,12 @@ fn params_calls(
     out
 }
 
-/// Emits `.body(vec![…])`, or nothing for an empty body.
+/// Emits `.body_exact(vec![…])`, or nothing for an empty body.
 fn body_call(body: &[Stmt], depth: usize) -> String {
     if body.is_empty() {
         return String::new();
     }
-    let mut out = format!("\n{}.body(vec![", pad(depth));
+    let mut out = format!("\n{}.body_exact(vec![", pad(depth));
     for stmt in body {
         out.push_str(&format!("\n{}{},", pad(depth + 1), statement(stmt, depth + 1)));
     }
@@ -879,13 +1018,29 @@ fn expr(value: &Expr, depth: usize) -> String {
         ExprKind::This => "e_this()".to_string(),
         ExprKind::BoolLiteral(flag) => format!("e_bool({})", flag),
         ExprKind::IntLiteral(number) => format!("e_int({})", number),
+        ExprKind::FloatLiteral(number) if number.is_infinite() && number.is_sign_positive() => {
+            "e_float(f64::INFINITY)".to_string()
+        }
+        ExprKind::FloatLiteral(number) if number.is_infinite() => {
+            "e_float(f64::NEG_INFINITY)".to_string()
+        }
+        ExprKind::FloatLiteral(number) if number.is_nan() => {
+            "e_float(f64::NAN)".to_string()
+        }
         ExprKind::FloatLiteral(number) => format!("e_float({:?})", number),
         ExprKind::StringLiteral(text) => format!("e_str({})", lit(text)),
         ExprKind::Variable(name) => format!("e_var({})", lit(name)),
+        ExprKind::NamedArg { name, value } => {
+            format!("e_named_arg({}, {})", lit(name), expr(value, depth))
+        }
         ExprKind::ConstRef(name) => format!("e_const({})", lit(&name.as_canonical())),
         ExprKind::PostIncrement(name) => format!("e_post_inc({})", lit(name)),
         ExprKind::Negate(inner) => format!("e_neg({})", expr(inner, depth)),
         ExprKind::Not(inner) => format!("e_not({})", expr(inner, depth)),
+        ExprKind::ErrorSuppress(inner) => {
+            format!("e_error_suppress({})", expr(inner, depth))
+        }
+        ExprKind::Clone(inner) => format!("e_clone({})", expr(inner, depth)),
         ExprKind::Cast { target, expr: inner } => format!(
             "e_cast(CastType::{}, {})",
             cast_type(target),
@@ -922,6 +1077,9 @@ fn expr(value: &Expr, depth: usize) -> String {
                 .map(|(key, item)| format!("({}, {})", expr(key, depth), expr(item, depth)))
                 .collect();
             format!("e_array_assoc(vec![{}])", rendered.join(", "))
+        }
+        ExprKind::ObjectClassName { object } => {
+            format!("e_object_class_name({})", expr(object, depth))
         }
         ExprKind::StaticPropertyAccess { receiver, property } => match receiver {
             StaticReceiver::Self_ => format!("e_self_static_prop({})", lit(property)),
@@ -1164,6 +1322,7 @@ fn cast_type(target: &CastType) -> &'static str {
         CastType::String => "String",
         CastType::Bool => "Bool",
         CastType::Array => "Array",
+        CastType::Void => "Void",
     }
 }
 

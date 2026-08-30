@@ -9,6 +9,7 @@
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
 use crate::errors::CompileError;
+use crate::names::{php_symbol_key, property_hook_get_method};
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::types::{PhpType, TypeEnv};
 
@@ -234,6 +235,10 @@ impl Checker {
                 return Ok(ty);
             }
             if let Some((_, (_, ty))) = class_info.visible_property(property) {
+                let getter = php_symbol_key(&property_hook_get_method(property));
+                if let Some(signature) = class_info.methods.get(&getter) {
+                    return Ok(signature.return_type.clone());
+                }
                 return Ok(ty.clone());
             }
             if let Some(sig) = class_info.methods.get("__get") {
@@ -245,10 +250,10 @@ impl Checker {
                 // value is statically `Mixed` because we cannot infer it.
                 return Ok(PhpType::Mixed);
             }
-            return Err(CompileError::new(
-                expr.span,
-                &format!("Undefined property: {}::{}", class_name, property),
-            ));
+            // PHP permits reads of undeclared object properties. The runtime emits an
+            // E_WARNING naming the receiver's concrete class and evaluates the read as null.
+            // Keep the result Mixed so codegen can preserve that warning/null behavior.
+            return Ok(PhpType::Mixed);
         }
         Err(CompileError::new(
             expr.span,

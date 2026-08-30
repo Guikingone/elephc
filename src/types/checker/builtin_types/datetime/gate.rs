@@ -33,7 +33,6 @@ pub(crate) const DATETIME_CLASS_NAMES: &[&str] = &[
     "DateMalformedStringException",
     "DateMalformedIntervalStringException",
     "DateMalformedPeriodStringException",
-    "DateUnknownException",
 ];
 
 /// Returns whether `program` can reach any builtin date/time class.

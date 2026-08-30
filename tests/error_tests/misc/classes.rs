@@ -188,6 +188,15 @@ fn test_error_nullsafe_assignment_target_is_rejected() {
     );
 }
 
+/// Verifies compound assignment cannot use an empty dynamic-property append target.
+#[test]
+fn test_error_dynamic_property_array_push_compound_assignment_is_rejected() {
+    expect_error(
+        "<?php $box = new stdClass(); $name = 'items'; $box->$name[] += 1;",
+        "Invalid assignment target",
+    );
+}
+
 /// Verifies the error diagnostic for private access.
 #[test]
 fn test_error_private_access() {
@@ -542,7 +551,7 @@ fn test_error_wrong_signature_vs_interface() {
     // implementing an interface method with a different parameter count is an error.
     expect_error(
         "<?php interface Named { public function name($x); } class User implements Named { public function name() { return \"x\"; } }",
-        "Cannot change parameter count when implementing interface method: User::name",
+        "Cannot remove inherited parameters when implementing interface method: User::name",
     );
 }
 

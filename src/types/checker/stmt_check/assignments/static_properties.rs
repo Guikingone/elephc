@@ -376,7 +376,7 @@ fn refine_static_property_assignment_type(
             return;
         };
         let Some(refined_ty) = super::properties::refined_untyped_property_assignment_type(
-            checker, &current, val_ty, false,
+            checker, &current, val_ty,
         ) else {
             return;
         };

@@ -3116,3 +3116,25 @@ fn test_branch_divergent_marking_survives_an_eval_body() {
         result.mixed_storage_store_sites
     );
 }
+
+/// Typed locals and typed parameters remain strict through the new boxed-Mixed fallback.
+#[test]
+fn test_boxed_mixed_fallback_preserves_declared_types() {
+    expect_error(
+        "<?php int $value = 1; echo ($value = \"x\");",
+        "cannot reassign $value",
+    );
+    expect_error(
+        "<?php function f(int $value) { if ($value) { $value = new stdClass(); } } f(1);",
+        "cannot reassign $value",
+    );
+}
+
+/// By-reference parameters keep caller-owned storage and cannot be boxed by the fallback.
+#[test]
+fn test_boxed_mixed_fallback_preserves_by_ref_parameters() {
+    expect_error(
+        "<?php function f(&$value) { if ($value) { $value = new stdClass(); } } $value = 1; f($value);",
+        "cannot reassign $value",
+    );
+}

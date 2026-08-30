@@ -57,6 +57,8 @@ use super::*;
             RuntimeFeatures { generator: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { popen_resource: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { directory_resource: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { float_precision: 13, ..RuntimeFeatures::none() },
+            RuntimeFeatures { php_profile: 4, ..RuntimeFeatures::none() },
         ];
 
         let mut keys = std::collections::HashSet::from([baseline]);

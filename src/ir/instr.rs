@@ -189,6 +189,7 @@ pub enum MixedNumericOp {
     Sub,
     Mul,
     Pow,
+    UnaryPlus,
 }
 
 /// PHP runtime type category tested by the backend-neutral `TypePredicate` opcode.
@@ -230,6 +231,7 @@ impl MixedNumericOp {
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
             MixedNumericOp::Pow => "pow",
+            MixedNumericOp::UnaryPlus => "unary_plus",
         }
     }
 }
@@ -434,8 +436,11 @@ pub enum Op {
     IteratorMethodCall,
     SplRuntimeCall,
     ObjectNew,
+    ObjectNewWithoutConstructor,
     EvalObjectNew,
     ObjectCloneShallow,
+    /// Clones compiler-private object storage without reserving a PHP-visible object handle.
+    ObjectCloneInternal,
     DynamicObjectNew,
     DynamicObjectNewMixed,
     DynamicObjectNewWithoutConstructorMixed,
@@ -700,6 +705,7 @@ impl Op {
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
+            | ObjectNewWithoutConstructor
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
@@ -719,7 +725,7 @@ impl Op {
                     | E::REFCOUNT_OP | E::MAY_WARN | E::MAY_FATAL
             }
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
-            | HashCloneShallow | ObjectCloneShallow => {
+            | HashCloneShallow | ObjectCloneShallow | ObjectCloneInternal => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             ArrayLen | HashLen => E::READS_HEAP,
@@ -764,9 +770,17 @@ impl Op {
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
             | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
             | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
-            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp
+            | InstanceOfDynamic | LooseEq | LooseNotEq | PhpRelCmp
             | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
+            }
+            MixedNumericBinop => {
+                E::READS_HEAP
+                    | E::ALLOC_HEAP
+                    | E::ALLOC_CONCAT
+                    | E::MAY_THROW
+                    | E::MAY_WARN
+                    | E::MAY_DEOPT
             }
             // `++`/`--` on a string reads the operand's payload, may write the shared
             // concat scratch while building the carried result, and always allocates the
@@ -1021,8 +1035,10 @@ impl Op {
             IteratorMethodCall => "iterator_method_call",
             SplRuntimeCall => "spl_runtime_call",
             ObjectNew => "object_new",
+            ObjectNewWithoutConstructor => "object_new_without_constructor",
             EvalObjectNew => "eval_object_new",
             ObjectCloneShallow => "object_clone_shallow",
+            ObjectCloneInternal => "object_clone_internal",
             DynamicObjectNew => "dynamic_object_new",
             DynamicObjectNewMixed => "dynamic_object_new_mixed",
             DynamicObjectNewWithoutConstructorMixed => {

@@ -492,7 +492,10 @@ impl ExceptionFlowAnalysis {
                 .combined(self.block_throws(body, bindings, class_context)),
             StmtKind::Foreach { array, body, .. } => self
                 .expr_throws(array, bindings, class_context)
-                .combined(self.block_throws(body, bindings, class_context)),
+                .combined(self.block_throws(body, bindings, class_context))
+                // Iterator initialization, current()/next(), and compiler-inserted guards can
+                // throw even when the source expression and loop body are otherwise pure.
+                .combined(ThrownTypes::unknown()),
             StmtKind::Switch {
                 subject,
                 cases,
@@ -998,6 +1001,9 @@ fn binary_op_exact_throw_type(
     op: &BinOp,
     right: &Expr,
 ) -> Option<&'static str> {
+    if crate::parser::ast::is_synthetic_unary_plus(op, right) {
+        return Some("TypeError");
+    }
     let left_is_numeric_literal = matches!(
         &left.kind,
         ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)

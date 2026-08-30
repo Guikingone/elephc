@@ -127,6 +127,15 @@ fn test_error_putenv_wrong_args() {
     expect_error("<?php putenv();", "putenv() takes exactly 1 argument");
 }
 
+/// Verifies that `setlocale()` requires both a category and at least one locale candidate.
+#[test]
+fn test_error_setlocale_wrong_args() {
+    expect_error(
+        "<?php setlocale(LC_ALL);",
+        "setlocale() takes at least 2 arguments",
+    );
+}
+
 /// Verifies that `phpversion()` with any arguments yields a no-args diagnostic.
 #[test]
 fn test_error_phpversion_wrong_args() {
@@ -138,6 +147,24 @@ fn test_error_phpversion_wrong_args() {
     expect_error(
         "<?php phpversion(1);",
         "phpversion() extension argument must be string",
+    );
+}
+
+/// Verifies `get_extension_funcs()` requires exactly one extension name.
+#[test]
+fn test_error_get_extension_funcs_wrong_args() {
+    expect_error(
+        "<?php get_extension_funcs();",
+        "get_extension_funcs() takes exactly 1 argument",
+    );
+}
+
+/// Verifies dynamic non-string extension names are rejected before backend lowering.
+#[test]
+fn test_error_get_extension_funcs_wrong_type() {
+    expect_error(
+        "<?php $extension = [\"date\"]; get_extension_funcs($extension);",
+        "get_extension_funcs() first argument must be a string in AOT mode",
     );
 }
 
