@@ -910,6 +910,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_types = types;
     }
 
+    /// Returns whether this name is an ORDINARY frame local, not a static or a global alias.
+    ///
+    /// `local_uses_global_storage` answers a narrower question: a `static` local's storage is a
+    /// program-global symbol but it is not a global ALIAS, so it answers false for one. A caller
+    /// that must not touch storage outliving the frame — anything that would re-initialize a
+    /// `static` on every call — has to ask this instead.
+    pub(crate) fn local_is_plain_frame_local(&self, name: &str) -> bool {
+        let kind = self
+            .local_kinds
+            .get(name)
+            .copied()
+            .unwrap_or(LocalKind::PhpLocal);
+        kind == LocalKind::PhpLocal && !self.uses_global_storage(name, kind)
+    }
+
     /// Returns whether a local is backed by program-global storage.
     pub(crate) fn local_uses_global_storage(&self, name: &str) -> bool {
         let kind = self

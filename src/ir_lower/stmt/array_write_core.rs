@@ -103,7 +103,11 @@ pub(super) fn vivify_undefined_container(
     array: &str,
     span: Span,
 ) {
-    if !ctx.local_name_is_undefined(array) || ctx.local_uses_global_storage(array) {
+    // A `static` local's slot is never marked initialized by a store in THIS frame — its storage
+    // is a program-global symbol that outlives the call — so `local_name_is_undefined` says yes on
+    // every entry. Vivifying there threw the static's array away each time a method ran:
+    // `static $q = []; $q[] = count($q);` counted 1, 1 instead of 1, 2.
+    if !ctx.local_is_plain_frame_local(array) || !ctx.local_name_is_undefined(array) {
         return;
     }
     let php_type = match ctx.local_type(array).codegen_repr() {
