@@ -33,7 +33,7 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     }
 
     let plat = emitter.platform;
-    let stat_buf = plat.stat_buf_size();
+    let stat_buf = plat.stat_buf_size(emitter.target.arch);
     // Layout: [0..8) path ptr, [8..16) file size, [16..16+stat_buf) stat buffer,
     //         then fd, heap ptr, bytes read, + saved frame regs
     let stat_base = 16;
@@ -212,7 +212,7 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
 /// Calls `__rt_diag_warning` on failure before returning (rax=0, rdx=0).
 /// Frame: pushes rbp, allocates `frame_size` bytes on rsp, preserves r10 as a temporary.
 fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
-    let stat_buf = emitter.platform.stat_buf_size();
+    let stat_buf = emitter.platform.stat_buf_size(emitter.target.arch);
     let size_off = emitter.platform.stat_size_offset();
     let frame_size = ((stat_buf + 48) + 15) & !15;
     let path_off = 8usize;

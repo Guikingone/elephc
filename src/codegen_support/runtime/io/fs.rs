@@ -295,13 +295,13 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // -- set up stack frame --
     // The two stat buffers sit ABOVE the original 48 bytes, so every offset below still reads
     // what it always did.
-    let stat_buf = emitter.platform.stat_buf_size();
+    let stat_buf = emitter.platform.stat_buf_size(emitter.target.arch);
     let copy_frame = 48 + ((2 * stat_buf + 15) & !15);
     let src_stat = 48;
     let dst_stat = 48 + stat_buf;
     let ino_off = emitter.platform.stat_ino_offset();
     let dev_off = emitter.platform.stat_dev_offset();
-    let mode_off = emitter.platform.stat_mode_offset();
+    let mode_off = emitter.platform.stat_mode_offset(emitter.target.arch);
     emitter.instruction(&format!("sub sp, sp, #{}", copy_frame));               // allocate the frame plus two stat buffers
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
@@ -499,13 +499,13 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved destination path and copied file payload
     // The two stat buffers sit BELOW the original four slots, so every offset below still reads
     // what it always did.
-    let stat_buf = emitter.platform.stat_buf_size();
+    let stat_buf = emitter.platform.stat_buf_size(emitter.target.arch);
     let copy_frame = 48 + ((2 * stat_buf + 15) & !15);
     let src_stat = 48 + stat_buf;
     let dst_stat = 48 + 2 * stat_buf;
     let ino_off = emitter.platform.stat_ino_offset();
     let dev_off = emitter.platform.stat_dev_offset();
-    let mode_off = emitter.platform.stat_mode_offset();
+    let mode_off = emitter.platform.stat_mode_offset(emitter.target.arch);
     emitter.instruction(&format!("sub rsp, {}", copy_frame));                   // reserve the path/payload slots plus two stat buffers
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the destination elephc path pointer while the source file is read into owned storage
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the destination elephc path length while the source file is read into owned storage

@@ -26,15 +26,15 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
     }
 
     let plat = emitter.platform;
-    let stat_buf = plat.stat_buf_size();
+    let stat_buf = plat.stat_buf_size(emitter.target.arch);
     let frame_size = (stat_buf + 32 + 15) & !15;
     let save_offset = frame_size - 16;
-    let mode_off = plat.stat_mode_offset();
+    let mode_off = plat.stat_mode_offset(emitter.target.arch);
     let atime_off = plat.stat_atime_offset();
     let ctime_off = plat.stat_ctime_offset();
     let ino_off = plat.stat_ino_offset();
-    let uid_off = plat.stat_uid_offset();
-    let gid_off = plat.stat_gid_offset();
+    let uid_off = plat.stat_uid_offset(emitter.target.arch);
+    let gid_off = plat.stat_gid_offset(emitter.target.arch);
 
     // Helper closure that emits the standard prologue for a stat-based scalar
     // helper: setup frame, cstr the path, syscall stat64, then leave the

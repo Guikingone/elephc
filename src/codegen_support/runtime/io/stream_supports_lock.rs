@@ -41,10 +41,10 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_stream_supports_lock");
     // The frame carries the incoming handle and a stat buffer: the socket test below needs the
     // DESCRIPTOR, which only the handle can produce, and `__rt_stream_state` consumes x0.
-    let stat_buf = emitter.platform.stat_buf_size();
+    let stat_buf = emitter.platform.stat_buf_size(emitter.target.arch);
     let buf_off = 32;
     let frame = (buf_off + stat_buf + 15) & !15;
-    let mode_off = buf_off + emitter.platform.stat_mode_offset();
+    let mode_off = buf_off + emitter.platform.stat_mode_offset(emitter.target.arch);
     emitter.instruction(&format!("sub sp, sp, #{}", frame));                    // frame for the linkage, the handle and a stat buffer
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
@@ -101,11 +101,11 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_supports_lock ---");
     emitter.label_global("__rt_stream_supports_lock");
     // See the AArch64 arm: the socket test needs the descriptor, so the handle is kept.
-    let stat_buf = emitter.platform.stat_buf_size();
+    let stat_buf = emitter.platform.stat_buf_size(emitter.target.arch);
     let handle_off = 8;
     let buf_off = 16 + stat_buf;
     let frame = (buf_off + 15) & !15;
-    let mode_off = buf_off - emitter.platform.stat_mode_offset();
+    let mode_off = buf_off - emitter.platform.stat_mode_offset(emitter.target.arch);
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
     emitter.instruction(&format!("sub rsp, {}", frame));                        // room for the handle and a stat buffer

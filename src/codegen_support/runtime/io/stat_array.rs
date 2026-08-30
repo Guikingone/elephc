@@ -34,7 +34,7 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
     }
 
     let plat = emitter.platform;
-    let stat_buf = plat.stat_buf_size();
+    let stat_buf = plat.stat_buf_size(emitter.target.arch);
     // Frame layout:
     //   sp + 0 .. stat_buf       : stat buffer (must be at sp+0 for the syscall)
     //   sp + stat_buf            : hash pointer slot (8 bytes)
@@ -46,14 +46,14 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
 
     // Field descriptor: (numeric_idx, key_symbol, key_len, value_offset_fn,
     //                    load_instr_fn).
-    let mode_off = plat.stat_mode_offset();
+    let mode_off = plat.stat_mode_offset(emitter.target.arch);
     let size_off = plat.stat_size_offset();
     let atime_off = plat.stat_atime_offset();
     let mtime_off = plat.stat_mtime_offset();
     let ctime_off = plat.stat_ctime_offset();
     let ino_off = plat.stat_ino_offset();
-    let uid_off = plat.stat_uid_offset();
-    let gid_off = plat.stat_gid_offset();
+    let uid_off = plat.stat_uid_offset(emitter.target.arch);
+    let gid_off = plat.stat_gid_offset(emitter.target.arch);
     let dev_off = plat.stat_dev_offset();
     let rdev_off = plat.stat_rdev_offset();
     let nlink_off = plat.stat_nlink_offset();

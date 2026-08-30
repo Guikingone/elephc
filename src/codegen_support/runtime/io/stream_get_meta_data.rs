@@ -430,10 +430,10 @@ fn emit_data_uri_params_aarch64(emitter: &mut Emitter) {
 /// answers 0, which is the same non-seekable verdict the lseek probe used to give it.
 fn emit_stream_fd_is_regular_aarch64(emitter: &mut Emitter) {
     let plat = emitter.platform;
-    let stat_buf = plat.stat_buf_size();
+    let stat_buf = plat.stat_buf_size(emitter.target.arch);
     let frame_size = (stat_buf + 32 + 15) & !15;
     let save_offset = frame_size - 16;
-    let mode_off = plat.stat_mode_offset();
+    let mode_off = plat.stat_mode_offset(emitter.target.arch);
 
     emitter.blank();
     emitter.comment("--- runtime: is the stream descriptor a regular file (S_ISREG) ---");

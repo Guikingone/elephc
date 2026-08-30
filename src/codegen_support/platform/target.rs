@@ -340,23 +340,36 @@ impl Platform {
         }
     }
 
-    /// Returns the size of `struct stat` for this platform in bytes.
+    /// Returns the size of `struct stat` for this platform and ARCH in bytes.
     ///
-    /// Used when allocating the stat buffer passed to `*at()` syscalls.
-    pub fn stat_buf_size(&self) -> usize {
-        match self {
-            Platform::MacOS => 144,
-            Platform::Linux => 128,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    /// Used when allocating the stat buffer passed to `stat()`/`fstat()`. Linux does not have one
+    /// layout: the x86_64 struct is 144 bytes where the aarch64 one is 128, because x86_64 widens
+    /// `st_nlink` to 8 bytes and adds a `__pad0`. Reserving the smaller size on x86_64 lets the
+    /// call write 16 bytes PAST the buffer, over whatever the frame put below it.
+    pub fn stat_buf_size(&self, arch: Arch) -> usize {
+        match (self, arch) {
+            (Platform::MacOS, _) => 144,
+            (Platform::Linux, Arch::X86_64) => 144,
+            (Platform::Linux, Arch::AArch64) => 128,
+            (Platform::Windows, _) => {
+                panic!("Windows target is not yet supported (see issue #379)")
+            }
         }
     }
 
     /// Returns the byte offset of `st_mode` within `struct stat`.
-    pub fn stat_mode_offset(&self) -> usize {
-        match self {
-            Platform::MacOS => 4,
-            Platform::Linux => 16,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    ///
+    /// x86_64 Linux puts an 8-byte `st_nlink` before it and lands `st_mode` at 24; aarch64 Linux
+    /// puts `st_mode` first, at 16. Reading 16 on x86_64 reads `st_nlink`, which is 1 for an
+    /// ordinary file and so never matched `S_IFDIR`.
+    pub fn stat_mode_offset(&self, arch: Arch) -> usize {
+        match (self, arch) {
+            (Platform::MacOS, _) => 4,
+            (Platform::Linux, Arch::X86_64) => 24,
+            (Platform::Linux, Arch::AArch64) => 16,
+            (Platform::Windows, _) => {
+                panic!("Windows target is not yet supported (see issue #379)")
+            }
         }
     }
 
@@ -454,20 +467,26 @@ impl Platform {
     }
 
     /// Returns the byte offset of `st_uid` within `struct stat`.
-    pub fn stat_uid_offset(&self) -> usize {
-        match self {
-            Platform::MacOS => 16,
-            Platform::Linux => 24,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    pub fn stat_uid_offset(&self, arch: Arch) -> usize {
+        match (self, arch) {
+            (Platform::MacOS, _) => 16,
+            (Platform::Linux, Arch::X86_64) => 28,
+            (Platform::Linux, Arch::AArch64) => 24,
+            (Platform::Windows, _) => {
+                panic!("Windows target is not yet supported (see issue #379)")
+            }
         }
     }
 
     /// Returns the byte offset of `st_gid` within `struct stat`.
-    pub fn stat_gid_offset(&self) -> usize {
-        match self {
-            Platform::MacOS => 20,
-            Platform::Linux => 28,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    pub fn stat_gid_offset(&self, arch: Arch) -> usize {
+        match (self, arch) {
+            (Platform::MacOS, _) => 20,
+            (Platform::Linux, Arch::X86_64) => 32,
+            (Platform::Linux, Arch::AArch64) => 28,
+            (Platform::Windows, _) => {
+                panic!("Windows target is not yet supported (see issue #379)")
+            }
         }
     }
 
