@@ -1149,10 +1149,12 @@ fn assign_expr(name: &str, value: Expr) -> Expr {
 /// stream is not yet at end of file, so one more round answers `''`. `file()` reports no such
 /// element, so the array-backed model stopped an iteration early — MEASURED on `php -n` 8.5.6:
 ///
-///     ""       iterates 1 time  ['']
-///     "a"      iterates 1 time  ['a']
-///     "a\n"    iterates 2 times ['a\n', '']
-///     "a\nb\n"  iterates 3 times ['a\n', 'b\n', '']
+/// ```text
+/// ""       iterates 1 time  ['']
+/// "a"      iterates 1 time  ['a']
+/// "a\n"    iterates 2 times ['a\n', '']
+/// "a\nb\n"  iterates 3 times ['a\n', 'b\n', '']
+/// ```
 ///
 /// So the rule is: a file that is EMPTY, or whose last byte is a newline, has one more line than
 /// `file()` reports. The last stored line is tested rather than the file re-read, because these
@@ -1193,11 +1195,13 @@ fn spl_file_object_trailing_line_stmt() -> Stmt {
 /// hand-written in-memory buffer instead — thirteen method bodies of its own. They disagreed with
 /// php in several places at once. MEASURED on `php -n` 8.5.6:
 ///
-///     $t = new SplTempFileObject();
-///     $t->eof()                         php: false   elephc: true
-///     …write "a\nbb\nccc\n", fseek(0)
-///     $t->current()                     php: "a\n"   elephc: "ccc"
-///     iterating it                      php keeps the newlines, elephc dropped them
+/// ```text
+/// $t = new SplTempFileObject();
+/// $t->eof()                         php: false   elephc: true
+/// …write "a\nbb\nccc\n", fseek(0)
+/// $t->current()                     php: "a\n"   elephc: "ccc"
+/// iterating it                      php keeps the newlines, elephc dropped them
+/// ```
 ///
 /// Opening the stream php opens deletes all of that: everything below is inherited.
 ///

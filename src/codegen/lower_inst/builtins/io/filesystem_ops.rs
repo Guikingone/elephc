@@ -169,8 +169,10 @@ fn copy_source_is_a_run_time_path(
 /// Emits `copy()` for a source spelled at RUN TIME, giving a `php://filter/...` URL the read
 /// `fopen()` performs and leaving every other path to `__rt_copy`.
 ///
-///     $src = 'php://filter/read=string.rot13/resource=' . $raw;
-///     copy($src, $dst);
+/// ```text
+/// $src = 'php://filter/read=string.rot13/resource=' . $raw;
+/// copy($src, $dst);
+/// ```
 ///
 /// `__rt_copy` reads through `__rt_file_get_contents`, whose runtime half is a `stat` and an
 /// `open(2)`: it reaches every REGISTERED wrapper, and knows nothing of php's own filter scheme,

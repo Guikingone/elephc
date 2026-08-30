@@ -54,10 +54,12 @@ pub(in crate::codegen::lower_inst::builtins) fn load_stream_fd_to_result_at(
 /// makes the READ ITSELF fail, and php names the function the user called. MEASURED on `php -n`
 /// 8.5.6 against a wrapper with `stream_read` but no `stream_eof`, eleven callers, eleven names:
 ///
-///     Warning: fread(): C::stream_eof is not implemented! Assuming EOF        → false
-///     Warning: file_get_contents(): C::stream_eof is not implemented! ...     → ""
-///     Warning: fpassthru(): C::stream_eof is not implemented! ...             → -1
-///     Warning: file(): C::stream_eof is not implemented! ...                  → []
+/// ```text
+/// Warning: fread(): C::stream_eof is not implemented! Assuming EOF        → false
+/// Warning: file_get_contents(): C::stream_eof is not implemented! ...     → ""
+/// Warning: fpassthru(): C::stream_eof is not implemented! ...             → -1
+/// Warning: file(): C::stream_eof is not implemented! ...                  → []
+/// ```
 ///
 /// …and the same for `fgets`, `fgetc`, `fgetcsv`, `stream_get_contents`, `stream_get_line`,
 /// `readfile` and `fscanf`. Every failure shape is that one failed read travelling out through
