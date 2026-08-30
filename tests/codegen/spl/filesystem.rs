@@ -456,6 +456,42 @@ unlink("c.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// `flock()`, `fflush()` and `fstat()` answer instead of jumping to address zero.
+///
+/// All three are DECLARED on `SplFileObject` and were missing from
+/// `is_supported_builtin_spl_method`, which decides what gets lowered. A declared body that never
+/// reaches the lowering leaves a NULL vtable slot, and the call branches to 0 — MEASURED, both
+/// `$f->flock(LOCK_SH)` and `$f->fflush()` exited 139 with `lldb` stopped at
+/// `frame #0: 0x0000000000000000`. `SplTempFileObject` was missing `flock` the same way.
+///
+/// The list's own comment already described this failure mode for the CSV builder; these three
+/// are the same omission, and nothing but a call site can find them, which is what this test is.
+#[test]
+fn test_spl_file_object_stream_methods_that_had_no_vtable_slot() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("v.txt", "data
+");
+$f = new SplFileObject("v.txt", "r");
+echo var_export($f->flock(LOCK_SH | LOCK_NB), true), "|";
+echo var_export($f->flock(LOCK_UN), true), "|";
+echo var_export($f->fflush(), true), "|";
+$st = $f->fstat();
+echo var_export(isset($st["size"]), true), "|", $st["size"], "|";
+unset($f);
+$t = new SplTempFileObject();
+$t->fwrite("x");
+echo var_export($t->flock(LOCK_EX | LOCK_NB), true), "|";
+echo var_export($t->flock(LOCK_UN), true);
+unlink("v.txt");
+"#,
+    );
+    // `php://temp` is not a file a lock can be taken on — MEASURED, php answers `false` to both,
+    // and to a plain `flock()` on the same stream. What matters here is that it ANSWERS.
+    assert_eq!(out, "true|true|true|true|5|false|false");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies SplTempFileObject uses a writable stream for basic read/write cycles.
 #[test]
 fn test_spl_temp_file_object_stream_read_write() {

@@ -65,6 +65,12 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "ftruncate"
                 | "ftell"
                 | "fseek"
+                // Declared beside the three above and omitted here, so each answered a null
+                // vtable slot: MEASURED, `$f->flock(LOCK_SH)` and `$f->fflush()` both exit 139
+                // with `lldb` stopped at `frame #0: 0x0000000000000000`.
+                | "flock"
+                | "fflush"
+                | "fstat"
                 | "getflags"
                 | "setflags"
                 | "getmaxlinelen"
@@ -94,6 +100,9 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "ftell"
                 | "fseek"
                 | "ftruncate"
+                // See the parent's list: declared in `spl_temp_file_object_stream_methods` and
+                // missing here, which is the same null slot.
+                | "flock"
                 | "rewind"
                 | "__elephcspilltofile"
         ),
