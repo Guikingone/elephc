@@ -208,7 +208,8 @@ pub(crate) use fd_write::emit_fd_write;
 pub(crate) use file_put_contents::emit_file_put_contents;
 pub(crate) use fnmatch::emit_fnmatch;
 pub(crate) use fopen::{
-    emit_fopen, FOPEN_WRAPPER_DISABLED_MESSAGE, NO_SUITABLE_WRAPPER_REASON,
+    emit_fopen, unable_to_locate_wrapper_message, CHMOD_NON_STANDARD_STREAM,
+    FOPEN_WRAPPER_DISABLED_MESSAGE, NO_SUITABLE_WRAPPER_REASON,
 };
 pub(crate) use fputcsv::emit_fputcsv;
 pub(crate) use fread::emit_fread;

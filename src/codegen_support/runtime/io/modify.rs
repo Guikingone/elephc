@@ -37,6 +37,17 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment after preceding runtime literals
     emitter.comment("--- runtime: chmod ---");
     emitter.label_global("__rt_chmod");
+    // php locates a wrapper for every path, and `chmod()` words the refusal its own way — it is
+    // the ONLY guarded operation that does. Unguarded, elephc reached the syscall and answered
+    // TRUE while php answers false, which is a wrong VALUE and not just a missing line.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::Fixed {
+            symbol: "_diag_chmod_non_standard",
+            len: super::fopen::CHMOD_NON_STANDARD_STREAM.len(),
+        },
+    );
     emitter.instruction("sub sp, sp, #32");                                     // allocate frame + spill slot for mode
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish new frame pointer

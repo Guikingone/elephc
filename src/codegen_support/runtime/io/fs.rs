@@ -36,7 +36,14 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.comment("--- runtime: unlink ---");
     emitter.label_global("__rt_unlink");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
-    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::Fixed {
+            symbol: "_diag_no_wrapper_unlink",
+            len: super::fopen::unable_to_locate_wrapper_message("unlink").len(),
+        },
+    );
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #32");                                     // linkage plus the path the warning names
@@ -235,7 +242,14 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.comment("--- runtime: rename ---");
     emitter.label_global("__rt_rename");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
-    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::Fixed {
+            symbol: "_diag_no_wrapper_rename",
+            len: super::fopen::unable_to_locate_wrapper_message("rename").len(),
+        },
+    );
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
@@ -416,7 +430,14 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: unlink ---");
     emitter.label_global("__rt_unlink");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
-    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::Fixed {
+            symbol: "_diag_no_wrapper_unlink",
+            len: super::fopen::unable_to_locate_wrapper_message("unlink").len(),
+        },
+    );
     emit_single_path_libc_bool_helper_with(
         emitter,
         "unlink",
@@ -454,7 +475,14 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: rename ---");
     emitter.label_global("__rt_rename");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
-    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::Fixed {
+            symbol: "_diag_no_wrapper_rename",
+            len: super::fopen::unable_to_locate_wrapper_message("rename").len(),
+        },
+    );
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while rename uses temporary path slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source and destination path temporaries
     emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the saved destination and source C-string pointers

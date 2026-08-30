@@ -989,6 +989,16 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ".globl _diag_no_suitable_wrapper\n_diag_no_suitable_wrapper:\n    .ascii {:?}\n",
         crate::codegen_support::runtime::io::NO_SUITABLE_WRAPPER_REASON
     ));
+    for callee in ["unlink", "rename"] {
+        out.push_str(&format!(
+            ".globl _diag_no_wrapper_{callee}\n_diag_no_wrapper_{callee}:\n    .ascii {:?}\n",
+            crate::codegen_support::runtime::io::unable_to_locate_wrapper_message(callee)
+        ));
+    }
+    out.push_str(&format!(
+        ".globl _diag_chmod_non_standard\n_diag_chmod_non_standard:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::io::CHMOD_NON_STANDARD_STREAM
+    ));
     out.push_str(".globl _diag_open_failed_fgc_prefix\n_diag_open_failed_fgc_prefix:\n    .ascii \"Warning: file_get_contents(\"\n");
     out.push_str(".globl _diag_open_failed_fpc_prefix\n_diag_open_failed_fpc_prefix:\n    .ascii \"Warning: file_put_contents(\"\n");
     out.push_str(".globl _diag_open_failed_file_prefix\n_diag_open_failed_file_prefix:\n    .ascii \"Warning: file(\"\n");

@@ -58,9 +58,48 @@ pub(crate) enum DisabledWrapperAnswer {
     StringPair,
 }
 
+/// What a guarded helper SAYS while `file://` is unregistered.
+///
+/// A separate axis from the answer: php refuses `mkdir()` and `is_file()` without a word, gives
+/// `unlink()` and `rename()` one fixed line, and gives `chmod()` a different fixed line. MEASURED
+/// on `php -n` 8.5.6 — the wordings are php's own and none is a paraphrase of another.
+#[derive(Clone, Copy)]
+pub(crate) enum DisabledWrapperNotice {
+    /// php refuses without a word.
+    Silent,
+    /// One fixed line that names no path.
+    Fixed {
+        /// The data symbol holding the complete line, trailing newline included.
+        symbol: &'static str,
+        /// Its byte length.
+        len: usize,
+    },
+}
+
+/// php's line for a path operation that cannot even find a wrapper — `unlink`, `rename`.
+pub(crate) const UNABLE_TO_LOCATE_WRAPPER: &str = "Warning: %(): Unable to locate stream wrapper\n";
+
+/// php's line for `chmod()`, which words its refusal differently from every other path operation.
+pub(crate) const CHMOD_NON_STANDARD_STREAM: &str =
+    "Warning: chmod(): Cannot call chmod() for a non-standard stream\n";
+
+/// Returns [`UNABLE_TO_LOCATE_WRAPPER`] with `%` replaced by a callee name.
+pub(crate) fn unable_to_locate_wrapper_message(callee: &str) -> String {
+    UNABLE_TO_LOCATE_WRAPPER.replace('%', callee)
+}
+
 pub(crate) fn emit_refuse_when_file_wrapper_disabled(
     emitter: &mut Emitter,
     answer: DisabledWrapperAnswer,
+) {
+    emit_refuse_when_file_wrapper_disabled_saying(emitter, answer, DisabledWrapperNotice::Silent);
+}
+
+/// [`emit_refuse_when_file_wrapper_disabled`] with php's own wording for the refusal.
+pub(crate) fn emit_refuse_when_file_wrapper_disabled_saying(
+    emitter: &mut Emitter,
+    answer: DisabledWrapperAnswer,
+    notice: DisabledWrapperNotice,
 ) {
     // A GAS numeric local label, so the emitter needs no unique-name bookkeeping and two helpers
     // guarded in the same file cannot collide. `1f` is the next `1:` forward.
@@ -70,6 +109,16 @@ pub(crate) fn emit_refuse_when_file_wrapper_disabled(
             emitter.instruction("ldr x10, [x9]");                               // disabled built-in mask
             emitter.instruction(&format!("tst x10, #{}", file_wrapper_mask_bit()));
             emitter.instruction("b.eq 1f");                                     // file:// is registered: carry on
+            // The notice goes FIRST: `__rt_diag_warning` clobbers the answer registers, and the
+            // linkage has to be parked because the guard runs before the helper's own frame.
+            if let DisabledWrapperNotice::Fixed { symbol, len } = notice {
+                emitter.instruction("stp x29, x30, [sp, #-16]!");               // the guard has no frame of its own yet
+                emitter.instruction("mov x29, sp");
+                abi::emit_symbol_address(emitter, "x1", symbol);
+                emitter.instruction(&format!("mov x2, #{len}"));                // php's own line, byte length
+                emitter.instruction("bl __rt_diag_warning");
+                emitter.instruction("ldp x29, x30, [sp], #16");                 // and back to the caller's stack
+            }
             match answer {
                 DisabledWrapperAnswer::Predicate(value) => {
                     emitter.instruction(&format!("mov x0, #{value}"));          // php answers this while it is not
@@ -91,6 +140,16 @@ pub(crate) fn emit_refuse_when_file_wrapper_disabled(
             emitter.instruction("mov r10, QWORD PTR [r9]");                     // disabled built-in mask
             emitter.instruction(&format!("test r10, {}", file_wrapper_mask_bit()));
             emitter.instruction("jz 1f");                                       // file:// is registered: carry on
+            // See the AArch64 arm: the notice goes first and needs a frame the guard does not have.
+            if let DisabledWrapperNotice::Fixed { symbol, len } = notice {
+                emitter.instruction("push rbp");                                // also realigns rsp for the call
+                emitter.instruction("mov rbp, rsp");
+                abi::emit_symbol_address(emitter, "rdi", symbol);
+                emitter.instruction(&format!("mov esi, {len}"));                // php's own line, byte length
+                emitter.instruction("call __rt_diag_warning");
+                emitter.instruction("mov rsp, rbp");
+                emitter.instruction("pop rbp");
+            }
             match answer {
                 DisabledWrapperAnswer::Predicate(value) => {
                     emitter.instruction(&format!("mov rax, {value}"));          // php answers this while it is not

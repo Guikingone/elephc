@@ -40,6 +40,15 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: chmod ---");
     emitter.label_global("__rt_chmod");
+    // See the AArch64 counterpart: unguarded, this answered TRUE where php answers false.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::Fixed {
+            symbol: "_diag_chmod_non_standard",
+            len: super::fopen::CHMOD_NON_STANDARD_STREAM.len(),
+        },
+    );
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish frame
     emitter.instruction("sub rsp, 32");                                         // align stack, plus the path the warning names

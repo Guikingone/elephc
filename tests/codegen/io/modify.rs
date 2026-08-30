@@ -86,6 +86,35 @@ fn test_chmod_missing_path_returns_false() {
     assert_eq!(out, "n");
 }
 
+/// An unregistered `file://` wrapper stops `chmod()`, and php words it its own way.
+///
+/// `chmod()` carried no wrapper guard at all: it reached the syscall, which succeeded, and
+/// answered TRUE while php answers false — a wrong VALUE, not a missing line. It is also the one
+/// guarded operation php does not word like the others: MEASURED on `php -n` 8.5.6,
+/// `unlink()` and `rename()` say "Unable to locate stream wrapper" and this says
+/// "Cannot call chmod() for a non-standard stream".
+#[test]
+fn test_chmod_refuses_while_the_file_wrapper_is_unregistered() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("chm.txt", "x");
+stream_wrapper_unregister("file");
+var_dump(chmod("chm.txt", 0644));
+var_dump(rename("chm.txt", "chm2.txt"));
+stream_wrapper_restore("file");
+unlink("chm.txt");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: chmod(): Cannot call chmod() for a non-standard stream\n\
+         Warning: rename(): Unable to locate stream wrapper\n",
+        "php gives these two different wordings, and neither is a paraphrase of the other"
+    );
+}
+
 /// Verifies chown() returns false when the path does not exist.
 #[test]
 fn test_chown_missing_path_returns_false() {
