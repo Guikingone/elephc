@@ -646,6 +646,15 @@ pub(crate) fn lower_fdatasync(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 /// all `false`, MEASURED on `php -n` 8.5.6. elephc backs the first two with `tmpfile()`, a REAL
 /// descriptor that locks, so `flock()` answered true for every one of them. The wrapper is asked
 /// first, before the descriptor is even resolved — the same order `ftell()` uses above.
+///
+/// The question asked is `stream_supports_lock()`'s own, not the narrower wrapper-only one this
+/// used to ask: php decides both from the same place — the stream's ops — so the two cannot
+/// disagree, and the narrow one did not know about SOCKETS. A socket carries
+/// `php_stream_socket_ops`, which has no `set_option` at all, and no wrapper id can tell one from
+/// a file because `stream_socket_pair()` and `fopen()` are recorded identically. On macOS
+/// `flock(2)` refuses a socket by itself and the gap was invisible; on Linux it SUCCEEDS, so
+/// `@flock($pair[0], LOCK_EX)` answered true where php answers false — caught by CI's
+/// linux-aarch64 shard, which is the only place the two platforms differ here.
 pub(crate) fn lower_flock(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "flock", 2, 3)?;
     let stream = expect_operand(inst, 0)?;
@@ -655,16 +664,16 @@ pub(crate) fn lower_flock(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // the handle owns the wrapper identity
     }
-    abi::emit_call_label(ctx.emitter, "__rt_stream_lock_unsupported");
+    abi::emit_call_label(ctx.emitter, "__rt_stream_supports_lock");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cbnz x0, {}", unlockable_label));        // php has no descriptor to lock here
+                .instruction(&format!("cbz x0, {}", unlockable_label));         // php has no lock op to reach here
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                           // php has no descriptor to lock here
+            ctx.emitter.instruction("test rax, rax");                           // php has no lock op to reach here
             ctx.emitter
-                .instruction(&format!("jnz {}", unlockable_label));
+                .instruction(&format!("jz {}", unlockable_label));
         }
     }
     load_stream_fd_to_result(ctx, stream, "flock")?;
