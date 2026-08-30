@@ -29,6 +29,17 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// Shared rather than written out per helper: eighteen copies of a mask test is eighteen chances
 /// for the bit to stop agreeing with the table, which is how the `fopen` guard came to test
 /// `https` for five releases.
+/// php's first line when `fopen()` is handed a path whose wrapper is unregistered.
+///
+/// MEASURED on `php -n` 8.5.6 after `stream_wrapper_unregister("file")`. php prints TWO lines and
+/// this is the one that says why; the second is the ordinary failed-open line with
+/// [`NO_SUITABLE_WRAPPER_REASON`] where an errno would be.
+pub(crate) const FOPEN_WRAPPER_DISABLED_MESSAGE: &str =
+    "Warning: fopen(): file:// wrapper is disabled in the server configuration\n";
+
+/// The reason php gives when no wrapper claims a path, in place of a `strerror` text.
+pub(crate) const NO_SUITABLE_WRAPPER_REASON: &str = "no suitable wrapper could be found";
+
 /// What a guarded helper hands back while `file://` is unregistered.
 ///
 /// The two shapes are not interchangeable: a PREDICATE answers in x0/rax alone, while the
@@ -188,21 +199,27 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fopen_uw_slot");                                // continue scanning slots
     emitter.label("__rt_fopen_uw_done");
 
-    // -- refuse plain paths while the file:// wrapper is unregistered --
-    // stream_wrapper_unregister("file") must actually stop opens, otherwise the
-    // call reports success and changes nothing. The bit is derived from the wrapper table by
-    // `file_wrapper_mask_bit`.
-    abi::emit_symbol_address(emitter, "x9", "_disabled_builtin_wrappers");
-    emitter.instruction("ldr x10, [x9]");                                       // disabled built-in mask
-    emitter.instruction(&format!("tst x10, #{}", file_wrapper_mask_bit()));     // is file:// unregistered?
-    emitter.instruction("b.ne __rt_fopen_fail");                                // report PHP false while it is
-
     // -- save mode string for later parsing --
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save mode ptr and len on stack
 
     // -- null-terminate the filename via __rt_cstr --
     emitter.instruction("bl __rt_path_cstr");                                   // convert filename to C string, x0=cstr path
     emitter.instruction("str x0, [sp, #0]");                                    // save null-terminated path pointer
+
+    // -- refuse plain paths while the file:// wrapper is unregistered --
+    // stream_wrapper_unregister("file") must actually stop opens, otherwise the
+    // call reports success and changes nothing. The bit is derived from the wrapper table by
+    // `file_wrapper_mask_bit`.
+    //
+    // AFTER the path is null-terminated, and to an arm of its own. It used to sit before both and
+    // branch straight into `__rt_fopen_fail`, which reads the NUL-terminated path from `[sp, #0]`
+    // and an errno from x0 — neither of which exists yet there. The errno came out as the
+    // uninitialised register (`Unknown error: 35229128`) and the path as an uninitialised frame
+    // slot, which on `linux-aarch64` was a wild pointer and SEGFAULTED the whole program.
+    abi::emit_symbol_address(emitter, "x9", "_disabled_builtin_wrappers");
+    emitter.instruction("ldr x10, [x9]");                                       // disabled built-in mask
+    emitter.instruction(&format!("tst x10, #{}", file_wrapper_mask_bit()));     // is file:// unregistered?
+    emitter.instruction("b.ne __rt_fopen_wrapper_disabled");                    // php words this one itself
 
     // -- parse mode string to derive open() flags --
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // reload mode ptr and len
@@ -316,6 +333,31 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_open_failed_warning");
     emitter.instruction("mov x0, #-1");                                         // return -1 to indicate failure
     emitter.instruction("b __rt_fopen_return");                                 // skip eof-flag reset on failed opens
+
+    // -- the file:// wrapper is unregistered: php words this one itself --
+    // MEASURED on `php -n` 8.5.6 after `stream_wrapper_unregister("file")`, TWO lines:
+    //   Warning: fopen(): file:// wrapper is disabled in the server configuration
+    //   Warning: fopen(uw.txt): Failed to open stream: no suitable wrapper could be found
+    // The second is the ordinary failed-open line with a fixed reason where a `strerror` text
+    // normally goes, so it goes through `__rt_open_failed_reason_warning` rather than through
+    // `__rt_open_failed_warning`, which would call `strerror` on an errno that never happened.
+    emitter.label("__rt_fopen_wrapper_disabled");
+    abi::emit_symbol_address(emitter, "x1", "_diag_fopen_wrapper_disabled");
+    emitter.instruction(&format!(
+        "mov x2, #{}",
+        FOPEN_WRAPPER_DISABLED_MESSAGE.len()
+    ));                                                                         // the wrapper line, byte length
+    emitter.instruction("bl __rt_diag_warning");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the NUL-terminated path
+    emitter.instruction("bl __rt_path_diag_name");                              // php names what the program wrote
+    emitter.instruction("mov x2, x0");                                          // straight into the composer's path register
+    abi::emit_symbol_address(emitter, "x0", "_diag_open_failed_fopen_prefix");
+    emitter.instruction(&format!("mov x1, #{}", "Warning: fopen(".len()));      // prefix length
+    abi::emit_symbol_address(emitter, "x3", "_diag_no_suitable_wrapper");
+    emitter.instruction(&format!("mov x4, #{}", NO_SUITABLE_WRAPPER_REASON.len()));
+    emitter.instruction("bl __rt_open_failed_reason_warning");
+    emitter.instruction("mov x0, #-1");                                         // the caller boxes PHP false
+    emitter.instruction("b __rt_fopen_return");
 
     // -- a mode php refuses outright: no syscall ran, so there is no errno to describe --
     // php-src's `_php_stream_fopen` reports this through `php_stream_wrapper_log_error`, which the
@@ -574,19 +616,22 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fopen_uw_slot_x86");                          // continue scanning slots
     emitter.label("__rt_fopen_uw_done_x86");
 
-    // -- refuse plain paths while the file:// wrapper is unregistered --
-    // The AArch64 helper has always done this; without it here,
-    // `stream_wrapper_unregister("file")` reported success on x86_64 and then changed nothing,
-    // so opens kept working. The bit is derived by `file_wrapper_mask_bit`.
-    abi::emit_symbol_address(emitter, "r9", "_disabled_builtin_wrappers");
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // disabled built-in mask
-    emitter.instruction(&format!("test r10, {}", file_wrapper_mask_bit()));     // is file:// unregistered?
-    emitter.instruction("jnz __rt_fopen_fail_x86");                             // report PHP false while it is
-
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the elephc mode pointer while the filename string is converted to a C string
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the elephc mode length while the filename string is converted to a C string
     emitter.instruction("call __rt_path_cstr");                                 // convert the elephc filename in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the C pathname pointer for the later libc open() call
+
+    // -- refuse plain paths while the file:// wrapper is unregistered --
+    // The AArch64 helper has always done this; without it here,
+    // `stream_wrapper_unregister("file")` reported success on x86_64 and then changed nothing,
+    // so opens kept working. The bit is derived by `file_wrapper_mask_bit`.
+    //
+    // AFTER the path is null-terminated, for the reason the AArch64 arm gives: jumping into
+    // `__rt_fopen_fail_x86` from here read `[rbp - 24]` before anything had written it.
+    abi::emit_symbol_address(emitter, "r9", "_disabled_builtin_wrappers");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // disabled built-in mask
+    emitter.instruction(&format!("test r10, {}", file_wrapper_mask_bit()));     // is file:// unregistered?
+    emitter.instruction("jnz __rt_fopen_wrapper_disabled_x86");                 // php words this one itself
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the elephc mode pointer into the standard x86_64 string-result pointer register
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the elephc mode length into the standard x86_64 string-result length register
@@ -695,6 +740,25 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // the mode php quotes straight back
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");
     emitter.instruction("call __rt_fopen_bad_mode_warning");
+    emitter.instruction("mov rax, -1");                                         // the caller boxes PHP false
+    emitter.instruction("jmp __rt_fopen_return_x86");
+
+    // See the AArch64 counterpart: php's own two lines for a path whose wrapper is unregistered.
+    emitter.label("__rt_fopen_wrapper_disabled_x86");
+    abi::emit_symbol_address(emitter, "rdi", "_diag_fopen_wrapper_disabled");
+    emitter.instruction(&format!(
+        "mov esi, {}",
+        FOPEN_WRAPPER_DISABLED_MESSAGE.len()
+    ));                                                                         // the wrapper line, byte length
+    emitter.instruction("call __rt_diag_warning");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the NUL-terminated path
+    emitter.instruction("call __rt_path_diag_name");                            // php names what the program wrote
+    emitter.instruction("mov rdx, rax");                                        // straight into the composer's path register
+    abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fopen_prefix");
+    emitter.instruction(&format!("mov esi, {}", "Warning: fopen(".len()));      // prefix length
+    abi::emit_symbol_address(emitter, "rcx", "_diag_no_suitable_wrapper");
+    emitter.instruction(&format!("mov r8d, {}", NO_SUITABLE_WRAPPER_REASON.len()));
+    emitter.instruction("call __rt_open_failed_reason_warning");
     emitter.instruction("mov rax, -1");                                         // the caller boxes PHP false
     emitter.instruction("jmp __rt_fopen_return_x86");
 

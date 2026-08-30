@@ -981,6 +981,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         crate::codegen_support::runtime::io::PHP_FD_RANGE_HEAD
     ));
     out.push_str(".globl _diag_open_failed_fopen_prefix\n_diag_open_failed_fopen_prefix:\n    .ascii \"Warning: fopen(\"\n");
+    out.push_str(&format!(
+        ".globl _diag_fopen_wrapper_disabled\n_diag_fopen_wrapper_disabled:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::io::FOPEN_WRAPPER_DISABLED_MESSAGE
+    ));
+    out.push_str(&format!(
+        ".globl _diag_no_suitable_wrapper\n_diag_no_suitable_wrapper:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::io::NO_SUITABLE_WRAPPER_REASON
+    ));
     out.push_str(".globl _diag_open_failed_fgc_prefix\n_diag_open_failed_fgc_prefix:\n    .ascii \"Warning: file_get_contents(\"\n");
     out.push_str(".globl _diag_open_failed_fpc_prefix\n_diag_open_failed_fpc_prefix:\n    .ascii \"Warning: file_put_contents(\"\n");
     out.push_str(".globl _diag_open_failed_file_prefix\n_diag_open_failed_file_prefix:\n    .ascii \"Warning: file(\"\n");

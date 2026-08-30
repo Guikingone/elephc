@@ -18238,6 +18238,38 @@ unlink("uw.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// php's own two lines when `fopen()` is handed a path whose wrapper is unregistered.
+///
+/// The refusal used to branch into `__rt_fopen_fail`, which reads a NUL-terminated path from the
+/// frame and an errno from the result register — neither of which exists that early. What came out
+/// was `Warning: fopen(): Failed to open stream: Unknown error: 35229128` with an EMPTY path, and
+/// on `linux-aarch64` the uninitialised frame slot was a wild pointer that SEGFAULTED the program:
+/// `test_unregistering_the_file_wrapper_stops_opens` above died with SIGSEGV after printing its
+/// first character, while macOS happened to hold a benign value in the same slot and only printed
+/// nonsense. Same defect on both arches, visible on one.
+///
+/// MEASURED on `php -n` 8.5.6. Two lines, and the first is the one that says WHY.
+#[test]
+fn test_fopen_words_a_disabled_file_wrapper_the_way_php_does() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("uwd.txt", "abc");
+stream_wrapper_unregister("file");
+var_dump(fopen("uwd.txt", "r"));
+stream_wrapper_restore("file");
+unlink("uwd.txt");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(): file:// wrapper is disabled in the server configuration\n\
+         Warning: fopen(uwd.txt): Failed to open stream: no suitable wrapper could be found\n",
+        "php names the wrapper first and the failed open second"
+    );
+}
+
 /// Verifies a context created from an EMPTY options array survives `stream_context_set_option()`.
 ///
 /// It used to SEGFAULT. `[]` is an empty INDEXED array, and the options slot is read as a hash by
