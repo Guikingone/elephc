@@ -374,8 +374,8 @@ fn spl_file_info_methods() -> Vec<ClassMethod> {
             spl_file_info_construct_body(),
         ),
         method_with_body("__toString", Vec::new(), Some(TypeExpr::Str), return_body(file_path_expr())),
-        method_with_body("getPath", Vec::new(), Some(TypeExpr::Str), return_body(function_call("dirname", vec![file_path_arg_expr()]))),
-        method_with_body("getFilename", Vec::new(), Some(TypeExpr::Str), return_body(function_call("basename", vec![file_path_arg_expr()]))),
+        method_with_body("getPath", Vec::new(), Some(TypeExpr::Str), spl_file_info_get_path_body()),
+        method_with_body("getFilename", Vec::new(), Some(TypeExpr::Str), spl_file_info_get_filename_body()),
         method_with_body(
             "getExtension",
             Vec::new(),
@@ -549,8 +549,30 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Str),
             spl_file_object_manual_read_body(function_call("fread", vec![file_stream_expr(), var_expr("length")])),
         ),
-        method_with_body("fwrite", vec![param("data", TypeExpr::Str)], Some(TypeExpr::Int), spl_file_object_fwrite_body()),
+        method_with_body(
+            "fwrite",
+            vec![
+                param("data", TypeExpr::Str),
+                // php's own second parameter, read off reflection:
+                // `fwrite(string $data, ?int $length = null)`. elephc declared ONE, so
+                // `$f->fwrite("abcdef", 3)` was refused at compile time and a subclass carrying
+                // php's real signature could not override it at all.
+                param_default("length", nullable_int_type(), null_expr()),
+            ],
+            Some(TypeExpr::Int),
+            spl_file_object_fwrite_body(),
+        ),
         method_with_body("fflush", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("fflush", vec![file_stream_expr()]))),
+        // MEASURED and left at ONE parameter on purpose. php's is
+        // `flock(int $operation, &$wouldBlock = null)`, so a subclass carrying php's real
+        // signature is refused here with `Cannot change parameter count when overriding method`.
+        // Declaring the second parameter does NOT fix that: the body would then hand the builtin
+        // a by-reference slot, and the backend refuses a 3-argument `flock` outright —
+        // `flock would_block output for non-local arguments` — even from a branch a run never
+        // takes, so the ordinary `$f->flock(LOCK_SH)` stopped compiling. The out-parameter is
+        // unreachable anyway: `flock($h, LOCK_SH, $w)` over `$w = null` answers `by-ref integer
+        // output written into a null slot` for the plain BUILTIN too. Two backend gaps stand
+        // between this declaration and php's, and neither is a signature.
         method_with_body("flock", vec![param("operation", TypeExpr::Int)], Some(TypeExpr::Bool), return_body(function_call("flock", vec![file_stream_expr(), var_expr("operation")]))),
         method_with_body("ftruncate", vec![param("size", TypeExpr::Int)], Some(TypeExpr::Bool), spl_file_object_ftruncate_body()),
         method_with_body("fstat", Vec::new(), Some(mixed_type()), return_body(function_call("fstat", vec![file_stream_expr()]))),
@@ -686,7 +708,19 @@ fn spl_temp_file_object_stream_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Str),
             spl_file_object_manual_read_body(function_call("fread", vec![file_stream_expr(), var_expr("length")])),
         ),
-        method_with_body("fwrite", vec![param("data", TypeExpr::Str)], Some(TypeExpr::Int), spl_file_object_fwrite_body()),
+        method_with_body(
+            "fwrite",
+            vec![
+                param("data", TypeExpr::Str),
+                // php's own second parameter, read off reflection:
+                // `fwrite(string $data, ?int $length = null)`. elephc declared ONE, so
+                // `$f->fwrite("abcdef", 3)` was refused at compile time and a subclass carrying
+                // php's real signature could not override it at all.
+                param_default("length", nullable_int_type(), null_expr()),
+            ],
+            Some(TypeExpr::Int),
+            spl_file_object_fwrite_body(),
+        ),
         method_with_body("fflush", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("fflush", vec![file_stream_expr()]))),
         method_with_body("ftruncate", vec![param("size", TypeExpr::Int)], Some(TypeExpr::Bool), spl_file_object_ftruncate_body()),
         method_with_body("fstat", Vec::new(), Some(mixed_type()), return_body(function_call("fstat", vec![file_stream_expr()]))),
@@ -700,6 +734,16 @@ fn spl_temp_file_object_stream_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Int),
             spl_file_object_fseek_body(),
         ),
+        // MEASURED and left at ONE parameter on purpose. php's is
+        // `flock(int $operation, &$wouldBlock = null)`, so a subclass carrying php's real
+        // signature is refused here with `Cannot change parameter count when overriding method`.
+        // Declaring the second parameter does NOT fix that: the body would then hand the builtin
+        // a by-reference slot, and the backend refuses a 3-argument `flock` outright —
+        // `flock would_block output for non-local arguments` — even from a branch a run never
+        // takes, so the ordinary `$f->flock(LOCK_SH)` stopped compiling. The out-parameter is
+        // unreachable anyway: `flock($h, LOCK_SH, $w)` over `$w = null` answers `by-ref integer
+        // output written into a null slot` for the plain BUILTIN too. Two backend gaps stand
+        // between this declaration and php's, and neither is a signature.
         method_with_body("flock", vec![param("operation", TypeExpr::Int)], Some(TypeExpr::Bool), return_body(function_call("flock", vec![file_stream_expr(), var_expr("operation")]))),
     ]
 }
@@ -859,6 +903,98 @@ fn string_copy_expr(value: Expr) -> Expr {
 /// told apart from a spelled one, so the body can fall back on `setCsvControl()` state.
 fn nullable_string_type() -> TypeExpr {
     TypeExpr::Nullable(Box::new(TypeExpr::Str))
+}
+
+/// Splits a path the way php's `SplFileInfo` does, into `$__p` (the part before the last
+/// separator) and `$__n` (the rest).
+///
+/// NOT `dirname()`/`basename()`, which is what elephc used and what makes it wrong in nine of the
+/// fourteen shapes below. MEASURED on `php -n` 8.5.6:
+///
+/// ```text
+/// path          getPath   getFilename     dirname   basename
+/// 'a.txt'       ''        'a.txt'         '.'       'a.txt'
+/// 'fi2'         ''        'fi2'           '.'       'fi2'
+/// 'fi2/a.txt'   'fi2'     'a.txt'         'fi2'     'a.txt'
+/// './a.txt'     '.'       'a.txt'         '.'       'a.txt'
+/// '/a.txt'      ''        '/a.txt'        '/'       'a.txt'
+/// '/'           ''        '/'             '/'       ''
+/// '.'           ''        '.'             '.'       '.'
+/// 'a//b.txt'    'a/'      'b.txt'         'a'       'b.txt'
+/// 'dir/'        ''        'dir'           '.'       'dir'
+/// ```
+///
+/// One rule accounts for all of them, and for `getFilename` too — php stores a `path_len` and
+/// takes the filename from just past it, so the two answers are two halves of one split. Trailing
+/// separators come off first; a separator at index 0 means there is no path part at all, which is
+/// why `/a.txt` keeps its slash in the FILENAME.
+fn spl_file_info_path_split_stmts() -> Vec<Stmt> {
+    vec![
+        assign_stmt(
+            "__raw",
+            string_copy_expr(file_path_arg_expr()),
+        ),
+        assign_stmt(
+            "__p",
+            function_call("rtrim", vec![var_expr("__raw"), string_expr("/")]),
+        ),
+        assign_stmt(
+            "__i",
+            function_call("strrpos", vec![var_expr("__p"), string_expr("/")]),
+        ),
+    ]
+}
+
+/// Builds SplFileInfo getPath(): everything before the last separator, or the empty string.
+fn spl_file_info_get_path_body() -> Vec<Stmt> {
+    let mut body = spl_file_info_path_split_stmts();
+    body.push(if_stmt(
+        binary_expr(
+            binary_expr(var_expr("__i"), BinOp::StrictEq, bool_expr(false)),
+            BinOp::Or,
+            binary_expr(var_expr("__i"), BinOp::StrictEq, int_expr(0)),
+        ),
+        vec![return_stmt(string_expr(""))],
+        None,
+    ));
+    body.push(return_stmt(function_call(
+        "substr",
+        vec![var_expr("__p"), int_expr(0), var_expr("__i")],
+    )));
+    body
+}
+
+/// Builds SplFileInfo getFilename(): the other half of the same split.
+fn spl_file_info_get_filename_body() -> Vec<Stmt> {
+    let mut body = spl_file_info_path_split_stmts();
+    // A path that was ALL separators keeps its original spelling: php answers `/` for `/`.
+    body.push(if_stmt(
+        binary_expr(var_expr("__p"), BinOp::StrictEq, string_expr("")),
+        vec![return_stmt(var_expr("__raw"))],
+        None,
+    ));
+    body.push(if_stmt(
+        binary_expr(
+            binary_expr(var_expr("__i"), BinOp::StrictEq, bool_expr(false)),
+            BinOp::Or,
+            binary_expr(var_expr("__i"), BinOp::StrictEq, int_expr(0)),
+        ),
+        vec![return_stmt(var_expr("__p"))],
+        None,
+    ));
+    body.push(return_stmt(function_call(
+        "substr",
+        vec![
+            var_expr("__p"),
+            binary_expr(var_expr("__i"), BinOp::Add, int_expr(1)),
+        ],
+    )));
+    body
+}
+
+/// Returns `?int`.
+fn nullable_int_type() -> TypeExpr {
+    TypeExpr::Nullable(Box::new(TypeExpr::Int))
 }
 
 /// Returns `$this->lines`.
@@ -2039,10 +2175,26 @@ fn spl_file_object_fscanf_body() -> Vec<Stmt> {
 }
 
 /// Builds SplFileObject fwrite().
+/// `$length` is FORWARDED rather than reimplemented: php's rule here is the plain builtin's own,
+/// and they agree byte for byte. MEASURED on `php -n` 8.5.6 over `"abcdef"` — `null` writes 6,
+/// `0` writes 0, `3` writes 3, `99` writes 6, and a NEGATIVE length writes 0 without a
+/// diagnostic. An absent `$length` still calls the builtin with two arguments, so the builtin's
+/// own default stays the one in force.
 fn spl_file_object_fwrite_body() -> Vec<Stmt> {
-    let mut body = vec![
-        assign_stmt("bytes", function_call("fwrite", vec![file_stream_expr(), var_expr("data")])),
-    ];
+    let mut body = vec![if_stmt(
+        binary_expr(var_expr("length"), BinOp::StrictEq, null_expr()),
+        vec![assign_stmt(
+            "bytes",
+            function_call("fwrite", vec![file_stream_expr(), var_expr("data")]),
+        )],
+        Some(vec![assign_stmt(
+            "bytes",
+            function_call(
+                "fwrite",
+                vec![file_stream_expr(), var_expr("data"), var_expr("length")],
+            ),
+        )]),
+    )];
     body.extend(file_object_load_lines_body(file_backing_path_arg_expr()));
     body.push(return_stmt(var_expr("bytes")));
     body
