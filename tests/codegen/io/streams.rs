@@ -18362,6 +18362,74 @@ print_r(stream_context_get_options($d));
 }
 
 
+/// `stream_get_contents()` STATS a userspace wrapper before reading it to EOF, as php does.
+///
+/// php sizes its buffer from the stream's stat, and the wrapper sees that call. MEASURED on
+/// `php -n` 8.5.6 against a wrapper that traces itself: reading to EOF calls `stream_stat` once
+/// and then reads, while a BOUNDED read — `stream_get_contents($h, 4)` — does not stat at all.
+/// `file_get_contents()` has made the call since it was written; this one did not.
+///
+/// The size answered changes nothing: measured across `[]`, `size` 0, `size` 3, `size` 1000000
+/// and a flat `false`, php reads the whole stream every time. It is the CALL that is part of the
+/// protocol — a wrapper without the hook is told which caller noticed, and that wording is php's.
+#[test]
+fn test_stream_get_contents_stats_a_wrapper_before_reading_to_eof() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Traced {
+    public $context;
+    public int $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened): bool { $opened = $path; return true; }
+    public function stream_read($count) {
+        $out = substr("hello world", $this->pos, $count);
+        $this->pos += strlen($out);
+        return $out;
+    }
+    public function stream_eof(): bool { return $this->pos >= 11; }
+    public function stream_close(): void {}
+    public function stream_stat() { echo "STAT|"; return []; }
+}
+class NoStat {
+    public $context;
+    public int $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened): bool { $opened = $path; return true; }
+    public function stream_read($count) {
+        $out = substr("abc", $this->pos, $count);
+        $this->pos += strlen($out);
+        return $out;
+    }
+    public function stream_eof(): bool { return $this->pos >= 3; }
+    public function stream_close(): void {}
+}
+stream_wrapper_register("tw", Traced::class);
+stream_wrapper_register("ns", NoStat::class);
+
+$h = fopen("tw://a", "r");
+echo stream_get_contents($h), "|";
+fclose($h);
+
+$h = fopen("tw://b", "r");
+echo stream_get_contents($h, 4), "|";
+fclose($h);
+
+$h = fopen("ns://c", "r");
+echo stream_get_contents($h), "\n";
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "STAT|hello world|hell|abc\n",
+        "the read to EOF stats first; the bounded read does not"
+    );
+    assert_eq!(
+        out.diagnostics,
+        "Warning: stream_get_contents(): NoStat::stream_stat is not implemented!\n",
+        "php names the CALLER, and only the read-to-EOF form asks"
+    );
+}
+
 /// The PARAMS half of the same defect: an empty params array read as a hash.
 ///
 /// `stream_context_create([], [])` hands an EMPTY array, which is INDEXED. Both readers of the

@@ -242,6 +242,12 @@ pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FSTAT: &str = "Warning: fstat(): ";
 pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILE_GET_CONTENTS: &str =
     "Warning: file_get_contents(): ";
 
+/// `stream_get_contents()`'s head; it stats the stream for the same reason
+/// [`WRAPPER_MISSING_HOOK_HEAD_FILE_GET_CONTENTS`] gives, and only when it is reading to EOF.
+/// MEASURED: `stream_get_contents(): NoStat::stream_stat is not implemented!`.
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_STREAM_GET_CONTENTS: &str =
+    "Warning: stream_get_contents(): ";
+
 /// `flock()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
 pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FLOCK: &str = "Warning: flock(): ";
 

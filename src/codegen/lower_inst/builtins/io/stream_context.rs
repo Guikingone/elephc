@@ -1131,6 +1131,55 @@ pub(crate) fn lower_stream_context_get_params(
 const STREAM_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE: &str =
     "stream_get_contents(): Argument #2 ($length) must be greater than or equal to -1";
 
+/// Asks a userspace wrapper for `stream_stat()` before reading it to EOF, as php does.
+///
+/// php sizes its buffer from the stream's stat, and a wrapper SEES that call. MEASURED on
+/// `php -n` 8.5.6 against a wrapper that traces itself: `stream_get_contents($h)` calls
+/// `stream_stat` once and then reads, while `stream_get_contents($h, 4)` — a bounded read — does
+/// not stat at all. A wrapper WITHOUT the hook is told which caller noticed:
+/// `Warning: stream_get_contents(): NoStat::stream_stat is not implemented!`, and the read still
+/// answers the full contents.
+///
+/// The size itself changes nothing here — measured across stat answers of `[]`, `size` 0, 3 and
+/// 1000000 and a flat `false`, php reads the whole stream every time. elephc reads in chunks and
+/// does not need it, but the CALL is part of the protocol the wrapper is written against, which is
+/// the same reason `file_get_contents()` makes it.
+///
+/// Expects the opaque stream handle in the result register and leaves it there.
+fn emit_stream_get_contents_wrapper_stat(ctx: &mut FunctionContext<'_>) {
+    let done = ctx.next_label("sgc_wrapper_stat_done");
+    let head_len = crate::codegen_support::runtime::data::
+        WRAPPER_MISSING_HOOK_HEAD_STREAM_GET_CONTENTS.len();
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the handle outlives the stat
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");                // the descriptor behind the handle
+            ctx.emitter.instruction("mov x9, #0x40000000");                     // USER_WRAPPER_FD_BASE
+            ctx.emitter.instruction("cmp x0, x9");
+            ctx.emitter.instruction(&format!("b.lt {}", done));                 // a plain file has no wrapper to ask
+            abi::emit_symbol_address(ctx.emitter, "x1", "_uwmh_head_sgc");      // php names the CALLER, not fstat()
+            ctx.emitter.instruction(&format!("mov x2, #{head_len}"));
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fstat");       // stream_stat($this)
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");               // the answer may be a TAGGED value, not a cell
+            ctx.emitter.label(&done);
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // the handle again, for the read
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the handle outlives the stat
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");                // the descriptor behind the handle
+            ctx.emitter.instruction("mov r9, 0x40000000");                      // USER_WRAPPER_FD_BASE
+            ctx.emitter.instruction("cmp rax, r9");
+            ctx.emitter.instruction(&format!("jl {}", done));                   // a plain file has no wrapper to ask
+            abi::emit_symbol_address(ctx.emitter, "rsi", "_uwmh_head_sgc");     // php names the CALLER, not fstat()
+            ctx.emitter.instruction(&format!("mov edx, {head_len}"));
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fstat");       // stream_stat($this)
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");               // the answer may be a TAGGED value, not a cell
+            ctx.emitter.label(&done);
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // the handle again, for the read
+        }
+    }
+}
+
 /// Lowers `stream_get_contents(stream, length?, offset?)` to `string|false`.
 pub(crate) fn lower_stream_get_contents(
     ctx: &mut FunctionContext<'_>,
@@ -1147,6 +1196,7 @@ pub(crate) fn lower_stream_get_contents(
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     load_open_stream_handle_to_result(ctx, stream, "stream_get_contents")?;
     if inst.operands.len() == 1 {
+        emit_stream_get_contents_wrapper_stat(ctx);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 abi::emit_pop_reg(ctx.emitter, "x1");
