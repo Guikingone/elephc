@@ -74,6 +74,18 @@ pub(crate) enum DisabledWrapperNotice {
         /// Its byte length.
         len: usize,
     },
+    /// php's two lines: the wrapper is disabled, then the open that could not find one.
+    ///
+    /// The path comes from the STRING registers the helper was entered with, so this can only be
+    /// used by a helper whose first argument is the path — which is all eight that need it.
+    FailedToOpen {
+        /// Data symbol holding the bare callee name, e.g. `_uww_name_readfile`.
+        name_symbol: &'static str,
+        /// Its byte length.
+        name_len: usize,
+        /// Whether php says "Failed to open directory" — `opendir()` and `scandir()`.
+        directory: bool,
+    },
 }
 
 /// php's line for a path operation that cannot even find a wrapper — `unlink`, `rename`.
@@ -111,13 +123,31 @@ pub(crate) fn emit_refuse_when_file_wrapper_disabled_saying(
             emitter.instruction("b.eq 1f");                                     // file:// is registered: carry on
             // The notice goes FIRST: `__rt_diag_warning` clobbers the answer registers, and the
             // linkage has to be parked because the guard runs before the helper's own frame.
-            if let DisabledWrapperNotice::Fixed { symbol, len } = notice {
-                emitter.instruction("stp x29, x30, [sp, #-16]!");               // the guard has no frame of its own yet
-                emitter.instruction("mov x29, sp");
-                abi::emit_symbol_address(emitter, "x1", symbol);
-                emitter.instruction(&format!("mov x2, #{len}"));                // php's own line, byte length
-                emitter.instruction("bl __rt_diag_warning");
-                emitter.instruction("ldp x29, x30, [sp], #16");                 // and back to the caller's stack
+            match notice {
+                DisabledWrapperNotice::Silent => {}
+                DisabledWrapperNotice::Fixed { symbol, len } => {
+                    emitter.instruction("stp x29, x30, [sp, #-16]!");           // the guard has no frame of its own yet
+                    emitter.instruction("mov x29, sp");
+                    abi::emit_symbol_address(emitter, "x1", symbol);
+                    emitter.instruction(&format!("mov x2, #{len}"));            // php's own line, byte length
+                    emitter.instruction("bl __rt_diag_warning");
+                    emitter.instruction("ldp x29, x30, [sp], #16");             // and back to the caller's stack
+                }
+                DisabledWrapperNotice::FailedToOpen {
+                    name_symbol,
+                    name_len,
+                    directory,
+                } => {
+                    emitter.instruction("stp x29, x30, [sp, #-16]!");           // the guard has no frame of its own yet
+                    emitter.instruction("mov x29, sp");
+                    // x1/x2 already hold the path the helper was entered with, which is what php
+                    // names — so only the other three registers are set here.
+                    abi::emit_symbol_address(emitter, "x0", name_symbol);
+                    emitter.instruction(&format!("mov x3, #{name_len}"));
+                    emitter.instruction(&format!("mov x4, #{}", u8::from(directory)));
+                    emitter.instruction("bl __rt_wrapper_disabled_open_warning");
+                    emitter.instruction("ldp x29, x30, [sp], #16");             // and back to the caller's stack
+                }
             }
             match answer {
                 DisabledWrapperAnswer::Predicate(value) => {
@@ -141,14 +171,32 @@ pub(crate) fn emit_refuse_when_file_wrapper_disabled_saying(
             emitter.instruction(&format!("test r10, {}", file_wrapper_mask_bit()));
             emitter.instruction("jz 1f");                                       // file:// is registered: carry on
             // See the AArch64 arm: the notice goes first and needs a frame the guard does not have.
-            if let DisabledWrapperNotice::Fixed { symbol, len } = notice {
-                emitter.instruction("push rbp");                                // also realigns rsp for the call
-                emitter.instruction("mov rbp, rsp");
-                abi::emit_symbol_address(emitter, "rdi", symbol);
-                emitter.instruction(&format!("mov esi, {len}"));                // php's own line, byte length
-                emitter.instruction("call __rt_diag_warning");
-                emitter.instruction("mov rsp, rbp");
-                emitter.instruction("pop rbp");
+            match notice {
+                DisabledWrapperNotice::Silent => {}
+                DisabledWrapperNotice::Fixed { symbol, len } => {
+                    emitter.instruction("push rbp");                            // also realigns rsp for the call
+                    emitter.instruction("mov rbp, rsp");
+                    abi::emit_symbol_address(emitter, "rdi", symbol);
+                    emitter.instruction(&format!("mov esi, {len}"));            // php's own line, byte length
+                    emitter.instruction("call __rt_diag_warning");
+                    emitter.instruction("mov rsp, rbp");
+                    emitter.instruction("pop rbp");
+                }
+                DisabledWrapperNotice::FailedToOpen {
+                    name_symbol,
+                    name_len,
+                    directory,
+                } => {
+                    emitter.instruction("push rbp");                            // also realigns rsp for the call
+                    emitter.instruction("mov rbp, rsp");
+                    // rax/rdx already hold the path the helper was entered with.
+                    abi::emit_symbol_address(emitter, "rdi", name_symbol);
+                    emitter.instruction(&format!("mov esi, {name_len}"));
+                    emitter.instruction(&format!("mov r8d, {}", u8::from(directory)));
+                    emitter.instruction("call __rt_wrapper_disabled_open_warning");
+                    emitter.instruction("mov rsp, rbp");
+                    emitter.instruction("pop rbp");
+                }
             }
             match answer {
                 DisabledWrapperAnswer::Predicate(value) => {
@@ -167,6 +215,50 @@ pub(crate) fn emit_refuse_when_file_wrapper_disabled_saying(
             emitter.label("1");
         }
     }
+}
+
+/// Prefers the bare callee name a delegating builtin published, when there is one.
+///
+/// `copy()` and `readfile()` run ON other helpers and publish the name php prints for the duration
+/// of their call — `__rt_file_get_contents` has honoured that since it was written, and `__rt_fopen`
+/// did not, so a `copy()` whose source came through the fopen path reported `fopen(x)` where php
+/// reports `copy(x)`. The two values load SEPARATELY: materializing a symbol borrows the scratch
+/// register, so a length held there would not survive the pointer load.
+fn emit_published_name_aarch64(emitter: &mut Emitter, done_label: &str) {
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_open_diag_name_len", 0);
+    emitter.instruction(&format!("cbz x9, {done_label}"));
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_rt_open_diag_name", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x1", "_rt_open_diag_name_len", 0);
+    emitter.label(done_label);
+}
+
+/// [`emit_published_name_aarch64`] for the `Warning: <callee>(` prefix.
+fn emit_published_prefix_aarch64(emitter: &mut Emitter, done_label: &str) {
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_open_diag_prefix_len", 0);
+    emitter.instruction(&format!("cbz x9, {done_label}"));
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_rt_open_diag_prefix", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x1", "_rt_open_diag_prefix_len", 0);
+    emitter.label(done_label);
+}
+
+/// The x86_64 counterpart of [`emit_published_name_aarch64`].
+fn emit_published_name_x86(emitter: &mut Emitter, done_label: &str) {
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_rt_open_diag_name_len", 0);
+    emitter.instruction("test r11, r11");
+    emitter.instruction(&format!("jz {done_label}"));
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_rt_open_diag_name", 0);
+    abi::emit_load_symbol_to_reg(emitter, "rsi", "_rt_open_diag_name_len", 0);
+    emitter.label(done_label);
+}
+
+/// The x86_64 counterpart of [`emit_published_prefix_aarch64`].
+fn emit_published_prefix_x86(emitter: &mut Emitter, done_label: &str) {
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_rt_open_diag_prefix_len", 0);
+    emitter.instruction("test r11, r11");
+    emitter.instruction(&format!("jz {done_label}"));
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_rt_open_diag_prefix", 0);
+    abi::emit_load_symbol_to_reg(emitter, "rsi", "_rt_open_diag_prefix_len", 0);
+    emitter.label(done_label);
 }
 
 /// The disabled-wrapper mask bit that stands for `file://`.
@@ -384,11 +476,13 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // the null-terminated path
     abi::emit_symbol_address(emitter, "x0", "_uww_name_fopen");
     emitter.instruction(&format!("mov x1, #{}", "fopen".len()));                // bare callee name
+    emit_published_name_aarch64(emitter, "__rt_fopen_uww_named");
     emitter.instruction("bl __rt_unknown_wrapper_warning");
     emitter.instruction("ldr x3, [sp], #16");                                   // restore the errno
     emitter.instruction("ldr x2, [sp, #0]");                                    // the null-terminated path
     abi::emit_symbol_address(emitter, "x0", "_diag_open_failed_fopen_prefix");
     emitter.instruction(&format!("mov x1, #{}", "Warning: fopen(".len()));      // prefix length
+    emit_published_prefix_aarch64(emitter, "__rt_fopen_open_named");
     emitter.instruction("bl __rt_open_failed_warning");
     emitter.instruction("mov x0, #-1");                                         // return -1 to indicate failure
     emitter.instruction("b __rt_fopen_return");                                 // skip eof-flag reset on failed opens
@@ -776,12 +870,14 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // the null-terminated path
     abi::emit_symbol_address(emitter, "rdi", "_uww_name_fopen");
     emitter.instruction(&format!("mov esi, {}", "fopen".len()));                // bare callee name
+    emit_published_name_x86(emitter, "__rt_fopen_uww_named_x86");
     emitter.instruction("call __rt_unknown_wrapper_warning");
     emitter.instruction("pop rcx");                                             // discard the alignment copy
     emitter.instruction("pop rcx");                                             // restore the errno
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // the null-terminated path
     abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fopen_prefix");
     emitter.instruction("mov esi, 15");                                         // prefix length
+    emit_published_prefix_x86(emitter, "__rt_fopen_open_named_x86");
     emitter.instruction("call __rt_open_failed_warning");
     emitter.instruction("mov rax, -1");                                         // normalize all open failures to the PHP false sentinel path
     emitter.instruction("jmp __rt_fopen_return_x86");                           // skip eof-flag reset on failed opens

@@ -134,6 +134,7 @@ mod stream_is_local;
 mod stream_supports_lock;
 mod filter_missing_warning;
 mod open_failed_warning;
+mod wrapper_disabled_warning;
 mod unknown_wrapper_warning;
 mod errno_warning;
 mod append_position;
@@ -328,6 +329,10 @@ pub(crate) use filter_missing_warning::{emit_filter_missing_warning, FILTER_MISS
 pub(crate) use open_failed_warning::{
     emit_open_failed_warning, BAD_MODE_REASON_CAPACITY, BAD_MODE_TAIL, OPEN_FAILED_MIDDLE,
     OPEN_FAILED_MSG_CAPACITY, WRAPPER_REFUSAL_REASONS,
+};
+pub(crate) use wrapper_disabled_warning::{
+    emit_wrapper_disabled_open_warning, NO_WRAPPER_DIRECTORY_TAIL, NO_WRAPPER_STREAM_TAIL,
+    WARNING_HEAD, WRAPPER_DISABLED_TAIL,
 };
 #[allow(unused_imports)]
 pub(crate) use open_failed_warning::{

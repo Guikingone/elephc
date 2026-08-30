@@ -999,6 +999,34 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ".globl _diag_chmod_non_standard\n_diag_chmod_non_standard:\n    .ascii {:?}\n",
         crate::codegen_support::runtime::io::CHMOD_NON_STANDARD_STREAM
     ));
+    // The pieces `__rt_wrapper_disabled_open_warning` hands the accumulating diagnostic helper.
+    for (symbol, text) in [
+        ("_wd_head", crate::codegen_support::runtime::io::WARNING_HEAD),
+        ("_wd_lparen", "("),
+        (
+            "_wd_disabled_tail",
+            crate::codegen_support::runtime::io::WRAPPER_DISABLED_TAIL,
+        ),
+        (
+            "_wd_tail_stream",
+            crate::codegen_support::runtime::io::NO_WRAPPER_STREAM_TAIL,
+        ),
+        (
+            "_wd_tail_dir",
+            crate::codegen_support::runtime::io::NO_WRAPPER_DIRECTORY_TAIL,
+        ),
+    ] {
+        out.push_str(&format!(
+            ".globl {symbol}\n{symbol}:\n    .ascii {text:?}\n"
+        ));
+    }
+    // Bare callee names for the same helper. Five already exist above for the unknown-wrapper
+    // warning; these are the ones only this refusal needs.
+    for name in ["file_put_contents", "touch", "opendir", "scandir"] {
+        out.push_str(&format!(
+            ".globl _uww_name_{name}\n_uww_name_{name}:\n    .ascii {name:?}\n"
+        ));
+    }
     out.push_str(".globl _diag_open_failed_fgc_prefix\n_diag_open_failed_fgc_prefix:\n    .ascii \"Warning: file_get_contents(\"\n");
     out.push_str(".globl _diag_open_failed_fpc_prefix\n_diag_open_failed_fpc_prefix:\n    .ascii \"Warning: file_put_contents(\"\n");
     out.push_str(".globl _diag_open_failed_file_prefix\n_diag_open_failed_file_prefix:\n    .ascii \"Warning: file(\"\n");

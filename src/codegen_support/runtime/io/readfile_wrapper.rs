@@ -37,7 +37,15 @@ pub fn emit_readfile_wrapper(emitter: &mut Emitter) {
     emitter.comment("--- runtime: readfile_wrapper ---");
     emitter.label_global("__rt_readfile_wrapper");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
-    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(-2));
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(-2),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_readfile",
+            name_len: 8,
+            directory: false,
+        },
+    );
 
     // Frame: 48 bytes. [sp,#0..16] x29/x30, [sp,#16] fd, [sp,#24] byte count,
     //   [sp,#32] current chunk pointer (across the per-chunk release).
@@ -110,7 +118,15 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: readfile_wrapper ---");
     emitter.label_global("__rt_readfile_wrapper");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
-    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(-2));
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(-2),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_readfile",
+            name_len: 8,
+            directory: false,
+        },
+    );
 
     // Frame: [rbp-8] fd, [rbp-16] byte count, [rbp-24] current chunk pointer.
     // push rbp then sub rsp,48 keeps rsp 16-aligned for the helper calls.

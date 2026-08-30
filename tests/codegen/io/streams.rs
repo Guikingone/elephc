@@ -18270,6 +18270,68 @@ unlink("uwd.txt");
     );
 }
 
+/// The eight path operations php words as a two-line refusal, all of them, in one program.
+///
+/// MEASURED on `php -n` 8.5.6 after `stream_wrapper_unregister("file")`. All eight already
+/// answered the right VALUE and said nothing at all; php names the callee twice and the path once:
+///
+/// ```text
+/// Warning: file_get_contents(): file:// wrapper is disabled in the server configuration
+/// Warning: file_get_contents(uwa.txt): Failed to open stream: no suitable wrapper could be found
+/// ```
+///
+/// Three of them are only right because of where the guard sits. `readfile()` runs ON
+/// `__rt_file_get_contents` and would name that helper, so the refusal reads the name a lowering
+/// publishes for exactly this. `copy()` reads through `file_put_contents` and would have named it
+/// AND its destination, where php names `copy()` and the SOURCE — so `copy()` is guarded at its own
+/// entry, before it delegates. `opendir()` and `scandir()` say "directory" where the rest say
+/// "stream".
+///
+/// NOT pinned, and php's own doing: `scandir()` prints a THIRD line, `scandir(): (errno <n>):
+/// <strerror>`, whose number is a STALE errno — the same program answers 2 on one run of php and
+/// 25 on another, with no syscall in between to set it. There is nothing there to reproduce.
+#[test]
+fn test_the_disabled_file_wrapper_refusals_php_words_in_two_lines() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("uwa.txt", "abc");
+stream_wrapper_unregister("file");
+file_get_contents("uwa.txt");
+file("uwa.txt");
+file_put_contents("uwa.txt", "z");
+readfile("uwa.txt");
+copy("uwa.txt", "uwb.txt");
+touch("uwa.txt");
+opendir(".");
+scandir(".");
+stream_wrapper_restore("file");
+echo "done";
+unlink("uwa.txt");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+
+    let mut expected = String::new();
+    for (callee, path, directory) in [
+        ("file_get_contents", "uwa.txt", false),
+        ("file", "uwa.txt", false),
+        ("file_put_contents", "uwa.txt", false),
+        ("readfile", "uwa.txt", false),
+        ("copy", "uwa.txt", false),
+        ("touch", "uwa.txt", false),
+        ("opendir", ".", true),
+        ("scandir", ".", true),
+    ] {
+        let kind = if directory { "directory" } else { "stream" };
+        expected.push_str(&format!(
+            "Warning: {callee}(): file:// wrapper is disabled in the server configuration\n\
+             Warning: {callee}({path}): Failed to open {kind}: no suitable wrapper could be found\n"
+        ));
+    }
+    assert_eq!(out.diagnostics, expected);
+}
+
 /// Verifies a context created from an EMPTY options array survives `stream_context_set_option()`.
 ///
 /// It used to SEGFAULT. `[]` is an empty INDEXED array, and the options slot is read as a hash by
@@ -20421,6 +20483,46 @@ unlink("m.txt");
     );
     assert_eq!(out, "bool(true)\n204\nbool(true)\n644\nbool(true)\n1\n");
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// A failed `copy()` names `copy()`, even when the open that failed went through `fopen`.
+///
+/// `lower_copy` has published the name php prints since it was written, and
+/// `__rt_file_get_contents` has read it — but `__rt_fopen` never did, so a copy whose source takes
+/// the fopen path reported `Warning: fopen(src): Failed to open stream: …` where php reports
+/// `copy(src)`.
+///
+/// A USERSPACE destination is what routes the source through `fopen` rather than through
+/// `__rt_copy`, and an unreadable source is what makes that open fail. MEASURED on `php -n` 8.5.6:
+/// `Warning: copy(cpn.txt): Failed to open stream: Permission denied`, then `bool(false)`.
+#[test]
+fn test_a_failed_copy_names_copy_not_the_helper_it_opens_through() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Sink {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened): bool { $opened = $path; return true; }
+    public function stream_write($d) { return strlen($d); }
+    public function stream_close(): void {}
+    public function stream_eof(): bool { return true; }
+    public function stream_stat() { return []; }
+    public function url_stat($path, $flags) { return false; }
+}
+stream_wrapper_register("sink", Sink::class);
+file_put_contents("cpn.txt", "abc");
+chmod("cpn.txt", 0000);
+var_dump(copy("cpn.txt", "sink://dest"));
+chmod("cpn.txt", 0644);
+unlink("cpn.txt");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: copy(cpn.txt): Failed to open stream: Permission denied\n",
+        "php names the builtin the USER called, not the one it reads through"
+    );
 }
 
 /// Verifies `copy()` stats BOTH ends before it opens either, and reads before it believes EOF.

@@ -305,6 +305,18 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: copy ---");
     emitter.label_global("__rt_copy");
+    // php locates a wrapper for every path, and the one it names is the SOURCE. Guarded HERE
+    // rather than in the helper copy() reads through, which would name that helper and its
+    // DESTINATION path — both wrong.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_copy",
+            name_len: 4,
+            directory: false,
+        },
+    );
 
     // -- set up stack frame --
     // The two stat buffers sit ABOVE the original 48 bytes, so every offset below still reads
@@ -523,6 +535,18 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: copy ---");
     emitter.label_global("__rt_copy");
+    // php locates a wrapper for every path, and the one it names is the SOURCE. Guarded HERE
+    // rather than in the helper copy() reads through, which would name that helper and its
+    // DESTINATION path — both wrong.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_copy",
+            name_len: 4,
+            directory: false,
+        },
+    );
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while copy() uses path and payload spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved destination path and copied file payload
     // The two stat buffers sit BELOW the original four slots, so every offset below still reads

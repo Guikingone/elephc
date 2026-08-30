@@ -45,7 +45,15 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.comment("--- runtime: file ---");
     emitter.label_global("__rt_file");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
-    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_file",
+            name_len: 4,
+            directory: false,
+        },
+    );
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
@@ -199,7 +207,15 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: file ---");
     emitter.label_global("__rt_file");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
-    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_file",
+            name_len: 4,
+            directory: false,
+        },
+    );
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while file() uses scan state and array spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the file payload, scan cursors, and result array pointer

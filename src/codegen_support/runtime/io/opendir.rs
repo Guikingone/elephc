@@ -30,7 +30,15 @@ pub fn emit_opendir(emitter: &mut Emitter) {
     emitter.comment("--- runtime: opendir ---");
     emitter.label_global("__rt_opendir");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
-    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(-1));
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(-1),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_opendir",
+            name_len: 7,
+            directory: true,
+        },
+    );
 
     // -- userspace stream-wrapper probe (registered scheme://) --
     emitter.instruction("stp x29, x30, [sp, #-32]!");                           // probe frame, save fp/lr
@@ -127,7 +135,15 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: opendir ---");
     emitter.label_global("__rt_opendir");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
-    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(-1));
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(-1),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_opendir",
+            name_len: 7,
+            directory: true,
+        },
+    );
 
     // -- userspace stream-wrapper probe (registered scheme://) --
     emitter.instruction("push rbp");                                            // probe frame: preserve the caller frame pointer

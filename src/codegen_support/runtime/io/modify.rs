@@ -243,7 +243,15 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.comment("--- runtime: touch ---");
     emitter.label_global("__rt_touch");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
-    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_touch",
+            name_len: 5,
+            directory: false,
+        },
+    );
     emitter.instruction(&format!("sub sp, sp, #{}", frame));                    // allocate frame + timespec[2] + spill slots
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_off));         // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", save_off));                // establish new frame pointer
