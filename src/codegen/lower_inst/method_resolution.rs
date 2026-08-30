@@ -193,12 +193,32 @@ fn internal_call_frame_shape(
                 return None;
             }
             Some((
-                format!("{class_name}->{method}"),
+                format!("{}->{method}", frame_class_for_method(ctx, class_name, method)),
                 inst.operands.iter().skip(1).copied().collect(),
             ))
         }
         _ => None,
     }
+}
+
+/// Names the class php puts in a trace frame: the one that DECLARES the method.
+///
+/// php prints the declaring class, not the receiver's. MEASURED on `php -n` 8.5.6 with a plain
+/// user hierarchy — `(new Derived())->boom()` reports `#0 …: Base->boom()` — and the SPL surface
+/// is the same rule: `(new SplTempFileObject())->getSize()` reports `SplFileInfo->getSize()`,
+/// because `getSize()` is declared there and neither `SplFileObject` nor `SplTempFileObject`
+/// overrides it. elephc named the RECEIVER, which is right only when the two coincide.
+///
+/// `method_declaring_classes` is the checker's own answer and already accounts for overrides;
+/// falling back to the receiver keeps a class with no schema entry naming something rather than
+/// nothing.
+fn frame_class_for_method(ctx: &FunctionContext<'_>, class_name: &str, method: &str) -> String {
+    ctx.module
+        .class_infos
+        .get(class_name)
+        .and_then(|class| class.method_declaring_classes.get(&php_symbol_key(method)))
+        .cloned()
+        .unwrap_or_else(|| class_name.to_string())
 }
 
 /// Reports whether this class came from the compiler rather than from the program's source.
