@@ -811,6 +811,40 @@ pub(super) fn emit_transfer_stream_notification_to_loaded_state(ctx: &mut Functi
     ctx.emitter.label(&done_label);
 }
 
+/// Branches to `absent_label` unless the result register holds an ASSOCIATIVE array.
+///
+/// `stream_context_create([], [])` hands an EMPTY array, and an empty array literal is INDEXED,
+/// not a hash. `__rt_hash_get` reads its receiver as a hash table — 40-byte header, 64-byte
+/// entries — so over a 16-byte-element indexed array the key pointer it hands `__rt_str_eq` is
+/// whatever the neighbouring allocation left behind. On a fresh heap that is zeros and the lookup
+/// merely misses; after three contexts have been built it is a live address and the program
+/// SEGFAULTS. Exactly the defect the OPTIONS argument had, on the PARAMS argument, and the reason
+/// it hid so long is that the cheap probe (`stream_context_create([], [])` on its own) is green.
+///
+/// `__rt_heap_kind` answers 0 for null, for a pointer outside the managed heap and for a freed or
+/// foreign block, and masks the copy-on-write bit, so it is safe on any value at all. 3 is the
+/// associative-array tag; an indexed array is 2.
+pub(super) fn emit_skip_unless_assoc_array(ctx: &mut FunctionContext<'_>, absent_label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // the receiver outlives the probe
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // 3 = associative array; an indexed one has no string keys
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // LDR leaves the flags alone
+            ctx.emitter.instruction(&format!("b.ne {}", absent_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rax");                                // the receiver outlives the probe
+            ctx.emitter.instruction("push rax");                                // keep rsp 16-byte aligned for the call
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("add rsp, 8");                              // drop the alignment copy
+            ctx.emitter.instruction("cmp rax, 3");                              // 3 = associative array
+            ctx.emitter.instruction("pop rax");                                 // POP leaves the flags alone
+            ctx.emitter.instruction(&format!("jne {}", absent_label));
+        }
+    }
+}
+
 /// Captures a runtime `notification` callable from stream context params.
 pub(super) fn capture_stream_notification_callback(
     ctx: &mut FunctionContext<'_>,
@@ -854,6 +888,7 @@ pub(super) fn load_stream_notification_param_descriptor(
     let normalized = ctx.next_label("sctx_notification_normalized");
     let (key, key_len) = ctx.data.add_string(b"notification");
     ctx.load_value_to_result(params)?;
+    emit_skip_unless_assoc_array(ctx, absent_label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x1", &key);

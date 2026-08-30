@@ -224,6 +224,7 @@ pub(super) fn merge_stream_context_params_options_into_scratch(
     let done = ctx.next_label("sctx_params_options_done");
     let (key, key_len) = ctx.data.add_string(b"options");
     ctx.load_value_to_result(params)?;
+    super::stream_context::emit_skip_unless_assoc_array(ctx, &done);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x1", &key);

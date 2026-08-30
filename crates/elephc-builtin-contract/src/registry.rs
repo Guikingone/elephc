@@ -136,7 +136,9 @@ mod tests {
     fn catalog_is_valid_and_complete_for_all_contract_surfaces() {
         // Both sides added contracts: this branch the 14 `gz*` stream functions and
         // `similar_text`, upstream its own. Re-measured after the merge.
-        assert_eq!(contracts().len(), 588);
+        // +1: the internal `__elephc_deprecated`, which lets an injected prelude body raise
+        // one php `Deprecated:` line in its own name.
+        assert_eq!(contracts().len(), 589);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

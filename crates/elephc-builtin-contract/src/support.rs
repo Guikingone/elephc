@@ -316,9 +316,12 @@ mod tests {
         // This branch added the 14 `gz*` contracts, `zlib_get_coding_type` and `similar_text`;
         // main added BCMath and the ten iconv contracts and PROMOTES get_object_vars out of the
         // external surface. Re-measured on the merge result.
-        assert_eq!(eval_internal, 40);
+        // +1: the internal `__elephc_deprecated`.
+        assert_eq!(eval_internal, 41);
         assert_eq!(eval_pending, 54);
-        assert_eq!(aot_registry, 555);
+        // +1: the internal `__elephc_deprecated`, lowered through the registry like any
+        // other runtime-call builtin.
+        assert_eq!(aot_registry, 556);
         assert_eq!(aot_external, 30);
         assert_eq!(aot_unsupported, 3);
     }
@@ -367,7 +370,8 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 473);
-        assert_eq!(unsupported, 94);
+        // +1: the internal `__elephc_deprecated`, which the interpreter does not bind.
+        assert_eq!(unsupported, 95);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

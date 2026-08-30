@@ -18362,6 +18362,34 @@ print_r(stream_context_get_options($d));
 }
 
 
+/// The PARAMS half of the same defect: an empty params array read as a hash.
+///
+/// `stream_context_create([], [])` hands an EMPTY array, which is INDEXED. Both readers of the
+/// params argument — the `notification` lookup and the `options` merge — called `__rt_hash_get` on
+/// it without asking what it was, and that helper walks a 40-byte header and 64-byte entries over
+/// a 16-byte-element array: the key pointer it gave `__rt_str_eq` was whatever the neighbouring
+/// allocation had left there.
+///
+/// This is why it hid. On a fresh heap those bytes are zeros and the lookup merely misses —
+/// `stream_context_create([], [])` on its own is GREEN, and so is any two of the three shapes
+/// below. It takes three built contexts before the slot holds a live address, and then the fourth
+/// call SEGFAULTS. The probe that found it had all four; every smaller one passed.
+#[test]
+fn test_an_empty_params_array_is_not_read_as_a_hash() {
+    let out = compile_and_run(
+        r#"<?php
+class N { public function m($a, $b, $c, $d, $e, $f, $g) {} }
+function notif_fn($a, $b, $c, $d, $e, $f, $g) {}
+$c = stream_context_create([], ["notification" => function ($a, $b, $c, $d, $e, $f, $g) {}]);
+$c = stream_context_create([], ["notification" => "notif_fn"]);
+$c = stream_context_create([], ["notification" => [new N(), "m"]]);
+var_dump(is_resource(stream_context_create([], [])));
+var_dump(is_resource(stream_context_create([], ["other" => null])));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\n");
+}
+
 /// Verifies an options array arriving as a boxed `Mixed` value is judged like a literal one.
 ///
 /// A map built at runtime — `json_decode($json, true)` — reaches these builtins as a boxed cell.

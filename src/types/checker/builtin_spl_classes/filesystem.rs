@@ -2227,11 +2227,22 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
             )],
             None,
         ),
-        property_assign_stmt(
-            this_expr(),
-            "lineNumber",
-            binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+        // php's key() after a CSV read names the record it just read, not the one after it —
+        // the FIRST read of a fresh object leaves the key where it was and only later reads
+        // advance it. MEASURED on `php -n` 8.5.6 over a three-line file: `fgetcsv()` answers
+        // keys 0, 1, 2, 3 where `fgets()` answers 1, 2, 3. elephc advanced unconditionally and
+        // was one ahead at every step. `hasReadLine` is the same flag `fscanf()` already uses
+        // for the same rule.
+        if_stmt(
+            property_access(this_expr(), "hasReadLine"),
+            vec![property_assign_stmt(
+                this_expr(),
+                "lineNumber",
+                binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+            )],
+            None,
         ),
+        property_assign_stmt(this_expr(), "hasReadLine", bool_expr(true)),
         return_stmt(var_expr("row")),
     ]);
     body

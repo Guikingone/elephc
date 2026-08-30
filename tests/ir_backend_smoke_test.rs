@@ -3878,7 +3878,7 @@ file_put_contents("a.txt", "one\ntwo\n");
 
 $csv = new SplFileObject("a.txt");
 $csv->setFlags(SplFileObject::READ_CSV);
-$csv->setCsvControl("n");
+$csv->setCsvControl("n", '"', "\\");
 $row = $csv->current();
 echo $row[0];
 echo ":";
@@ -3967,6 +3967,7 @@ unlink("meta.txt");
 fn ir_backend_handles_spl_file_object_csv_methods() {
     let source = r#"<?php
 $file = new SplFileObject("csv.txt", "w+");
+$file->setCsvControl(",", '"', "\\");
 echo $file->fputcsv(["hello", "world"]);
 $file->rewind();
 $row = $file->fgetcsv();
@@ -3979,9 +3980,13 @@ echo $file->key();
 
 unlink("csv.txt");
 "#;
+    // `key()` is 0, not 1: php's CSV read names the record it just read, and the FIRST read of a
+    // fresh object does not advance it. MEASURED on `php -n` 8.5.6 — this pin said 1, which was
+    // elephc's own answer rather than php's, and it stayed green while `fgetcsv()` ran one line
+    // ahead of php at every step.
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_csv_methods", source),
-        "12:hello:world:1"
+        "12:hello:world:0"
     );
 }
 
