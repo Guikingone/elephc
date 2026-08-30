@@ -406,7 +406,10 @@ pub fn emit_stream_pending_clear(emitter: &mut Emitter) {
             ));
             emitter.instruction("test r9, r9");
             emitter.instruction("jz __rt_spc_done_x86");                        // nothing was allocated
-            emitter.instruction("mov rdi, r9");
+            // RAX, not rdi: `__rt_heap_free` reads its pointer there on this target, and rax
+            // still held the STREAM STATE that `__rt_stream_state` answered — so this freed the
+            // state rather than the holding area.
+            emitter.instruction("mov rax, r9");
             emitter.instruction("call __rt_heap_free");                         // the holding area is empty again
             emitter.label("__rt_spc_done_x86");
             emitter.instruction("mov rsp, rbp");
@@ -493,7 +496,8 @@ pub fn emit_stream_pending_consume(emitter: &mut Emitter) {
             emitter.instruction(&format!(
                 "mov QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}], 0"
             ));
-            emitter.instruction("mov rdi, r9");
+            // See `__rt_stream_pending_clear`: the free reads RAX, which still holds the state.
+            emitter.instruction("mov rax, r9");
             emitter.instruction("call __rt_heap_free");                         // drained: the holding area is empty again
             emitter.label("__rt_spc2_done_x86");
             emitter.instruction("mov rsp, rbp");
