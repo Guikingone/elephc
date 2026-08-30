@@ -2101,6 +2101,42 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
                 ],
             ),
         ),
+        // -- the trailing record php reads out of its LINE model --
+        //
+        // MEASURED on `php -n` 8.5.6, four calls per shape: a file ending in a newline answers
+        // `a+b`, `c+d`, `[NULL]`, `false`; one that does not stops at `false`; an
+        // `SplTempFileObject` stops at `false`; and an EMPTY file answers `[NULL]` first. The
+        // BUILTIN is right about the descriptor — a plain `fgetcsv($h, …)` answers `false` at
+        // each of those — and php's method does not read the descriptor. It reads the line model,
+        // which has one more element after a trailing newline and none after a temp stream, and
+        // `count($this->lines)` already carries both rules.
+        if_stmt(
+            binary_expr(
+                binary_expr(var_expr("row"), BinOp::StrictEq, bool_expr(false)),
+                BinOp::And,
+                binary_expr(
+                    file_line_number_expr(),
+                    BinOp::Lt,
+                    count_expr(file_lines_expr()),
+                ),
+            ),
+            vec![assign_stmt(
+                "row",
+                function_call(
+                    "str_getcsv",
+                    vec![
+                        string_expr(""),
+                        csv_control_or_state_expr("separator", "delimiter"),
+                        csv_control_or_state_expr("enclosure", "enclosure"),
+                        // Spelled out even though an empty subject cannot use it: omitting
+                        // `$escape` is what raises the 8.4 deprecation, and a notice the user's
+                        // program never asked for would come out of it.
+                        csv_control_or_state_expr("escape", "escape"),
+                    ],
+                ),
+            )],
+            None,
+        ),
         property_assign_stmt(
             this_expr(),
             "lineNumber",

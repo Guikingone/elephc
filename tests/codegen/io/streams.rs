@@ -930,12 +930,17 @@ unlink("bp_out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies `SplFileObject::fgetcsv()` reports a blank line as `[null]` too.
+/// Verifies `SplFileObject::fgetcsv()` reports a blank line as `[null]` too — and the TRAILING one.
 ///
 /// The SPL method body is synthesized and has no checked call-site type, so it reads the row
 /// through the EIR fallback rather than the checker's union — a second authority that has to
 /// agree about the boxed-`Mixed` cells, and the one that silently handed back header words as
 /// integers the last time `fgetcsv()`'s representation moved.
+///
+/// MEASURED on `php -n` 8.5.6 with this exact program: `["a","b"];[null];["c","d"];[null];`. The
+/// FOURTH record is the one a file ending in a newline has and the plain `fgetcsv()` builtin does
+/// not — php's method reads the object's line model, not the descriptor. This expectation used to
+/// stop at the third, which was elephc's answer rather than php's.
 #[test]
 fn test_spl_file_object_fgetcsv_reads_a_blank_line_as_null() {
     let (out, dir) = compile_and_run_in_dir(
@@ -956,7 +961,7 @@ echo $seen;
 unlink("spl_blank.csv");
 "#,
     );
-    assert_eq!(out, "[\"a\",\"b\"];[null];[\"c\",\"d\"];");
+    assert_eq!(out, "[\"a\",\"b\"];[null];[\"c\",\"d\"];[null];");
     let _ = fs::remove_dir_all(&dir);
 }
 
