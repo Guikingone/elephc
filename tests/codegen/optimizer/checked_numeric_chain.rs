@@ -105,7 +105,7 @@ echo $h;
     assert!(!optimized.contains("= mixed_numeric_binop "));
 }
 
-/// Emits signed-overflow checks and float suffixes for x86_64 and every AArch64 platform.
+/// Checks signed-overflow guards and float suffixes via Linux x86_64 and AArch64 targets.
 #[test]
 fn test_checked_numeric_chain_has_target_aware_fast_and_slow_paths() {
     let source = "<?php $h = $argc; echo ($h * 31 + $argc) & 0x3fffffff;";
@@ -158,6 +158,36 @@ echo (int) ((PHP_INT_MIN + $one) - PHP_INT_MAX);
     let (optimized, optimized_stderr) = compile_and_run_variant(source, &[]);
     assert_eq!(optimized, unoptimized);
     assert_eq!(optimized_stderr, unoptimized_stderr);
+}
+
+/// Matches the checked-multiply sink when `INT_MIN * -1` enters a fused overflow path.
+#[test]
+fn test_checked_numeric_chain_int_min_overflow_matches_checked_mul_sink() {
+    let source = r#"<?php
+$one = $argc;
+echo (int) (PHP_INT_MIN * -$one), "|";
+echo (int) (PHP_INT_MIN * -$one + $one);
+"#;
+    let optimized_ir = emit_main_ir(source, &[]);
+    assert!(
+        optimized_ir.contains("= ichecked_mul_to_int "),
+        "optimized EIR did not contain the checked multiply sink:\n{optimized_ir}"
+    );
+    assert!(
+        optimized_ir.contains("= ichecked_numeric_chain_to_int "),
+        "optimized EIR did not contain the fused chain:\n{optimized_ir}"
+    );
+    assert!(
+        optimized_ir.contains("[mul,add]"),
+        "optimized EIR did not retain the multiply/add order:\n{optimized_ir}"
+    );
+
+    let (unoptimized, unoptimized_stderr) =
+        compile_and_run_variant(source, &["--no-ir-opt"]);
+    let (optimized, optimized_stderr) = compile_and_run_variant(source, &[]);
+    assert_eq!(optimized, unoptimized);
+    assert_eq!(optimized_stderr, unoptimized_stderr);
+    assert_eq!(optimized, "-9223372036854775808|-9223372036854775808");
 }
 
 /// Eliminates all transient heap allocations in the benchmark loop's optimized hot path.

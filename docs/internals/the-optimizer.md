@@ -590,7 +590,13 @@ acquire/release cancellation, string-literal concat folding, redundant
 integer-sink specialization for checked add/subtract/multiply. Those passes make
 proven-stable local loads pure and replace transient boxed Mixed arithmetic with
 allocation-free `ichecked_*_to_int` operations only when every use observes an
-integer. Per-block constant folding then collapses
+integer. After `CheckedIntSink`, `CheckedNumericChain` may fuse a left-associated
+add/subtract/multiply chain whose `Mixed` intermediates are used only by the next
+operation, the final integer cast, and removable `Release` instructions into
+`ICheckedNumericChainToInt`; its in-range path stays in i64 registers, while the
+first signed overflow promotes the exact accumulator and operand, finishes the
+remaining suffix in double, and then uses the existing PHP float-to-int conversion.
+Per-block constant folding then collapses
 operations whose operands are all compile-time constants (`5 * 5` → `25`,
 `0 < 5` → `true`) into a single constant — which, composed with the peephole's
 scalar load/store forwarding, propagates constants through EIR value ids and

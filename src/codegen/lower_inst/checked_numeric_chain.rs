@@ -39,7 +39,7 @@ pub(super) fn lower_checked_numeric_chain_to_int(
     let overflow_labels = (0..operations.len())
         .map(|_| ctx.next_label("checked_numeric_chain_overflow"))
         .collect::<Vec<_>>();
-    let suffix_labels = (0..operations.len())
+    let suffix_labels = (1..operations.len())
         .map(|_| ctx.next_label("checked_numeric_chain_float_suffix"))
         .collect::<Vec<_>>();
     let float_finish_label = ctx.next_label("checked_numeric_chain_float_finish");
@@ -69,7 +69,7 @@ pub(super) fn lower_checked_numeric_chain_to_int(
         ctx.emitter.label(&overflow_labels[index]);
         emit_overflowing_step_as_float(ctx, operation, saved_lhs_reg, rhs_reg);
         let target = if index + 1 < operations.len() {
-            &suffix_labels[index + 1]
+            &suffix_labels[index]
         } else {
             &float_finish_label
         };
@@ -77,7 +77,7 @@ pub(super) fn lower_checked_numeric_chain_to_int(
     }
 
     for index in 1..operations.len() {
-        ctx.emitter.label(&suffix_labels[index]);
+        ctx.emitter.label(&suffix_labels[index - 1]);
         load_integer_operand(ctx, inst.operands[index + 1], rhs_reg, inst)?;
         emit_rhs_as_float(ctx, rhs_reg);
         emit_float_step(ctx, operations[index]);
