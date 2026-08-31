@@ -1102,6 +1102,33 @@ mod tests {
         }
     }
 
+    /// Verifies release artifacts also ship the curl-aware Magician variant.
+    ///
+    /// The ordinary bridge table names only `libelephc_magician.a`, but a program that
+    /// combines eval with curl resolves Magician to the separately feature-built
+    /// `libelephc_magician_curl.a`. Both the tarball and Homebrew layout must carry it.
+    #[test]
+    fn curl_aware_magician_staticlib_ships_in_both_release_channels() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let rel = ".github/workflows/release.yml";
+        let body = std::fs::read_to_string(root.join(rel)).expect("read release workflow");
+        let marker = "Update Homebrew tap";
+        let split = body
+            .find(marker)
+            .unwrap_or_else(|| panic!("{rel} no longer has an `{marker}` step to split on"));
+        let (tarball, formula) = body.split_at(split);
+
+        assert!(
+            tarball.contains("-p elephc-magician --features curl")
+                && tarball.contains("libelephc_magician_curl.a"),
+            "{rel} must build and pack the curl-aware Magician archive"
+        );
+        assert!(
+            formula.contains("lib.install \"libelephc_magician_curl.a\""),
+            "{rel} must install the curl-aware Magician archive with Homebrew"
+        );
+    }
+
     /// Verifies every bridge flag maps back to the table's linker library name.
     #[test]
     fn crate_flags_map_back_to_bridge_names() {
