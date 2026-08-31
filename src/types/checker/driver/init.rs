@@ -41,7 +41,7 @@ impl Checker {
         for constant in registered_constants() {
             constants.insert(constant.name.to_string(), php_type_of(constant.value));
         }
-        for (name, _) in pcntl_int_constants(target.platform) {
+        for (name, _) in pcntl_int_constants(target) {
             constants.insert(name.to_string(), PhpType::Int);
         }
 

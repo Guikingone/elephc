@@ -50,7 +50,6 @@ pub(crate) fn collect_constants(
             );
         }
     }
-
     let php_version = crate::codegen_support::compile_php_version();
     let (fnm_noescape, fnm_pathname) = match target_platform {
         Platform::MacOS => (1, 2),
@@ -61,6 +60,7 @@ pub(crate) fn collect_constants(
     let int_const = |value: i64| (ExprKind::IntLiteral(value), PhpType::Int);
     let computed = [
         ("PHP_OS", str_const(target_platform.php_os_name().to_string())),
+        ("PHP_OS_FAMILY", str_const(target_platform.php_os_family_name().to_string())),
         ("PHP_VERSION", str_const(php_version.version_string().to_string())),
         ("PHP_VERSION_ID", int_const(i64::from(php_version.version_id()))),
         ("PHP_MAJOR_VERSION", int_const(i64::from(php_version.major()))),

@@ -306,7 +306,7 @@ pub(super) fn resolve_constant_name(
         return name.as_canonical();
     }
     if name.is_unqualified() {
-        if matches!(name.as_str(), "PHP_OS" | "SID") {
+        if matches!(name.as_str(), "PHP_OS" | "PHP_OS_FAMILY" | "SID") {
             return name.as_canonical();
         }
         if let Some(alias) = name
