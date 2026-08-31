@@ -341,8 +341,9 @@ fn validate_instruction_immediate(
         }),
         ICheckedNumericChainToInt => {
             require_immediate(inst_id, inst, "checked numeric chain", |imm| {
-                matches!(imm, Imm::CheckedNumericChain(ops) if !ops.is_empty()
-                    && ops.iter().all(|op| !matches!(op, crate::ir::MixedNumericOp::Pow)))
+                matches!(imm, Imm::CheckedNumericChain(chain) if !chain.operations().is_empty()
+                    && chain.operations().iter()
+                        .all(|op| !matches!(op, crate::ir::MixedNumericOp::Pow)))
             })
         }
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
@@ -624,10 +625,15 @@ fn check_checked_numeric_chain(
     inst_id: InstId,
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
-    let Some(Immediate::CheckedNumericChain(ops)) = inst.immediate.as_ref() else {
+    let Some(Immediate::CheckedNumericChain(chain)) = inst.immediate.as_ref() else {
         return Ok(());
     };
-    check_count(inst_id, inst, ops.len() + 1, "one more than its operation count")?;
+    check_count(
+        inst_id,
+        inst,
+        chain.operations().len() + 1,
+        "one more than its operation count",
+    )?;
     for index in 0..inst.operands.len() {
         check_operand_type(function, inst_id, inst, index, IrType::I64, "I64")?;
     }

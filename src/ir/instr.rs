@@ -156,12 +156,30 @@ pub enum Immediate {
     TypePredicate(PhpTypePredicate),
     MixedNumericOp(MixedNumericOp),
     /// Ordered add/sub/mul operations in an unboxed checked numeric chain.
-    CheckedNumericChain(Vec<MixedNumericOp>),
+    CheckedNumericChain(Box<CheckedNumericChainImmediate>),
     CmpPredicate(CmpPredicate),
     CastTarget(IrType),
     TypeName(DataId),
     Capacity(u32),
     WidthBytes(u8),
+}
+
+/// Heap-backed operation sequence carried by a fused checked numeric chain immediate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckedNumericChainImmediate {
+    operations: Vec<MixedNumericOp>,
+}
+
+impl CheckedNumericChainImmediate {
+    /// Creates a compact immediate from its ordered left-associated operations.
+    pub fn new(operations: Vec<MixedNumericOp>) -> Self {
+        Self { operations }
+    }
+
+    /// Returns the ordered operations evaluated by the fused chain.
+    pub fn operations(&self) -> &[MixedNumericOp] {
+        &self.operations
+    }
 }
 
 /// Runtime arithmetic operation carried by `Op::MixedNumericBinop`.
@@ -1131,6 +1149,7 @@ mod tests {
     /// the existing padding.
     #[test]
     fn instruction_stays_112_bytes() {
-        assert!(std::mem::size_of::<super::Instruction>() <= 112);
+        let size = std::mem::size_of::<super::Instruction>();
+        assert!(size <= 112, "Instruction grew to {size} bytes");
     }
 }

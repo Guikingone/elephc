@@ -14,8 +14,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
-    BlockId, DataPool, Function, Immediate, InstId, IrType, MixedNumericOp, Op, Ownership,
-    ValueDef, ValueId,
+    BlockId, CheckedNumericChainImmediate, DataPool, Function, Immediate, InstId, IrType,
+    MixedNumericOp, Op, Ownership, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 
@@ -251,7 +251,9 @@ fn apply_rewrite(function: &mut Function, sink: InstId, rewrite: ChainRewrite) {
     if let Some(inst) = function.instruction_mut(sink) {
         inst.op = Op::ICheckedNumericChainToInt;
         inst.operands = rewrite.operands;
-        inst.immediate = Some(Immediate::CheckedNumericChain(rewrite.operations));
+        inst.immediate = Some(Immediate::CheckedNumericChain(Box::new(
+            CheckedNumericChainImmediate::new(rewrite.operations),
+        )));
         inst.result_type = IrType::I64;
         inst.result_php_type = PhpType::Int;
         inst.result_ownership = Ownership::NonHeap;

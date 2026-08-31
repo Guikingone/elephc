@@ -9,8 +9,8 @@
 //!   conservative rejection when any boxed intermediate has another observable use.
 
 use crate::ir::{
-    validate_function, Builder, DataPool, Function, Immediate, IrHeapKind, IrType,
-    MixedNumericOp, Op, Ownership, Terminator, ValidationError, ValueId,
+    validate_function, Builder, CheckedNumericChainImmediate, DataPool, Function, Immediate,
+    IrHeapKind, IrType, MixedNumericOp, Op, Ownership, Terminator, ValidationError, ValueId,
 };
 use crate::ir_passes::checked_numeric_chain::CheckedNumericChain;
 use crate::ir_passes::driver::IrPass;
@@ -106,10 +106,9 @@ fn fuses_multiply_add_chain_at_integer_cast() {
     assert_eq!(fused.op, Op::ICheckedNumericChainToInt);
     assert_eq!(
         fused.immediate,
-        Some(Immediate::CheckedNumericChain(vec![
-            MixedNumericOp::Mul,
-            MixedNumericOp::Add,
-        ]))
+        Some(Immediate::CheckedNumericChain(Box::new(
+            CheckedNumericChainImmediate::new(vec![MixedNumericOp::Mul, MixedNumericOp::Add])
+        )))
     );
     assert_eq!(fused.operands.len(), 3);
     assert_eq!(function.instructions[3].op, Op::Nop);
@@ -146,11 +145,13 @@ fn retains_add_sub_mul_operation_order() {
     assert!(fuse(&mut function));
     assert_eq!(
         function.instructions[7].immediate,
-        Some(Immediate::CheckedNumericChain(vec![
-            MixedNumericOp::Add,
-            MixedNumericOp::Sub,
-            MixedNumericOp::Mul,
-        ]))
+        Some(Immediate::CheckedNumericChain(Box::new(
+            CheckedNumericChainImmediate::new(vec![
+                MixedNumericOp::Add,
+                MixedNumericOp::Sub,
+                MixedNumericOp::Mul,
+            ])
+        )))
     );
     assert_eq!(function.instructions[7].operands.len(), 4);
     assert!(validate_function(&function).is_ok());
@@ -227,10 +228,12 @@ fn validator_rejects_malformed_checked_numeric_chain() {
             .emit(
                 Op::ICheckedNumericChainToInt,
                 vec![lhs, rhs],
-                Some(Immediate::CheckedNumericChain(vec![
-                    MixedNumericOp::Mul,
-                    MixedNumericOp::Add,
-                ])),
+                Some(Immediate::CheckedNumericChain(Box::new(
+                    CheckedNumericChainImmediate::new(vec![
+                        MixedNumericOp::Mul,
+                        MixedNumericOp::Add,
+                    ]),
+                ))),
                 IrType::I64,
                 PhpType::Int,
                 Ownership::NonHeap,

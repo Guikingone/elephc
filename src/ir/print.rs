@@ -244,8 +244,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::MixedNumericOp(op) => {
             let _ = write!(out, " {}", op.as_eir());
         }
-        Immediate::CheckedNumericChain(ops) => {
-            let ops = ops
+        Immediate::CheckedNumericChain(chain) => {
+            let ops = chain
+                .operations()
                 .iter()
                 .map(|op| op.as_eir())
                 .collect::<Vec<_>>()

@@ -38,8 +38,8 @@ pub use function::{
     LocalSlotId,
 };
 pub use instr::{
-    BuiltinId, CmpPredicate, Immediate, InstId, Instruction, MixedNumericOp, Op, PhpTypePredicate,
-    RuntimeId, PassOrigin,
+    BuiltinId, CheckedNumericChainImmediate, CmpPredicate, Immediate, InstId, Instruction,
+    MixedNumericOp, Op, PassOrigin, PhpTypePredicate, RuntimeId,
 };
 pub use module::{
     ClassTable, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,

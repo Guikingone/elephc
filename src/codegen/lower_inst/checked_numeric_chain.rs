@@ -89,15 +89,16 @@ pub(super) fn lower_checked_numeric_chain_to_int(
 }
 
 /// Returns the checked operation sequence attached to the fused opcode.
-fn expect_operations(inst: &Instruction) -> Result<Vec<MixedNumericOp>> {
+fn expect_operations(inst: &Instruction) -> Result<&[MixedNumericOp]> {
     match inst.immediate.as_ref() {
-        Some(Immediate::CheckedNumericChain(operations))
-            if !operations.is_empty()
-                && operations
+        Some(Immediate::CheckedNumericChain(chain))
+            if !chain.operations().is_empty()
+                && chain
+                    .operations()
                     .iter()
                     .all(|op| !matches!(op, MixedNumericOp::Pow)) =>
         {
-            Ok(operations.clone())
+            Ok(chain.operations())
         }
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing valid checked numeric chain immediate",
