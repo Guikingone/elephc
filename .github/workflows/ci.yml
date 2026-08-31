@@ -740,27 +740,10 @@ jobs:
   # tests/codegen/support/curl_native.rs) that the
   # ordinary shards' machines don't provision, so give them their own jobs that
   # materialize that native cache first, cached across runs by an actions/cache keyed
-  # on the committed lock plus the recipe sources that decide what gets built. Three
-  # things are still unverified going into a first run here -- not reasons to exclude
-  # the tests, but the first places to look if this job goes red:
-  #   (a) the x86_64 callback trampoline asm cross-assembles but has never actually
-  #       executed on real hardware -- codegen::curl::callbacks on
-  #       curl-codegen-tests-linux-x86_64 is the first time it runs.
-  #   (b) the eval+curl duplicate-symbol link shape (elephc_magician and elephc_curl
-  #       both linked into one program, exercised by codegen::curl::eval) is
-  #       unverified on the Linux container's toolchain/ld.
-  #   (c) this is also the first time `elephc native install` fetches
-  #       curl/libssh2/nghttp2/openssl/zlib source over the network and builds it
-  #       from scratch *inside* the elephc-ci
-  #       container image on Linux -- managed-native-smoke only proves those recipes
-  #       on the bare ubuntu-24.04(-arm) runner images (no `container:` there).
-  #       openssl's Configure needs `perl`, but that part is not actually at risk:
-  #       .github/docker/ci.Dockerfile installs build-essential, which hard-Depends on
-  #       dpkg-dev, which hard-Depends on the full `perl` package (Depends install
-  #       unconditionally, --no-install-recommends notwithstanding), so perl with every
-  #       module Configure needs is already guaranteed present. The genuine unknown is
-  #       everything else about a from-source build reaching out over the network from
-  #       inside this specific minimal container for the first time.
+  # on the committed lock plus the recipe sources that decide what gets built. This
+  # dedicated matrix also exercises target callback trampolines, the combined
+  # elephc_magician + elephc_curl link shape, and managed-native materialization inside
+  # the Linux CI container.
   curl-codegen-tests-macos-aarch64:
     name: Curl Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-macos-aarch64
@@ -816,7 +799,7 @@ jobs:
       - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
         # `install --locked` reproduces exactly the versions pinned in the committed
         # examples/curl-get/elephc.lock (curl 8.21.0, libssh2 1.11.1, nghttp2
-        # 1.70.0, openssl 3.5.7, zlib 1.3.2) --
+        # 1.70.0, openssl 3.5.8, zlib 1.3.2) --
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
@@ -893,7 +876,7 @@ jobs:
       - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
         # `install --locked` reproduces exactly the versions pinned in the committed
         # examples/curl-get/elephc.lock (curl 8.21.0, libssh2 1.11.1, nghttp2
-        # 1.70.0, openssl 3.5.7, zlib 1.3.2) --
+        # 1.70.0, openssl 3.5.8, zlib 1.3.2) --
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
@@ -970,7 +953,7 @@ jobs:
       - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
         # `install --locked` reproduces exactly the versions pinned in the committed
         # examples/curl-get/elephc.lock (curl 8.21.0, libssh2 1.11.1, nghttp2
-        # 1.70.0, openssl 3.5.7, zlib 1.3.2) --
+        # 1.70.0, openssl 3.5.8, zlib 1.3.2) --
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache

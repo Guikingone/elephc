@@ -12,10 +12,10 @@
 - [x] Ship the share interface, including PHP 8.5 persistent shares.
 - [x] Ship `CURLFile`, `CURLStringFile`, and `curl_file_create`.
 - [x] Ship libcurl callbacks through the existing runtime callable invoker.
-- [x] Mirror the same ABI in magician `eval_builtin!` homes. (Partial: the easy
-  interface and the full constant table. Multi, share, `CURLFile`/`CURLStringFile`
-  and callback options are deferred in eval and honestly rejected —
-  `docs/php/curl.md`, "curl inside `eval()`".)
+- [x] Mirror the same ABI in magician `eval_builtin!` homes. Eval ships the easy,
+  multi, share, `CURLFile`/`CURLStringFile`, upload, and callback surfaces plus the
+  full constant table. Only the four PHP-stream options remain honestly rejected;
+  see `docs/php/curl.md`, "curl inside `eval()`".
 - [x] Add local HTTP/HTTPS fixtures, example, generated docs, and a ROADMAP item.
 
 This is a first-class PHP `ext/curl` implementation for AOT and magician. It is
@@ -322,11 +322,11 @@ in Task 2 copies these exact fields.
 ```markdown
 ## v0.30.x — PHP curl extension
 
-- [ ] `ext/curl` function, class, and constant surface on AOT and magician
-- [ ] Managed native `curl` 8.21.0 + OpenSSL TLS backend (no system fallback)
-- [ ] Easy, multi, and share interfaces including PHP 8.5 additions
-- [ ] `CURLFile` / `CURLStringFile` uploads
-- [ ] libcurl callbacks via the runtime callable invoker
+- [x] `ext/curl` function, class, and constant surface on AOT and magician
+- [x] Managed native `curl` 8.21.0 + OpenSSL TLS backend (no system fallback)
+- [x] Easy, multi, and share interfaces including PHP 8.5 additions
+- [x] `CURLFile` / `CURLStringFile` uploads
+- [x] libcurl callbacks via the runtime callable invoker
 ```
 
 Do not tick the v0.28 “call a PHP curl `.so`” item. That is a different
@@ -1159,4 +1159,3 @@ for `curl_version()['version']` (ours is 8.21.0, the host PHP may differ).
 5. Tasks 12–14 (callbacks, magician, docs).
 
 Each PR must keep `cargo build` warning-free and the focused curl tests green.
-)
