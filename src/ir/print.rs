@@ -244,6 +244,14 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::MixedNumericOp(op) => {
             let _ = write!(out, " {}", op.as_eir());
         }
+        Immediate::CheckedNumericChain(ops) => {
+            let ops = ops
+                .iter()
+                .map(|op| op.as_eir())
+                .collect::<Vec<_>>()
+                .join(",");
+            let _ = write!(out, " [{}]", ops);
+        }
         Immediate::CmpPredicate(predicate) => {
             let _ = write!(out, " {:?}", predicate);
         }

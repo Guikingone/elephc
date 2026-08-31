@@ -155,6 +155,8 @@ pub enum Immediate {
     MixedTag(u8),
     TypePredicate(PhpTypePredicate),
     MixedNumericOp(MixedNumericOp),
+    /// Ordered add/sub/mul operations in an unboxed checked numeric chain.
+    CheckedNumericChain(Vec<MixedNumericOp>),
     CmpPredicate(CmpPredicate),
     CastTarget(IrType),
     TypeName(DataId),
@@ -285,6 +287,9 @@ pub enum Op {
     /// Multiplies two integers with PHP overflow promotion, then applies PHP's integer
     /// cast without materializing the intermediate boxed `Mixed` value.
     ICheckedMulToInt,
+    /// Evaluates a left-associated integer add/sub/mul chain in registers, promotes the
+    /// remaining suffix to PHP float semantics on first overflow, then casts to `int`.
+    ICheckedNumericChainToInt,
     ICheckedPow,
     IDiv,
     ISDiv,
@@ -594,6 +599,7 @@ impl Op {
             | ICheckedAddToInt
             | ICheckedSubToInt
             | ICheckedMulToInt
+            | ICheckedNumericChainToInt
             | IPow
             | INeg
             | IBitAnd
@@ -886,6 +892,7 @@ impl Op {
             ICheckedAddToInt => "ichecked_add_to_int",
             ICheckedSubToInt => "ichecked_sub_to_int",
             ICheckedMulToInt => "ichecked_mul_to_int",
+            ICheckedNumericChainToInt => "ichecked_numeric_chain_to_int",
             ICheckedPow => "ichecked_pow",
             IDiv => "idiv",
             ISDiv => "isdiv",
