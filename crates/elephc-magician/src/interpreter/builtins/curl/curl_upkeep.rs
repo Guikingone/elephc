@@ -41,6 +41,7 @@ pub(in crate::interpreter) fn eval_curl_upkeep_values_result(
     eval_curl_upkeep_result(*handle, context, values)
 }
 
+/// Runs libcurl connection upkeep for a validated eval-side easy handle.
 fn eval_curl_upkeep_result(
     handle: RuntimeCellHandle,
     context: &mut ElephcEvalContext,

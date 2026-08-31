@@ -212,6 +212,7 @@ fn os_bytes(value: &OsStr) -> Option<&[u8]> {
 }
 
 #[cfg(not(unix))]
+/// Borrows UTF-8 bytes from an `OsStr` on unsupported non-Unix build hosts.
 fn os_bytes(value: &OsStr) -> Option<&[u8]> {
     value.to_str().map(str::as_bytes)
 }
@@ -224,6 +225,7 @@ fn os_str(bytes: &[u8]) -> Option<&OsStr> {
 }
 
 #[cfg(not(unix))]
+/// Rebuilds an `OsStr` when the supplied bytes are valid UTF-8 on non-Unix hosts.
 fn os_str(bytes: &[u8]) -> Option<&OsStr> {
     std::str::from_utf8(bytes).ok().map(OsStr::new)
 }

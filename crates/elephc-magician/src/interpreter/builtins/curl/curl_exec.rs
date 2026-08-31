@@ -47,6 +47,7 @@ pub(in crate::interpreter) fn eval_curl_exec_values_result(
     eval_curl_exec_result(*handle, context, values)
 }
 
+/// Performs an eval-side easy transfer while preserving callback and return-transfer semantics.
 fn eval_curl_exec_result(
     handle: RuntimeCellHandle,
     context: &mut ElephcEvalContext,

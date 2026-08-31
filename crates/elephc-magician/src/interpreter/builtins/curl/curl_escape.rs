@@ -42,6 +42,7 @@ pub(in crate::interpreter) fn eval_curl_escape_values_result(
     eval_curl_escape_result(*handle, *string, context, values)
 }
 
+/// URL-encodes an eval string through the easy handle or throws on libcurl failure.
 fn eval_curl_escape_result(
     handle: RuntimeCellHandle,
     string: RuntimeCellHandle,

@@ -605,6 +605,7 @@ fn parse_lock_data_csv(csv: &[u8]) -> Option<Vec<i64>> {
 mod tests {
     use super::*;
 
+    /// Verifies only the supported share and unshare option numbers classify as long values.
     #[test]
     fn share_option_kind_accepts_only_share_and_unshare() {
         assert_eq!(share_option_kind(1), SHARE_OPTION_LONG);
@@ -618,6 +619,7 @@ mod tests {
         }
     }
 
+    /// Verifies lock-data CSV parsing accepts valid lists and rejects malformed tokens.
     #[test]
     fn parse_lock_data_csv_parses_and_rejects() {
         assert_eq!(parse_lock_data_csv(b""), Some(Vec::new()));

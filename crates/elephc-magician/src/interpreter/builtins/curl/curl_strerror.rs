@@ -47,6 +47,7 @@ pub(in crate::interpreter) fn eval_curl_strerror_values_result(
     eval_curl_strerror_result(*error_code, values)
 }
 
+/// Converts an eval integer error code to libcurl's diagnostic string.
 fn eval_curl_strerror_result(
     error_code: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,

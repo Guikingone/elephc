@@ -562,6 +562,7 @@ mod test_stubs {
             _ => 0,      // KIND_INVALID
         }
     }
+    /// Returns a fixed non-zero easy-handle id so eval tests can install handle state.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_init() -> i64 {
         // A fixed non-zero fake id: `curl_ffi::easy_init()` treats `0` as libcurl
@@ -572,14 +573,17 @@ mod test_stubs {
         // regardless of this shared raw id, so reusing one value across handles is safe.
         42
     }
+    /// Accepts URL assignment without invoking native libcurl in Magician unit tests.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_set_url(_id: i64, _ptr: *const u8, _len: usize) -> i32 {
         0
     }
+    /// Accepts integer easy options without invoking native libcurl in unit tests.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_setopt_long(_id: i64, _opt: i32, _value: i64) -> i32 {
         0
     }
+    /// Accepts string easy options without retaining the supplied test buffer.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_setopt_str(
         _id: i64,
@@ -589,6 +593,7 @@ mod test_stubs {
     ) -> i32 {
         0
     }
+    /// Accepts serialized list options without retaining the supplied test buffer.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_setopt_slist(
         _id: i64,
@@ -598,14 +603,17 @@ mod test_stubs {
     ) -> i32 {
         0
     }
+    /// Reports a successful no-op easy transfer for Magician unit tests.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_perform(_id: i64) -> i32 {
         0
     }
+    /// Reports no easy-handle error for the native-free test stub.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_errno(_id: i64) -> i32 {
         0
     }
+    /// Returns an empty easy-handle error message through the length out-parameter.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_error(
         _id: i64,
@@ -620,14 +628,17 @@ mod test_stubs {
         }
         0
     }
+    /// Accepts integer info queries without writing a native result in unit tests.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_getinfo_long(_id: i64, _info: i32, _out: *mut i64) -> i32 {
         0
     }
+    /// Accepts floating-point info queries without writing a native result in unit tests.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_getinfo_double(_id: i64, _info: i32, _out: *mut f64) -> i32 {
         0
     }
+    /// Reports success for native-free escape, unescape, and info-string operations.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_str_op(
         _id: i64,
@@ -638,6 +649,7 @@ mod test_stubs {
     ) -> i32 {
         0
     }
+    /// Reports an empty scratch result through the bridge's take-buffer ABI.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_take_scratch(
         _id: i64,
@@ -651,6 +663,7 @@ mod test_stubs {
         }
         0
     }
+    /// Reports an empty response body through the bridge's take-buffer ABI.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_take_body(
         _id: i64,
@@ -664,22 +677,27 @@ mod test_stubs {
         }
         0
     }
+    /// Accepts easy-handle reset without native state in unit tests.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_reset(_id: i64) -> i32 {
         0
     }
+    /// Returns the sentinel pause result expected by eval dispatch tests.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_pause(_id: i64, _bitmask: i32) -> i32 {
         43
     }
+    /// Reports successful upkeep for the native-free easy-handle stub.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_upkeep(_id: i64) -> i32 {
         0
     }
+    /// Reports duplication failure because unit tests do not clone native handles.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_duphandle(_id: i64) -> i64 {
         0
     }
+    /// Returns an empty diagnostic for arbitrary cURL error codes in unit tests.
     #[no_mangle]
     extern "C" fn elephc_curl_strerror(
         _code: i32,
@@ -694,8 +712,10 @@ mod test_stubs {
         }
         0
     }
+    /// Accepts easy-handle destruction without owning native state.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_free(_id: i64) {}
+    /// Returns an empty global-info payload through the bridge's JSON buffer ABI.
     #[no_mangle]
     extern "C" fn elephc_curl_global_info(_out_json: *mut u8, _cap: usize, len: *mut usize) -> i32 {
         if !len.is_null() {
@@ -712,22 +732,27 @@ mod test_stubs {
     extern "C" fn elephc_curl_multi_init() -> i64 {
         7
     }
+    /// Accepts adding an easy handle to the fixed test multi handle.
     #[no_mangle]
     extern "C" fn elephc_curl_multi_add(_multi_id: i64, _easy_id: i64) -> i32 {
         0
     }
+    /// Accepts removing an easy handle from the fixed test multi handle.
     #[no_mangle]
     extern "C" fn elephc_curl_multi_remove(_multi_id: i64, _easy_id: i64) -> i32 {
         0
     }
+    /// Reports a successful multi perform with no running transfers.
     #[no_mangle]
     extern "C" fn elephc_curl_multi_perform(_multi_id: i64) -> i64 {
         0
     }
+    /// Reports an immediate successful select for the native-free multi stub.
     #[no_mangle]
     extern "C" fn elephc_curl_multi_select(_multi_id: i64, _timeout_ms: i64) -> i32 {
         0
     }
+    /// Reports no queued completion message for any requested multi-info field.
     #[no_mangle]
     extern "C" fn elephc_curl_multi_info_read(_multi_id: i64, _field: i64) -> i64 {
         0
@@ -744,10 +769,12 @@ mod test_stubs {
             _ => -1,
         }
     }
+    /// Reports no multi-handle error for the native-free test stub.
     #[no_mangle]
     extern "C" fn elephc_curl_multi_errno(_multi_id: i64) -> i32 {
         0
     }
+    /// Returns an empty multi error message through the length out-parameter.
     #[no_mangle]
     extern "C" fn elephc_curl_multi_strerror(
         _code: i32,
@@ -762,12 +789,15 @@ mod test_stubs {
         }
         0
     }
+    /// Accepts multi-handle destruction without owning native state.
     #[no_mangle]
     extern "C" fn elephc_curl_multi_free(_multi_id: i64) {}
+    /// Returns a fixed non-zero share-handle id for eval resource tests.
     #[no_mangle]
     extern "C" fn elephc_curl_share_init() -> i64 {
         11
     }
+    /// Returns a distinct fixed id for persistent share-handle tests.
     #[no_mangle]
     extern "C" fn elephc_curl_share_persistent_init(_ptr: *const u8, _len: usize) -> i64 {
         13
@@ -782,10 +812,12 @@ mod test_stubs {
             _ => -1,
         }
     }
+    /// Reports no share-handle error for the native-free test stub.
     #[no_mangle]
     extern "C" fn elephc_curl_share_errno(_share_id: i64) -> i32 {
         0
     }
+    /// Returns an empty share error message through the length out-parameter.
     #[no_mangle]
     extern "C" fn elephc_curl_share_strerror(
         _code: i32,
@@ -800,20 +832,25 @@ mod test_stubs {
         }
         0
     }
+    /// Reports successful attachment of a test share handle to an easy handle.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_set_share(_easy_id: i64, _share_id: i64) -> i32 {
         1
     }
+    /// Accepts share-handle destruction without owning native state.
     #[no_mangle]
     extern "C" fn elephc_curl_share_free(_share_id: i64) {}
+    /// Reports successful creation of native-free MIME state for an easy handle.
     #[no_mangle]
     extern "C" fn elephc_curl_mime_new(_id: i64) -> i32 {
         0
     }
+    /// Reports successful addition of a part to native-free MIME state.
     #[no_mangle]
     extern "C" fn elephc_curl_mime_add_part(_id: i64) -> i32 {
         0
     }
+    /// Accepts a MIME part field without retaining the supplied test buffer.
     #[no_mangle]
     extern "C" fn elephc_curl_mime_part_field(
         _id: i64,
@@ -823,14 +860,17 @@ mod test_stubs {
     ) -> i32 {
         0
     }
+    /// Reports successful attachment of native-free MIME state to the easy handle.
     #[no_mangle]
     extern "C" fn elephc_curl_mime_post(_id: i64) -> i32 {
         0
     }
+    /// Reports that native-free MIME state was present and aborted.
     #[no_mangle]
     extern "C" fn elephc_curl_mime_abort(_id: i64) -> i32 {
         1
     }
+    /// Accepts callback installation without retaining interpreter pointers in tests.
     #[no_mangle]
     extern "C" fn elephc_curl_easy_set_callback(
         _id: i64,
@@ -841,6 +881,7 @@ mod test_stubs {
     ) -> i32 {
         1
     }
+    /// Reports that no native callback raised an eval exception.
     #[no_mangle]
     extern "C" fn elephc_curl_take_callback_threw() -> i32 {
         0

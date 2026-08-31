@@ -68,6 +68,7 @@ pub(in crate::interpreter) fn eval_curl_getinfo_values_result(
     eval_curl_getinfo_result(handle, option, context, values)
 }
 
+/// Materializes one or all libcurl info fields for a validated eval-side easy handle.
 fn eval_curl_getinfo_result(
     handle: RuntimeCellHandle,
     option: Option<RuntimeCellHandle>,

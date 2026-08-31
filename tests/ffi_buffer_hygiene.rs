@@ -66,6 +66,7 @@ fn is_suspect(static_type: &str) -> bool {
     false
 }
 
+/// Records process-global mutable string buffers declared by one Rust source file.
 fn scan_file(path: &Path, findings: &mut Vec<String>) {
     let Ok(source) = fs::read_to_string(path) else {
         return;
@@ -97,6 +98,7 @@ fn scan_file(path: &Path, findings: &mut Vec<String>) {
     }
 }
 
+/// Recursively scans Rust sources while skipping generated and version-control trees.
 fn scan_tree(root: &Path, findings: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(root) else {
         return;

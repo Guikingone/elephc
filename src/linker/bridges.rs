@@ -1391,6 +1391,7 @@ mod tests {
     /// takes.
     #[test]
     fn resolve_routes_magician_to_the_curl_aware_locator_only_when_the_plan_needs_curl() {
+        /// Resolves a plan with sentinel archives while preserving the real routing decision.
         fn resolve_with_fake_locators(plan: &LinkPlan) -> BridgeResolution {
             let needs_curl = plan_requires_library(plan, "elephc_curl");
             resolve_with(plan, &[], |bridge| {
@@ -1403,6 +1404,7 @@ mod tests {
             .expect("fake locators never fail")
         }
 
+        /// Extracts the resolved Magician archive path from a synthetic link plan.
         fn magician_archive_path(resolution: &BridgeResolution) -> PathBuf {
             resolution
                 .plan

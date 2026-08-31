@@ -41,6 +41,7 @@ pub(in crate::interpreter) fn eval_curl_errno_values_result(
     eval_curl_errno_result(*handle, context, values)
 }
 
+/// Returns the last libcurl error code for a validated eval-side easy handle.
 fn eval_curl_errno_result(
     handle: RuntimeCellHandle,
     context: &mut ElephcEvalContext,

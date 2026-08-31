@@ -380,6 +380,7 @@ mod multi_option_table {
 mod share_option_table {
     use crate::share::{share_option_kind, SHARE_OPTION_INVALID, SHARE_OPTION_LONG};
 
+    /// Loads the frozen PHP cURL surface used by the share-option parity assertions.
     fn frozen_surface() -> serde_json::Value {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../scripts/docs/curl_surface.json");

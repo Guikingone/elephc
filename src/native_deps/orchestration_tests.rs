@@ -373,6 +373,7 @@ fn failed_recipe_leaves_no_resolvable_artifact_or_staging() {
 fn materialize_package_forwards_dependency_prefixes_to_the_recipe() {
     struct AssertingRecipe { expected: PathBuf }
     impl RecipeRunner for AssertingRecipe {
+        /// Asserts dependency prefixes reach the recipe and creates the expected fixture artifact.
         fn build(&self, request: &RecipeRequest<'_>) -> Result<(), NativeError> {
             assert_eq!(request.dependency_prefixes.get("openssl"), Some(&self.expected));
             assert_eq!(request.dependency_prefixes.len(), 1);

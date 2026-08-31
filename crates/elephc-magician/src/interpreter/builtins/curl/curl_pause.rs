@@ -42,6 +42,7 @@ pub(in crate::interpreter) fn eval_curl_pause_values_result(
     eval_curl_pause_result(*handle, *flags, context, values)
 }
 
+/// Applies pause flags while publishing the callback frame needed when unpausing flushes data.
 fn eval_curl_pause_result(
     handle: RuntimeCellHandle,
     flags: RuntimeCellHandle,

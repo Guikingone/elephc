@@ -39,6 +39,7 @@ pub(in crate::interpreter) fn eval_curl_version_values_result(
     eval_curl_version_result(context, values)
 }
 
+/// Decodes the bridge's version JSON into the associative array returned by eval.
 fn eval_curl_version_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

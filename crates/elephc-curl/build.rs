@@ -71,6 +71,7 @@ fn add_search_path(dir: &std::ffi::OsStr) {
     println!("cargo:rustc-link-search=native={}", Path::new(dir).display());
 }
 
+/// Configures native libcurl and dependency archives when a test artifact is supplied.
 fn main() {
     declare_check_cfg();
 

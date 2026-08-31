@@ -197,6 +197,7 @@ impl ActiveFrameGuard {
 }
 
 impl Drop for ActiveFrameGuard {
+    /// Restores the callback frame that was active before this guard was published.
     fn drop(&mut self) {
         ACTIVE_FRAME.store(self.previous, std::sync::atomic::Ordering::SeqCst);
     }
