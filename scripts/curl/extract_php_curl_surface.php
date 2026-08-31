@@ -61,17 +61,17 @@ const PINS = [
             'the identical 4298225-byte size.',
     ],
     'openssl' => [
-        'version' => '3.5.7',
-        'release_date' => '2026-06-09',
+        'version' => '3.5.8',
+        'release_date' => '2026-08-25',
         'lts_supported_until' => '2030-04-08',
-        'url' => 'https://github.com/openssl/openssl/releases/download/openssl-3.5.7/openssl-3.5.7.tar.gz',
-        'exact_size' => 53153930,
-        'sha256' => 'a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8',
+        'url' => 'https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz',
+        'exact_size' => 53213818,
+        'sha256' => 'a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2',
         'checksum_cross_check' =>
             'Matches both the published ' .
-            'https://openssl-library.org/source/openssl-3.5.7.tar.gz.sha256 ' .
+            'https://www.openssl.org/source/openssl-3.5.8.tar.gz.sha256 ' .
             'checksum file and the GitHub release asset digest for ' .
-            'openssl-3.5.7.tar.gz on tag openssl-3.5.7. 3.5 is the current ' .
+            'openssl-3.5.8.tar.gz on tag openssl-3.5.8. 3.5 is the current ' .
             '"[LTS]"-labelled row on the openssl-library.org source page.',
     ],
 ];

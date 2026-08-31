@@ -65,7 +65,7 @@ const PCRE2_HEADERS: &[&str] = &["include/pcre2.h", "include/pcre2posix.h"];
 const ZLIB_ARCHIVES: &[&str] = &["lib/libz.a"];
 const ZLIB_HEADERS: &[&str] = &["include/zlib.h", "include/zconf.h"];
 const OPENSSL_ARCHIVES: &[&str] = &["lib/libssl.a", "lib/libcrypto.a"];
-/// Every public OpenSSL 3.5.7 header curl's TLS backend transitively includes: the static headers
+/// Every public OpenSSL 3.5.8 header curl's TLS backend transitively includes: the static headers
 /// shipped in the release tarball plus the ones OpenSSL's own `Configure`/`make build_libs`
 /// generates from `.h.in` templates. Verified against a real `no-shared no-legacy` build (see
 /// `openssl_catalog_snapshot_is_exact`).
@@ -169,12 +169,12 @@ const ZLIB_VERSIONS: &[PackageVersion] = &[PackageVersion {
 /// Frozen source identity copied verbatim from `scripts/docs/curl_surface.json`. OpenSSL
 /// is used only as libcurl's TLS backend; `openssl_encrypt`/`hash()` stay on `elephc-crypto`.
 const OPENSSL_VERSIONS: &[PackageVersion] = &[PackageVersion {
-    version: "3.5.7",
+    version: "3.5.8",
     source: SourceArchive {
         https_url:
-            "https://github.com/openssl/openssl/releases/download/openssl-3.5.7/openssl-3.5.7.tar.gz",
-        sha256: "a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8",
-        exact_size: 53_153_930,
+            "https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz",
+        sha256: "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2",
+        exact_size: 53_213_818,
         body_limit: 128 * 1024 * 1024,
     },
     recipe_revision: 1,
@@ -260,7 +260,7 @@ const PACKAGES: &[PackageSpec] = &[
     },
     PackageSpec {
         name: "openssl",
-        default_version: "3.5.7",
+        default_version: "3.5.8",
         versions: OPENSSL_VERSIONS,
     },
     PackageSpec {
@@ -395,11 +395,11 @@ mod tests {
     #[test]
     fn openssl_catalog_snapshot_is_exact() {
         let version = version("openssl", None).expect("catalogue entry");
-        assert_eq!(version.version, "3.5.7");
-        assert_eq!(version.source.exact_size, 53_153_930);
+        assert_eq!(version.version, "3.5.8");
+        assert_eq!(version.source.exact_size, 53_213_818);
         assert_eq!(
             version.source.sha256,
-            "a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8"
+            "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2"
         );
         assert_eq!(version.ordered_link_outputs, OPENSSL_ARCHIVES);
         assert_eq!(version.ordered_link_outputs, &["lib/libssl.a", "lib/libcrypto.a"]);

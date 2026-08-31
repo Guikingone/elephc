@@ -206,7 +206,7 @@ mod tests {
         declare_transitive_dependencies(&mut manifest).unwrap();
         assert_eq!(manifest.dependencies().get("libssh2").map(String::as_str), Some("1.11.1"));
         assert_eq!(manifest.dependencies().get("nghttp2").map(String::as_str), Some("1.70.0"));
-        assert_eq!(manifest.dependencies().get("openssl").map(String::as_str), Some("3.5.7"));
+        assert_eq!(manifest.dependencies().get("openssl").map(String::as_str), Some("3.5.8"));
         assert_eq!(manifest.dependencies().get("zlib").map(String::as_str), Some("1.3.2"));
         // The now fully-declared manifest locks without failing closed.
         let lock = NativeLock::from_manifest(&manifest).unwrap();
@@ -222,13 +222,13 @@ mod tests {
     #[test]
     fn transitive_declaration_does_not_override_an_existing_dependency() {
         let mut manifest = ManifestDocument::parse(
-            "[native]\nschema = 1\n[native.dependencies]\ncurl = \"8.21.0\"\nopenssl = \"3.5.7\"\n",
+            "[native]\nschema = 1\n[native.dependencies]\ncurl = \"8.21.0\"\nopenssl = \"3.5.8\"\n",
         )
         .unwrap();
         declare_transitive_dependencies(&mut manifest).unwrap();
         declare_transitive_dependencies(&mut manifest).unwrap();
         assert_eq!(manifest.dependencies().len(), 5);
-        assert_eq!(manifest.dependencies().get("openssl").map(String::as_str), Some("3.5.7"));
+        assert_eq!(manifest.dependencies().get("openssl").map(String::as_str), Some("3.5.8"));
     }
 
     /// Verifies lock rendering is stable and carries one ordered plan per

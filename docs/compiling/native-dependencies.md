@@ -10,7 +10,7 @@ as **curated native packages**: the project declares an exact version, the lock
 records immutable catalog metadata, and `elephc native` builds verified static
 archives into a target- and toolchain-specific cache.
 
-The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.7, nghttp2 1.70.0,
+The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0,
 libssh2 1.11.1, and curl 8.21.0.
 Programs using `preg_*`, `mb_ereg_match()`, `RegexIterator`, or
 `RecursiveRegexIterator` require PCRE2 at final link time. zlib is the second

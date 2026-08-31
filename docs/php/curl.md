@@ -16,7 +16,7 @@ The pinned stack is:
 | Library | Version | Role |
 |---|---|---|
 | libcurl | 8.21.0 | The transfer engine behind every `curl_*` function |
-| OpenSSL | 3.5.7 (LTS) | libcurl's TLS backend — **and nothing else** (see below) |
+| OpenSSL | 3.5.8 (LTS) | libcurl's TLS backend — **and nothing else** (see below) |
 | zlib | 1.3.2 | `Accept-Encoding` / `CURLOPT_ACCEPT_ENCODING` decompression |
 
 Everything is pay-for-use. A program that never mentions a `curl_*` function, a
@@ -164,7 +164,7 @@ age-gates are populated rather than empty:
 | Key | Value on this build |
 |---|---|
 | `version` | `8.21.0` |
-| `ssl_version` | `OpenSSL/3.5.7` |
+| `ssl_version` | `OpenSSL/3.5.8` |
 | `libz_version` | `1.3.2` |
 | `libssh_version` | `libssh2/1.11.1` |
 | `libidn`, `brotli_version` | `""` — not built in |
@@ -183,7 +183,7 @@ binaries but does not route any other PHP surface through it:
 
 | PHP surface | Backed by |
 |---|---|
-| `https://` through `curl_*` | Managed OpenSSL 3.5.7, as libcurl's SSL backend |
+| `https://` through `curl_*` | Managed OpenSSL 3.5.8, as libcurl's SSL backend |
 | `openssl_encrypt()` / `openssl_decrypt()` / the rest of `openssl_*` | RustCrypto (`elephc-crypto`), unchanged |
 | `hash()`, `hash_hmac()`, `md5()`, `sha1()` | RustCrypto (`elephc-crypto`), unchanged |
 | `https://` through `file_get_contents()` / `fopen()` stream wrappers | `elephc-tls` (rustls), unchanged |
@@ -197,7 +197,7 @@ stacks never meet.
 ```php
 $v = curl_version();
 echo $v["version"];       // 8.21.0
-echo $v["ssl_version"];   // OpenSSL/3.5.7
+echo $v["ssl_version"];   // OpenSSL/3.5.8
 echo $v["libz_version"];  // 1.3.2
 ```
 

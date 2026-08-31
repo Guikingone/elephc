@@ -1,5 +1,5 @@
 //! Purpose:
-//! Builds static OpenSSL 3.5.7 `libssl`/`libcrypto` archives used only as libcurl's TLS backend.
+//! Builds static OpenSSL 3.5.8 `libssl`/`libcrypto` archives used only as libcurl's TLS backend.
 //!
 //! Called from:
 //! - `crate::native_deps::recipe::CuratedRecipes` for openssl recipe revision 1.

@@ -35,7 +35,7 @@ requirements against the nearest project's `elephc.toml`, deterministic
 `elephc.lock`, and verified target/toolchain cache receipt. It passes exact
 static archive paths to the linker; compilation never downloads or builds them.
 
-The current catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.7, and curl
+The current catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, and curl
 8.21.0. Regex use links PCRE2's managed archives in the fixed shim/POSIX/8-bit
 order and has no production system-library fallback:
 

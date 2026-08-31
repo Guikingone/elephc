@@ -18,7 +18,7 @@
 //!   `ELEPHC_CURL_ZLIB_LIB_DIR=<zlib prefix>/lib \`
 //!   `cargo test -p elephc-curl`
 //!   using this machine's `elephc native`-installed curl 8.21.0/openssl
-//!   3.5.7/zlib 1.3.2 artifact prefixes.
+//!   3.5.8/zlib 1.3.2 artifact prefixes.
 //! - Handle-table assertions check presence/absence of the specific ids each
 //!   test allocated rather than the table's aggregate length, since
 //!   `cargo test` runs tests in parallel threads sharing the one global
@@ -777,7 +777,7 @@ mod native {
     }
 
     /// A real `curl_version_info` smoke: `elephc_curl_global_info` must
-    /// report our pinned libcurl 8.21.0 / OpenSSL 3.5.7 / zlib 1.3.2, and the
+    /// report our pinned libcurl 8.21.0 / OpenSSL 3.5.8 / zlib 1.3.2, and the
     /// required HTTP/HTTPS/FILE/FTP/FTPS protocol matrix
     /// (global-constraints.md's protocol matrix).
     #[test]
@@ -798,7 +798,7 @@ mod native {
         let json: serde_json::Value =
             serde_json::from_slice(&buf).expect("global_info must produce valid JSON");
         assert_eq!(json["version"], "8.21.0");
-        assert_eq!(json["ssl_version"], "OpenSSL/3.5.7");
+        assert_eq!(json["ssl_version"], "OpenSSL/3.5.8");
         assert_eq!(json["libz_version"], "1.3.2");
         let protocols: Vec<String> = json["protocols"]
             .as_array()

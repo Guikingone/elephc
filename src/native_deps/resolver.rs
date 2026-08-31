@@ -485,7 +485,7 @@ mod tests {
     fn curl_requirement_resolves_its_transitive_native_chain() {
         let root = project_fixture(
             "curl-transitive",
-            "[native]\nschema = 1\n[native.dependencies]\ncurl = \"8.21.0\"\nlibssh2 = \"1.11.1\"\nnghttp2 = \"1.70.0\"\nopenssl = \"3.5.7\"\nzlib = \"1.3.2\"\n",
+            "[native]\nschema = 1\n[native.dependencies]\ncurl = \"8.21.0\"\nlibssh2 = \"1.11.1\"\nnghttp2 = \"1.70.0\"\nopenssl = \"3.5.8\"\nzlib = \"1.3.2\"\n",
             true,
         );
         let cache = CacheLayout::from_values(
