@@ -34,6 +34,7 @@ mod arithmetic;
 mod arrays;
 mod buffers;
 mod checked_int_to_int;
+mod checked_numeric_chain;
 mod runtime_functions;
 pub(crate) mod builtins;
 mod callables;
@@ -195,6 +196,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             &inst,
             checked_int_to_int::CheckedIntOp::Mul,
         ),
+        Op::ICheckedNumericChainToInt => {
+            checked_numeric_chain::lower_checked_numeric_chain_to_int(ctx, &inst)
+        }
         Op::ICheckedPow => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_pow_checked"),
         Op::IDiv => arithmetic::lower_int_div_to_float(ctx, &inst),
         Op::ISMod => arithmetic::lower_int_mod(ctx, &inst),

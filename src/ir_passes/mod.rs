@@ -15,6 +15,7 @@
 mod allocation;
 mod branch_simplify;
 mod checked_int_sink;
+mod checked_numeric_chain;
 mod cfg;
 mod clobber;
 mod const_fold;

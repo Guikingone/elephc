@@ -21,6 +21,8 @@ mod constant_folding;
 mod constant_propagation;
 #[path = "optimizer/checked_int_sink.rs"]
 mod checked_int_sink;
+#[path = "optimizer/checked_numeric_chain.rs"]
+mod checked_numeric_chain;
 #[path = "optimizer/eir_common_subexpression.rs"]
 mod eir_common_subexpression;
 #[path = "optimizer/dead_code_elimination.rs"]
