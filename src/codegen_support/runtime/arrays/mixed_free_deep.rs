@@ -422,7 +422,7 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.label("__rt_mixed_free_deep_resource_curl_share");
     emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the libcurl share handle id from the low payload word
 
-    emitter.instruction("call __rt_curl_share_free");                          // release the share handle through the indirect curl slot (no-op if persistent)
+    emitter.instruction("call __rt_curl_share_free");                           // release the share handle through the indirect curl slot (no-op if persistent)
 
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after releasing the handle
 

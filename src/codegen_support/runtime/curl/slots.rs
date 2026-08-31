@@ -145,13 +145,13 @@ pub(crate) fn emit_load_entry_or_branch(emitter: &mut Emitter, slot: &str, missi
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(emitter, reg, slot);
-            emitter.instruction(&format!("ldr {reg}, [{reg}]")); // load the elephc_curl entry pointer
-            emitter.instruction(&format!("cbz {reg}, {missing_label}")); // bridge not linked -> fail closed
+            emitter.instruction(&format!("ldr {reg}, [{reg}]"));                // load the elephc_curl entry pointer
+            emitter.instruction(&format!("cbz {reg}, {missing_label}"));        // bridge not linked -> fail closed
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(emitter, reg, slot, 0); // load the elephc_curl entry pointer
-            emitter.instruction(&format!("test {reg}, {reg}")); // bridge not linked -> fail closed
-            emitter.instruction(&format!("jz {missing_label}"));
+            emitter.instruction(&format!("test {reg}, {reg}"));                 // bridge not linked -> fail closed
+            emitter.instruction(&format!("jz {missing_label}"));                // bridge not linked -> fail closed
         }
     }
 }
@@ -160,8 +160,8 @@ pub(crate) fn emit_load_entry_or_branch(emitter: &mut Emitter, slot: &str, missi
 pub(crate) fn emit_call_entry(emitter: &mut Emitter) {
     let reg = entry_reg(emitter);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("blr {reg}")), // call the elephc_curl entry point
-        Arch::X86_64 => emitter.instruction(&format!("call {reg}")), // call the elephc_curl entry point
+        Arch::AArch64 => emitter.instruction(&format!("blr {reg}")),            // call the elephc_curl entry point
+        Arch::X86_64 => emitter.instruction(&format!("call {reg}")),            // call the elephc_curl entry point
     }
 }
 
@@ -170,8 +170,8 @@ pub(crate) fn emit_call_entry(emitter: &mut Emitter) {
 /// both ABIs leave unspecified).
 pub(crate) fn emit_zero_extend_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("mov w0, w0"), // zero-extend the C int32_t answer into x0
-        Arch::X86_64 => emitter.instruction("mov eax, eax"), // zero-extend the C int32_t answer into rax
+        Arch::AArch64 => emitter.instruction("mov w0, w0"),                     // zero-extend the C int32_t answer into x0
+        Arch::X86_64 => emitter.instruction("mov eax, eax"),                    // zero-extend the C int32_t answer into rax
     }
 }
 
@@ -179,7 +179,7 @@ pub(crate) fn emit_zero_extend_int_result(emitter: &mut Emitter) {
 /// `curl_errno()`, whose value is a `CURLcode` rather than a boolean.
 pub(crate) fn emit_sign_extend_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("sxtw x0, w0"), // sign-extend the CURLcode into x0
-        Arch::X86_64 => emitter.instruction("movsxd rax, eax"), // sign-extend the CURLcode into rax
+        Arch::AArch64 => emitter.instruction("sxtw x0, w0"),                    // sign-extend the CURLcode into x0
+        Arch::X86_64 => emitter.instruction("movsxd rax, eax"),                 // sign-extend the CURLcode into rax
     }
 }

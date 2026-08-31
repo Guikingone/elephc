@@ -141,19 +141,11 @@ pub(super) fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &Ph
             );
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!(
-                        "cmp {}, {}",
-                        abi::int_result_reg(ctx.emitter),
-                        sentinel_reg
-                    ));                                                         // compare integer value against the runtime null sentinel
+                    ctx.emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(ctx.emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
                     ctx.emitter.instruction(&format!("b.eq {}", skip_label));   // skip integer echo when the value represents null
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!(
-                        "cmp {}, {}",
-                        abi::int_result_reg(ctx.emitter),
-                        sentinel_reg
-                    ));                                                         // compare integer value against the runtime null sentinel
+                    ctx.emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(ctx.emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
                     ctx.emitter.instruction(&format!("je {}", skip_label));     // skip integer echo when the value represents null
                 }
             }
@@ -182,4 +174,3 @@ pub(super) fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &Ph
         ))),
     }
 }
-

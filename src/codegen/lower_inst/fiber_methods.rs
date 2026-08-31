@@ -105,10 +105,7 @@ pub(super) fn emit_store_fiber_start_args_aarch64(
     supplied_arg_count: usize,
 ) -> Result<()> {
     let skip_label = ctx.next_label("fiber_start_args_done");
-    ctx.emitter.instruction(&format!(
-        "ldr x9, [x0, #{}]",
-        runtime::FIBER_USER_ARG_MAX_OFFSET
-    ));                                                                         // x9 = writable Fiber start_args slot count
+    ctx.emitter.instruction(&format!("ldr x9, [x0, #{}]", runtime::FIBER_USER_ARG_MAX_OFFSET)); // x9 = writable Fiber start_args slot count
     for (idx, assignment) in assignments.iter().take(supplied_arg_count).enumerate() {
         if !assignment.in_register() {
             return Err(CodegenIrError::unsupported(
@@ -125,10 +122,7 @@ pub(super) fn emit_store_fiber_start_args_aarch64(
     ctx.emitter.label(&skip_label);
     ctx.emitter
         .instruction(&format!("mov x9, #{}", supplied_arg_count)); // materialize the visible start() argument count
-    ctx.emitter.instruction(&format!(
-        "str x9, [x0, #{}]",
-        runtime::FIBER_START_ARG_COUNT_OFFSET
-    ));                                                                         // publish start() arity for Fiber wrappers
+    ctx.emitter.instruction(&format!("str x9, [x0, #{}]", runtime::FIBER_START_ARG_COUNT_OFFSET)); // publish start() arity for Fiber wrappers
     Ok(())
 }
 
@@ -139,10 +133,7 @@ pub(super) fn emit_store_fiber_start_args_x86_64(
     supplied_arg_count: usize,
 ) {
     let skip_label = ctx.next_label("fiber_start_args_done");
-    ctx.emitter.instruction(&format!(
-        "mov r11, QWORD PTR [rdi + {}]",
-        runtime::FIBER_USER_ARG_MAX_OFFSET
-    ));                                                                         // r11 = writable Fiber start_args slot count
+    ctx.emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", runtime::FIBER_USER_ARG_MAX_OFFSET)); // r11 = writable Fiber start_args slot count
     let mut overflow_slot = 0usize;
     for (idx, assignment) in assignments.iter().take(supplied_arg_count).enumerate() {
         let offset = runtime::FIBER_START_ARGS_OFFSET + (idx as i32) * 8;
@@ -168,11 +159,7 @@ pub(super) fn emit_store_fiber_start_args_x86_64(
         }
     }
     ctx.emitter.label(&skip_label);
-    ctx.emitter.instruction(&format!(
-        "mov QWORD PTR [rdi + {}], {}",
-        runtime::FIBER_START_ARG_COUNT_OFFSET,
-        supplied_arg_count
-    ));                                                                         // publish start() arity for Fiber wrappers
+    ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], {}", runtime::FIBER_START_ARG_COUNT_OFFSET, supplied_arg_count)); // publish start() arity for Fiber wrappers
 }
 
 /// Lowers no-argument Fiber instance methods that delegate to one runtime helper.

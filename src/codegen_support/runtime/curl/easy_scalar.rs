@@ -238,7 +238,7 @@ fn emit_forwarder_impl(
                 IntResult::Wide => {}
             }
             if rethrow_pending {
-                emitter.instruction("bl __rt_curl_rethrow_pending");             // resume an exception a PHP callback threw mid-transfer
+                emitter.instruction("bl __rt_curl_rethrow_pending");            // resume an exception a PHP callback threw mid-transfer
 
             }
             emitter.instruction("ldp x29, x30, [sp]");                          // restore frame pointer and return address
@@ -275,7 +275,7 @@ fn emit_forwarder_impl(
                 IntResult::Wide => {}
             }
             if rethrow_pending {
-                emitter.instruction("call __rt_curl_rethrow_pending");           // resume an exception a PHP callback threw mid-transfer
+                emitter.instruction("call __rt_curl_rethrow_pending");          // resume an exception a PHP callback threw mid-transfer
 
             }
             emitter.instruction("mov rsp, rbp");                                // release the frame
