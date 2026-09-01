@@ -445,17 +445,73 @@ mod share_option_table {
 ///   around it, because it is the one case a `&str` helper could not express.
 #[cfg(test)]
 mod ca_discovery {
-    use crate::ca::{resolve, CANDIDATE_CA_FILES};
+    use crate::ca::{has_feature_name, resolve, CANDIDATE_CA_FILES};
 
     /// Runs the decision table over text paths, so each test below reads as the rule it
     /// pins. `present` is the exact set of paths that exist.
     fn decide(baked: Option<&str>, env: Option<&str>, present: &[&str]) -> Option<String> {
         let exists = |path: &[u8]| present.iter().any(|entry| entry.as_bytes() == path);
-        resolve(baked.map(str::as_bytes), env.map(str::as_bytes), &exists)
-            .map(|bytes| String::from_utf8(bytes).expect("text fixtures decode"))
+        resolve(
+            baked.map(str::as_bytes),
+            env.map(str::as_bytes),
+            false,
+            &exists,
+        )
+        .map(|bytes| String::from_utf8(bytes).expect("text fixtures decode"))
     }
 
-    /// BRANCH 1, THE NO-OP: a binary running where its baked-in CA bundle exists — its own
+    /// Runs the same table while libcurl advertises an OS-native verifier.
+    fn decide_with_native_trust(
+        baked: Option<&str>,
+        env: Option<&str>,
+        present: &[&str],
+    ) -> Option<String> {
+        let exists = |path: &[u8]| present.iter().any(|entry| entry.as_bytes() == path);
+        resolve(
+            baked.map(str::as_bytes),
+            env.map(str::as_bytes),
+            true,
+            &exists,
+        )
+        .map(|bytes| String::from_utf8(bytes).expect("text fixtures decode"))
+    }
+
+    /// Apple SecTrust remains the default even if an iOS filesystem exposes a Unix PEM path.
+    #[test]
+    fn native_trust_skips_file_discovery() {
+        assert_eq!(
+            decide_with_native_trust(
+                None,
+                None,
+                &["/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem"],
+            ),
+            None
+        );
+    }
+
+    /// An explicit process-wide CA bundle remains authoritative over native trust.
+    #[test]
+    fn environment_override_replaces_native_trust() {
+        assert_eq!(
+            decide_with_native_trust(None, Some("/opt/app/ca-bundle.pem"), &[]).as_deref(),
+            Some("/opt/app/ca-bundle.pem")
+        );
+    }
+
+    /// The exact feature name published by curl 8.21 selects the native verifier.
+    #[test]
+    fn apple_sectrust_feature_is_detected_exactly() {
+        let apple = std::ffi::CString::new("AppleSecTrust").unwrap();
+        let ssl = std::ffi::CString::new("SSL").unwrap();
+        let features = [ssl.as_ptr(), apple.as_ptr(), std::ptr::null()];
+        unsafe {
+            assert!(has_feature_name(features.as_ptr(), b"AppleSecTrust"));
+            assert!(!has_feature_name(features.as_ptr(), b"NativeCA"));
+            assert!(!has_feature_name(std::ptr::null(), b"AppleSecTrust"));
+        }
+    }
+
+    /// FILE-BASED NO-OP: a binary running where its baked-in CA bundle exists — its own
     /// build machine, or any same-layout system — is left completely alone, so this
     /// feature cannot change the behavior of a deployment that already worked.
     #[test]
@@ -600,6 +656,7 @@ mod ca_discovery {
         let decision = resolve(
             Some(b"/etc/ssl/cert.pem"),
             Some(raw),
+            false,
             &|path| path == b"/etc/ssl/cert.pem",
         );
         assert_eq!(decision.as_deref(), Some(raw));
@@ -612,7 +669,7 @@ mod ca_discovery {
     fn an_undecodable_baked_path_is_still_existence_checked() {
         // Undecodable by construction; see the sibling test for why that is not asserted.
         let raw: &[u8] = b"/opt/\xff/cert.pem";
-        assert_eq!(resolve(Some(raw), None, &|path| path == raw), None);
+        assert_eq!(resolve(Some(raw), None, false, &|path| path == raw), None);
     }
 
     /// A RELATIVE override is refused — a CA store resolved against the process's working

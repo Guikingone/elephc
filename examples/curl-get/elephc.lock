@@ -4,7 +4,7 @@ schema = 1
 [[package]]
 name = "curl"
 version = "8.21.0"
-recipe = 2
+recipe = 3
 dependencies = ["libssh2", "nghttp2", "openssl", "zlib"]
 provides = ["curl"]
 

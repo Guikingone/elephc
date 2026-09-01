@@ -58,7 +58,7 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
         ("nghttp2", 1) => Some(BuiltInRecipe::Nghttp2),
         ("libssh2", 1) => Some(BuiltInRecipe::Libssh2),
-        ("curl", 2) => Some(BuiltInRecipe::Curl),
+        ("curl", 3) => Some(BuiltInRecipe::Curl),
         _ => None,
     }
 }
@@ -127,15 +127,16 @@ mod tests {
             "missing built-in recipe for libssh2 revision 1"
         );
         assert!(
-            built_in_recipe("curl", 2).is_some(),
-            "missing built-in recipe for curl revision 2"
+            built_in_recipe("curl", 3).is_some(),
+            "missing built-in recipe for curl revision 3"
         );
     }
 
     /// Verifies the HTTP/1.1-only curl build (revision 1, no nghttp2/libssh2 and a wall of
-    /// `--disable-*` protocol flags) is not reused under revision 2's artifact identity.
+    /// `--disable-*` protocol flags) is not reused under the current artifact identity.
     #[test]
     fn previous_curl_recipe_revision_is_not_dispatched() {
         assert!(built_in_recipe("curl", 1).is_none());
+        assert!(built_in_recipe("curl", 2).is_none());
     }
 }

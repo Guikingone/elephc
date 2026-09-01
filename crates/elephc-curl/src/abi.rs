@@ -121,10 +121,11 @@ pub extern "C" fn elephc_curl_easy_init() -> i64 {
 /// `curl_easy_reset` has just cleared.
 ///
 /// A NO-OP ON THE OVERWHELMINGLY COMMON PATH. `ca::discovered_cainfo()` answers `None`
-/// whenever the CA bundle libcurl was BUILT against still exists on this machine, which is
-/// every binary running on its own build host and every binary shipped to a same-layout
-/// system. Only a machine whose CA store lives somewhere else — or a cross-compiled
-/// libcurl, which has no baked-in default at all — reaches the `setopt` below.
+/// whenever libcurl advertises Apple SecTrust or the CA bundle it was built against still
+/// exists on this machine. Only a file-based build whose CA layout changed — or a
+/// file-based cross build with no baked-in default — reaches the `setopt` below. In
+/// particular, iOS must stay on this no-op path: setting CAINFO would mark the handle as
+/// custom and disable curl's automatic Security.framework verification.
 ///
 /// CALLED WHILE THE HANDLE IS STILL UNSHARED (before `elephc_curl_easy_init` inserts its
 /// entry in the table) or under the table lock (`elephc_curl_easy_reset`); it touches

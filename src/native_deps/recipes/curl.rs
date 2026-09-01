@@ -4,7 +4,7 @@
 //! and `libssh2` native packages.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for curl recipe revision 2.
+//! - `crate::native_deps::recipe::CuratedRecipes` for curl recipe revision 3.
 //!
 //! Key details:
 //! - `curl` is the first catalog package with non-empty `dependencies`; its recipe never probes
@@ -31,14 +31,20 @@
 //!   `--without-librtmp` was already dead by this pin (configure answers `unrecognized
 //!   options: --without-librtmp`), so revision 2 drops it rather than implying a defense it
 //!   does not provide.
-//! - NO `--with-ca-bundle`/`--with-ca-path` IS PASSED, DELIBERATELY, and the resulting build is
-//!   NOT hermetic in that one respect: `configure`'s own `CURL_CHECK_CA_BUNDLE` probes this
-//!   BUILD machine and bakes whatever absolute path it finds in as `CURL_CA_BUNDLE` (and bakes
-//!   nothing at all when the `--host=` branch below makes it cross-compile). Pinning a path here
-//!   would not help — a build-time constant is a build-time constant either way — so
-//!   PORTABILITY IS SOLVED AT RUN TIME INSTEAD, in `crates/elephc-curl/src/ca.rs`, which checks
-//!   whether the baked path exists on the machine actually running the binary and falls back to
-//!   a fixed list of distribution root stores when it does not.
+//! - iOS uses curl 8.21's OpenSSL + Apple SecTrust integration. Revision 3 passes
+//!   `--with-apple-sectrust` and explicitly disables file/path defaults for both iOS targets,
+//!   so a transfer with no application CA override verifies through Security.framework instead
+//!   of looking for Unix PEM files that do not exist in the iOS sandbox. A user-provided
+//!   `CURLOPT_CAINFO`, `CURLOPT_CAPATH`, or `$CURL_CA_BUNDLE` remains a custom trust decision and
+//!   follows libcurl's normal rule of replacing SecTrust unless `CURLSSLOPT_NATIVE_CA` is also
+//!   requested.
+//! - Other targets deliberately receive no `--with-ca-bundle`/`--with-ca-path`. `configure`'s
+//!   `CURL_CHECK_CA_BUNDLE` probes the BUILD machine and bakes whatever absolute path it finds in
+//!   as `CURL_CA_BUNDLE` (and bakes nothing when `--host=` makes it cross-compile). Portability
+//!   there is solved at run time in `crates/elephc-curl/src/ca.rs`, which recognizes a working
+//!   baked path and otherwise probes fixed distribution root-store files. That bridge first
+//!   recognizes the `AppleSecTrust` feature and skips PEM discovery, so it cannot accidentally
+//!   turn native iOS trust back off by setting `CURLOPT_CAINFO` itself.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,6 +55,19 @@ use super::super::error::{NativeError, NativeErrorKind};
 use super::super::recipe::RecipeRequest;
 use super::super::toolchain::run_checked;
 use super::util::{copy_regular, require_regular};
+
+/// curl configure flags that make iOS use Security.framework's native trust store.
+fn ca_configuration_args(target: Target) -> &'static [&'static str] {
+    if target.is_ios() {
+        &[
+            "--with-apple-sectrust",
+            "--without-ca-bundle",
+            "--without-ca-path",
+        ]
+    } else {
+        &[]
+    }
+}
 
 /// Builds libcurl into the catalog-declared staging prefix.
 pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
@@ -87,6 +106,7 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     // longer exists.
     command.arg(format!("--with-nghttp2={}", nghttp2_prefix.display()));
     command.arg(format!("--with-libssh2={}", libssh2_prefix.display()));
+    command.args(ca_configuration_args(request.target));
     command.args([
         "--enable-smb",
         "--enable-ntlm",
@@ -136,4 +156,46 @@ fn dependency_prefix<'a>(request: &'a RecipeRequest<'a>, name: &str) -> Result<&
             format!("curl recipe requires the '{name}' dependency to be materialized first"),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{AppleVariant, Arch, Platform};
+
+    /// Verifies both first-class iOS artifacts enable SecTrust and carry no PEM default.
+    #[test]
+    fn ios_targets_use_apple_sectrust_without_file_defaults() {
+        for target in [
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+        ] {
+            assert_eq!(
+                ca_configuration_args(target),
+                &[
+                    "--with-apple-sectrust",
+                    "--without-ca-bundle",
+                    "--without-ca-path",
+                ],
+                "{} must verify through the Apple system trust store",
+                target.as_str()
+            );
+        }
+    }
+
+    /// Verifies the existing runtime PEM discovery remains authoritative off iOS.
+    #[test]
+    fn non_ios_targets_do_not_enable_apple_sectrust() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            assert!(
+                ca_configuration_args(target).is_empty(),
+                "{} must retain file-based CA discovery",
+                target.as_str()
+            );
+        }
+    }
 }

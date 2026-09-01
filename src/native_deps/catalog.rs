@@ -240,7 +240,7 @@ const CURL_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 4_298_225,
         body_limit: 32 * 1024 * 1024,
     },
-    recipe_revision: 2,
+    recipe_revision: 3,
     dependencies: &["libssh2", "nghttp2", "openssl", "zlib"],
     supported_targets: TARGETS,
     ordered_link_outputs: CURL_ARCHIVES,
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(version.ordered_link_outputs, &["lib/libcurl.a"]);
         assert_eq!(version.retained_headers, CURL_HEADERS);
         assert_eq!(version.dependencies, &["libssh2", "nghttp2", "openssl", "zlib"]);
-        assert_eq!(version.recipe_revision, 2);
+        assert_eq!(version.recipe_revision, 3);
         assert_eq!(version.supported_targets, TARGETS);
     }
 }

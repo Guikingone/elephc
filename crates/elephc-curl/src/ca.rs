@@ -1,9 +1,9 @@
 //! Purpose:
-//! RUNTIME CA-TRUST-STORE DISCOVERY: decides, once per process, whether this build's
-//! COMPILE-TIME CA bundle path is usable on the machine the binary is actually running
-//! on, and picks a replacement from a fixed list of well-known root-store locations when
-//! it is not. The answer is applied to every easy handle as an ordinary
-//! `CURLOPT_CAINFO` (`crate::abi::apply_discovered_cainfo`).
+//! RUNTIME CA-TRUST SELECTION: preserves Apple SecTrust when libcurl advertises that
+//! native verifier, otherwise decides once per process whether this build's compile-time
+//! CA bundle is usable and picks a replacement from fixed root-store locations when it
+//! is not. A file answer is applied to every easy handle as ordinary `CURLOPT_CAINFO`
+//! (`crate::abi::apply_discovered_cainfo`).
 //!
 //! Called from:
 //! - `crate::abi::elephc_curl_easy_init` and `crate::abi::elephc_curl_easy_reset`, the
@@ -12,9 +12,10 @@
 //! Key details:
 //! - WHY THIS EXISTS. libcurl's `configure` auto-detects a CA bundle ON THE BUILD MACHINE
 //!   and bakes that ABSOLUTE PATH into the archive as `CURL_CA_BUNDLE` (pinned curl
-//!   8.21.0, `acinclude.m4`'s `CURL_CHECK_CA_BUNDLE`; the managed recipe in
-//!   `src/native_deps/recipes/curl.rs` passes no `--with-ca-*` flag, so the auto-detection
-//!   is what runs). `Curl_ssl_easy_config_complete` (`lib/vtls/vtls_config.c`) then applies
+//!   8.21.0, `acinclude.m4`'s `CURL_CHECK_CA_BUNDLE`; for file-based targets the managed
+//!   recipe in `src/native_deps/recipes/curl.rs` passes no `--with-ca-*` flag, so the
+//!   auto-detection is what runs). `Curl_ssl_easy_config_complete`
+//!   (`lib/vtls/vtls_config.c`) then applies
 //!   that constant to every transfer that has no application CA setting. A binary built on
 //!   macOS therefore carries `/etc/ssl/cert.pem`, and running it on Debian — where the
 //!   store lives at `/etc/ssl/certs/ca-certificates.crt` — fails EVERY verified HTTPS
@@ -24,9 +25,11 @@
 //! - THE BAKED PATH CAN ALSO BE ABSENT ENTIRELY. `CURL_CHECK_CA_BUNDLE` skips detection
 //!   when `cross_compiling` is `yes`, which is exactly what the managed recipe triggers by
 //!   passing `--host=` for a non-host target. A cross-built libcurl has NO `CURL_CA_BUNDLE`
-//!   at all, so without this module every verified HTTPS transfer from a cross-compiled
-//!   elephc binary fails with no trust anchors configured. [`resolve`] handles that as
-//!   `baked == None`, which falls straight through to the probe list.
+//!   at all. File-based cross targets fall through to the probe list. iOS is deliberately
+//!   different: recipe revision 3 builds curl with `--with-apple-sectrust`, and
+//!   [`discovered_cainfo`] recognizes the resulting `AppleSecTrust` feature before probing.
+//!   Leaving CAINFO unset makes curl delegate verification to Security.framework; setting
+//!   a guessed PEM path would disable that native path.
 //! - THERE IS NO OpenSSL FALLBACK IN THIS BUILD, so `SSL_CERT_FILE`/`SSL_CERT_DIR` are
 //!   dead letters and are deliberately NOT honored here. `X509_STORE_set_default_paths`
 //!   (the only call that would make OpenSSL read those two env vars) sits behind
@@ -53,7 +56,8 @@
 //!   documented for users in `docs/php/curl.md`'s divergence section. The alternative
 //!   ranking (baked path first) was rejected because it would make the hook useless on
 //!   exactly the machines that have a working-but-wrong store.
-//! - THE PROBE LIST IS FIXED, ABSOLUTE, AND ROOT-OWNED. Nothing here derives a path from
+//! - THE PROBE LIST IS ONLY FOR FILE-BASED BUILDS and is fixed, absolute, and root-owned.
+//!   A build advertising `AppleSecTrust` never consults it. Nothing here derives a path from
 //!   the working directory, `$HOME`, `PATH`, or any other writable-by-default location,
 //!   and nothing here ever disables or relaxes verification: when no store is found, the
 //!   handle is left EXACTLY as libcurl configured it and libcurl reports its own error.
@@ -144,16 +148,16 @@ pub(crate) const CANDIDATE_CA_FILES: &[&str] = &[
     "/usr/share/ssl/certs/ca-bundle.crt",
 ];
 
-/// What discovery decided for this process: `Some(path)` to set as `CURLOPT_CAINFO` on
-/// every handle that carries no CA configuration of its own, `None` to leave libcurl's
-/// own configuration untouched.
+/// What trust selection decided for this process: `Some(path)` to set as `CURLOPT_CAINFO`
+/// on every handle that carries no CA configuration of its own, `None` to leave libcurl's
+/// own file default or native verifier untouched.
 ///
 /// THE PURE CORE OF THIS MODULE — no I/O of its own, no environment of its own, no
 /// libcurl. `baked` is `curl_version_info()->cainfo` (`None` for a build that has no
-/// `CURL_CA_BUNDLE` at all), `env_override` is `$CURL_CA_BUNDLE`, and `exists` answers
-/// whether a path names a regular file. Every one of them is a parameter precisely so the
-/// whole decision table is unit-testable on a machine whose real CA layout is fixed
-/// (`crate::tests::ca_discovery`).
+/// `CURL_CA_BUNDLE` at all), `env_override` is `$CURL_CA_BUNDLE`, `native_trust` says
+/// libcurl advertises an OS verifier, and `exists` answers whether a path names a regular
+/// file. Every one of them is a parameter precisely so the whole decision table is
+/// unit-testable on a machine whose real CA layout is fixed (`crate::tests::ca_discovery`).
 ///
 /// EVERY PATH IS BYTES, never `str`: see this module's header for why an undecodable
 /// `$CURL_CA_BUNDLE` must be honored rather than treated as absent.
@@ -165,16 +169,20 @@ pub(crate) const CANDIDATE_CA_FILES: &[&str] = &[
 ///    silently replaced by a guess from the probe list. Relative paths are refused because
 ///    a CA store resolved against the process's working directory is exactly the
 ///    writable-location hazard this module refuses to introduce.
-/// 2. The baked-in default, when a file exists there: answer `None` and change NOTHING, so
+/// 2. A native verifier such as Apple SecTrust: answer `None` and do not probe for PEM
+///    files. curl automatically uses native trust when no application CA option exists;
+///    setting CAINFO here would mark the handle custom and disable that behavior.
+/// 3. The baked-in default, when a file exists there: answer `None` and change NOTHING, so
 ///    a binary running on its own build machine (or any same-layout system) behaves
 ///    EXACTLY as it did before this module existed.
-/// 3. The first [`CANDIDATE_CA_FILES`] entry that exists.
-/// 4. Otherwise `None`: no store was found, so the handle is left alone and libcurl
+/// 4. The first [`CANDIDATE_CA_FILES`] entry that exists.
+/// 5. Otherwise `None`: no store was found, so the handle is left alone and libcurl
 ///    reports its own error. Discovery NEVER disables verification to make a transfer
 ///    succeed.
 pub(crate) fn resolve(
     baked: Option<&[u8]>,
     env_override: Option<&[u8]>,
+    native_trust: bool,
     exists: &dyn Fn(&[u8]) -> bool,
 ) -> Option<Vec<u8>> {
     if let Some(value) = env_override {
@@ -188,6 +196,9 @@ pub(crate) fn resolve(
         // function with its own contract, and a value it could not hand to
         // `curl_easy_setopt` is not a value it may return.)
     }
+    if native_trust {
+        return None;
+    }
     if let Some(path) = baked {
         if exists(path) {
             return None;
@@ -197,6 +208,30 @@ pub(crate) fn resolve(
         .iter()
         .find(|candidate| exists(candidate.as_bytes()))
         .map(|candidate| candidate.as_bytes().to_vec())
+}
+
+/// Returns whether libcurl's null-terminated feature-name array contains `expected`.
+///
+/// # Safety
+/// `feature_names` must be null or point to a readable, null-terminated array of readable
+/// C strings for the duration of this call.
+pub(crate) unsafe fn has_feature_name(
+    feature_names: *const *const std::ffi::c_char,
+    expected: &[u8],
+) -> bool {
+    if feature_names.is_null() {
+        return false;
+    }
+    let mut cursor = feature_names;
+    unsafe {
+        while !(*cursor).is_null() {
+            if std::ffi::CStr::from_ptr(*cursor).to_bytes() == expected {
+                return true;
+            }
+            cursor = cursor.add(1);
+        }
+    }
+    false
 }
 
 /// Borrows an `OsStr`'s raw bytes, the platform-native spelling of a filesystem path.
@@ -265,7 +300,12 @@ pub(crate) fn discovered_cainfo() -> Option<&'static CString> {
                 .then(|| unsafe { std::ffi::CStr::from_ptr(info.cainfo) }.to_bytes());
             let env = std::env::var_os(CA_BUNDLE_ENV);
             let env_override = env.as_deref().and_then(os_bytes);
-            resolve(baked, env_override, &path_is_file)
+            // SAFETY: `feature_names` belongs to the same libcurl-owned static version-info
+            // record as `cainfo` and is documented as a null-terminated array of C strings.
+            let native_trust = unsafe {
+                has_feature_name(info.feature_names, b"AppleSecTrust")
+            };
+            resolve(baked, env_override, native_trust, &path_is_file)
                 // `CString::new` only fails on an interior NUL, which `resolve` refuses for
                 // the env value and cannot occur in a `&'static str` literal.
                 .and_then(|path| CString::new(path).ok())
