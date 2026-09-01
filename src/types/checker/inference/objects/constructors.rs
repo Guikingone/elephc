@@ -106,13 +106,24 @@ impl Checker {
                     &format!("Cannot instantiate abstract class: {}", class_name),
                 ));
             }
-            if let Some(sig) = class_info.methods.get("__construct") {
-                if let Some(visibility) = class_info.method_visibilities.get("__construct") {
-                    let declaring_class = class_info
+            // A private constructor is not inherited, so a descendant's own method map has
+            // no `__construct` entry. PHP still instantiates the descendant through the
+            // ancestor that declares it, and reports that declaring class when the call site
+            // may not reach it, so resolve the owner before reading the constructor contract.
+            let constructor_owner = crate::types::constructor_owner(&self.classes, class_name.as_str())
+                .and_then(|(owner_name, owner_info)| {
+                    owner_info
+                        .methods
+                        .get("__construct")
+                        .map(|sig| (sig, owner_name, owner_info))
+                });
+            if let Some((sig, owner_name, owner_info)) = constructor_owner {
+                if let Some(visibility) = owner_info.method_visibilities.get("__construct") {
+                    let declaring_class = owner_info
                         .method_declaring_classes
                         .get("__construct")
                         .map(String::as_str)
-                        .unwrap_or(class_name.as_str());
+                        .unwrap_or(owner_name);
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
                         && !self.can_construct_pdo_row_from_prelude_fetch(&class_name)
@@ -122,15 +133,15 @@ impl Checker {
                             &format!(
                                 "Cannot access {} constructor: {}::__construct",
                                 Self::visibility_label(visibility),
-                                class_name
+                                declaring_class
                             ),
                         ));
                     }
                 }
                 let declared_flags =
-                    Self::declared_method_param_flags(class_info, "__construct", false);
+                    Self::declared_method_param_flags(owner_info, "__construct", false);
                 let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
-                let param_to_prop = class_info.constructor_param_to_prop.clone();
+                let param_to_prop = owner_info.constructor_param_to_prop.clone();
                 let normalized_args = self.normalize_named_call_args(
                     &effective_sig,
                     args,

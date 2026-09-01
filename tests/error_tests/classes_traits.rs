@@ -604,6 +604,34 @@ fn test_error_reflection_attribute_constructor_is_private() {
     );
 }
 
+/// Verifies instantiating a descendant of a class with a private constructor is rejected, and
+/// that the diagnostic names the class that DECLARES the constructor, as php does.
+#[test]
+fn test_error_private_constructor_blocks_descendant_from_global_scope() {
+    expect_error(
+        "<?php class Owner { private function __construct() {} } class Child extends Owner {} $o = new Child();",
+        "Cannot access private constructor: Owner::__construct",
+    );
+}
+
+/// Verifies `new static()` from a scope that does not declare the private constructor is rejected.
+#[test]
+fn test_error_private_constructor_blocks_new_static_from_other_scope() {
+    expect_error(
+        "<?php class Owner { private function __construct() {} } class Child extends Owner { public static function make(): static { return new static(); } } Child::make();",
+        "Cannot access private constructor: Owner::__construct",
+    );
+}
+
+/// Verifies the declaring class is reported from further up the chain, not the lexical scope.
+#[test]
+fn test_error_private_grandparent_constructor_names_its_declaring_class() {
+    expect_error(
+        "<?php class Root { private function __construct() {} } class Middle extends Root { public static function make(): static { return new static(); } } class Leaf extends Middle {} Leaf::make();",
+        "Cannot access private constructor: Root::__construct",
+    );
+}
+
 /// Verifies that `new ReflectionParameter()` rejects unknown parameter names.
 #[test]
 fn test_error_reflection_parameter_constructor_unknown_name() {
