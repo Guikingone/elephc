@@ -217,6 +217,13 @@ selection and troubleshooting.
 brew install illegalstudio/tap/elephc
 ```
 
+### Nightly builds
+
+`main` is built nightly and published as a pre-release under the rolling
+[`nightly`](https://github.com/illegalstudio/elephc/releases/tag/nightly) tag.
+Nightlies are unsupported and are replaced every night; see the
+[installation guide](docs/getting-started/installation.md#nightly-builds-unsupported).
+
 ### From source (alternative)
 
 ```bash

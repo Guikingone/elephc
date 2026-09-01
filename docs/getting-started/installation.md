@@ -157,3 +157,33 @@ sudo install -m 644 libelephc_*.a /usr/local/lib/
 
 The Linux tarballs are built against glibc 2.35 and run on any distribution
 with that glibc or newer (Ubuntu 22.04+, Debian 12+, RHEL 9+, ...).
+
+## Nightly builds (unsupported)
+
+Alongside the versioned releases, `main` is built every night and published as a
+pre-release under the rolling
+[`nightly`](https://github.com/illegalstudio/elephc/releases/tag/nightly) tag.
+Use it to try unreleased work or to confirm that a fix has landed — not to run
+anything you depend on. Nightly artifacts carry no compatibility, stability, or
+upgrade guarantees, and they are replaced every night.
+
+The download URLs are stable, so the tarball for a platform is always at:
+
+```bash
+curl -fLO https://github.com/illegalstudio/elephc/releases/download/nightly/elephc-nightly-x86_64-unknown-linux-gnu.tar.gz
+```
+
+The other targets are `elephc-nightly-aarch64-apple-darwin.tar.gz` and
+`elephc-nightly-aarch64-unknown-linux-gnu.tar.gz`. The contents and the install
+layout are identical to a release tarball, so the same install steps apply.
+
+A nightly identifies the commit it was built from in its version string:
+
+```console
+$ elephc --version
+elephc 0.26.5-nightly.20260901+g6f7cd55de
+```
+
+The build number is the UTC date and the trailing `g<sha>` is the `main` commit.
+Nightlies are only published from a commit whose CI run was green, and no
+nightly is published on a day when `main` has not moved.

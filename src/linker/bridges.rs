@@ -667,7 +667,7 @@ mod tests {
     }
 
     /// Every bridge crate must appear in the lists CI, the Docker scripts and the
-    /// release workflow build.
+    /// release and nightly workflows build.
     ///
     /// The archives are produced by explicit `cargo build -p …` lists that live
     /// outside Rust, and `cargo test` alone never emits a staticlib. So a bridge
@@ -679,13 +679,15 @@ mod tests {
     ///
     /// `release.yml` was the list nobody checked, and it is the one users meet:
     /// it built eight of eleven, so every published tarball carried a compiler
-    /// that refused `--with-monitoring`.
+    /// that refused `--with-monitoring`. `nightly.yml` ships to users too, and
+    /// nobody watches an unattended 03:00 build, so it is held to the same list.
     #[test]
     fn every_bridge_crate_is_in_the_build_lists() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let lists = [
             ".github/workflows/ci.yml",
             ".github/workflows/release.yml",
+            ".github/workflows/nightly.yml",
             "scripts/test-linux-arm64.sh",
             "scripts/test-linux-x86_64.sh",
         ];
