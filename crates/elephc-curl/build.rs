@@ -33,8 +33,10 @@
 //!   -> ssl -> crypto -> z -> nghttp2 (libssh2 needs OpenSSL and zlib, so it has
 //!   to precede them; nghttp2 needs nothing, so it can trail), which is the same
 //!   sequence `src/native_deps/catalog.rs`' `CURL_VERSIONS.dependencies` produces
-//!   for the production link. Plus this file's own empirical `SystemConfiguration`
-//!   fix below for the macOS system frameworks curl's TLS/resolver backend needs.
+//!   for the production link. Apple test targets also receive curl's upstream
+//!   Security/CoreFoundation/CoreServices trio for SecTrust; macOS alone adds the
+//!   empirically required
+//!   SystemConfiguration resolver framework.
 //! - `ELEPHC_CURL_LIB_DIR` NAMES THE SAME ENV VAR AS `src/linker/bridges.rs`'s
 //!   `BRIDGES` table entry for `elephc_curl`, but for a DIFFERENT purpose there:
 //!   the production compiler reads it as an override for the directory
@@ -90,8 +92,8 @@ fn main() {
     };
 
     // Real native artifacts requested: wire up libcurl's own dependency link
-    // order (curl -> ssh2 -> ssl -> crypto -> z -> nghttp2), plus the
-    // macOS frameworks curl's OpenSSL/resolver backend needs there.
+    // order (curl -> ssh2 -> ssl -> crypto -> z -> nghttp2), plus the Apple
+    // frameworks curl's OpenSSL/SecTrust backend needs there.
     add_search_path(&curl_lib_dir);
     println!("cargo:rustc-link-lib=static=curl");
 
@@ -118,18 +120,19 @@ fn main() {
     }
     println!("cargo:rustc-link-lib=static=nghttp2");
 
-    if env::var_os("CARGO_CFG_TARGET_OS").as_deref() == Some(std::ffi::OsStr::new("macos")) {
-        // `Security`/`CoreFoundation` satisfy OpenSSL's keychain-backed trust
-        // store lookups; `SystemConfiguration` satisfies libcurl's own
-        // `Curl_macos_init`/`SCDynamicStoreCopyProxies` system-proxy
-        // detection (`lib/macos.c`) — confirmed necessary empirically: a
-        // link without it fails with an undefined
-        // `_SCDynamicStoreCopyProxies` symbol even though nothing in this
-        // crate calls it directly. `elephc-pdo`'s `BRIDGES` entry
-        // (`src/linker/bridges.rs`) needs the identical pair for the same
-        // underlying reason (its libpq dependency).
+    let target_os = env::var_os("CARGO_CFG_TARGET_OS");
+    if matches!(target_os.as_deref(), Some(os) if os == "macos" || os == "ios") {
+        // Mirror curl 8.21's `APPLE_SECTRUST_LDFLAGS` exactly: Security evaluates the
+        // certificate chain, while the implementation uses CoreFoundation objects and
+        // upstream retains the CoreServices umbrella in the supported Apple link set.
         println!("cargo:rustc-link-lib=framework=Security");
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
+        println!("cargo:rustc-link-lib=framework=CoreServices");
+    }
+    if target_os.as_deref() == Some(std::ffi::OsStr::new("macos")) {
+        // macOS additionally compiles `Curl_macos_init` proxy/NAT64 setup, whose
+        // `SCDynamicStoreCopyProxies` reference needs SystemConfiguration. iOS excludes
+        // that source path through TargetConditionals.
         println!("cargo:rustc-link-lib=framework=SystemConfiguration");
     }
 

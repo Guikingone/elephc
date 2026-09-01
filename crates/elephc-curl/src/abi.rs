@@ -329,11 +329,12 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_str(
         let Some(entry) = guard.get_mut(&id) else {
             return 0;
         };
-        // NO CA-SPECIFIC HANDLING HERE, AND THAT IS THE DESIGN, not an omission.
-        // `CURLOPT_CAINFO`/`CURLOPT_PROXY_CAINFO` replace the discovered bundle in their
-        // own option slots, and `CURLOPT_CAPATH`/`CURLOPT_PROXY_CAPATH` are deliberately
-        // allowed to compose with it — see [`apply_discovered_cainfo`] for the
-        // measurement that ruled out taking the discovered bundle back out.
+        // NO CA-SPECIFIC HANDLING HERE, AND THAT IS THE DESIGN, not an omission. On a
+        // file-based build, CAINFO replaces and CAPATH composes with the discovered file
+        // through libcurl's own option slots (see [`apply_discovered_cainfo`]). On an
+        // AppleSecTrust build, either custom option disables automatic native trust unless
+        // the matching SSL_OPTIONS also requests CURLSSLOPT_NATIVE_CA. Forwarding all four
+        // untouched is what preserves those upstream semantics.
         let code = unsafe { easy::setopt_str(entry.curl, opt as c_int, value.as_ptr()) };
         (code == easy::CURLE_OK) as i32
     })

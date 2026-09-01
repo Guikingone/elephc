@@ -133,13 +133,14 @@ pub(crate) struct EasyEntry {
     pub(crate) callback_threw: bool,
 }
 
-// RUNTIME CA DISCOVERY (`crate::ca`) DELIBERATELY KEEPS NO STATE HERE. It is applied as an
-// ordinary `CURLOPT_CAINFO` at `curl_init()`/`curl_reset()` — the two moments a handle
-// provably carries no user CA configuration (a fresh handle has none; `curl_easy_reset`
-// has just cleared it) — so every user `curl_setopt()` lands strictly afterwards and wins
-// by plain option assignment, and `curl_easy_duphandle` carries the value across on its
-// own like any other string option. There is nothing for an `EasyEntry` field to
-// remember. An earlier revision tracked "is the current CAINFO the discovered one" so a
+// RUNTIME CA SELECTION (`crate::ca`) DELIBERATELY KEEPS NO STATE HERE. A discovered file
+// is applied as ordinary `CURLOPT_CAINFO` at `curl_init()`/`curl_reset()` — the two moments
+// a handle provably carries no user CA configuration — so every user `curl_setopt()`
+// lands strictly afterwards and wins by plain assignment. On AppleSecTrust builds the
+// selection is a no-op, leaving libcurl's native-verifier default intact. In both cases
+// `curl_easy_duphandle` carries the resulting SSL configuration across itself. There is
+// nothing for an `EasyEntry` field to remember. An earlier revision tracked "is the
+// current CAINFO the discovered one" so a
 // later `CURLOPT_CAPATH` could take it back out again; `crate::abi::apply_discovered_cainfo`
 // documents the measurement that showed the take-out was both ineffective and harmful.
 

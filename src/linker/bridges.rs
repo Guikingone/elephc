@@ -31,8 +31,8 @@ pub(super) struct BridgeStaticlib {
     pub(super) flag_name: &'static str,
     /// Whether link-time side effects require the whole archive by default.
     pub(super) whole_archive: bool,
-    /// macOS frameworks required by this bridge's transitive dependencies.
-    pub(super) macos_frameworks: &'static [&'static str],
+    /// Apple frameworks required by this bridge's transitive dependencies.
+    pub(super) apple_frameworks: &'static [&'static str],
     /// Whether the Linux link needs the dynamic loader library.
     pub(super) needs_libdl: bool,
     /// Canonical PHP extension reported when this bridge is linked, if distinct.
@@ -47,7 +47,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-tls",
         flag_name: "tls",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The TLS bridge implements PHP's OpenSSL-backed stream crypto surface.
         php_extension: Some("openssl"),
@@ -58,7 +58,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-pdo",
         flag_name: "pdo",
         whole_archive: false,
-        macos_frameworks: &["CoreFoundation", "SystemConfiguration"],
+        apple_frameworks: &["CoreFoundation", "SystemConfiguration"],
         needs_libdl: true,
         // The archive backs MORE THAN ONE PHP surface (PDO and mysqli), so the
         // linked staticlib alone cannot identify a PHP extension. Reporting comes
@@ -72,7 +72,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-crypto",
         flag_name: "crypto",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The crypto bridge implements PHP's digest/HMAC `hash` extension.
         php_extension: Some("hash"),
@@ -83,7 +83,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-bcmath",
         flag_name: "bcmath",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
         php_extension: Some("bcmath"),
@@ -94,7 +94,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-iconv",
         flag_name: "iconv",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The charset bridge implements PHP's procedural `iconv` extension.
         php_extension: Some("iconv"),
@@ -105,7 +105,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-phar",
         flag_name: "phar",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The archive reader/writer is exposed by PHP as `Phar`.
         php_extension: Some("Phar"),
@@ -116,7 +116,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-tz",
         flag_name: "tz",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // Timezone support folds into the always-present `date` extension.
         php_extension: None,
@@ -127,7 +127,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-image",
         flag_name: "image",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The image codec/drawing surface maps to PHP's `gd` extension.
         php_extension: Some("gd"),
@@ -138,7 +138,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-probe",
         flag_name: "probe",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The sampling probe is an elephc-native diagnostic, not a PHP extension.
         php_extension: None,
@@ -149,7 +149,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-instr",
         flag_name: "instrument",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // Exact per-function instrumentation is an elephc-native diagnostic.
         php_extension: None,
@@ -160,7 +160,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-web",
         flag_name: "web",
         whole_archive: true,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The web bridge owns the PHP `session` extension surface.
         php_extension: Some("session"),
@@ -171,7 +171,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-magician",
         flag_name: "eval",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extension: None,
@@ -182,7 +182,12 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-curl",
         flag_name: "curl",
         whole_archive: true,
-        macos_frameworks: &["Security", "CoreFoundation", "SystemConfiguration"],
+        apple_frameworks: &[
+            "Security",
+            "CoreFoundation",
+            "CoreServices",
+            "SystemConfiguration",
+        ],
         needs_libdl: true,
         // The curl bridge implements PHP's libcurl-backed `curl` extension surface.
         php_extension: Some("curl"),
@@ -372,7 +377,7 @@ fn record_bridge_metadata(
     seen_frameworks: &mut HashSet<&'static str>,
 ) {
     *needs_libdl |= bridge.needs_libdl;
-    for framework in bridge.macos_frameworks {
+    for framework in bridge.apple_frameworks {
         if seen_frameworks.insert(*framework) {
             frameworks.push(LinkItem::Framework((*framework).to_string()));
         }
@@ -1153,7 +1158,7 @@ mod tests {
 
         let pdo = bridge_for_library("elephc_pdo").expect("pdo bridge");
         assert_eq!(
-            pdo.macos_frameworks,
+            pdo.apple_frameworks,
             &["CoreFoundation", "SystemConfiguration"]
         );
 
@@ -1167,12 +1172,12 @@ mod tests {
         // `curl_*` function/class/constant (the ordinary pay-for-use detection path,
         // `src/curl_prelude/detect.rs`) but is compiled with the flag anyway references
         // no `elephc_curl_*` symbol at all, so a selective (non-whole-archive) link
-        // would pull in nothing from the archive. It also needs the same macOS proxy/keychain
-        // framework trio as the crate's
-        // own gated native tests (`crates/elephc-curl/build.rs`): `Security` and
-        // `CoreFoundation` satisfy OpenSSL's keychain-backed trust store lookups,
-        // `SystemConfiguration` satisfies libcurl's own `SCDynamicStoreCopyProxies`
-        // system-proxy detection.
+        // would pull in nothing from the archive. The Apple link also needs the same
+        // framework set as the crate's gated native tests (`crates/elephc-curl/build.rs`):
+        // Security/CoreFoundation/CoreServices mirror curl 8.21's upstream
+        // `APPLE_SECTRUST_LDFLAGS`, while SystemConfiguration satisfies macOS's
+        // `SCDynamicStoreCopyProxies` reference (and is harmless on iOS, where that
+        // source path is compiled out).
         let curl = bridge_for_library("elephc_curl").expect("curl bridge");
         assert_eq!(curl.crate_name, "elephc-curl");
         assert_eq!(curl.env_var, "ELEPHC_CURL_LIB_DIR");
@@ -1180,8 +1185,13 @@ mod tests {
         assert!(curl.whole_archive);
         assert!(curl.needs_libdl);
         assert_eq!(
-            curl.macos_frameworks,
-            &["Security", "CoreFoundation", "SystemConfiguration"]
+            curl.apple_frameworks,
+            &[
+                "Security",
+                "CoreFoundation",
+                "CoreServices",
+                "SystemConfiguration"
+            ]
         );
     }
 

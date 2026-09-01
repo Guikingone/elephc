@@ -51,14 +51,18 @@ const CURL_NATIVE_PACKAGES: &[(&str, &[&str])] = &[
     ("nghttp2", &["libnghttp2.a"]),
 ];
 
-/// The macOS system frameworks a statically linked libcurl needs for its native
-/// resolver/proxy support (`Curl_macos_init` references `CFRelease` and
-/// `SCDynamicStoreCopyProxies`). Kept in step with the `elephc_curl` entry's
-/// `macos_frameworks` in `src/linker/bridges.rs`, which is what the production link uses;
+/// The Apple frameworks a statically linked libcurl needs: the first three mirror curl
+/// 8.21's upstream `APPLE_SECTRUST_LDFLAGS`, and macOS's `Curl_macos_init` references
+/// `SCDynamicStoreCopyProxies` from SystemConfiguration. Kept in step with the bridge's
+/// `apple_frameworks` in `src/linker/bridges.rs`, which is what the production link uses;
 /// that table lives in the binary crate and is not reachable from an integration test, so
 /// it is mirrored here rather than imported.
-pub(crate) const CURL_MACOS_FRAMEWORKS: &[&str] =
-    &["Security", "CoreFoundation", "SystemConfiguration"];
+pub(crate) const CURL_APPLE_FRAMEWORKS: &[&str] = &[
+    "Security",
+    "CoreFoundation",
+    "CoreServices",
+    "SystemConfiguration",
+];
 
 /// One discovered package: the `lib/` directory plus the EXACT ARCHIVE PATHS it provides,
 /// in libcurl's own dependency order (curl -> ssh2 -> ssl -> crypto -> z -> nghttp2).

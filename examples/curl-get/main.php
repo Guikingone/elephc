@@ -6,12 +6,11 @@
 // it still compiles and reports why nothing was fetched when the network is unavailable,
 // rather than crashing.
 //
-// https:// works too, and verifies out of the box: the managed curl/OpenSSL recipe bakes
-// the BUILD machine's CA path into the archive, so the bridge discovers a real trust store
-// at RUN time and sets CURLOPT_CAINFO itself when that baked path is not there. Set
-// CURLOPT_CAINFO (or $CURL_CA_BUNDLE) when you want to pin a specific bundle. The headline
-// request below stays on plain http:// only so the example needs nothing but a socket. See
-// docs/php/curl.md for the resolution order and the protocol matrix.
+// https:// works too, and verifies out of the box: iOS builds use Apple SecTrust, while
+// file-based targets discover a real CA bundle at run time when curl's baked build-host
+// path is not usable. Set CURLOPT_CAINFO (or $CURL_CA_BUNDLE) when you want to pin a
+// specific bundle. The headline request below stays on plain http:// only so the example
+// needs nothing but a socket. See docs/php/curl.md for the trust rules and protocol matrix.
 
 $ch = curl_init("http://example.com/");
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);

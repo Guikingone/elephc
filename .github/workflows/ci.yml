@@ -976,6 +976,65 @@ jobs:
           bash scripts/ci/run_curl_codegen_shard.sh \
             "$curl_test_binary" "${{ matrix.shard }}" 4
 
+  # iOS cannot run as a standalone elephc executable, but curl is still a first-class
+  # dependency of exported iOS staticlibs. Build the complete managed native chain with
+  # the real Xcode toolchain, prove libcurl contains AppleSecTrust, cross-build the Rust
+  # bridge, compile a curl-using PHP library, and perform the final application-host link
+  # for both device and Simulator. A recipe that silently falls back to Unix PEM probing,
+  # or misses a framework/archive on either platform, fails here.
+  curl-ios-compile-link:
+    name: Curl iOS Compile & Link (${{ matrix.elephc_target }})
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust with the iOS standard library
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-curl-${{ matrix.elephc_target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-curl-${{ matrix.elephc_target }}-
+
+      - name: Cache managed native curl for iOS
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/elephc-native
+          key: curl-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-${{ matrix.elephc_target }}-
+
+      - name: Build and link curl with native iOS trust
+        run: |
+          bash scripts/ci/test_ios_curl_link.sh \
+            "${{ matrix.elephc_target }}" \
+            "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" \
+            "${{ matrix.clang_target }}"
+
   # Eval integration tests compile, link, and run full programs while exercising
   # eval/magician paths, so keep them out of the ordinary codegen shards. Two
   # workers per shard reduce wall time without increasing the number of test runs.
@@ -1402,6 +1461,7 @@ jobs:
       - curl-codegen-tests-macos-aarch64
       - curl-codegen-tests-linux-x86_64
       - curl-codegen-tests-linux-aarch64
+      - curl-ios-compile-link
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
       - eval-codegen-tests-linux-aarch64
@@ -1431,6 +1491,7 @@ jobs:
           test "${{ needs.curl-codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.curl-codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.curl-codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.curl-ios-compile-link.result }}" = "success"
           test "${{ needs.eval-codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.eval-codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.eval-codegen-tests-linux-aarch64.result }}" = "success"

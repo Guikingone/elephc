@@ -1069,7 +1069,7 @@ fn test_link_plan(
         if let Some(packages) = curl_native_packages() {
             push_curl_native_archives(&mut plan, packages);
             if target().platform == Platform::MacOS {
-                for framework in CURL_MACOS_FRAMEWORKS {
+                for framework in CURL_APPLE_FRAMEWORKS {
                     plan.push(LinkItem::Framework((*framework).to_string()));
                 }
             }

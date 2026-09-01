@@ -1,6 +1,6 @@
 ---
 title: "cURL"
-description: "PHP's ext/curl on a statically pinned libcurl 8.21.0 with HTTP/2 and 25 protocols: easy, multi and share interfaces, uploads, callbacks, the protocol matrix, and every documented difference from PHP."
+description: "PHP's ext/curl on pinned libcurl 8.21.0 with HTTP/2, 25 protocols, OpenSSL, and native iOS SecTrust: easy, multi and share interfaces, uploads, callbacks, and documented PHP differences."
 sidebar:
   order: 18
 ---
@@ -183,7 +183,7 @@ binaries but does not route any other PHP surface through it:
 
 | PHP surface | Backed by |
 |---|---|
-| `https://` through `curl_*` | Managed OpenSSL 3.5.8, as libcurl's SSL backend |
+| `https://` through `curl_*` | Managed OpenSSL 3.5.8 as libcurl's SSL backend; Apple SecTrust supplies native trust anchors on iOS |
 | `openssl_encrypt()` / `openssl_decrypt()` / the rest of `openssl_*` | RustCrypto (`elephc-crypto`), unchanged |
 | `hash()`, `hash_hmac()`, `md5()`, `sha1()` | RustCrypto (`elephc-crypto`), unchanged |
 | `https://` through `file_get_contents()` / `fopen()` stream wrappers | `elephc-tls` (rustls), unchanged |
@@ -207,21 +207,38 @@ libcurl the host PHP was built against.
 
 ### The CA trust store
 
-**HTTPS verifies out of the box, including on a machine other than the one that
-compiled the binary.** That is not something libcurl does on its own, so it is
-worth knowing how it works.
+**HTTPS verifies out of the box, including on iOS and on a file-based system
+whose CA layout differs from the build host.** The two paths are deliberately
+different.
 
-The managed curl recipe passes no `--with-ca-bundle` / `--with-ca-path`, so
-libcurl's `configure` autodetects a CA bundle on the **build machine** and bakes
-that absolute path into the archive (`/etc/ssl/cert.pem` on a macOS build host,
+On `ios-arm64` and `ios-sim-arm64`, the managed curl recipe combines OpenSSL
+with curl 8.21's Apple SecTrust integration. OpenSSL still owns the TLS
+connection, but when no application CA option is set curl hands the server
+chain and hostname to Security.framework for verification against the iOS
+system trust store. These builds explicitly carry no baked CA file or path;
+they do not expect `/etc/ssl`, and the bridge does not probe for PEM files after
+`curl_version_info()` advertises `AppleSecTrust`. The same native verification
+applies independently to an HTTPS proxy connection.
+
+An explicit CA setting remains explicit on iOS. `CURLOPT_CAINFO`,
+`CURLOPT_CAPATH`, or `$CURL_CA_BUNDLE` disables the automatic SecTrust path for
+that hop and verifies against the supplied file/directory instead. To combine a
+custom store with native roots, include `CURLSSLOPT_NATIVE_CA` in
+`CURLOPT_SSL_OPTIONS` (and in `CURLOPT_PROXY_SSL_OPTIONS` for an HTTPS proxy).
+
+The remaining targets use file-based trust. There the managed curl recipe
+passes no `--with-ca-bundle` / `--with-ca-path`, so libcurl's `configure`
+autodetects a CA bundle on the **build machine** and bakes that absolute path
+into the archive (`/etc/ssl/cert.pem` on a macOS build host,
 `/etc/ssl/certs/ca-certificates.crt` on a Debian one — and *nothing at all* when
 the recipe cross-compiles, because `configure` skips the detection entirely in
-that case). Left alone, a binary shipped anywhere else fails every verified HTTPS
-transfer with `CURLE_SSL_CACERT_BADFILE` (`77`).
+that case). Left alone, a binary shipped to a different filesystem layout can
+fail verified HTTPS with `CURLE_SSL_CACERT_BADFILE` (`77`).
 
-elephc's curl bridge therefore resolves a CA bundle at **run** time and sets it
-as an ordinary `CURLOPT_CAINFO` — and `CURLOPT_PROXY_CAINFO` — on each handle.
-The order, applied once per process at the first `curl_init()`:
+For those file-based builds, elephc's curl bridge resolves a CA bundle at
+**run** time and sets it as ordinary `CURLOPT_CAINFO` — and
+`CURLOPT_PROXY_CAINFO` — on each handle. The order, applied once per process at
+the first `curl_init()`:
 
 1. **`$CURL_CA_BUNDLE`**, if it names an absolute path. Not checked for
    existence — naming a bundle is an instruction, and a wrong one fails loudly
@@ -248,48 +265,52 @@ deliberately does not, because `/usr/local` is the Homebrew prefix on Intel macO
 and is left admin-writable there. On a FreeBSD host that has only that file, set
 `CURLOPT_CAINFO` or `$CURL_CA_BUNDLE` explicitly.
 
-**`CURLOPT_CAINFO` always wins.** Setting it replaces the discovered bundle on
-that handle, exactly as it would replace libcurl's baked-in default:
+**`CURLOPT_CAINFO` always wins.** On file-based targets it replaces the
+discovered bundle; on iOS it replaces automatic SecTrust for the origin hop:
 
 ```php
 curl_setopt($ch, CURLOPT_CAINFO, __DIR__ . "/ca-bundle.pem");
 ```
 
-**`CURLOPT_CAPATH` composes with it** rather than replacing it, so the handle
-verifies against *your directory plus the discovered bundle*:
+On file-based targets, **`CURLOPT_CAPATH` composes with the discovered bundle**
+rather than replacing it, so the handle verifies against *your directory plus
+the discovered bundle*:
 
 ```php
 curl_setopt($ch, CURLOPT_CAPATH, "/etc/ssl/certs");
 ```
 
-That is the same shape a stock libcurl gives — there, a capath composes with the
-*baked-in* bundle — and it is not a choice elephc could avoid: clearing
+That is the same shape a stock file-based libcurl gives — there, a capath
+composes with the *baked-in* bundle — and it is not a choice elephc could avoid: clearing
 `CURLOPT_CAINFO` makes libcurl re-inject its compile-time default, which on a
 machine where that path does not exist fails the whole transfer with `77` before
 your capath is ever read. Set `CURLOPT_CAINFO` to your own bundle alongside the
 capath if you need the trust set to be exactly yours.
 
-**HTTPS proxies get the same bundle.** libcurl verifies the TLS connection to a
-proxy against a completely separate set of options, with its own copy of the
-baked-in default, so tunnelling through one used to fail on a foreign machine for
-exactly the reason a direct transfer did:
+On iOS, setting `CURLOPT_CAPATH` is itself a custom CA configuration, so it
+disables automatic SecTrust and uses the OpenSSL hashed directory alone unless
+`CURLOPT_SSL_OPTIONS` also contains `CURLSSLOPT_NATIVE_CA`.
+
+**HTTPS proxies use the matching trust path.** On file-based targets they get
+the same discovered bundle. On iOS their separate TLS configuration defaults to
+SecTrust too. libcurl keeps proxy trust separate from origin trust in both
+cases:
 
 ```php
 curl_setopt($ch, CURLOPT_PROXY, "https://proxy.internal:3128");
-// The proxy's certificate is verified against the discovered bundle too.
+// File-based targets use the discovered bundle; iOS uses SecTrust by default.
 ```
 
 `CURLOPT_PROXY_CAINFO` and `CURLOPT_PROXY_CAPATH` behave on that hop exactly as
-their non-proxy counterparts do on the origin hop — the first replaces the
-discovered bundle, the second composes with it. There is only ever **one**
-resolution per process: whether the baked-in path is usable is a fact about the
-machine, not about which hop is being verified. A plain `http://` proxy involves
-no TLS to the proxy and is unaffected.
+their non-proxy counterparts do on the origin hop. File discovery has only
+**one** resolution per process because the filesystem layout is a fact about
+the machine, not the hop. A plain `http://` proxy involves no TLS to the proxy
+and is unaffected.
 
-`curl_reset($ch)` puts the discovered bundle back (it restores libcurl's own
-defaults, which would otherwise mean the dead baked-in path), and
-`curl_copy_handle($ch)` carries whichever bundle the original had. Share handles
-and the multi interface do not interact with any of this: `CURLOPT_CAINFO` is a
+`curl_reset($ch)` puts the discovered bundle back on file-based targets and
+restores the no-custom-CA SecTrust default on iOS. `curl_copy_handle($ch)`
+carries whichever trust options the original had. Share handles and the multi
+interface do not interact with any of this: `CURLOPT_CAINFO` is a
 per-handle option, and a `CurlShareHandle` shares DNS, SSL sessions, cookies and
 connections — never options. Disabling verification with
 `CURLOPT_SSL_VERIFYPEER => false` also "works" and is, as always, a bad idea.
@@ -298,10 +319,10 @@ connections — never options. Disabling verification with
 
 | | php 8.4 | elephc |
 |---|---|---|
-| Portability comes from | the distro's own libcurl, built for that distro | runtime discovery, above |
+| Portability comes from | the distro's own libcurl, built for that distro | Apple SecTrust on iOS; runtime PEM discovery elsewhere |
 | `curl.cainfo` / `openssl.cafile` php.ini | honored | **not implemented** — elephc has no php.ini for curl |
 | `$CURL_CA_BUNDLE` | ignored | **honored** (parity with the `curl` command-line tool, which reads the same variable) |
-| `$SSL_CERT_FILE` / `$SSL_CERT_DIR` | ignored | ignored — this build has no OpenSSL default-verify-paths fallback compiled in, so they were never consulted |
+| `$SSL_CERT_FILE` / `$SSL_CERT_DIR` | ignored | ignored — iOS uses SecTrust by default, and file-based builds have no OpenSSL default-verify-paths fallback compiled in |
 
 Honoring `$CURL_CA_BUNDLE` is the deliberate part: it is the only process-wide
 hook available when the handles are created by library code you do not control,
@@ -346,7 +367,7 @@ OpenSSL `c_rehash` layout that a filesystem check cannot confirm, so only bundle
 ```php
 // This reports the path libcurl was BUILT with, not the one in force.
 $info = curl_getinfo(curl_init());
-echo $info["cainfo"];   // /etc/ssl/cert.pem
+echo $info["cainfo"];   // /etc/ssl/cert.pem on a file build; "" on iOS
 ```
 
 That is not an elephc quirk: libcurl answers `CURLINFO_CAINFO` from a
