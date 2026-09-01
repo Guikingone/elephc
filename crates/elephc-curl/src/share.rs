@@ -469,11 +469,13 @@ pub extern "C" fn elephc_curl_share_free(share_id: i64) {
 ///   the caller's `handles::ffi_guard`, never a hard process abort).
 /// - An `eprintln!` on the non-OK path keeps a release build's failure visible without
 ///   panicking through the `extern "C"` boundary.
-/// - The result is recorded in [`cleanup_results`], keyed by `share_id`, so a test can
-///   observe exactly which outcome a given deferred (or immediate) free actually produced
-///   — see `crate::tests::native_share`.
+/// - Native test builds record the result in [`cleanup_results`], keyed by `share_id`, so
+///   tests can observe exactly which outcome a given deferred (or immediate) free actually
+///   produced — see `crate::tests::native_share`. Production builds retain no per-share
+///   cleanup history.
 fn finish_share_cleanup(share_id: i64, share: *mut CURLSH) {
     let code = unsafe { curl_share_cleanup(share) };
+    #[cfg(all(test, elephc_curl_native))]
     handles::lock_recover(cleanup_results()).insert(share_id, code);
     if code != CURLSHE_OK {
         eprintln!(
@@ -491,11 +493,10 @@ fn finish_share_cleanup(share_id: i64, share: *mut CURLSH) {
 }
 
 /// Records the `CURLSHcode` [`finish_share_cleanup`] observed for `share_id`, keyed by id
-/// so parallel `cargo test` runs (this crate's tables are process-wide) do not race each
-/// other reading a single shared slot. Entries are never pruned automatically — this is
-/// test/observability infrastructure exercising a rare event (a share is actually
-/// destroyed), not a hot path, so the bound is "one small entry per share the process ever
-/// destroys", not unbounded per request.
+/// so parallel native tests (this crate's tables are process-wide) do not race each other
+/// reading a single shared slot. This registry is excluded from production builds so
+/// repeatedly creating and destroying shares cannot accumulate diagnostic-only entries.
+#[cfg(all(test, elephc_curl_native))]
 fn cleanup_results() -> &'static Mutex<HashMap<i64, CURLSHcode>> {
     static RESULTS: OnceLock<Mutex<HashMap<i64, CURLSHcode>>> = OnceLock::new();
     RESULTS.get_or_init(|| Mutex::new(HashMap::new()))
