@@ -3,7 +3,7 @@
 //! handlers need — against the already materialized `openssl` and `zlib` native packages.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for libssh2 recipe revision 1.
+//! - `crate::native_deps::recipe::CuratedRecipes` for libssh2 recipe revision 2.
 //!
 //! Key details:
 //! - Like `curl.rs`, this recipe NEVER probes the system for OpenSSL or zlib: it only
@@ -26,6 +26,9 @@
 //!   the version curl's own `--with-openssl` prefix supplied, not libssh2's. So the recipe
 //!   reads back the `LIBSSL`/`LIBZ` that configure actually resolved and requires both to
 //!   live under the dependency prefixes this run was handed.
+//! - Revision 2 passes the normalized ABI to Autoconf instead of clang's
+//!   SDK-qualified target triple, so `ios-sim-arm64` reaches the compiler rather than
+//!   being rejected by `config.sub`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -65,7 +68,7 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     command.arg(format!("--with-libssl-prefix={}", openssl_prefix.display()));
     command.arg(format!("--with-libz-prefix={}", zlib_prefix.display()));
     if request.target != Target::detect_host() {
-        command.arg(format!("--host={}", request.toolchain.target_tuple));
+        command.arg(format!("--host={}", request.toolchain.autoconf_host()));
     }
     run_checked(&mut command, "configure trusted libssh2 recipe")?;
     require_configured_against(&build, openssl_prefix, zlib_prefix)?;

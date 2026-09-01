@@ -195,7 +195,7 @@ const NGHTTP2_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 3_104_002,
         body_limit: 32 * 1024 * 1024,
     },
-    recipe_revision: 1,
+    recipe_revision: 2,
     dependencies: &[],
     supported_targets: TARGETS,
     ordered_link_outputs: NGHTTP2_ARCHIVES,
@@ -214,7 +214,7 @@ const LIBSSH2_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 1_093_012,
         body_limit: 16 * 1024 * 1024,
     },
-    recipe_revision: 1,
+    recipe_revision: 2,
     dependencies: &["openssl", "zlib"],
     supported_targets: TARGETS,
     ordered_link_outputs: LIBSSH2_ARCHIVES,
@@ -240,7 +240,7 @@ const CURL_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 4_298_225,
         body_limit: 32 * 1024 * 1024,
     },
-    recipe_revision: 3,
+    recipe_revision: 4,
     dependencies: &["libssh2", "nghttp2", "openssl", "zlib"],
     supported_targets: TARGETS,
     ordered_link_outputs: CURL_ARCHIVES,
@@ -427,6 +427,7 @@ mod tests {
             version.retained_headers,
             &["include/nghttp2/nghttp2.h", "include/nghttp2/nghttp2ver.h"]
         );
+        assert_eq!(version.recipe_revision, 2);
         assert!(version.dependencies.is_empty());
         assert_eq!(version.supported_targets, TARGETS);
     }
@@ -445,6 +446,7 @@ mod tests {
         );
         assert_eq!(version.ordered_link_outputs, &["lib/libssh2.a"]);
         assert_eq!(version.retained_headers, LIBSSH2_HEADERS);
+        assert_eq!(version.recipe_revision, 2);
         assert_eq!(version.dependencies, &["openssl", "zlib"]);
         assert_eq!(version.supported_targets, TARGETS);
     }
@@ -466,7 +468,7 @@ mod tests {
         assert_eq!(version.ordered_link_outputs, &["lib/libcurl.a"]);
         assert_eq!(version.retained_headers, CURL_HEADERS);
         assert_eq!(version.dependencies, &["libssh2", "nghttp2", "openssl", "zlib"]);
-        assert_eq!(version.recipe_revision, 3);
+        assert_eq!(version.recipe_revision, 4);
         assert_eq!(version.supported_targets, TARGETS);
     }
 }

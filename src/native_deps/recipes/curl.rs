@@ -4,7 +4,7 @@
 //! and `libssh2` native packages.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for curl recipe revision 3.
+//! - `crate::native_deps::recipe::CuratedRecipes` for curl recipe revision 4.
 //!
 //! Key details:
 //! - `curl` is the first catalog package with non-empty `dependencies`; its recipe never probes
@@ -45,6 +45,9 @@
 //!   baked path and otherwise probes fixed distribution root-store files. That bridge first
 //!   recognizes the `AppleSecTrust` feature and skips PEM discovery, so it cannot accidentally
 //!   turn native iOS trust back off by setting `CURLOPT_CAINFO` itself.
+//! - Revision 4 also passes the normalized ABI to Autoconf instead of clang's
+//!   SDK-qualified target triple, matching the dependency recipes and allowing
+//!   `ios-sim-arm64` through `config.sub`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -123,7 +126,7 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
         "--without-quiche",
     ]);
     if request.target != Target::detect_host() {
-        command.arg(format!("--host={}", request.toolchain.target_tuple));
+        command.arg(format!("--host={}", request.toolchain.autoconf_host()));
     }
     run_checked(&mut command, "configure trusted curl recipe")?;
 

@@ -56,9 +56,9 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("pcre2", 2) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
-        ("nghttp2", 1) => Some(BuiltInRecipe::Nghttp2),
-        ("libssh2", 1) => Some(BuiltInRecipe::Libssh2),
-        ("curl", 3) => Some(BuiltInRecipe::Curl),
+        ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
+        ("libssh2", 2) => Some(BuiltInRecipe::Libssh2),
+        ("curl", 4) => Some(BuiltInRecipe::Curl),
         _ => None,
     }
 }
@@ -119,16 +119,16 @@ mod tests {
             "missing built-in recipe for openssl revision 1"
         );
         assert!(
-            built_in_recipe("nghttp2", 1).is_some(),
-            "missing built-in recipe for nghttp2 revision 1"
+            built_in_recipe("nghttp2", 2).is_some(),
+            "missing built-in recipe for nghttp2 revision 2"
         );
         assert!(
-            built_in_recipe("libssh2", 1).is_some(),
-            "missing built-in recipe for libssh2 revision 1"
+            built_in_recipe("libssh2", 2).is_some(),
+            "missing built-in recipe for libssh2 revision 2"
         );
         assert!(
-            built_in_recipe("curl", 3).is_some(),
-            "missing built-in recipe for curl revision 3"
+            built_in_recipe("curl", 4).is_some(),
+            "missing built-in recipe for curl revision 4"
         );
     }
 
@@ -138,5 +138,14 @@ mod tests {
     fn previous_curl_recipe_revision_is_not_dispatched() {
         assert!(built_in_recipe("curl", 1).is_none());
         assert!(built_in_recipe("curl", 2).is_none());
+        assert!(built_in_recipe("curl", 3).is_none());
+    }
+
+    /// Verifies the dependency recipes that used clang's unparseable iOS Simulator
+    /// triple are not reused after switching their Autoconf host to the normalized ABI.
+    #[test]
+    fn previous_curl_dependency_recipe_revisions_are_not_dispatched() {
+        assert!(built_in_recipe("nghttp2", 1).is_none());
+        assert!(built_in_recipe("libssh2", 1).is_none());
     }
 }
