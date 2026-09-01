@@ -986,8 +986,6 @@ jobs:
     name: Curl iOS Compile & Link (${{ matrix.elephc_target }})
     runs-on: macos-14
     timeout-minutes: 60
-    env:
-      ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
     strategy:
       fail-fast: false
       matrix:
@@ -1028,6 +1026,8 @@ jobs:
             curl-native-${{ matrix.elephc_target }}-
 
       - name: Build and link curl with native iOS trust
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
         run: |
           bash scripts/ci/test_ios_curl_link.sh \
             "${{ matrix.elephc_target }}" \
