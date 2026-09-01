@@ -8,12 +8,11 @@
 //! - `crate::curl_prelude::inject_if_used`.
 //!
 //! Key details:
-//! - Runs before name resolution, so `Name`s are raw source text and PHP function and
-//!   class names are case-insensitive. A reference may be written `curl_init`,
-//!   `\curl_init`, or `\Some\curl_init`, and `CurlHandle` may be spelled
-//!   `\CurlHandle` or `curlhandle`. The walk therefore matches the unqualified last
-//!   segment case-insensitively, exactly like `hash_prelude::detect`, which this file
-//!   mirrors structurally.
+//! - Runs before the pipeline's name-resolution phase, so [`program_uses_curl`] first resolves
+//!   a clone with the exact global curl function/class surface seeded as fallback symbols.
+//!   This applies the authoritative PHP namespace/import rules without injecting the prelude:
+//!   `namespace App; curl_init()` falls back to global curl, while `\App\curl_init()`, an
+//!   imported user function, and a namespace-local declaration remain unrelated user symbols.
 //! - THREE KINDS OF POSITION trigger injection: (a) a *function call* naming one of
 //!   the `curl_*` functions — the dominant way the surface is used, since `curl_init()`
 //!   is what mints a `CurlHandle` in the first place; (b) a *class-name* position
@@ -21,13 +20,9 @@
 //!   `extends`/`implements`, type hints, trait uses, `use` imports); and (c) a
 //!   *constant* reference whose name carries one of curl's four frozen prefixes, so a
 //!   program that only mentions `CURLOPT_URL` still injects.
-//! - THE FUNCTION SET IS WHOLE-SEGMENT, NOT A BARE `curl` PREFIX. The exact names are
-//!   listed, plus the two families (`curl_multi_*`, `curl_share_*`) matched by their
-//!   `curl_multi_`/`curl_share_` prefix rather than individually enumerated. A bare
-//!   `curl` prefix test would inject (and bridge-link) for a user's own
-//!   `curl_helper()`; requiring the `curl_multi_`/`curl_share_` underscore keeps the
-//!   family match as tight as an enumeration while staying forward-compatible with any
-//!   future addition to either family.
+//! - THE FUNCTION SET IS EXACT. Every supported easy/multi/share function is enumerated;
+//!   prefixes are never accepted. This prevents user functions such as
+//!   `curl_multi_helper()` and `curl_share_cache()` from pulling in the bridge.
 //! - Soundness over precision: a missed reference would drop the prelude and turn a
 //!   valid program into an "undefined function/class" error, so the `match`es are
 //!   exhaustive (no wildcard arm). Adding an AST node forces this file to be updated.
@@ -37,12 +32,11 @@
 //!   which is exactly the pay-for-use guarantee this crate holds for every optional
 //!   native surface, so the
 //!   matching stays deliberately narrow rather than "anything starting with curl".
-//! - CONSTANT PREFIXES ARE MATCHED CASE-INSENSITIVELY for consistency with the rest of
-//!   this file, even though PHP constants are case-sensitive. The four frozen prefixes
-//!   are `CURLOPT_`/`CURLINFO_`/`CURLE_`/`CURL_`; other real families (`CURLM_*`, `CURLPROTO_*`,
-//!   `CURLAUTH_*`) are deliberately NOT matched, because a constant on its own does no
-//!   curl work: it resolves through the builtin constant table unconditionally, with or
-//!   without
+//! - CONSTANT PREFIXES ARE MATCHED CASE-SENSITIVELY after resolution because PHP constants
+//!   are case-sensitive. The four frozen prefixes are `CURLOPT_`/`CURLINFO_`/`CURLE_`/
+//!   `CURL_`; other real families (`CURLM_*`, `CURLPROTO_*`, `CURLAUTH_*`) are deliberately
+//!   NOT matched, because a constant on its own does no curl work: it resolves through the
+//!   builtin constant table unconditionally, with or without
 //!   the prelude, and the call or class-name position that actually needs the prelude is
 //!   caught by (a) or (b) above.
 
@@ -53,8 +47,8 @@ use crate::parser::ast::{
     TypeExpr,
 };
 
-/// The PHP functions the curl prelude declares or reserves. Whole-segment matches: every
-/// name here is a real `ext/curl` function, and nothing else pulls the prelude in.
+/// The exact PHP functions the curl prelude declares. Whole-segment matches ensure future
+/// user helpers with a curl-shaped prefix do not silently opt into the native bridge.
 const CURL_FUNCTIONS: &[&str] = &[
     "curl_init",
     "curl_setopt",
@@ -73,12 +67,25 @@ const CURL_FUNCTIONS: &[&str] = &[
     "curl_version",
     "curl_strerror",
     "curl_file_create",
+    "curl_multi_init",
+    "curl_multi_add_handle",
+    "curl_multi_remove_handle",
+    "curl_multi_exec",
+    "curl_multi_select",
+    "curl_multi_info_read",
+    "curl_multi_close",
+    "curl_multi_getcontent",
+    "curl_multi_setopt",
+    "curl_multi_errno",
+    "curl_multi_strerror",
+    "curl_multi_get_handles",
+    "curl_share_init",
+    "curl_share_setopt",
+    "curl_share_close",
+    "curl_share_errno",
+    "curl_share_strerror",
+    "curl_share_init_persistent",
 ];
-
-/// The `curl_multi_*` / `curl_share_*` families, matched by prefix because their member
-/// lists are still growing (Tasks 9 and 10). The trailing underscore is part of the
-/// prefix, so a user's `curl_multiplexer()` does not match.
-const CURL_FUNCTION_FAMILIES: &[&str] = &["curl_multi_", "curl_share_"];
 
 /// The six OOP classes of PHP's curl surface. `CurlSharePersistentHandle` is 8.5-only and
 /// `CURLStringFile` is 8.1+, but detection is version-independent: naming any of them is
@@ -95,44 +102,40 @@ const CURL_CLASSES: &[&str] = &[
 /// The four frozen constant prefixes from the task brief.
 const CURL_CONSTANT_PREFIXES: &[&str] = &["CURLOPT_", "CURLINFO_", "CURLE_", "CURL_"];
 
-/// Returns whether any top-level statement references the curl surface, so the prelude
-/// must be injected ahead of user code.
+/// Returns whether any statement resolves to the global curl surface, so the prelude must
+/// be injected ahead of user code. Resolution errors are left for the pipeline's normal
+/// name-resolution phase; an invalid program does not need speculative bridge injection.
 pub(super) fn program_uses_curl(program: &[Stmt]) -> bool {
-    program.iter().any(stmt_refs_curl)
+    crate::name_resolver::resolve_with_additional_global_symbols(
+        program.to_vec(),
+        CURL_FUNCTIONS,
+        CURL_CLASSES,
+    )
+    .is_ok_and(|resolved| resolved.iter().any(stmt_refs_curl))
 }
 
-/// Returns whether `name`'s unqualified last segment is a curl function, compared
-/// case-insensitively to match PHP's case-insensitive function names and any
-/// namespace/leading-backslash form (`curl_init`, `\curl_init`, `\Some\curl_init`).
+/// Returns whether a resolved name is one of curl's global functions. Function names are
+/// case-insensitive, but a name with namespace segments is unrelated to the global surface.
 fn name_is_curl_function(name: &Name) -> bool {
-    name.last_segment().is_some_and(|segment| {
-        CURL_FUNCTIONS
-            .iter()
-            .any(|candidate| segment.eq_ignore_ascii_case(candidate))
-            || CURL_FUNCTION_FAMILIES.iter().any(|family| {
-                segment.len() > family.len()
-                    && segment.as_bytes()[..family.len()].eq_ignore_ascii_case(family.as_bytes())
-            })
-    })
+    CURL_FUNCTIONS
+        .iter()
+        .any(|candidate| crate::name_resolver::is_additional_global_symbol(name, candidate))
 }
 
-/// Returns whether `name`'s unqualified last segment is one of curl's classes, compared
-/// case-insensitively and tolerant of any namespace/leading-backslash form.
+/// Returns whether a resolved name is one of curl's global classes. Class names are
+/// case-insensitive, but a name with namespace segments is unrelated to the global surface.
 fn name_is_curl_class(name: &Name) -> bool {
-    name.last_segment().is_some_and(|segment| {
-        CURL_CLASSES
-            .iter()
-            .any(|candidate| segment.eq_ignore_ascii_case(candidate))
-    })
+    CURL_CLASSES
+        .iter()
+        .any(|candidate| crate::name_resolver::is_additional_global_symbol(name, candidate))
 }
 
-/// Returns whether `name`'s unqualified last segment carries one of curl's constant
+/// Returns whether a resolved global name carries one of curl's case-sensitive constant
 /// prefixes (`CURLOPT_URL`, `CURLINFO_HTTP_CODE`, `CURLE_OK`, `CURL_HTTP_VERSION_2_0`).
 fn name_is_curl_constant(name: &Name) -> bool {
-    name.last_segment().is_some_and(|segment| {
+    matches!(name.parts.as_slice(), [segment] if {
         CURL_CONSTANT_PREFIXES.iter().any(|prefix| {
-            segment.len() > prefix.len()
-                && segment.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+            segment.len() > prefix.len() && segment.starts_with(prefix)
         })
     })
 }
@@ -641,10 +644,9 @@ mod tests {
         }
     }
 
-    /// The `curl_multi_*` / `curl_share_*` families are detected by prefix, so Tasks 9
-    /// and 10 can add members without editing this file.
+    /// Representative multi/share functions are present in the exact surface list.
     #[test]
-    fn detects_multi_and_share_families() {
+    fn detects_multi_and_share_functions() {
         assert!(program_uses_curl(&parse("<?php $m = curl_multi_init();")));
         assert!(program_uses_curl(&parse(
             "<?php function f($m, $h) { curl_multi_add_handle($m, $h); }"
@@ -720,16 +722,13 @@ mod tests {
         )));
     }
 
-    /// A fully-qualified, differently-cased reference is detected on the function side,
-    /// the class side, and the constant side (last segment, case-insensitive).
+    /// Fully-qualified global functions/classes remain case-insensitive, while constants
+    /// retain PHP's case-sensitive spelling.
     #[test]
     fn detects_fully_qualified_and_case_insensitive() {
         assert!(program_uses_curl(&parse("<?php $ch = \\CURL_INIT();")));
         assert!(program_uses_curl(&parse(
             "<?php function f(\\curlhandle $c): bool { return true; }"
-        )));
-        assert!(program_uses_curl(&parse(
-            "<?php $ch = \\Some\\curl_exec($h);"
         )));
         assert!(program_uses_curl(&parse("<?php $o = \\CURLOPT_URL;")));
     }
@@ -744,6 +743,61 @@ mod tests {
         )));
         assert!(program_uses_curl(&parse(
             "<?php use function curl_init as ci; $ch = ci();"
+        )));
+    }
+
+    /// An unqualified function call inside a namespace falls back to global curl when no
+    /// local declaration or function import claims the name.
+    #[test]
+    fn detects_namespaced_function_fallback() {
+        assert!(program_uses_curl(&parse(
+            "<?php namespace App; $ch = curl_init();"
+        )));
+    }
+
+    /// Fully-qualified user symbols that merely end in curl names stay in their namespace
+    /// and must not opt a curl-free program into the native package.
+    #[test]
+    fn ignores_fully_qualified_user_symbols() {
+        assert!(!program_uses_curl(&parse(
+            "<?php $value = \\Some\\curl_exec($handle);"
+        )));
+        assert!(!program_uses_curl(&parse(
+            "<?php function f(\\Acme\\CurlHandle $handle): bool { return true; }"
+        )));
+        assert!(!program_uses_curl(&parse(
+            "<?php $option = \\Acme\\CURLOPT_URL;"
+        )));
+    }
+
+    /// Namespace-local and explicitly imported user symbols take precedence over the seeded
+    /// global curl fallbacks, matching the real name resolver.
+    #[test]
+    fn ignores_local_and_imported_user_symbols() {
+        assert!(!program_uses_curl(&parse(
+            "<?php namespace App; function curl_exec($handle) { return 'local'; } \
+             echo curl_exec(null);"
+        )));
+        assert!(!program_uses_curl(&parse(
+            "<?php namespace Acme { function curl_exec($handle) { return 'user'; } \
+             class CurlHandle {} } namespace App { use function Acme\\curl_exec as transfer; \
+             use Acme\\CurlHandle as Handle; function f(Handle $handle) { return transfer($handle); } }"
+        )));
+    }
+
+    /// Global regular and extern declarations also outrank detector-only fallbacks. This
+    /// keeps an explicit `extern "curl"` surface under user FFI control.
+    #[test]
+    fn ignores_global_user_symbols() {
+        assert!(!program_uses_curl(&parse(
+            "<?php function curl_exec($handle) { return 'user'; } echo curl_exec(null);"
+        )));
+        assert!(!program_uses_curl(&parse(
+            "<?php class CurlHandle {} function f(CurlHandle $handle): bool { return true; }"
+        )));
+        assert!(!program_uses_curl(&parse(
+            "<?php extern \"curl\" { function curl_exec(ptr $handle): int; } \
+             $result = curl_exec(null);"
         )));
     }
 
@@ -774,8 +828,15 @@ mod tests {
         assert!(!program_uses_curl(&parse(
             "<?php $m = curl_multiplexer();"
         )));
+        assert!(!program_uses_curl(&parse(
+            "<?php $m = curl_multi_helper();"
+        )));
+        assert!(!program_uses_curl(&parse(
+            "<?php $s = curl_share_cache();"
+        )));
         assert!(!program_uses_curl(&parse("<?php echo curling();")));
         assert!(!program_uses_curl(&parse("<?php echo CURLY;")));
+        assert!(!program_uses_curl(&parse("<?php echo curlopt_url;")));
     }
 
     /// Mentions of the names only inside string literals and variable names do not
