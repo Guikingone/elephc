@@ -5,13 +5,22 @@ on:
   # suppress the release gate before it can verify the tagged commit.
   create:
 
+# Least privilege by default. `permissions:` at the workflow level applies to
+# EVERY job, so declaring `contents: write` here handed a write token to the
+# build jobs, which run third-party actions and never write anything — a moved
+# or compromised upstream ref would have run with authority over this
+# repository's contents, releases and tags. Only the jobs that publish are
+# granted write below.
 permissions:
-  contents: write
-  checks: read
+  contents: read
 
 jobs:
   verify-ci:
     name: Verify CI for tagged commit
+    # Reads the `Build & Test` check run on the tagged commit.
+    permissions:
+      contents: read
+      checks: read
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: ubuntu-latest
     steps:
@@ -58,6 +67,9 @@ jobs:
 
   prepare:
     name: Bump version on main
+    # Pushes the version-bump commit to main.
+    permissions:
+      contents: write
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: ubuntu-latest
     needs:
@@ -115,6 +127,8 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
+    permissions:
+      contents: read
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: ${{ matrix.runner }}
     needs:
@@ -210,6 +224,8 @@ jobs:
   # tarball, so it needs no packing list of its own to be kept in step.
   verify-artifact:
     name: Verify ${{ matrix.target }} tarball
+    permissions:
+      contents: read
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: ${{ matrix.runner }}
     needs:
@@ -250,6 +266,9 @@ jobs:
 
   release:
     name: Publish release
+    # Creates the GitHub release and uploads its assets.
+    permissions:
+      contents: write
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: ubuntu-latest
     needs:

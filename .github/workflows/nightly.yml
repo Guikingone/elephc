@@ -15,9 +15,14 @@ on:
     - cron: "0 3 * * *"  # 03:00 UTC
   workflow_dispatch:
 
+# Least privilege by default. `permissions:` at the workflow level applies to
+# EVERY job, so declaring `contents: write` here handed a write token to the
+# build jobs, which run third-party actions and never write anything — a moved
+# or compromised upstream ref would have run with authority over this
+# repository's contents, releases and tags. Only the jobs that publish are
+# granted write below.
 permissions:
-  contents: write
-  checks: read
+  contents: read
 
 # Never cancel: a half-run `publish` job leaves the `nightly` tag deleted and
 # no release behind it. A manual dispatch queues behind the scheduled run.
@@ -31,6 +36,10 @@ env:
 jobs:
   gate:
     name: Select nightly commit
+    # Reads the `Build & Test` check runs on candidate commits.
+    permissions:
+      contents: read
+      checks: read
     # Scheduled workflows keep running on forks that never disable Actions;
     # nothing downstream would be publishable there.
     if: github.repository == 'illegalstudio/elephc'
@@ -91,6 +100,8 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
+    permissions:
+      contents: read
     needs: gate
     if: needs.gate.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
@@ -211,6 +222,8 @@ jobs:
   # that has drifted is worth catching here rather than at the next release.
   verify-artifact:
     name: Verify ${{ matrix.target }} tarball
+    permissions:
+      contents: read
     needs:
       - gate
       - build
@@ -250,6 +263,9 @@ jobs:
 
   publish:
     name: Publish nightly pre-release
+    # Deletes and recreates the `nightly` release and its tag.
+    permissions:
+      contents: write
     needs:
       - gate
       - build
