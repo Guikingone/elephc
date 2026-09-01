@@ -104,16 +104,20 @@ jobs:
           # not refresh the rolling pointer either. Runs are serialised by the
           # `nightly` concurrency group, so nothing can claim this name between
           # here and the publish job.
-          DATED="nightly-${DATE}"
-          SUFFIX=2
-          while git rev-parse -q --verify "refs/tags/${DATED}" >/dev/null 2>&1; do
-            DATED="nightly-${DATE}.${SUFFIX}"
-            SUFFIX=$((SUFFIX + 1))
-            if [ "$SUFFIX" -gt 20 ]; then
-              echo "::error::More than 20 nightly tags already exist for ${DATE}."
-              exit 1
+          # Enumerated rather than incremented: a loop that assigns a name and
+          # then tests the bound rejects its own last candidate, which is how
+          # the first version of this refused `.20` while `.20` was free.
+          DATED=""
+          for CANDIDATE in "nightly-${DATE}" $(seq -f "nightly-${DATE}.%g" 2 20); do
+            if ! git rev-parse -q --verify "refs/tags/${CANDIDATE}" >/dev/null 2>&1; then
+              DATED="$CANDIDATE"
+              break
             fi
           done
+          if [ -z "$DATED" ]; then
+            echo "::error::All 20 nightly tag names for ${DATE} are taken."
+            exit 1
+          fi
 
           echo "Building nightly ${VERSION} from ${SHA} as ${DATED}"
           echo "build=true" >> "$GITHUB_OUTPUT"
@@ -428,22 +432,39 @@ jobs:
       # rather than by tag name, because `nightly-20260901.10` sorts before
       # `nightly-20260901.2` lexicographically and would prune the wrong one.
       # The pattern cannot match the rolling `nightly` tag.
+      #
+      # Today's tags are never pruned, and that exclusion is what keeps a dated
+      # pin immutable. `gate` picks a name by finding one that does not exist,
+      # and the only names it can ever pick carry TODAY's date — so deleting a
+      # tag from today hands its name back to the next dispatch, which then
+      # republishes it against a different commit. Reachable with more than
+      # `KEEP` builds in one UTC day: the fifteenth prunes `nightly-<today>`,
+      # and the sixteenth is handed that exact name. A date that has passed can
+      # never be selected again, so pruning older days is safe. The cost is that
+      # a day with many builds holds more than `KEEP` releases until it ends.
       - name: Prune nightlies past the retention window
         env:
           GH_TOKEN: ${{ github.token }}
           KEEP: "14"
+          DATED: ${{ needs.gate.outputs.dated_tag }}
         run: |
+          # Taken from the tag just published rather than from `date -u`, so a
+          # run that crosses midnight still protects the day it built for.
+          TODAY="${DATED#nightly-}"
+          TODAY="${TODAY%%.*}"
+
           STALE="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/releases" \
-            --jq '.[] | select(.tag_name | test("^nightly-[0-9]{8}(\\.[0-9]+)?$")) | [.published_at, .tag_name] | @tsv' \
+            --jq --arg today "$TODAY" '.[]
+                 | select(.tag_name | test("^nightly-[0-9]{8}(\\.[0-9]+)?$"))
+                 | select(.tag_name | startswith("nightly-" + $today) | not)
+                 | [.published_at, .tag_name] | @tsv' \
             | sort -r | tail -n "+$((KEEP + 1))" | cut -f2)"
 
           if [ -z "$STALE" ]; then
-            echo "Nothing to prune; at most ${KEEP} dated nightlies exist."
+            echo "Nothing to prune outside ${TODAY}; at most ${KEEP} dated nightlies remain."
             exit 0
           fi
 
-          # A dated tag name is never reused — it carries the UTC date it was
-          # built on — so deleting one cannot make a later build ambiguous.
           echo "$STALE" | while read -r TAG; do
             [ -n "$TAG" ] || continue
             echo "Pruning ${TAG}"
