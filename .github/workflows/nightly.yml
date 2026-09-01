@@ -206,11 +206,54 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # Same probe the release path runs, on the same artifact shape. A nightly is
+  # the one build a real user installs before a tag exists, so a packing list
+  # that has drifted is worth catching here rather than at the next release.
+  verify-artifact:
+    name: Verify ${{ matrix.target }} tarball
+    needs:
+      - gate
+      - build
+    if: needs.gate.outputs.build == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      # The probe links real programs, which the build jobs never do on these
+      # runners; macOS runners carry the Xcode command line tools already.
+      - name: Install a linking toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils build-essential file
+
+      - name: Download the built tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: nightly-${{ matrix.target }}
+          path: dist
+
+      - name: Verify the tarball is complete
+        run: ./scripts/verify-release-artifact.sh "dist/elephc-nightly-${{ matrix.target }}.tar.gz"
+
   publish:
     name: Publish nightly pre-release
     needs:
       - gate
       - build
+      - verify-artifact
     if: needs.gate.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:

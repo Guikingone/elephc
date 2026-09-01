@@ -197,12 +197,64 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # Compile against the tarball that is about to be published, on the platform
+  # it targets. A bridge archive is resolved from the directory the binary lives
+  # in (or its sibling `lib/`), so a compiler ships with exactly what was packed
+  # beside it and will still advertise a capability whose archive nobody packed
+  # — which is how every tarball from v0.26.3 to v0.26.5 shipped without
+  # `libelephc_magician.a`, refusing `--with-eval` and any `eval()` the compiler
+  # could not fold. No test that runs in a checkout can see that, because
+  # `target/` always holds every archive.
+  #
+  # The probe reads its list from `elephc --print-capabilities` inside the
+  # tarball, so it needs no packing list of its own to be kept in step.
+  verify-artifact:
+    name: Verify ${{ matrix.target }} tarball
+    if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
+    runs-on: ${{ matrix.runner }}
+    needs:
+      - prepare
+      - build
+    strategy:
+      # One incomplete target should still report the state of the other two.
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      # The probe links real programs, which the build jobs never do on these
+      # runners; macOS runners carry the Xcode command line tools already.
+      - name: Install a linking toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils build-essential file
+
+      - name: Download the built tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist
+
+      - name: Verify the tarball is complete
+        run: ./scripts/verify-release-artifact.sh "dist/elephc-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+
   release:
     name: Publish release
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: ubuntu-latest
     needs:
       - build
+      - verify-artifact
     steps:
       - name: Download release artifacts
         uses: actions/download-artifact@v4

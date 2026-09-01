@@ -58,6 +58,11 @@ pub(crate) fn crate_flag_names() -> Vec<&'static str> {
     bridges::crate_flag_names()
 }
 
+/// Maps a `--with-<flag>` suffix to the archive filename it resolves to.
+pub(crate) fn archive_filename_for_flag(flag: &str) -> Option<String> {
+    bridges::archive_filename_for_flag(flag)
+}
+
 /// Returns bridge library/flag pairs present in one planned named-library set.
 pub(crate) fn bridges_in(
     link_libraries: &[String],
