@@ -264,7 +264,13 @@ jobs:
           path: dist
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        # Pinned to a full commit SHA (v2.6.2) rather than the `v2` tag.
+        # This step is the one third-party action that runs while the job
+        # holds `contents: write`, so a moved upstream tag would change the
+        # code authorised to rewrite this repository's releases, tags and
+        # published artifacts without any diff to review here. Both publish
+        # paths pin the same SHA; bump them together.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           generate_release_notes: true
           files: dist/*
