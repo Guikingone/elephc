@@ -200,6 +200,20 @@ pub(super) fn crate_flag_names() -> Vec<&'static str> {
     BRIDGES.iter().map(|bridge| bridge.flag_name).collect()
 }
 
+/// Maps a `--with-<flag>` suffix to the archive filename it resolves to.
+///
+/// Exists so a shipped compiler can name the archives it needs without anyone
+/// writing that list down a second time: `--print-capabilities` reports this
+/// projection of the table, and the release probe checks the tarball against
+/// what the binary inside it says. A bridge added to `BRIDGES` is therefore
+/// carried into the packaging check by the same edit that declares it.
+pub(super) fn archive_filename_for_flag(flag: &str) -> Option<String> {
+    BRIDGES
+        .iter()
+        .find(|bridge| bridge.flag_name == flag)
+        .map(BridgeStaticlib::archive_filename)
+}
+
 /// Returns bridge library/flag pairs present in one planned named-library set.
 pub(super) fn bridges_in(
     link_libraries: &[String],
@@ -667,7 +681,7 @@ mod tests {
     }
 
     /// Every bridge crate must appear in the lists CI, the Docker scripts and the
-    /// release workflow build.
+    /// release and nightly workflows build.
     ///
     /// The archives are produced by explicit `cargo build -p …` lists that live
     /// outside Rust, and `cargo test` alone never emits a staticlib. So a bridge
@@ -679,13 +693,15 @@ mod tests {
     ///
     /// `release.yml` was the list nobody checked, and it is the one users meet:
     /// it built eight of eleven, so every published tarball carried a compiler
-    /// that refused `--with-monitoring`.
+    /// that refused `--with-monitoring`. `nightly.yml` ships to users too, and
+    /// nobody watches an unattended 03:00 build, so it is held to the same list.
     #[test]
     fn every_bridge_crate_is_in_the_build_lists() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let lists = [
             ".github/workflows/ci.yml",
             ".github/workflows/release.yml",
+            ".github/workflows/nightly.yml",
             "scripts/test-linux-arm64.sh",
             "scripts/test-linux-x86_64.sh",
         ];
@@ -786,6 +802,38 @@ mod tests {
                  bridge {} could not be found`",
                 bridge.flag_name,
                 bridge.lib_name
+            );
+        }
+    }
+
+    /// The workflows that publish an artifact must actually run the packaging probe.
+    ///
+    /// Every other packaging test here checks one list against the bridge
+    /// table, and all of them pass on a tarball nobody ever unpacks: they prove
+    /// the packing list NAMES each archive, not that the archive arrived beside
+    /// the binary. `scripts/verify-release-artifact.sh` is what closes that —
+    /// it unpacks the tarball, asks the compiler inside it for its capabilities
+    /// and holds it to them — and it closes nothing if the step that runs it is
+    /// dropped from the workflow that publishes.
+    #[test]
+    fn the_publishing_workflows_run_the_packaging_probe() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let probe = "scripts/verify-release-artifact.sh";
+        assert!(
+            root.join(probe).is_file(),
+            "{probe} is missing; the shipped artifact is checked by nothing"
+        );
+        for rel in [
+            ".github/workflows/release.yml",
+            ".github/workflows/nightly.yml",
+        ] {
+            let Ok(body) = std::fs::read_to_string(root.join(rel)) else {
+                panic!("cannot read {rel}; the publishing workflows moved");
+            };
+            assert!(
+                body.contains(probe),
+                "{rel} publishes an artifact without running {probe}, so a \
+                 bridge missing from the tarball ships unnoticed again"
             );
         }
     }
