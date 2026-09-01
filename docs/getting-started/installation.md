@@ -161,21 +161,43 @@ with that glibc or newer (Ubuntu 22.04+, Debian 12+, RHEL 9+, ...).
 ## Nightly builds (unsupported)
 
 Alongside the versioned releases, `main` is built every night and published as a
-pre-release under the rolling
-[`nightly`](https://github.com/illegalstudio/elephc/releases/tag/nightly) tag.
-Use it to try unreleased work or to confirm that a fix has landed — not to run
-anything you depend on. Nightly artifacts carry no compatibility, stability, or
-upgrade guarantees, and they are replaced every night.
+pre-release. Use it to try unreleased work or to confirm that a fix has landed —
+not to run anything you depend on. Nightly artifacts carry no compatibility,
+stability, or upgrade guarantees.
 
-The download URLs are stable, so the tarball for a platform is always at:
+Each build is published under two tags:
+
+- [`nightly`](https://github.com/illegalstudio/elephc/releases/tag/nightly) —
+  a rolling tag that always points at the newest build. Its assets are replaced
+  every night, so a URL under it downloads something different tomorrow.
+- `nightly-YYYYMMDD` (the UTC build date, e.g. `nightly-20260901`) — immutable.
+  Its assets are never replaced, so this is what to pin to. The **14** most
+  recent are kept; older ones are deleted, tag included, and a pinned build that
+  falls out of that window cannot be recovered. A second build on the same UTC
+  day — which only happens when the workflow is run by hand after new commits —
+  is published as `nightly-YYYYMMDD.2`.
+
+Nothing is published on a day when `main` has not moved, so the newest nightly
+can be older than today. Nightlies are only built from a commit whose CI run was
+green.
+
+The rolling download URLs are stable, so the newest tarball for a platform is
+always at:
 
 ```bash
 curl -fLO https://github.com/illegalstudio/elephc/releases/download/nightly/elephc-nightly-x86_64-unknown-linux-gnu.tar.gz
 ```
 
 The other targets are `elephc-nightly-aarch64-apple-darwin.tar.gz` and
-`elephc-nightly-aarch64-unknown-linux-gnu.tar.gz`. The contents and the install
-layout are identical to a release tarball, so the same install steps apply.
+`elephc-nightly-aarch64-unknown-linux-gnu.tar.gz`. The asset names are the same
+under a dated tag, which is what disambiguates the URL:
+
+```bash
+curl -fLO https://github.com/illegalstudio/elephc/releases/download/nightly-20260901/elephc-nightly-x86_64-unknown-linux-gnu.tar.gz
+```
+
+The contents and the install layout are identical to a release tarball, so the
+same install steps apply.
 
 A nightly identifies the commit it was built from in its version string:
 
@@ -185,5 +207,8 @@ elephc 0.26.5-nightly.20260901+g6f7cd55de
 ```
 
 The build number is the UTC date and the trailing `g<sha>` is the `main` commit.
-Nightlies are only published from a commit whose CI run was green, and no
-nightly is published on a day when `main` has not moved.
+Note that this string sorts *below* the release it derives from under semantic
+versioning — `0.26.5-nightly.20260901` precedes `0.26.5` — even though the code
+is newer, and that the `+g<sha>` part is build metadata, which semver ignores
+when comparing. Identify a specific build by its commit or by the tarball
+checksum rather than by ordering version strings.

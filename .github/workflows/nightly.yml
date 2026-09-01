@@ -48,6 +48,7 @@ jobs:
       build: ${{ steps.pick.outputs.build }}
       sha: ${{ steps.pick.outputs.sha }}
       version: ${{ steps.pick.outputs.version }}
+      dated_tag: ${{ steps.pick.outputs.dated_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -92,11 +93,37 @@ jobs:
           fi
 
           BASE="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
-          VERSION="${BASE}-nightly.$(date -u +%Y%m%d)+g$(git rev-parse --short "$SHA")"
-          echo "Building nightly ${VERSION} from ${SHA}"
+          DATE="$(date -u +%Y%m%d)"
+          VERSION="${BASE}-nightly.${DATE}+g$(git rev-parse --short "$SHA")"
+
+          # The dated tag is the pinnable one, and its whole value is that it
+          # never moves — so the name is chosen here to be one that does not
+          # exist yet, rather than overwritten later. A second build on the same
+          # UTC day (main moved again, and someone dispatched the workflow) gets
+          # `.2`; skipping instead would leave that commit unpinnable and would
+          # not refresh the rolling pointer either. Runs are serialised by the
+          # `nightly` concurrency group, so nothing can claim this name between
+          # here and the publish job.
+          # Enumerated rather than incremented: a loop that assigns a name and
+          # then tests the bound rejects its own last candidate, which is how
+          # the first version of this refused `.20` while `.20` was free.
+          DATED=""
+          for CANDIDATE in "nightly-${DATE}" $(seq -f "nightly-${DATE}.%g" 2 20); do
+            if ! git rev-parse -q --verify "refs/tags/${CANDIDATE}" >/dev/null 2>&1; then
+              DATED="$CANDIDATE"
+              break
+            fi
+          done
+          if [ -z "$DATED" ]; then
+            echo "::error::All 20 nightly tag names for ${DATE} are taken."
+            exit 1
+          fi
+
+          echo "Building nightly ${VERSION} from ${SHA} as ${DATED}"
           echo "build=true" >> "$GITHUB_OUTPUT"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "dated_tag=${DATED}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.target }}
@@ -263,7 +290,8 @@ jobs:
 
   publish:
     name: Publish nightly pre-release
-    # Deletes and recreates the `nightly` release and its tag.
+    # Creates the dated release and tag, recreates the rolling `nightly` ones,
+    # and deletes pruned dated releases and tags.
     permissions:
       contents: write
     needs:
@@ -295,10 +323,63 @@ jobs:
             fi
           done
 
-      # `nightly` is a moving tag, so the old release and tag come down before
-      # the new ones go up; updating the release in place would leave the tag on
-      # last night's commit.
-      - name: Drop the previous nightly release and tag
+      # The dated release is created FIRST, and it is the one that matters:
+      # it is what anybody pins to, and its entire value is that its contents
+      # never change once published. If this job dies halfway, the durable
+      # artifact exists and only the rolling pointer is stale.
+      #
+      # The name was chosen in `gate` to be one that did not exist. Re-checking
+      # here is not paranoia about that logic — it is the guarantee itself: a
+      # tag that already exists must never be written over, whatever the reason
+      # it survived, because someone may already have pinned to it.
+      - name: Refuse to overwrite an existing dated tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATED: ${{ needs.gate.outputs.dated_tag }}
+        run: |
+          if gh api "/repos/${GITHUB_REPOSITORY}/git/ref/tags/${DATED}" >/dev/null 2>&1; then
+            echo "::error::Tag ${DATED} already exists; a dated nightly is immutable and is never republished."
+            exit 1
+          fi
+          echo "Publishing ${DATED}"
+
+      - name: Publish the dated nightly
+        # Pinned to a full commit SHA (v2.6.2) rather than the `v2` tag.
+        # This step is the one third-party action that runs while the job
+        # holds `contents: write`, so a moved upstream tag would change the
+        # code authorised to rewrite this repository's releases, tags and
+        # published artifacts without any diff to review here. Both publish
+        # paths pin the same SHA; bump them together.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          tag_name: ${{ needs.gate.outputs.dated_tag }}
+          target_commitish: ${{ needs.gate.outputs.sha }}
+          name: Nightly ${{ needs.gate.outputs.version }}
+          prerelease: true
+          make_latest: false
+          body: |
+            Automated build of `main`. **Not a supported release** — no
+            compatibility, stability, or upgrade guarantees.
+
+            This dated build is immutable: its assets are never replaced, so it
+            can be pinned. It is kept for 14 nightlies and then deleted, tag
+            included. For the newest one, use the rolling
+            [`nightly`](https://github.com/illegalstudio/elephc/releases/tag/nightly)
+            tag instead.
+
+            - Commit: ${{ needs.gate.outputs.sha }}
+            - Version: `${{ needs.gate.outputs.version }}`
+
+            For a supported build, see the
+            [latest release](https://github.com/illegalstudio/elephc/releases/latest).
+          files: dist/*
+
+      # `nightly` is a moving pointer at the newest dated build, so the old
+      # release and tag come down before the new ones go up; updating the
+      # release in place would leave the tag on last night's commit. Its assets
+      # duplicate the dated ones, which is what keeps the download URLs under
+      # `/download/nightly/` stable for anyone who just wants the newest.
+      - name: Drop the previous rolling nightly
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -315,7 +396,7 @@ jobs:
             exit 1
           fi
 
-      - name: Create nightly pre-release
+      - name: Refresh the rolling nightly pointer
         # Pinned to a full commit SHA (v2.6.2) rather than the `v2` tag.
         # This step is the one third-party action that runs while the job
         # holds `contents: write`, so a moved upstream tag would change the
@@ -334,9 +415,58 @@ jobs:
             compatibility, stability, or upgrade guarantees, and these artifacts
             are replaced every night.
 
+            This tag moves. To pin a build that will not change under you, use
+            its dated tag —
+            [`${{ needs.gate.outputs.dated_tag }}`](https://github.com/illegalstudio/elephc/releases/tag/${{ needs.gate.outputs.dated_tag }}),
+            which carries these same artifacts and is kept for 14 nightlies.
+
             - Commit: ${{ needs.gate.outputs.sha }}
             - Version: `${{ needs.gate.outputs.version }}`
 
             For a supported build, see the
             [latest release](https://github.com/illegalstudio/elephc/releases/latest).
           files: dist/*
+
+      # Pruning runs last, so a failure here leaves too many nightlies rather
+      # than too few — the harmless direction. Ordered by publication time
+      # rather than by tag name, because `nightly-20260901.10` sorts before
+      # `nightly-20260901.2` lexicographically and would prune the wrong one.
+      # The pattern cannot match the rolling `nightly` tag.
+      #
+      # Today's tags are never pruned, and that exclusion is what keeps a dated
+      # pin immutable. `gate` picks a name by finding one that does not exist,
+      # and the only names it can ever pick carry TODAY's date — so deleting a
+      # tag from today hands its name back to the next dispatch, which then
+      # republishes it against a different commit. Reachable with more than
+      # `KEEP` builds in one UTC day: the fifteenth prunes `nightly-<today>`,
+      # and the sixteenth is handed that exact name. A date that has passed can
+      # never be selected again, so pruning older days is safe. The cost is that
+      # a day with many builds holds more than `KEEP` releases until it ends.
+      - name: Prune nightlies past the retention window
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: "14"
+          DATED: ${{ needs.gate.outputs.dated_tag }}
+        run: |
+          # Taken from the tag just published rather than from `date -u`, so a
+          # run that crosses midnight still protects the day it built for.
+          TODAY="${DATED#nightly-}"
+          TODAY="${TODAY%%.*}"
+
+          STALE="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/releases" \
+            --jq --arg today "$TODAY" '.[]
+                 | select(.tag_name | test("^nightly-[0-9]{8}(\\.[0-9]+)?$"))
+                 | select(.tag_name | startswith("nightly-" + $today) | not)
+                 | [.published_at, .tag_name] | @tsv' \
+            | sort -r | tail -n "+$((KEEP + 1))" | cut -f2)"
+
+          if [ -z "$STALE" ]; then
+            echo "Nothing to prune outside ${TODAY}; at most ${KEEP} dated nightlies remain."
+            exit 0
+          fi
+
+          echo "$STALE" | while read -r TAG; do
+            [ -n "$TAG" ] || continue
+            echo "Pruning ${TAG}"
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          done
