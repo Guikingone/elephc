@@ -82,7 +82,9 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_pdo",
         package: "elephc-pdo",
-        php_extension: Some("PDO"),
+        // This archive backs both PDO and mysqli; the injected surface reports which
+        // extension is actually present, matching the production bridge table.
+        php_extension: None,
     },
     TestBridgeStaticlib {
         lib_name: "elephc_crypto",
@@ -97,6 +99,7 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_iconv",
         package: "elephc-iconv",
+        php_extension: Some("iconv"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_phar",
@@ -289,6 +292,22 @@ pub(crate) fn test_linked_extensions(required_libraries: &[String]) -> Vec<Strin
         }
     }
     extensions
+}
+
+#[cfg(test)]
+mod bridge_extension_tests {
+    use super::*;
+
+    /// Verifies distinct bridge extensions are reported while PDO's shared archive is not.
+    #[test]
+    fn bridge_extension_metadata_matches_distinct_and_shared_surfaces() {
+        let linked = vec![
+            "elephc_pdo".to_string(),
+            "elephc_iconv".to_string(),
+            "elephc_curl".to_string(),
+        ];
+        assert_eq!(test_linked_extensions(&linked), ["iconv", "curl"]);
+    }
 }
 
 /// Locks `BRIDGE_STATICLIB_BUILD_LOCK`, recovering the guard if an earlier holder
