@@ -2,7 +2,7 @@
 title: "stripos() — internals"
 description: "Compiler internals for stripos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 464
+  order: 498
 ---
 
 ## `stripos()` — internals

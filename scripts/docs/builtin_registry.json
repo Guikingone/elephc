@@ -223,7 +223,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_adapter_addr` through `BuiltinLoweringContext`.",
@@ -281,9 +281,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -331,7 +334,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_body` through `BuiltinLoweringContext`.",
@@ -394,9 +397,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -452,7 +458,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_copy` through `BuiltinLoweringContext`.",
@@ -515,9 +521,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -573,7 +582,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_errno` through `BuiltinLoweringContext`.",
@@ -636,9 +645,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -694,7 +706,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_error` through `BuiltinLoweringContext`.",
@@ -757,9 +769,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -822,7 +837,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_getinfo_double` through `BuiltinLoweringContext`.",
@@ -885,9 +900,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -957,7 +975,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_getinfo_long` through `BuiltinLoweringContext`.",
@@ -1020,9 +1038,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -1085,7 +1106,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_id` through `BuiltinLoweringContext`.",
@@ -1148,9 +1169,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -1198,7 +1222,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_init` through `BuiltinLoweringContext`.",
@@ -1261,9 +1285,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -1318,7 +1345,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_pause` through `BuiltinLoweringContext`.",
@@ -1381,9 +1408,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -1446,7 +1476,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_perform` through `BuiltinLoweringContext`.",
@@ -1509,9 +1539,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -1567,7 +1600,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_reset` through `BuiltinLoweringContext`.",
@@ -1630,9 +1663,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -1716,7 +1752,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_set_callback` through `BuiltinLoweringContext`.",
@@ -1779,9 +1815,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -1872,7 +1911,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_set_share` through `BuiltinLoweringContext`.",
@@ -1935,9 +1974,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -2014,7 +2056,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_setopt_long` through `BuiltinLoweringContext`.",
@@ -2077,9 +2119,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -2163,7 +2208,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_setopt_slist` through `BuiltinLoweringContext`.",
@@ -2226,9 +2271,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -2312,7 +2360,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_setopt_str` through `BuiltinLoweringContext`.",
@@ -2375,9 +2423,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -2468,7 +2519,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_str_op` through `BuiltinLoweringContext`.",
@@ -2531,9 +2582,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -2610,7 +2664,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_easy_upkeep` through `BuiltinLoweringContext`.",
@@ -2673,9 +2727,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -2731,7 +2788,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_mime_abort` through `BuiltinLoweringContext`.",
@@ -2794,9 +2851,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -2852,7 +2912,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_mime_add_part` through `BuiltinLoweringContext`.",
@@ -2915,9 +2975,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -2973,7 +3036,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_mime_new` through `BuiltinLoweringContext`.",
@@ -3036,9 +3099,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -3108,7 +3174,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_mime_part_field` through `BuiltinLoweringContext`.",
@@ -3171,9 +3237,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -3243,7 +3312,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_mime_post` through `BuiltinLoweringContext`.",
@@ -3306,9 +3375,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -3371,7 +3443,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_multi_add` through `BuiltinLoweringContext`.",
@@ -3434,9 +3506,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -3499,7 +3574,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_multi_errno` through `BuiltinLoweringContext`.",
@@ -3562,9 +3637,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -3620,7 +3698,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_multi_exec` through `BuiltinLoweringContext`.",
@@ -3683,9 +3761,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -3748,7 +3829,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_multi_info_read` through `BuiltinLoweringContext`.",
@@ -3811,9 +3892,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -3868,7 +3952,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_multi_init` through `BuiltinLoweringContext`.",
@@ -3931,9 +4015,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -3988,7 +4075,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_multi_remove` through `BuiltinLoweringContext`.",
@@ -4051,9 +4138,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -4123,7 +4213,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_multi_select` through `BuiltinLoweringContext`.",
@@ -4186,9 +4276,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -4265,7 +4358,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_multi_setopt` through `BuiltinLoweringContext`.",
@@ -4328,9 +4421,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -4400,7 +4496,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_multi_setopt_unsupported_warning` through `BuiltinLoweringContext`.",
@@ -4458,9 +4554,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -4516,7 +4615,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_multi_strerror` through `BuiltinLoweringContext`.",
@@ -4579,9 +4678,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -4637,7 +4739,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_option_kind` through `BuiltinLoweringContext`.",
@@ -4700,9 +4802,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -4758,7 +4863,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_setopt_unsupported_warning` through `BuiltinLoweringContext`.",
@@ -4816,9 +4921,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -4874,7 +4982,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_share_errno` through `BuiltinLoweringContext`.",
@@ -4937,9 +5045,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -4987,7 +5098,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_share_init` through `BuiltinLoweringContext`.",
@@ -5050,9 +5161,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -5100,7 +5214,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_share_init_persistent` through `BuiltinLoweringContext`.",
@@ -5163,9 +5277,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -5235,7 +5352,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_share_setopt` through `BuiltinLoweringContext`.",
@@ -5298,9 +5415,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -5370,7 +5490,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_share_strerror` through `BuiltinLoweringContext`.",
@@ -5433,9 +5553,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -5491,7 +5614,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_strerror` through `BuiltinLoweringContext`.",
@@ -5554,9 +5677,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
@@ -5604,7 +5730,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 544,
+      "codegen_line": 553,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.__elephc_curl_version` through `BuiltinLoweringContext`.",
@@ -5667,9 +5793,12 @@
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64"
       ],
+      "target_support_kind": "all",
       "validation": {
         "kind": "signature"
       }
