@@ -1792,6 +1792,56 @@ foreach ($m as $key => $value) {
     );
 }
 
+/// Verifies `PREG_OFFSET_CAPTURE` turns every `$matches` entry into `[text, byte offset]`.
+///
+/// PHP's `PREG_OFFSET_CAPTURE` (bit 256) does not add a parallel array: it REPLACES each entry of
+/// `$matches` with a two-element array whose key `0` is the captured text and whose key `1` is the
+/// byte offset it starts at — `-1` for a capture that did not participate. Ignoring the flag was
+/// SILENT: `preg_match()` still returned 1 and `$m[0]` still read back as the matched string, so
+/// `$m[0][1]` yielded the string's second BYTE. Symfony's `Inline::parseScalar()` strips a trailing
+/// `# comment` with `substr($output, 0, $match[0][1])`; that byte cast to 0 and truncated every
+/// commented scalar to the empty string, so `autowire: true # ...` parsed as null.
+///
+/// The last case pins what must NOT change: without the flag a capture stays a bare string.
+#[test]
+fn test_preg_match_offset_capture_pairs_text_with_byte_offset() {
+    let out = compile_and_run(
+        r##"<?php
+preg_match('/[ \t]+#/', 'true      # note', $m, PREG_OFFSET_CAPTURE);
+echo var_export($m[0][0], true), '|', $m[0][1], '|', substr('true      # note', 0, $m[0][1]), "\n";
+
+preg_match('/(a)?(b)/', 'zb', $m2, PREG_OFFSET_CAPTURE);
+echo implode(',', array_keys($m2)), '|', $m2[0][0], $m2[0][1], '|[', $m2[1][0], ']', $m2[1][1],
+    '|', $m2[2][0], $m2[2][1], '|', count($m2), "\n";
+
+preg_match('/x(y)?z/', 'axz', $m3, PREG_OFFSET_CAPTURE);
+echo implode(',', array_keys($m3)), '|', $m3[0][0], $m3[0][1], '|', count($m3), "\n";
+
+preg_match('/(?P<k>\w+): (?P<v>\d+)/', 'aa: 12', $m4, PREG_OFFSET_CAPTURE);
+echo implode(',', array_keys($m4)), '|', $m4['k'][0], $m4['k'][1], '|', $m4['v'][0], $m4['v'][1],
+    '|', $m4[2][0], $m4[2][1], '|', count($m4), "\n";
+
+echo preg_match('/nope/', 'abc', $m5, PREG_OFFSET_CAPTURE), '|', count($m5), "\n";
+
+preg_match('/b/', 'aXbXb', $m6, PREG_OFFSET_CAPTURE, 3);
+echo $m6[0][0], $m6[0][1], "\n";
+
+preg_match('/(a)(b)/', 'ab', $m7);
+echo $m7[0], $m7[1], $m7[2], '|', count($m7), "\n";
+"##,
+    );
+    assert_eq!(
+        out,
+        "'      #'|4|true\n\
+         0,1,2|b1|[]-1|b1|3\n\
+         0|xz1|1\n\
+         0,k,1,v,2|aa0|124|124|5\n\
+         0|0\n\
+         b4\n\
+         abab|3\n"
+    );
+}
+
 /// Verifies every PHP regex delimiter is honoured, not just `/`.
 ///
 /// PHP accepts any non-alphanumeric, non-backslash, non-whitespace delimiter, and the bracket

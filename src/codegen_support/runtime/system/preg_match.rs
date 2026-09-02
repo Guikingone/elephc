@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Regex helpers preserve PHP PCRE-flavored inputs for PCRE2 and must preserve match array construction.
+//! - `PREG_OFFSET_CAPTURE` (bit 256 of PHP's `$flags`) reshapes every `$matches` entry into a
+//!   `[capture text, byte offset]` array, so `__rt_preg_match_capture` hands that case to
+//!   `__rt_preg_offset_matches` / `__rt_preg_offset_pair` instead of pushing bare strings.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -18,6 +21,8 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_preg_match_linux_x86_64(emitter);
         emit_preg_match_capture_linux_x86_64(emitter);
+        emit_preg_offset_pair_linux_x86_64(emitter);
+        emit_preg_offset_matches_linux_x86_64(emitter);
         return;
     }
 
@@ -129,6 +134,191 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     emit_preg_match_capture_arm64(emitter);
+    emit_preg_offset_pair_arm64(emitter);
+    emit_preg_offset_matches_arm64(emitter);
+}
+
+/// Emits ARM64 `__rt_preg_offset_pair`, PHP's `[capture text, byte offset]` element.
+///
+/// PHP's `PREG_OFFSET_CAPTURE` does not add a parallel offset array: it replaces every entry of
+/// `$matches` with a two-element array whose key `0` is the captured text and whose key `1` is the
+/// byte offset the capture starts at, `-1` for a capture that did not participate. The pair is
+/// built as a mixed-valued hash because its two values have different runtime tags, and the text
+/// is persisted so the element outlives the null-terminated subject copy the offsets index into.
+///
+/// Input:  x1=capture ptr (0 when unmatched), x2=capture len, x3=byte offset (-1 when unmatched)
+/// Output: x0=pair hash pointer, owned by the caller
+fn emit_preg_offset_pair_arm64(emitter: &mut Emitter) {
+    let pair_off = 0;
+    let text_ptr_off = pair_off + 8;
+    let text_len_off = text_ptr_off + 8;
+    let byte_offset_off = text_len_off + 8;
+    let stack_size = (byte_offset_off + 8 + 32 + 15) & !15;
+    let save_off = stack_size - 16;
+
+    emitter.blank();
+    emitter.comment("--- runtime: preg_offset_pair ---");
+    emitter.label_global("__rt_preg_offset_pair");
+
+    emitter.instruction(&format!("sub sp, sp, #{}", stack_size));               // allocate the offset-pair construction frame
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_off));         // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", save_off));                // establish the offset-pair frame pointer
+    emitter.instruction(&format!("str x1, [sp, #{}]", text_ptr_off));           // hold the capture pointer across helper calls
+    emitter.instruction(&format!("str x2, [sp, #{}]", text_len_off));           // hold the capture length across helper calls
+    emitter.instruction(&format!("str x3, [sp, #{}]", byte_offset_off));        // hold the capture byte offset across helper calls
+
+    emitter.instruction("mov x0, #2");                                          // PHP's offset pair has exactly two numeric keys
+    emitter.instruction("mov x1, #7");                                          // mixed-valued hash: key 0 is a string and key 1 an int
+    emitter.instruction("bl __rt_hash_new");                                    // allocate the ordered two-entry pair
+    emitter.instruction(&format!("str x0, [sp, #{}]", pair_off));               // save the pair across the inserts
+
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", text_ptr_off));           // reload the capture pointer to persist
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", text_len_off));           // reload the capture length to persist
+    emitter.instruction("bl __rt_str_persist");                                 // the pair owns its own copy of the capture bytes
+    emitter.instruction("mov x3, x1");                                          // pass the persisted capture as the entry value payload
+    emitter.instruction("mov x4, x2");                                          // pass the persisted capture length
+    emitter.instruction("mov x1, xzr");                                         // numeric key 0 carries the captured text
+    emitter.instruction("mov x2, #-1");                                         // a key discriminant of -1 marks an integer key
+    emitter.instruction("mov x5, #1");                                          // runtime value tag 1 = string
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", pair_off));               // reload the pair receiver
+    emitter.instruction("bl __rt_hash_set");                                    // publish the captured text at key zero
+    emitter.instruction(&format!("str x0, [sp, #{}]", pair_off));               // save a possibly-grown pair pointer
+
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", byte_offset_off));        // the byte offset is the second entry's payload
+    emitter.instruction("mov x4, xzr");                                         // an integer payload has no high word
+    emitter.instruction("mov x1, #1");                                          // numeric key 1 carries the byte offset
+    emitter.instruction("mov x2, #-1");                                         // a key discriminant of -1 marks an integer key
+    emitter.instruction("mov x5, #0");                                          // runtime value tag 0 = int
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", pair_off));               // reload the pair receiver
+    emitter.instruction("bl __rt_hash_set");                                    // publish the byte offset at key one
+
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_off));         // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", stack_size));               // release the offset-pair construction frame
+    emitter.instruction("ret");                                                 // return the finished pair in x0
+}
+
+/// Emits ARM64 `__rt_preg_offset_matches`, PHP's `$matches` under `PREG_OFFSET_CAPTURE`.
+///
+/// The shape is the same ordered hash the named-capture path builds — each declared group name is
+/// written immediately before the numeric key it aliases — except that every value is the
+/// `[text, offset]` pair rather than a bare string. Offset capture always uses hash storage: an
+/// indexed string array cannot hold an array element, and the numeric keys read back as a list.
+/// A name and its numeric twin get two independently owned pairs so releasing one entry cannot
+/// free storage the other still points at.
+///
+/// Input:  x0=compiled pattern handle, x1=offset-pair vector, x2=highest capture index,
+///         x3=null-terminated subject base
+/// Output: x0=matches hash pointer, owned by the caller
+fn emit_preg_offset_matches_arm64(emitter: &mut Emitter) {
+    let handle_off = 0;
+    let pairs_off = handle_off + 8;
+    let max_group_off = pairs_off + 8;
+    let subject_off = max_group_off + 8;
+    let out_hash_off = subject_off + 8;
+    let group_idx_off = out_hash_off + 8;
+    let value_ptr_off = group_idx_off + 8;
+    let value_len_off = value_ptr_off + 8;
+    let value_off_off = value_len_off + 8;
+    let name_ptr_off = value_off_off + 8;
+    let name_len_off = name_ptr_off + 8;
+    let key_lo_off = name_len_off + 8;
+    let key_hi_off = key_lo_off + 8;
+    let stack_size = (key_hi_off + 8 + 48 + 15) & !15;
+    let save_off = stack_size - 16;
+
+    emitter.blank();
+    emitter.comment("--- runtime: preg_offset_matches ---");
+    emitter.label_global("__rt_preg_offset_matches");
+
+    emitter.instruction(&format!("sub sp, sp, #{}", stack_size));               // allocate the offset-capture construction frame
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_off));         // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", save_off));                // establish the offset-capture frame pointer
+    emitter.instruction(&format!("str x0, [sp, #{}]", handle_off));             // hold the compiled pattern for group-name lookups
+    emitter.instruction(&format!("str x1, [sp, #{}]", pairs_off));              // hold the populated offset-pair vector
+    emitter.instruction(&format!("str x2, [sp, #{}]", max_group_off));          // hold the highest capture index to materialize
+    emitter.instruction(&format!("str x3, [sp, #{}]", subject_off));            // hold the subject base the offsets index into
+
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", max_group_off));          // size the table from the emitted capture count
+    emitter.instruction("add x0, x0, #1");                                      // the highest index is inclusive
+    emitter.instruction("lsl x0, x0, #1");                                      // reserve one bucket per numeric key and one per name
+    emitter.instruction("mov x1, #7");                                          // mixed-valued hash: every entry holds a pair array
+    emitter.instruction("bl __rt_hash_new");                                    // allocate the ordered hash that carries both key kinds
+    emitter.instruction(&format!("str x0, [sp, #{}]", out_hash_off));           // save matches hash pointer across inserts
+    emitter.instruction(&format!("str xzr, [sp, #{}]", group_idx_off));         // start with capture index zero
+
+    emitter.label("__rt_preg_offset_matches_loop");
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload current capture index
+    emitter.instruction(&format!("ldr x13, [sp, #{}]", max_group_off));         // reload highest capture index
+    emitter.instruction("cmp x12, x13");                                        // have all required captures been materialized?
+    emitter.instruction("b.gt __rt_preg_offset_matches_done");                  // finish after the highest populated capture
+    emitter.instruction("lsl x14, x12, #4");                                    // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("ldr x15, [sp, #{}]", pairs_off));             // load the offset-pair vector base
+    emitter.instruction("add x14, x15, x14");                                   // compute address of this offset pair
+    emitter.instruction("ldr x15, [x14]");                                      // load signed-64-bit capture start
+    emitter.instruction("ldr x16, [x14, #8]");                                  // load signed-64-bit capture end
+    emitter.instruction("cmp x15, #0");                                         // detect captures that did not participate
+    emitter.instruction("b.lt __rt_preg_offset_matches_unmatched");             // PHP pairs an unmatched capture with offset -1
+    emitter.instruction("sub x2, x16, x15");                                    // capture length = rm_eo - rm_so
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_off));            // reload subject base
+    emitter.instruction("add x1, x1, x15");                                     // compute capture string pointer
+    emitter.instruction(&format!("str x15, [sp, #{}]", value_off_off));         // the capture start is PHP's reported byte offset
+    emitter.instruction("b __rt_preg_offset_matches_value");                    // insert this capture under every key it owns
+    emitter.label("__rt_preg_offset_matches_unmatched");
+    emitter.instruction("mov x1, #0");                                          // an unmatched capture has an empty string
+    emitter.instruction("mov x2, #0");                                          // an unmatched capture has zero length
+    emitter.instruction("mov x15, #-1");                                        // PHP reports -1 as the unmatched capture offset
+    emitter.instruction(&format!("str x15, [sp, #{}]", value_off_off));         // hold the unmatched offset for both key kinds
+    emitter.label("__rt_preg_offset_matches_value");
+    emitter.instruction(&format!("str x1, [sp, #{}]", value_ptr_off));          // hold the capture pointer across helper calls
+    emitter.instruction(&format!("str x2, [sp, #{}]", value_len_off));          // hold the capture length across helper calls
+
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass the compiled pattern holding the name table
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", group_idx_off));          // ask for this capture group's declared name
+    emitter.instruction(&format!("add x2, sp, #{}", name_ptr_off));             // receive the name pointer into pattern storage
+    emitter.instruction(&format!("add x3, sp, #{}", name_len_off));             // receive the name length
+    emitter.bl_c("elephc_pcre2_v1_group_name");                                 // resolve the name without exposing PCRE2 table layouts
+    emitter.instruction("cbnz w0, __rt_preg_offset_matches_int");               // an unnamed group only gets its numeric key
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", name_ptr_off));           // load the resolved group name pointer
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", name_len_off));           // load the resolved group name length
+    emitter.instruction("bl __rt_hash_normalize_key");                          // apply PHP's numeric-string key normalization
+    emitter.instruction(&format!("str x1, [sp, #{}]", key_lo_off));             // hold the normalized key across the pair construction
+    emitter.instruction(&format!("str x2, [sp, #{}]", key_hi_off));             // hold the key discriminant across the pair construction
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", value_ptr_off));          // reload the capture pointer for this entry's pair
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", value_len_off));          // reload the capture length for this entry's pair
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", value_off_off));          // reload the capture byte offset for this entry's pair
+    emitter.instruction("bl __rt_preg_offset_pair");                            // the named entry owns its own [text, offset] pair
+    emitter.instruction("mov x3, x0");                                          // pass the pair as the entry value payload
+    emitter.instruction("mov x4, xzr");                                         // an array payload has no high word
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", key_lo_off));             // reload the normalized key
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", key_hi_off));             // reload the key discriminant
+    emitter.instruction("mov x5, #5");                                          // runtime value tag 5 = hash-backed array
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", out_hash_off));           // reload matches hash pointer
+    emitter.instruction("bl __rt_hash_set");                                    // insert the named key ahead of its numeric twin
+    emitter.instruction(&format!("str x0, [sp, #{}]", out_hash_off));           // save possibly-grown matches hash pointer
+
+    emitter.label("__rt_preg_offset_matches_int");
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", value_ptr_off));          // reload the capture pointer for the numeric entry
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", value_len_off));          // reload the capture length for the numeric entry
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", value_off_off));          // reload the capture byte offset for the numeric entry
+    emitter.instruction("bl __rt_preg_offset_pair");                            // the numeric entry owns its own [text, offset] pair
+    emitter.instruction("mov x3, x0");                                          // pass the pair as the entry value payload
+    emitter.instruction("mov x4, xzr");                                         // an array payload has no high word
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", group_idx_off));          // the capture index is the numeric key
+    emitter.instruction("mov x2, #-1");                                         // a key discriminant of -1 marks an integer key
+    emitter.instruction("mov x5, #5");                                          // runtime value tag 5 = hash-backed array
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", out_hash_off));           // reload matches hash pointer
+    emitter.instruction("bl __rt_hash_set");                                    // insert this capture under its numeric key
+    emitter.instruction(&format!("str x0, [sp, #{}]", out_hash_off));           // save possibly-grown matches hash pointer
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload capture index after helper calls
+    emitter.instruction("add x12, x12, #1");                                    // advance to next capture index
+    emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save next capture index
+    emitter.instruction("b __rt_preg_offset_matches_loop");                     // continue materializing captures
+
+    emitter.label("__rt_preg_offset_matches_done");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", out_hash_off));           // return the finished offset-capture hash
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_off));         // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", stack_size));               // release the offset-capture construction frame
+    emitter.instruction("ret");                                                 // return the matches hash in x0
 }
 
 /// Emits ARM64 `__rt_preg_match_capture`, returning the match flag and `$matches` array.
@@ -154,7 +344,8 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     let value_len_off = value_ptr_off + 8;
     let key_lo_off = value_len_off + 8;
     let key_hi_off = key_lo_off + 8;
-    let stack_size = (key_hi_off + 8 + 48 + 15) & !15;
+    let php_flags_off = key_hi_off + 8;
+    let stack_size = (php_flags_off + 8 + 48 + 15) & !15;
     let save_off = stack_size - 16;
 
     emitter.blank();
@@ -173,6 +364,7 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x3, [sp, #{}]", subject_ptr_off));        // save subject ptr
     emitter.instruction(&format!("str x4, [sp, #{}]", subject_len_off));        // save subject len
     emitter.instruction(&format!("str x6, [sp, #{}]", offset_off));             // save requested starting offset
+    emitter.instruction(&format!("str x5, [sp, #{}]", php_flags_off));          // save PHP's preg_match() flags before __rt_preg_strip reuses x5
 
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("bl __rt_preg_strip");                                  // strip delimiters and expose regex flags
@@ -244,6 +436,19 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_match_capture_scan");                      // continue searching for the highest populated capture
     emitter.label("__rt_preg_match_capture_scan_found");
     emitter.instruction(&format!("str x12, [sp, #{}]", max_group_off));         // save highest capture index to materialize
+
+    // -- PREG_OFFSET_CAPTURE replaces every capture string with a [text, offset] pair --
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", php_flags_off));          // reload PHP's preg_match() flags
+    emitter.instruction("tst x9, #256");                                        // PHP's PREG_OFFSET_CAPTURE is bit 256
+    emitter.instruction("b.eq __rt_preg_match_capture_plain");                  // without the flag every capture stays a bare string
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // the compiled pattern still owns the group-name table
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", regmatches_ptr_off));     // pass the populated offset-pair vector
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", max_group_off));          // pass the highest capture index to materialize
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", subject_cstr_off));       // pass the subject base those offsets index into
+    emitter.instruction("bl __rt_preg_offset_matches");                         // build PHP's offset-capture hash under both key kinds
+    emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // the offset hash is the finished matches array
+    emitter.instruction("b __rt_preg_match_capture_success");                   // the offset path already emitted every key
+    emitter.label("__rt_preg_match_capture_plain");
 
     // -- a compiled name table means PHP's $matches is an ordered hash, not a list --
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // the name table lives inside the compiled pattern
@@ -506,7 +711,8 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     let value_len_off = value_ptr_off + 8;
     let key_lo_off = value_len_off + 8;
     let key_hi_off = key_lo_off + 8;
-    let stack_size = (key_hi_off + 8 + 32 + 15) & !15;
+    let php_flags_off = key_hi_off + 8;
+    let stack_size = (php_flags_off + 8 + 32 + 15) & !15;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_match_capture ---");
@@ -518,6 +724,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer across pattern helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across pattern helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", offset_off));  // preserve requested starting offset across pattern helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", php_flags_off)); // preserve PHP's preg_match() flags before the strip helper reuses r8
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into preg-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move pattern length into preg-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect supported regex flags
@@ -589,6 +796,19 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_match_capture_scan_linux_x86_64");       // continue searching for the highest populated capture
     emitter.label("__rt_preg_match_capture_scan_found_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off)); // save highest capture index to materialize
+
+    // -- PREG_OFFSET_CAPTURE replaces every capture string with a [text, offset] pair --
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", php_flags_off)); // reload PHP's preg_match() flags
+    emitter.instruction("test r9, 256");                                        // PHP's PREG_OFFSET_CAPTURE is bit 256
+    emitter.instruction("jz __rt_preg_match_capture_plain_linux_x86_64");       // without the flag every capture stays a bare string
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // the compiled pattern still owns the group-name table
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass the populated offset-pair vector
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", max_group_off)); // pass the highest capture index to materialize
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the subject base those offsets index into
+    emitter.instruction("call __rt_preg_offset_matches");                       // build PHP's offset-capture hash under both key kinds
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // the offset hash is the finished matches array
+    emitter.instruction("jmp __rt_preg_match_capture_success_linux_x86_64");    // the offset path already emitted every key
+    emitter.label("__rt_preg_match_capture_plain_linux_x86_64");
 
     // -- a compiled name table means PHP's $matches is an ordered hash, not a list --
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // the name table lives inside the compiled pattern
@@ -741,4 +961,225 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release capture helper local storage
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return match flag in rax and matches array in rdx
+}
+
+/// Emits the x86_64 Linux variant of `__rt_preg_offset_pair`.
+///
+/// Mirrors `emit_preg_offset_pair_arm64`: builds PHP's `[capture text, byte offset]` element as a
+/// mixed-valued hash so its two entries can carry different runtime tags.
+///
+/// Input:  rdi=capture ptr (0 when unmatched), rsi=capture len, rdx=byte offset (-1 when unmatched)
+/// Output: rax=pair hash pointer, owned by the caller
+fn emit_preg_offset_pair_linux_x86_64(emitter: &mut Emitter) {
+    let pair_off = 0;
+    let text_ptr_off = pair_off + 8;
+    let text_len_off = text_ptr_off + 8;
+    let byte_offset_off = text_len_off + 8;
+    let stack_size = (byte_offset_off + 8 + 16 + 15) & !15;
+
+    emitter.blank();
+    emitter.comment("--- runtime: preg_offset_pair ---");
+    emitter.label_global("__rt_preg_offset_pair");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving pair storage
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the pair construction slots
+    emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve local storage for the pair and its captured text
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdi", text_ptr_off)); // hold the capture pointer across helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", text_len_off)); // hold the capture length across helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", byte_offset_off)); // hold the capture byte offset across helper calls
+
+    emitter.instruction("mov edi, 2");                                          // PHP's offset pair has exactly two numeric keys
+    emitter.instruction("mov esi, 7");                                          // mixed-valued hash: key 0 is a string and key 1 an int
+    emitter.instruction("call __rt_hash_new");                                  // allocate the ordered two-entry pair
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pair_off));   // save the pair across the inserts
+
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", text_ptr_off)); // reload the capture pointer to persist
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", text_len_off)); // reload the capture length to persist
+    emitter.instruction("call __rt_str_persist");                               // the pair owns its own copy of the capture bytes
+    emitter.instruction("mov rcx, rax");                                        // pass the persisted capture as the entry value payload
+    emitter.instruction("mov r8, rdx");                                         // pass the persisted capture length
+    emitter.instruction("xor esi, esi");                                        // numeric key 0 carries the captured text
+    emitter.instruction("mov rdx, -1");                                         // a key discriminant of -1 marks an integer key
+    emitter.instruction("mov r9d, 1");                                          // runtime value tag 1 = string
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", pair_off));   // reload the pair receiver
+    emitter.instruction("call __rt_hash_set");                                  // publish the captured text at key zero
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pair_off));   // save a possibly-grown pair pointer
+
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", byte_offset_off)); // the byte offset is the second entry's payload
+    emitter.instruction("xor r8d, r8d");                                        // an integer payload has no high word
+    emitter.instruction("mov esi, 1");                                          // numeric key 1 carries the byte offset
+    emitter.instruction("mov rdx, -1");                                         // a key discriminant of -1 marks an integer key
+    emitter.instruction("xor r9d, r9d");                                        // runtime value tag 0 = int
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", pair_off));   // reload the pair receiver
+    emitter.instruction("call __rt_hash_set");                                  // publish the byte offset at key one
+
+    emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the pair construction storage
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the finished pair in rax
+}
+
+/// Emits the x86_64 Linux variant of `__rt_preg_offset_matches`.
+///
+/// Mirrors `emit_preg_offset_matches_arm64`: an ordered hash whose values are `[text, offset]`
+/// pairs, with every declared group name written immediately before the numeric key it aliases.
+///
+/// Input:  rdi=compiled pattern handle, rsi=offset-pair vector, rdx=highest capture index,
+///         rcx=null-terminated subject base
+/// Output: rax=matches hash pointer, owned by the caller
+fn emit_preg_offset_matches_linux_x86_64(emitter: &mut Emitter) {
+    let handle_off = 0;
+    let pairs_off = handle_off + 8;
+    let max_group_off = pairs_off + 8;
+    let subject_off = max_group_off + 8;
+    let out_hash_off = subject_off + 8;
+    let group_idx_off = out_hash_off + 8;
+    let value_ptr_off = group_idx_off + 8;
+    let value_len_off = value_ptr_off + 8;
+    let value_off_off = value_len_off + 8;
+    let name_ptr_off = value_off_off + 8;
+    let name_len_off = name_ptr_off + 8;
+    let key_lo_off = name_len_off + 8;
+    let key_hi_off = key_lo_off + 8;
+    let stack_size = (key_hi_off + 8 + 32 + 15) & !15;
+
+    emitter.blank();
+    emitter.comment("--- runtime: preg_offset_matches ---");
+    emitter.label_global("__rt_preg_offset_matches");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving matches storage
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the offset-capture slots
+    emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve local storage for the hash and per-capture state
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdi", handle_off)); // hold the compiled pattern for group-name lookups
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", pairs_off));  // hold the populated offset-pair vector
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", max_group_off)); // hold the highest capture index to materialize
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_off)); // hold the subject base the offsets index into
+
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", max_group_off)); // size the table from the emitted capture count
+    emitter.instruction("add rdi, 1");                                          // the highest index is inclusive
+    emitter.instruction("shl rdi, 1");                                          // reserve one bucket per numeric key and one per name
+    emitter.instruction("mov esi, 7");                                          // mixed-valued hash: every entry holds a pair array
+    emitter.instruction("call __rt_hash_new");                                  // allocate the ordered hash that carries both key kinds
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", out_hash_off)); // save matches hash pointer across inserts
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start with capture index zero
+
+    emitter.label("__rt_preg_offset_matches_loop_linux_x86_64");
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index
+    emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
+    emitter.instruction("cmp r9, r8");                                          // have all required captures been materialized?
+    emitter.instruction("jg __rt_preg_offset_matches_done_linux_x86_64");       // finish after the highest populated capture
+    emitter.instruction("mov r10, r9");                                         // copy capture index before scaling
+    emitter.instruction("shl r10, 4");                                          // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("add r10, QWORD PTR [rsp + {}]", pairs_off));  // compute address of this offset pair
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load signed-64-bit capture start
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load signed-64-bit capture end
+    emitter.instruction("cmp r11, 0");                                          // detect captures that did not participate
+    emitter.instruction("jl __rt_preg_offset_matches_unmatched_linux_x86_64");  // PHP pairs an unmatched capture with offset -1
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_off)); // reload subject base
+    emitter.instruction("add rsi, r11");                                        // compute capture string pointer
+    emitter.instruction("mov rdx, rcx");                                        // copy capture end offset before subtracting start
+    emitter.instruction("sub rdx, r11");                                        // capture length = rm_eo - rm_so
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", value_off_off)); // the capture start is PHP's reported byte offset
+    emitter.instruction("jmp __rt_preg_offset_matches_value_linux_x86_64");     // insert this capture under every key it owns
+    emitter.label("__rt_preg_offset_matches_unmatched_linux_x86_64");
+    emitter.instruction("xor esi, esi");                                        // an unmatched capture has an empty string
+    emitter.instruction("xor edx, edx");                                        // an unmatched capture has zero length
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], -1", value_off_off)); // PHP reports -1 as the unmatched capture offset
+    emitter.label("__rt_preg_offset_matches_value_linux_x86_64");
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", value_ptr_off)); // hold the capture pointer across helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", value_len_off)); // hold the capture length across helper calls
+
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass the compiled pattern holding the name table
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", group_idx_off)); // ask for this capture group's declared name
+    emitter.instruction(&format!("lea rdx, [rsp + {}]", name_ptr_off));         // receive the name pointer into pattern storage
+    emitter.instruction(&format!("lea rcx, [rsp + {}]", name_len_off));         // receive the name length
+    emitter.bl_c("elephc_pcre2_v1_group_name");                                 // resolve the name without exposing PCRE2 table layouts
+    emitter.instruction("test eax, eax");                                       // did this capture group carry a declared name?
+    emitter.instruction("jnz __rt_preg_offset_matches_int_linux_x86_64");       // an unnamed group only gets its numeric key
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", name_ptr_off)); // load the resolved group name pointer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", name_len_off)); // load the resolved group name length
+    emitter.instruction("call __rt_hash_normalize_key");                        // apply PHP's numeric-string key normalization
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", key_lo_off)); // hold the normalized key across the pair construction
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", key_hi_off)); // hold the key discriminant across the pair construction
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer for this entry's pair
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length for this entry's pair
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_off_off)); // reload the capture byte offset for this entry's pair
+    emitter.instruction("call __rt_preg_offset_pair");                          // the named entry owns its own [text, offset] pair
+    emitter.instruction("mov rcx, rax");                                        // pass the pair as the entry value payload
+    emitter.instruction("xor r8d, r8d");                                        // an array payload has no high word
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", key_lo_off)); // reload the normalized key
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", key_hi_off)); // reload the key discriminant
+    emitter.instruction("mov r9d, 5");                                          // runtime value tag 5 = hash-backed array
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", out_hash_off)); // reload matches hash pointer
+    emitter.instruction("call __rt_hash_set");                                  // insert the named key ahead of its numeric twin
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", out_hash_off)); // save possibly-grown matches hash pointer
+
+    emitter.label("__rt_preg_offset_matches_int_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer for the numeric entry
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length for the numeric entry
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_off_off)); // reload the capture byte offset for the numeric entry
+    emitter.instruction("call __rt_preg_offset_pair");                          // the numeric entry owns its own [text, offset] pair
+    emitter.instruction("mov rcx, rax");                                        // pass the pair as the entry value payload
+    emitter.instruction("xor r8d, r8d");                                        // an array payload has no high word
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", group_idx_off)); // the capture index is the numeric key
+    emitter.instruction("mov rdx, -1");                                         // a key discriminant of -1 marks an integer key
+    emitter.instruction("mov r9d, 5");                                          // runtime value tag 5 = hash-backed array
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", out_hash_off)); // reload matches hash pointer
+    emitter.instruction("call __rt_hash_set");                                  // insert this capture under its numeric key
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", out_hash_off)); // save possibly-grown matches hash pointer
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload capture index after helper calls
+    emitter.instruction("add r9, 1");                                           // advance to next capture index
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save next capture index
+    emitter.instruction("jmp __rt_preg_offset_matches_loop_linux_x86_64");      // continue materializing captures
+
+    emitter.label("__rt_preg_offset_matches_done_linux_x86_64");
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", out_hash_off)); // return the finished offset-capture hash
+    emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the offset-capture construction storage
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the matches hash in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies both targets route `PREG_OFFSET_CAPTURE` to the offset-capture builders.
+    ///
+    /// The runtime only sees PHP's `$flags` in the register the delimiter stripper immediately
+    /// reuses, so the flag has to be spilled in the prologue; dropping that spill silently made
+    /// every offset-capture match fall through to the bare-string path. Only the x86_64 CI shard
+    /// executes that variant, so the emission itself is pinned here for both targets.
+    #[test]
+    fn test_preg_match_capture_routes_offset_capture_flag_on_both_targets() {
+        for (name, target, flag_test, builder) in [
+            (
+                "macos-aarch64",
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "tst x9, #256\n",
+                "bl __rt_preg_offset_matches\n",
+            ),
+            (
+                "linux-x86_64",
+                Target::new(Platform::Linux, Arch::X86_64),
+                "test r9, 256\n",
+                "call __rt_preg_offset_matches\n",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_preg_match(&mut emitter);
+            let asm = emitter.output();
+
+            assert!(asm.contains(flag_test), "{name} misses the flag test");
+            assert!(asm.contains(builder), "{name} never calls the builder");
+            assert!(
+                asm.contains("__rt_preg_offset_matches:\n"),
+                "{name} never defines the offset matches builder"
+            );
+            assert!(
+                asm.contains("__rt_preg_offset_pair:\n"),
+                "{name} never defines the offset pair builder"
+            );
+        }
+    }
 }
