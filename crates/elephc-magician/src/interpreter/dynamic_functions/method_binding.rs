@@ -288,9 +288,6 @@ fn bind_dynamic_named_method_arg(
         })
         .and_then(|index| index.checked_add(1))
         .ok_or(EvalStatus::RuntimeFatal)?;
-    *next_variadic_index = next_variadic_index
-        .checked_add(1)
-        .ok_or(EvalStatus::RuntimeFatal)?;
     let value = eval_variadic_method_parameter_value(
         parameter_types,
         variadic_index,
