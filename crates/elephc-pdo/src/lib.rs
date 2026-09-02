@@ -2872,7 +2872,7 @@ pub unsafe extern "C" fn elephc_pdo_sql_has_multiple_statements(
 /// can never be fooled into treating a multibyte session as utf8mb4), closing
 /// the GBK/Big5 trailing-byte breakout that pure byte substitution leaves open,
 /// and honoring the connection's `NO_BACKSLASH_ESCAPES`. Writes the escaped
-/// bytes into the shared blob cell (read via `elephc_pdo_blob_data_ptr`) and
+/// bytes into the per-thread blob cell (read via `elephc_pdo_blob_data_ptr`) and
 /// returns their length; `-1` for a non-MySQL or unknown handle.
 ///
 /// # Safety
@@ -2892,7 +2892,7 @@ pub unsafe extern "C" fn elephc_pdo_real_escape_string(
         };
         let output = my::my_real_escape(&input, c.charset(), c.no_backslash_escape());
         let length = output.len() as i64;
-        *lock_recover(blob_cell()) = output;
+        blob_cell().with(|slot| *slot.borrow_mut() = output);
         length
     })
 }
