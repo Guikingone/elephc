@@ -3267,3 +3267,153 @@ fn test_by_ref_foreach_object_retype_reads_back_as_php_does() {
         out.stderr
     );
 }
+
+/// A DECLARED by-reference parameter whose own body stores a value the declaration cannot hold
+/// writes that value all the way back to the caller.
+///
+/// PHP's reference cell is untyped: `int &$i` gates what may be BOUND to it at the call and says
+/// nothing about what the body may later store through it, so `php -n` runs
+/// `function adv(string $s, int &$i) { $i = \strpos($s, ":", $i); }` and prints `int(2)` then
+/// `bool(false)` — the second call's `false` reaches the caller's variable.
+/// `Symfony\Component\Yaml\Inline::parseMapping` is that exact shape.
+///
+/// elephc's cell IS the caller's frame slot, so this only works if BOTH sides use a boxed one, and
+/// neither side can discover that alone — the checker's walk order does not guarantee a callee is
+/// reached before its callers. `Checker::scan_widened_ref_params` decides it once over every body
+/// before any is walked. Both call paths are asserted, and the `\gettype` on each is what
+/// separates a correct `false` from a boxed pointer read back as an integer, which is what this
+/// printed before.
+#[test]
+fn test_by_ref_param_widened_by_its_own_body_reaches_the_caller() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php function adv(string $s, int &$i): void { $i = \\strpos($s, \":\", $i); }
+         $p = 0; adv(\"ab:cd\", $p); echo \\var_export($p, true), \"|\", \\gettype($p), \"|\";
+         $q = 0; adv(\"abcd\", $q); echo \\var_export($q, true), \"|\", \\gettype($q);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|integer|false|boolean");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The same rule on a declared UNION cell, which is `ProxyHelper::exportParameters`.
+///
+/// `?string &$args` is already boxed, so nothing about the ABI changes here — what changes is the
+/// body's BINDING, which refused `$args = \explode(", ", $args, 2)` with
+/// `cannot reassign $args from string|null to array<string>` on a program `php -n` runs. Both
+/// branches are exercised because they leave the parameter holding different TYPES, and the caller
+/// reads each back: a string on one path, an array on the other.
+#[test]
+fn test_by_ref_param_widened_from_a_nullable_union_reaches_the_caller() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php
+         function build(int $n, ?string &$args = null): string {
+             $args = \"\";
+             for ($k = 0; $k < $n; $k++) { $args .= \"p\" . $k . \", \"; }
+             if (0 === $n) { $args = \"none\"; } else { $args = \\explode(\", \", $args, 2); }
+             return \"sig\" . $n;
+         }
+         $a = null; echo build(0, $a), \"=\", \\gettype($a), \":\", $a, \"|\";
+         $b = null; echo build(2, $b), \"=\", \\gettype($b), \":\", \\count($b), \":\", $b[0];",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "sig0=string:none|sig2=array:2:p0");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A widened by-reference parameter LENT on to another by-reference parameter keeps its own cell.
+///
+/// `Inline::parseMapping` hands `$i` to `parseScalar(…, int &$i)` and then stores `strpos`'s
+/// `int|false` into it. Binding `$i` to the callee's declared `int` after that call — which is
+/// what the by-reference argument effect does for an ordinary local, and rightly, since the
+/// adapter writes a concrete value back — typed every read below the call against a
+/// representation the slot does not have, and made the store eleven lines later
+/// `cannot reassign $i from int to int|false` again.
+///
+/// The `mixed &$i` twin is the same program with the decision spelled out by hand, and it is
+/// asserted to agree BYTE FOR BYTE, output and heap alike. That is the control the widening needs:
+/// it claims to reproduce a declaration PHP already lets you write, so the two must be
+/// indistinguishable. The residual they share (8 blocks / 384 bytes, the by-reference cell the
+/// caller's `$i` keeps) is therefore the boxed-cell path's, not this decision's — it is pinned
+/// rather than asserted clean so it cannot grow unnoticed.
+#[test]
+fn test_widened_by_ref_param_lent_to_another_matches_its_hand_written_twin() {
+    let program = |declared: &str| {
+        format!(
+            "<?php
+             class Inline {{
+                 private static function parseScalar(string $m, int &$i = 0): string {{
+                     $start = $i;
+                     while ($i < \\strlen($m) && \":\" !== $m[$i]) {{ ++$i; }}
+                     return \\substr($m, $start, $i - $start);
+                 }}
+                 public static function parseMapping(string $m, {declared} &$i = 0): array {{
+                     $out = [];
+                     $len = \\strlen($m);
+                     while ($i < $len) {{
+                         $key = self::parseScalar($m, $i);
+                         if (false === $i = \\strpos($m, \":\", $i)) {{ break; }}
+                         $out[] = $key;
+                         ++$i;
+                     }}
+                     return $out;
+                 }}
+             }}
+             $i = 0;
+             echo \\implode(\",\", Inline::parseMapping(\"aa:bb:cc\", $i)), \"|\", \\var_export($i, true), \"|\", \\gettype($i);"
+        )
+    };
+    let widened = compile_and_run_with_heap_debug(&program("int"));
+    let hand_written = compile_and_run_with_heap_debug(&program("mixed"));
+    assert!(widened.success, "program failed: {}", widened.stderr);
+    assert!(
+        hand_written.success,
+        "program failed: {}",
+        hand_written.stderr
+    );
+    assert_eq!(widened.stdout, "aa,bb|false|boolean");
+    assert_eq!(hand_written.stdout, widened.stdout);
+    assert!(
+        widened
+            .stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=8 live_bytes=384"),
+        "expected the recorded by-reference cell residual, got: {}",
+        widened.stderr
+    );
+    assert!(
+        hand_written
+            .stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=8 live_bytes=384"),
+        "the hand-written twin must leave the SAME residual, got: {}",
+        hand_written.stderr
+    );
+}
+
+/// Control: a by-reference parameter whose body keeps the declaration's representation is NOT
+/// widened, and a caller that never sees a wider value keeps reading it concretely.
+///
+/// `$i = \strlen($s)` stores an `int` into an `int` cell, so `merged_assignment_type` keeps `Int`
+/// and the pre-pass records nothing — this fixture is what fails if the rule ever degrades to
+/// "any assignment to a by-reference parameter boxes it". A clean heap is the observable half:
+/// the boxed path leaves a residual, as the fixture above pins.
+#[test]
+fn test_by_ref_param_that_keeps_its_type_is_not_widened() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php function measure(string $s, int &$i): void { $i = \\strlen($s); }
+         $n = 0; measure(\"abcd\", $n); echo $n, \"|\", \\gettype($n);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4|integer");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

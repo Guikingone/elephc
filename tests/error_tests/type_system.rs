@@ -2020,10 +2020,20 @@ fn test_depth_zero_retype_the_rebind_refuses_still_widens() {
 /// Storage that is NOT this frame's is refused in BOTH modes, however ordinary the PHP is.
 ///
 /// `Checker::local_binding_is_widenable` widens a slot; it does not get to widen one another body
-/// owns. A superglobal, `$argv`, a `global`-declared name, a `static` local, a `=&` alias and a
-/// by-reference parameter therefore keep the hard error rather than becoming a silent widening —
-/// the same six refusals the kill applies, kept for the same reason. These are the controls that
-/// stop the widening arm from being satisfiable by simply accepting everything.
+/// owns. A superglobal, `$argv`, a `global`-declared name, a `static` local and a `=&` alias
+/// therefore keep the hard error rather than becoming a silent widening — the same refusals the
+/// kill applies, kept for the same reason. These are the controls that stop the widening arm from
+/// being satisfiable by simply accepting everything.
+///
+/// A by-reference PARAMETER used to be the sixth entry here, and it is deliberately not any more:
+/// its storage is still not this frame's, which is exactly why the answer for it is no longer this
+/// rule's to give. `Checker::scan_widened_ref_params` decides the cell's representation once, over
+/// EVERY body, before any is walked, so both sides of the call agree on a boxed one — and
+/// `function f(int &$x) { $x = "s"; } $a = 1; f($a); echo $a;` prints `php -n`'s `s`
+/// (`codegen::locals_retype::test_by_ref_param_widened_by_its_own_body_reaches_the_caller` and its
+/// three siblings measure the values). What must NOT be lost with it is the call boundary, which
+/// is the only thing standing between a program PHP rejects and a silent wrong answer;
+/// [`test_widened_by_ref_param_still_validates_its_argument`] is that control.
 #[test]
 fn test_storage_this_frame_does_not_own_is_never_widened() {
     for source in [
@@ -2032,9 +2042,47 @@ fn test_storage_this_frame_does_not_own_is_never_widened() {
         "<?php $g = 1; function f() { global $g; $g = \"x\"; } f(); echo $g;",
         "<?php function f() { static $a = 1; $a = \"x\"; echo $a; } f();",
         "<?php $a = 1; $r =& $a; $a = \"x\"; echo $a;",
-        "<?php function f(int &$x) { $x = \"s\"; } $a = 1; f($a); echo $a;",
     ] {
         expect_error(source, "cannot reassign");
+    }
+}
+
+/// Widening a by-reference parameter's CELL must not relax what may be BOUND to it.
+///
+/// The two are different contracts and PHP keeps them apart: the declared type gates the argument
+/// at the call (`php -n` throws `adv(): Argument #2 ($i) must be of type int, string given` and
+/// exits 255), while the body may afterwards store anything through the reference. So
+/// `Checker::scan_widened_ref_params` publishes its decision into the signature only AFTER every
+/// diagnostic that reads it has run — if it moved earlier, `expected` would be `mixed` when the
+/// argument is checked, this call would compile, and elephc would silently run a program PHP
+/// refuses. That is the one failure mode of the whole feature that is a wrong ANSWER rather than a
+/// missing convenience, so it gets its own pin, in both modes.
+#[test]
+fn test_widened_by_ref_param_still_validates_its_argument() {
+    let source = "<?php function adv(string $s, int &$i): void { $i = \\strpos($s, \":\", $i); } $z = \"str\"; adv(\"a\", $z);";
+    expect_error(source, "parameter $i expects Int, got Str");
+    expect_error_strict(source, "parameter $i expects Int, got Str");
+}
+
+/// A by-reference parameter its own body widens type-checks, in BOTH modes.
+///
+/// Nothing here consults `local_binding_is_widenable`: the parameter's environment is SEEDED
+/// `mixed` because its cell is boxed, so the store merges and no widening decision is taken at
+/// all — which is why `--strict-locals` accepts it too, and why it does not warn. A future change
+/// that routed this through the widening arm instead would still pass the permissive half while
+/// silently starting to reject the strict one.
+///
+/// Decision only. What the programs PRINT is pinned against `php -n` by the four
+/// `codegen::locals_retype::test_by_ref_param_*` fixtures, because a checker that accepts a
+/// program says nothing about whether it then answers what PHP answers.
+#[test]
+fn test_by_ref_param_widened_by_its_own_body_type_checks() {
+    for source in [
+        "<?php function adv(string $s, int &$i): void { $i = \\strpos($s, \":\", $i); } $p = 0; adv(\"ab:cd\", $p); echo $p;",
+        "<?php function w(?string &$a): void { $a = \\explode(\",\", \"x,y\"); } $v = null; w($v); echo \\count($v);",
+    ] {
+        expect_no_error(source);
+        expect_no_error_strict(source);
     }
 }
 

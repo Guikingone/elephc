@@ -29,6 +29,7 @@ mod inference;
 mod loop_storage;
 mod method_pass;
 mod mixed_storage_scan;
+mod ref_param_widening;
 pub(crate) mod null_probe;
 mod schema;
 mod stmt_check;
@@ -299,6 +300,23 @@ pub(crate) struct Checker {
     /// Checker-selected boxed storage contracts for caller locals passed through
     /// source-declared by-reference parameters whose writable type is represented as `Mixed`.
     pub by_ref_local_storage_types: HashMap<(String, String), PhpType>,
+    /// DECLARED by-reference parameters whose own body stores a value the declaration cannot
+    /// represent, as `(body scope key, parameter name)`.
+    ///
+    /// PHP's reference cell is untyped — a declared `int &$i` gates what may be BOUND to it, not
+    /// what the body may later store through it — so such a parameter needs one boxed cell, and
+    /// the callee's cell IS the caller's slot. Computed once by
+    /// [`Checker::scan_widened_ref_params`] over EVERY body, because the walk order does not
+    /// guarantee a callee is checked before its callers, and read by the callee's environment
+    /// seeding and by every call site's argument storage.
+    pub widened_ref_params: HashSet<(String, String)>,
+    /// The same decisions under the DECLARATION's own spelling, in discovery order.
+    ///
+    /// `widened_ref_params` folds its keys so a call site's spelling of the callee matches; this
+    /// keeps the exact one, which is what
+    /// [`Checker::publish_widened_ref_param_signatures`] needs to find the signature to rewrite
+    /// and what EIR lowering builds when it declares the callee's own parameter slot.
+    pub widened_ref_param_decls: Vec<(String, String)>,
     /// String suffixes known for locals in a function-like scope.
     ///
     /// A binding such as `$property = $type.'Passes'` records `"Passes"`. Dynamic property

@@ -96,6 +96,15 @@ impl Checker {
                         } else {
                             ty
                         };
+                        // A by-reference parameter this body widens is bound `mixed` for the whole
+                        // body — see `Checker::widened_ref_param_env_type`. Only the ENVIRONMENT
+                        // moves; `self.classes`' signature keeps the declared type, so every call
+                        // site still validates its argument against it.
+                        let ty = self.widened_ref_param_env_type(
+                            &format!("{}::{}", class.name, method.name),
+                            pname,
+                            &ty,
+                        );
                         method_env.insert(pname.clone(), ty);
                     }
                     if let Some(variadic_name) = &method.variadic {

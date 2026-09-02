@@ -1069,7 +1069,23 @@ fn merge_local_assignment_type(
     // Everything above still runs (the retype-site re-decision, and the callable/reflection
     // metadata updates `check_assign` performed before calling in), so only the type merge is
     // short-circuited.
-    if checker.mixed_storage_locals.contains(name) {
+    // A by-reference PARAMETER the program-wide pre-pass widened holds the same contract for the
+    // same reason, and needs the same re-assertion for a second one. PHP's reference cell is
+    // untyped, `Checker::scan_widened_ref_params` has already decided this one is boxed on both
+    // sides of every call, and the body's environment is SEEDED `Mixed` — but a call that lends
+    // the parameter on to another by-reference parameter re-binds it to THAT parameter's declared
+    // type (`prepare_by_ref_variable_storage` ends by inserting the callee's `expected`), which
+    // narrowed the name back to a representation its slot no longer has.
+    // `Symfony\Component\Yaml\Inline::parseMapping` is the shape: `self::parseScalar(…, $i, false)`
+    // re-bound `$i` to `parseScalar`'s declared `int`, and the `$i = \strpos(…)` eleven lines
+    // below it was `cannot reassign $i from int to int|false` again.
+    //
+    // Re-asserting rather than widening is what keeps `--strict-locals` honest: nothing is being
+    // discarded here and no decision is being taken, so this must not warn and must not become an
+    // error in strict mode. The cell really is `mixed`.
+    if checker.mixed_storage_locals.contains(name)
+        || checker.ref_param_is_widened(&checker.current_loop_storage_scope, name)
+    {
         // A marked name still needs its binding depth on its FIRST store, for the same reason the
         // fresh-insert branch below records one: it is the name's single authority on whether a
         // later decision is judged against a binding this body definitely created.

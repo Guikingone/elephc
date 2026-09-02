@@ -403,6 +403,13 @@ pub(super) fn check_types_impl(
 
     checker.prescan_extern_decls(program, &mut errors);
 
+    // Runs before ANY body is walked, and has to: a declared by-reference parameter the callee
+    // widens needs a boxed cell on BOTH sides of every call, and the walk order below does not
+    // guarantee the callee is reached first — the top level is checked before
+    // `resolve_unchecked_functions` ever touches a free function's body. See
+    // `Checker::scan_widened_ref_params`.
+    checker.scan_widened_ref_params(program, &flattened_classes);
+
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
@@ -432,6 +439,12 @@ pub(super) fn check_types_impl(
     if !errors.is_empty() {
         return Err(CompileError::from_many(errors));
     }
+
+    // Every diagnostic that reads a declared by-reference parameter type has now run, so the
+    // signature can stop describing the declaration and start describing the CELL — which for a
+    // parameter the callee widens is boxed on both sides of the call. See
+    // `Checker::publish_widened_ref_param_signatures`.
+    checker.publish_widened_ref_param_signatures();
 
     Ok((checker, final_global_env))
 }

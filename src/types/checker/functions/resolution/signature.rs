@@ -34,7 +34,16 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
-            local_env.insert(pname.clone(), pty.clone());
+            // A by-reference parameter this body widens is bound `mixed` for the whole body,
+            // which is the representation its cell really has once `scan_widened_ref_params` has
+            // decided so. Binding it at the DECLARED type instead would make the very store that
+            // caused the decision the hard `cannot reassign` error the decision exists to remove.
+            // Only the ENVIRONMENT is widened — `param_types` still builds the signature below,
+            // so the call boundary keeps validating arguments against the declared type.
+            local_env.insert(
+                pname.clone(),
+                self.widened_ref_param_env_type(name, pname, pty),
+            );
         }
         // Seed the request superglobals so a function body can read/write
         // `$_SERVER`/`$_GET`/`$_POST` without a `global` declaration. `or_insert`

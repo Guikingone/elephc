@@ -429,12 +429,19 @@ impl Checker {
                 if let Some((signature, internal_callable)) =
                     self.direct_function_call_signature(builtin_name)
                 {
+                    // A builtin has no user body to widen anything, so only a resolved user
+                    // function names a scope here.
+                    let callee_scope = (!internal_callable).then(|| {
+                        self.canonical_function_name_folded(builtin_name)
+                            .unwrap_or_else(|| builtin_name.to_string())
+                    });
                     self.prepare_by_ref_variable_storage(
                         &signature,
                         args,
                         expr.span,
                         env,
                         internal_callable,
+                        callee_scope.as_deref(),
                     )?;
                 } else if self.direct_call_is_late_bound_undefined(builtin_name) {
                     self.prepare_late_bound_call_argument_storage(args, env);
@@ -642,12 +649,16 @@ impl Checker {
                     .ok()
                     .or_else(|| self.static_call_effect_signature(receiver, method));
                 if let Some(signature) = signature {
+                    let callee_scope = self
+                        .static_receiver_class_name(receiver)
+                        .and_then(|class| self.method_body_scope(&class, method));
                     self.prepare_by_ref_variable_storage(
                         &signature,
                         args,
                         expr.span,
                         env,
                         false,
+                        callee_scope.as_deref(),
                     )?;
                 }
                 let closure_bind = matches!(
@@ -677,6 +688,7 @@ impl Checker {
                         expr.span,
                         env,
                         false,
+                        None,
                     )?;
                 }
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
@@ -701,6 +713,7 @@ impl Checker {
                         expr.span,
                         env,
                         false,
+                        None,
                     )?;
                 }
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
@@ -751,12 +764,19 @@ impl Checker {
                     .ok()
                     .or_else(|| self.instance_call_effect_signature(&object_type, method));
                 if let Some(signature) = signature {
+                    let callee_scope = match object_type.codegen_repr() {
+                        PhpType::Object(class_name) => {
+                            self.method_body_scope(&class_name, method)
+                        }
+                        _ => None,
+                    };
                     self.prepare_by_ref_variable_storage(
                         &signature,
                         args,
                         expr.span,
                         env,
                         false,
+                        callee_scope.as_deref(),
                     )?;
                 }
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
@@ -976,22 +996,30 @@ impl Checker {
             .cloned()
     }
 
+    /// Resolves the class a `Foo::m()` / `self::m()` / `parent::m()` receiver names.
+    pub(crate) fn static_receiver_class_name(
+        &self,
+        receiver: &crate::parser::ast::StaticReceiver,
+    ) -> Option<String> {
+        match receiver {
+            crate::parser::ast::StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+            crate::parser::ast::StaticReceiver::Self_
+            | crate::parser::ast::StaticReceiver::Static => self.current_class.clone(),
+            crate::parser::ast::StaticReceiver::Parent => self
+                .classes
+                .get(self.current_class.as_ref()?)?
+                .parent
+                .clone(),
+        }
+    }
+
     /// Resolves a static method signature for call effects without callable-syntax policy.
     fn static_call_effect_signature(
         &self,
         receiver: &crate::parser::ast::StaticReceiver,
         method: &str,
     ) -> Option<crate::types::FunctionSig> {
-        let class_name = match receiver {
-            crate::parser::ast::StaticReceiver::Named(name) => name.as_str().to_string(),
-            crate::parser::ast::StaticReceiver::Self_
-            | crate::parser::ast::StaticReceiver::Static => self.current_class.clone()?,
-            crate::parser::ast::StaticReceiver::Parent => self
-                .classes
-                .get(self.current_class.as_ref()?)?
-                .parent
-                .clone()?,
-        };
+        let class_name = self.static_receiver_class_name(receiver)?;
         let info = self.classes.get(class_name.trim_start_matches('\\'))?;
         let key = php_symbol_key(method);
         info.static_methods
@@ -1006,6 +1034,11 @@ impl Checker {
     /// cell. The compiler uses boxed `Mixed` storage for that cell so the callee can replace it
     /// with any PHP value. Declared reference parameters instead see a null value and retain
     /// ordinary parameter validation, which rejects null when the declaration does not accept it.
+    ///
+    /// `callee_scope` names the callee's BODY when the call resolves to one, so a parameter whose
+    /// body widens it (`Checker::scan_widened_ref_params`) hands the caller the boxed storage its
+    /// cell really has. `None` — a closure, a runtime callable, a builtin — leaves the decision
+    /// exactly where it was.
     fn prepare_by_ref_variable_storage(
         &mut self,
         signature: &crate::types::FunctionSig,
@@ -1013,6 +1046,7 @@ impl Checker {
         span: crate::span::Span,
         env: &mut TypeEnv,
         internal_callable: bool,
+        callee_scope: Option<&str>,
     ) -> Result<(), CompileError> {
         let normalized = if internal_callable {
             self.normalize_builtin_call_args(signature, args, span, "call", env)?
@@ -1051,12 +1085,43 @@ impl Checker {
                         .get(binding_index)
                         .copied()
                         .unwrap_or(false);
-                    let expected = signature
+                    let declared_expected = signature
                         .params
                         .get(binding_index)
                         .map(|(_, ty)| ty)
                         .unwrap_or(&PhpType::Mixed);
                     let current = env.get(name).cloned();
+                    // The cell's REPRESENTATION, which is the declared type unless the callee's
+                    // own body stores something that type cannot hold. The callee's cell IS this
+                    // slot, so a widening there has to reach the caller before the slot is typed.
+                    let widened = self.effective_ref_param_type(
+                        callee_scope,
+                        signature
+                            .params
+                            .get(binding_index)
+                            .map(|(param_name, _)| param_name.as_str())
+                            .unwrap_or(""),
+                        declared_expected,
+                    );
+                    // …but ONLY for an argument the declaration would accept. Binding a rejected
+                    // one to the widened `mixed` here hands `require_bound_param_arg_type` a
+                    // gradual `actual` a moment later, and `mixed` satisfies every scalar — so
+                    // `function adv(string $s, int &$i) {…}; $z = "str"; adv("a", $z);` compiled
+                    // silently where `php -n` throws `Argument #2 ($i) must be of type int, string
+                    // given` and exits 255. The declared type is left in place for exactly that
+                    // argument, which is the only path on which this feature could turn a program
+                    // PHP refuses into one elephc runs
+                    // (`error_tests::type_system::test_widened_by_ref_param_still_validates_its_argument`).
+                    let expected = &if widened != *declared_expected
+                        && current.as_ref().is_some_and(|current| {
+                            !Self::types_compatible(declared_expected, current)
+                                && !self.type_accepts(declared_expected, current)
+                        })
+                    {
+                        declared_expected.clone()
+                    } else {
+                        widened
+                    };
                     let storage = if is_variadic_binding && *expected == PhpType::Mixed {
                         Some(PhpType::Mixed)
                     } else if internal_callable {
@@ -1141,6 +1206,30 @@ impl Checker {
                                 storage.clone(),
                             );
                         }
+                        // Lending a by-reference PARAMETER of the current body on to another
+                        // by-reference parameter must not re-bind it below its own cell's
+                        // representation. The arms above end by binding the name to the CALLEE's
+                        // declared type, which is right for an ordinary local — the adapter
+                        // writes a concrete value back into it — and wrong for a name whose cell
+                        // is boxed and stays boxed: every read below the call would then be typed
+                        // against a representation the slot does not have, and the next store
+                        // through the reference is refused for a type the cell can hold perfectly
+                        // well. `Symfony\Component\Yaml\Inline::parseMapping` is the shape:
+                        // `self::parseScalar(…, $i, false)` re-bound `$i` to `parseScalar`'s
+                        // declared `int`, and `$i = \strpos(…)` eleven lines below it was
+                        // `cannot reassign $i from int to int|false`. Measured on a hand-written
+                        // `mixed &$i` too, which is the same program with the decision spelled
+                        // out, so this is not the widening's own defect.
+                        let storage = match &current {
+                            Some(current)
+                                if self.active_ref_params.contains(name)
+                                    && current.codegen_repr() == PhpType::Mixed
+                                    && storage.codegen_repr() != PhpType::Mixed =>
+                            {
+                                current.clone()
+                            }
+                            _ => storage,
+                        };
                         env.insert(name.clone(), storage);
                     }
                 }

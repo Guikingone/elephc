@@ -243,6 +243,8 @@ impl Checker {
             loop_storage_types: HashMap::new(),
             string_incdec_locals: HashSet::new(),
             by_ref_local_storage_types: HashMap::new(),
+            widened_ref_params: HashSet::new(),
+            widened_ref_param_decls: Vec::new(),
             string_suffix_locals: HashMap::new(),
             dynamic_ref_local_types: HashMap::new(),
             strict_locals: false,
