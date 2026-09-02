@@ -327,6 +327,24 @@ pub(crate) struct Checker {
     /// A reference can escape through a callee, so the alias is permanent for the rest of the
     /// body.
     pub ref_aliased_locals: HashSet<String>,
+    /// The subset of [`Checker::ref_aliased_locals`] whose HOME stops being an ordinary frame
+    /// slot: EIR lowering binds these names to a shared reference cell
+    /// (`LoweringContext::mark_ref_bound_local`), so a store through the name writes the cell at
+    /// the CELL's representation and `store_local` deliberately refuses to widen the slot.
+    ///
+    /// That is the difference the widening eligibility turns on, and the full aliased set cannot
+    /// express it. A `=&` target or source, a `use (&$x)` capture, and both names a
+    /// `foreach ($arr as &$v)` touches all keep a lasting alias — the cell outlives the statement
+    /// that made it — while a variable merely handed to a by-reference PARAMETER lends its slot
+    /// address for the duration of one call and keeps its own frame storage afterwards
+    /// (`ir_lower::expr::ref_place_args` already adapts a boxed caller slot to a declared
+    /// parameter representation and writes the result back). `sort($c); … $c = 'x';` is that
+    /// shape, and it is `array_shift`, `array_pop`, `array_splice`, `preg_match_all`'s out
+    /// parameter and `uksort` in the stock fixture.
+    ///
+    /// The KILL keeps consulting the full set: abandoning a slot strands a reference that
+    /// escaped through the callee, which a lend cannot be proven not to do.
+    pub ref_bound_locals: HashSet<String>,
     /// Names declared `static` in the current body. Their storage outlives the call, so the
     /// binding is never killable.
     pub static_local_names: HashSet<String>,
@@ -444,6 +462,7 @@ pub(crate) struct SavedLocalBindingScope {
     conditional_depth: u32,
     binding_depth: HashMap<String, u32>,
     ref_aliased: HashSet<String>,
+    ref_bound: HashSet<String>,
     statics: HashSet<String>,
     typed: HashSet<String>,
     mixed_storage: HashSet<String>,
@@ -551,6 +570,20 @@ impl Checker {
     ///   a boxed slot holding a string) instead of `si`. That is fixed in the `if` join itself,
     ///   where a switch's edges have always been joined; measured against `php -n`, byte-identical.
     ///
+    /// - the LENT half of the reference-aliased set. `ref_aliased_locals` answers "a reference
+    ///   reached this name", which is what the kill needs: abandoning a slot strands a reference
+    ///   that escaped through a callee. Widening asks a narrower question — is the name's HOME
+    ///   still an ordinary frame slot this frame may re-represent? — and the answer differs
+    ///   between the two halves of that set. A `=&` alias, a `use (&$x)` capture and a
+    ///   `foreach ($arr as &$v)` all leave a cell alive after the statement, and lowering
+    ///   ref-binds the name so `store_local` refuses to widen the slot at all; widening in the
+    ///   checker alone would degrade to a store through the cell at the CELL's representation,
+    ///   which is a miscompile rather than a diagnostic. A variable merely handed to a
+    ///   by-reference PARAMETER lends its slot address for one call and keeps its own frame
+    ///   storage afterwards, so it widens like any other local — `sort($c); … $c = 'x';` and the
+    ///   `array_shift` / `array_pop` / `array_splice` / `preg_match_all` / `uksort` shapes it
+    ///   stands for. [`Checker::ref_bound_locals`] is the narrower set this reads.
+    ///
     /// Everything else the kill demands is kept, plus the program-global veto the kill applies
     /// separately: a by-reference parameter, a `=&` alias, a `global` write through a cell another
     /// body owns and a `static` whose storage outlives the call all stay hard errors rather than
@@ -561,7 +594,7 @@ impl Checker {
             && !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)
             && !self.active_ref_params.contains(name)
-            && !self.ref_aliased_locals.contains(name)
+            && !self.ref_bound_locals.contains(name)
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
     }
@@ -638,6 +671,7 @@ impl Checker {
             conditional_depth: self.local_conditional_depth,
             binding_depth: std::mem::take(&mut self.local_binding_depth),
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
+            ref_bound: std::mem::take(&mut self.ref_bound_locals),
             statics: std::mem::take(&mut self.static_local_names),
             typed: std::mem::take(&mut self.typed_local_names),
             // The mixed-storage marking describes ONE frame: a name boxed in the caller says
@@ -663,6 +697,7 @@ impl Checker {
         self.local_conditional_depth = saved.conditional_depth;
         self.local_binding_depth = saved.binding_depth;
         self.ref_aliased_locals = saved.ref_aliased;
+        self.ref_bound_locals = saved.ref_bound;
         self.static_local_names = saved.statics;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
@@ -698,12 +733,33 @@ impl Checker {
     /// `sort(array: $a)` all reach the local behind the wrapper, and a shape one walker sees
     /// through while the other stops at is exactly how the checker and the pre-scan drift apart.
     pub(crate) fn record_reference_alias_root(&mut self, expr: &Expr) {
+        if let Some(name) = Self::reference_alias_root_name(expr) {
+            self.ref_aliased_locals.insert(name);
+        }
+    }
+
+    /// Records a reference alias whose CELL outlives the statement that made it, so lowering
+    /// ref-binds the name for the rest of the body.
+    ///
+    /// Aliases the whole of [`Checker::record_reference_alias_root`] and additionally files the
+    /// root in [`Checker::ref_bound_locals`]. The three shapes that need it are the ones whose
+    /// cell is reachable after the expression finishes: a `=&` target and its source, a
+    /// `use (&$x)` capture, and both names a `foreach ($arr as &$v)` touches. A by-reference
+    /// call ARGUMENT is deliberately not one of them — see `ref_bound_locals`.
+    pub(crate) fn record_ref_bound_alias_root(&mut self, expr: &Expr) {
+        if let Some(name) = Self::reference_alias_root_name(expr) {
+            self.ref_aliased_locals.insert(name.clone());
+            self.ref_bound_locals.insert(name);
+        }
+    }
+
+    /// Returns the local at the root of a reference's access chain, if the chain reaches one.
+    fn reference_alias_root_name(expr: &Expr) -> Option<String> {
         let mut current = expr;
         loop {
             match &current.kind {
                 ExprKind::Variable(name) => {
-                    self.ref_aliased_locals.insert(name.clone());
-                    return;
+                    return Some(name.clone());
                 }
                 ExprKind::ArrayAccess { array: base, .. }
                 | ExprKind::PropertyAccess { object: base, .. }
@@ -713,7 +769,7 @@ impl Checker {
                 | ExprKind::Spread(base)
                 | ExprKind::ErrorSuppress(base)
                 | ExprKind::NamedArg { value: base, .. } => current = base,
-                _ => return,
+                _ => return None,
             }
         }
     }

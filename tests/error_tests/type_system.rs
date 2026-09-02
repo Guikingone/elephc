@@ -1512,12 +1512,26 @@ fn test_ref_alias_target_retype_not_permitted() {
 /// whether its first parameter is by-reference — and if it is, the kill would abandon a slot the
 /// callee still holds a reference into. The branch-divergent pre-scan already disqualifies every
 /// `ClosureCall`/`ExprCall` argument for the same reason.
+///
+/// Read off the decision: no kill site and no re-bind site, so the slot the callee may hold a
+/// reference into is never abandoned. The store that follows widens that slot, which is sound
+/// for a reference the callee only holds for the duration of the call — the only kind this
+/// compiler's `InvokerRefArg` can hand it. `--strict-locals` keeps the hard error.
 #[test]
 fn test_unresolved_callable_arg_not_killable() {
-    expect_error(
-        "<?php function g(callable $cb) { $a = 1; $cb($a); unset($a); $a = \"s\"; echo $a; }",
-        "cannot reassign",
+    let source = "<?php function g(callable $cb) { $a = 1; $cb($a); unset($a); $a = \"s\"; echo $a; }";
+    let result = check_source_full(source).expect("the unresolved-callable fixture must type-check");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "an unresolved callable's argument is never killable: {:?}",
+        result.local_bind_kill_sites
     );
+    assert!(
+        result.local_retype_sites.is_empty(),
+        "…and never re-bound either: {:?}",
+        result.local_retype_sites
+    );
+    expect_error_strict(source, "cannot reassign");
 }
 
 /// The same rule for a variable function (`$f = \"sort\"; $f($a);`), whose callee is a string
@@ -1538,20 +1552,33 @@ fn test_string_variable_callee_arg_not_killable() {
 /// Sibling unknown-callee shapes reach the same rule: a dynamic class static call
 /// (`$c::m($a)`, which desugars to `call_user_func([$c, "m"], $a)`), a dynamic constructor
 /// (`new $c($a)`), and a method call on a `mixed` receiver dispatched over runtime candidates.
+///
+/// The KILL stays refused for all three — the reference may be by-reference and abandoning the
+/// slot would strand it — which is read here off the absent kill/re-bind sites. The store that
+/// follows widens instead, because an unresolved callee is handed the slot's ADDRESS for the
+/// duration of the call and nothing ref-binds the name (see `Checker::ref_bound_locals`);
+/// `--strict-locals` keeps the hard error.
 #[test]
 fn test_unknown_callee_siblings_not_killable() {
-    expect_error(
+    for source in [
         "<?php class C { static function m(&$x) { $x = 2; } } function g() { $a = 1; $c = \"C\"; $c::m($a); unset($a); $a = \"s\"; echo $a; }",
-        "cannot reassign",
-    );
-    expect_error(
         "<?php function g(string $c) { $a = 1; $x = new $c($a); unset($a); $a = \"s\"; echo $a, $x; }",
-        "cannot reassign",
-    );
-    expect_error(
         "<?php class C { function m(&$x) { $x = 2; } } function g($o) { $a = 1; $o->m($a); unset($a); $a = \"s\"; echo $a; }",
-        "cannot reassign",
-    );
+    ] {
+        let result =
+            check_source_full(source).expect("an unresolved callee's argument must type-check");
+        assert!(
+            result.local_bind_kill_sites.is_empty(),
+            "an unresolved callee's argument is never killable: {:?}",
+            result.local_bind_kill_sites
+        );
+        assert!(
+            result.local_retype_sites.is_empty(),
+            "…and never re-bound either: {:?}",
+            result.local_retype_sites
+        );
+        expect_error_strict(source, "cannot reassign");
+    }
 }
 
 /// The conservatism is per-ARGUMENT, not per-body: an unresolvable call that never mentions `$a`
@@ -1578,16 +1605,29 @@ fn test_unknown_callee_does_not_over_reach() {
 /// is narrow — the RFC gives the pipe no by-ref
 /// parameters and the known-signature path rejects one outright — but the conservatism must not
 /// depend on which call syntax reached the callee.
+///
+/// Read off the decision, like its ordinary-call sibling above: neither shape records a kill or a
+/// re-bind site, so the piped value's slot is never abandoned. The store that follows widens it,
+/// and `--strict-locals` keeps the hard error.
 #[test]
 fn test_unresolved_pipe_target_arg_not_killable() {
-    expect_error(
+    for source in [
         "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; unset($a); $a = \"s\"; echo $a, $r; }",
-        "cannot reassign",
-    );
-    expect_error(
         "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; $a = \"s\"; echo $a, $r; }",
-        "cannot reassign",
-    );
+    ] {
+        let result = check_source_full(source).expect("the pipe fixture must type-check");
+        assert!(
+            result.local_bind_kill_sites.is_empty(),
+            "an unresolved pipe target's value is never killable: {:?}",
+            result.local_bind_kill_sites
+        );
+        assert!(
+            result.local_retype_sites.is_empty(),
+            "…and never re-bound either: {:?}",
+            result.local_retype_sites
+        );
+        expect_error_strict(source, "cannot reassign");
+    }
 }
 
 /// The pipe controls: a KNOWN pipe target leaves both shapes available, and an unresolvable pipe
@@ -1808,12 +1848,29 @@ fn test_method_by_ref_call_arg_not_killable() {
 
 /// A local passed to a BUILTIN's by-ref parameter (`sort`, `preg_match`, …) is aliased: the
 /// builtin reaches the local through its storage.
+///
+/// The KILL is what the name says, and it is still refused — no kill site, no re-bind site. The
+/// reassignment after it is not: the reference `sort` took is LENT for the duration of the call
+/// and the local keeps its own frame slot, so the store WIDENS that slot
+/// (`Checker::ref_bound_locals` is the narrower set the widening consults). `--strict-locals`
+/// keeps the hard error this fixture used to read the decision through.
 #[test]
 fn test_builtin_by_ref_call_arg_not_killable() {
-    expect_error(
-        "<?php $a = [3, 1]; sort($a); unset($a); $a = \"s\";",
-        "cannot reassign",
+    let source = "<?php $a = [3, 1]; sort($a); unset($a); $a = \"s\"; echo $a;";
+    let result =
+        check_source_full(source).expect("a lent reference's retype must type-check permissively");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "a by-ref builtin argument is never killable: {:?}",
+        result.local_bind_kill_sites
     );
+    assert!(
+        result.local_retype_sites.is_empty(),
+        "a widening abandons no slot, so it records no re-bind site: {:?}",
+        result.local_retype_sites
+    );
+    expect_warning(source, "changes type");
+    expect_error_strict(source, "cannot reassign");
 }
 
 /// A `foreach` value target is bound inside the loop, which may never run, so it is not
@@ -2125,6 +2182,32 @@ fn test_loop_bound_by_ref_foreach_value_var_retype_still_errors() {
         "<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } $v = \"s\"; echo $v;",
         "cannot reassign $v from int to string",
     );
+}
+
+/// A reference LENT to a by-reference parameter for the duration of one call does NOT veto the
+/// widening: the name keeps its own frame slot afterwards, so the slot is this frame's to
+/// re-represent.
+///
+/// `sort($c); … $c = 'x';` was a hard `cannot reassign $c from array<string> to string` because
+/// the checker files every by-reference call ARGUMENT in the same permanent set as a `=&` alias.
+/// That set answers the KILL's question (may the slot be abandoned — no, the callee may have
+/// stashed the reference), not the widening's (is the name still homed in an ordinary frame slot
+/// — yes: nothing here reaches `mark_ref_bound_local`, and `ref_place_args` already adapts a
+/// boxed caller slot to a declared parameter representation). `array_shift`, `array_pop`,
+/// `array_splice`, `uksort` and `preg_match_all`'s out parameter are the same shape, and between
+/// them they were six of the stock fixture's remaining checker errors.
+///
+/// `--strict-locals` still refuses every one of them, which is what the flag is for.
+#[test]
+fn test_a_lent_reference_does_not_veto_the_widening() {
+    let builtin = "<?php $c = [\"bb\", \"aa\"]; \\sort($c); $c = \"x\"; echo $c;";
+    expect_warning(builtin, "$c changes type from array<string> to string");
+    expect_error_strict(builtin, "cannot reassign $c from array<string> to string");
+
+    let out_param =
+        "<?php function fill(array &$o): void { $o = [\"a\"]; } $m = [\"z\"]; fill($m); $m = 7; echo $m;";
+    expect_warning(out_param, "$m changes type from array<mixed> to int");
+    expect_error_strict(out_param, "cannot reassign $m from array<mixed> to int");
 }
 
 /// The mixed-storage half of the same exclusion: a `foreach` value variable — by reference or by
@@ -2992,9 +3075,22 @@ fn test_a_closure_local_is_still_marked_out_loud() {
 /// looked kill/retype eligible after `sort(...$args)` even though `sort` holds a reference into it.
 /// The recording now happens before that bail-out, and `record_reference_alias_root` sees through
 /// the `Spread` wrapper (as `mixed_storage_scan::disqualify_root` already did).
+///
+/// What the alias buys is read off the DECISION rather than off a hard error: an aliased name is
+/// not kill/re-bind eligible, so the store takes the widening arm and records NO re-bind site,
+/// while the by-value control below records one. Both type-check today — PHP allows either — so
+/// the re-bind site is the only thing that still tells the two apart.
 #[test]
 fn test_spread_by_ref_builtin_argument_is_ref_aliased() {
-    expect_error(
+    let result =
+        check_source_full("<?php $args = [[3, 1, 2]]; sort(...$args); $args = \"s\"; echo $args;")
+            .expect("the spread fixture must type-check in permissive mode");
+    assert!(
+        result.local_retype_sites.is_empty(),
+        "a spread by-ref argument aliases its local, so no slot may be abandoned: {:?}",
+        result.local_retype_sites
+    );
+    expect_error_strict(
         "<?php $args = [[3, 1, 2]]; sort(...$args); $args = \"s\"; echo $args;",
         "cannot reassign",
     );
@@ -3005,6 +3101,13 @@ fn test_spread_by_ref_builtin_argument_is_ref_aliased() {
 #[test]
 fn test_spread_argument_of_a_by_value_builtin_stays_rebindable() {
     expect_no_error("<?php $args = [[3, 1, 2]]; var_dump(...$args); $args = \"s\"; echo $args;");
+    let result =
+        check_source_full("<?php $args = [[3, 1, 2]]; var_dump(...$args); $args = \"s\"; echo $args;")
+            .expect("the by-value spread fixture must type-check");
+    assert!(
+        !result.local_retype_sites.is_empty(),
+        "a by-value spread leaves the local re-bindable, so the store abandons its slot",
+    );
 }
 
 /// Control for the test above: the same shape written as a LOCAL still marks and warns, so the

@@ -442,8 +442,12 @@ impl Checker {
         // this statement and write through the reference, so `$x` is aliased there from here
         // on. Recorded before entering the closure scope, which saves and restores the
         // enclosing set.
+        // REF-BOUND, not merely lent: the closure keeps the cell for as long as it lives, and
+        // `expr::closures` ref-binds the enclosing name to it, so the slot's representation is
+        // no longer this body's to widen.
         for capture in capture_refs {
             self.ref_aliased_locals.insert(capture.clone());
+            self.ref_bound_locals.insert(capture.clone());
         }
         // Every closure parameter is bound unconditionally on entry, so all of them are
         // recorded at binding depth 0. A `use ($x)` CAPTURE is deliberately absent: it is

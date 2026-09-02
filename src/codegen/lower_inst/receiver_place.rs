@@ -96,7 +96,23 @@ impl ReceiverPlace {
         }
     }
 
-    /// Publishes the receiver's current pointer back into the place it was read from.
+    /// Publishes the receiver's current pointer back into the place it was read from, through a
+    /// ref cell TYPED at the value being published.
+    ///
+    /// `array_splice` is the only caller: its replacement insert can retype the receiver's
+    /// elements, and `store_value_through_ref_cell_slot` is what refuses that against a
+    /// by-reference parameter's declared cell instead of writing a representation the cell cannot
+    /// hold (`test_array_splice_type_changing_replacement_on_by_ref_parameter_is_refused`).
+    ///
+    /// The LOCAL arm goes through the mutated-container path all the other mutating builtins use.
+    /// It used to be the ordinary local store, whose boxing path TRANSFERS the SSA value's
+    /// reference into the new Mixed cell — while that same value stays live for the splice call
+    /// and is released again by the ordinary cleanup. A frame slot a LATER store had widened to
+    /// boxed `Mixed` therefore held a cell whose payload had already been freed:
+    /// `$c = ['bb', 'aa']; array_splice($c, 0, 1); var_dump($c); $c = null;` printed
+    /// `array(0) {}` where php prints the one remaining element, and then looped forever inside
+    /// the runtime. The slot only ends up boxed when a later store widens it, which is why the
+    /// indexed path looked correct on its own.
     pub(super) fn store_back(
         &self,
         ctx: &mut FunctionContext<'_>,
@@ -105,7 +121,7 @@ impl ReceiverPlace {
     ) -> Result<()> {
         match self {
             Self::Opaque => Ok(()),
-            Self::Local(slot) => ctx.store_value_to_local(*slot, value),
+            Self::Local(slot) => ctx.store_mutated_container_to_local(*slot, value),
             Self::RefCell(slot) => super::store_value_through_ref_cell_slot(
                 ctx,
                 *slot,

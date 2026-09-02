@@ -428,6 +428,11 @@ pub(super) fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Inst
 /// source array longer than it was. `__rt_array_splice_insert*` grows the payload for that, and a
 /// growth relocates the array, so the by-reference receiver is written back a second time after
 /// the insertion rather than only after the copy-on-write split.
+///
+/// Both write-backs go through `ReceiverPlace::store_back`, whose LOCAL arm publishes through the
+/// mutated-container path so a frame slot a LATER store widened to boxed `Mixed` receives a cell
+/// that RETAINS the container instead of one that takes over the still-live SSA value's
+/// reference. See that method for the measured miscompile.
 pub(crate) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_splice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
@@ -450,6 +455,14 @@ pub(crate) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instructi
         SpliceReplacement::resolve(ctx, inst.operands.get(3).copied(), &elem_ty)?;
     let receiver_ty = ctx.value_php_type(array)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
+    // The pre-mutation bookkeeping every other mutating container builtin performs, and the half
+    // `array_splice` was missing: a concrete container loaded out of a boxed frame slot carries an
+    // extra owned reference, and the slot's previous Mixed cell has to be released before the
+    // mutation or the write-back publishes a second cell over a live one. A no-op unless the slot
+    // is raw-represented AND boxed, so a ref-cell or concrete receiver is untouched.
+    if let Some(slot) = receiver.slot() {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
     ensure_unique_array_pop_source(ctx, array)?;
     receiver.store_back(ctx, array, &receiver_ty)?;
     lower_array_splice_call(ctx, array, offset, length, &elem_ty)?;

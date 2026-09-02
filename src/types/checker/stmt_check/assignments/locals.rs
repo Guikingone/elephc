@@ -257,8 +257,13 @@ pub(super) fn check_ref_assign(
     // Both sides of `$target =& <source>` share one cell from here on, so neither binding can
     // be killed or re-bound independently. Recorded before the per-shape checks so an aliasing
     // that fails a later validation is still treated as an alias.
+    // Both names are REF-BOUND, not merely lent: the cell they share outlives this statement, so
+    // lowering binds them to it and `store_local` keeps the cell's representation. Widening
+    // either slot in the checker would therefore degrade to a store through the cell at a type
+    // it cannot hold.
     checker.ref_aliased_locals.insert(target.to_string());
-    checker.record_reference_alias_root(source);
+    checker.ref_bound_locals.insert(target.to_string());
+    checker.record_ref_bound_alias_root(source);
     let result = match &source.kind {
         ExprKind::Variable(source_name) => {
             check_ref_assign_variable(checker, target, source_name, span, env)

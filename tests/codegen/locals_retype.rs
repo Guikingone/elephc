@@ -2963,6 +2963,68 @@ fn test_store_inside_a_branch_after_a_try_unset_answers() {
     assert_eq!(out, "f|s|string");
 }
 
+/// A local whose reference was LENT to a by-reference parameter still widens, and the widened
+/// slot answers like `php -n` on both sides of the lend.
+///
+/// The checker used to refuse these outright, so the value was never measurable. Each fixture
+/// reads the container BEFORE the widening store (so the load is a concrete array from a slot
+/// the store later boxes) and the scalar after it. `array_shift`'s and `array_pop`'s receivers
+/// are the `Command::setName` / `UndefinedFunctionErrorEnhancer` shapes verbatim in structure.
+#[test]
+fn test_widening_after_a_by_reference_builtin_argument_answers() {
+    let out = compile_and_run(
+        "<?php $c = [\"bb\", \"a\" . $argc]; \\sort($c); $c = \"/\" . \\implode(\"/\", $c); echo $c, \"|\", \\gettype($c);",
+    );
+    assert_eq!(out, "/a1/bb|string");
+
+    let out = compile_and_run(
+        "<?php $d = [\"yy\", \"x\" . $argc]; \\sort($d); $last = \\array_pop($d); $d = \\implode(\",\", $d) . \">\" . $last; echo $d;",
+    );
+    assert_eq!(out, "x1>yy");
+
+    let out = compile_and_run(
+        "<?php $e = \\explode(\"|\", \"a|b|c\"); $head = \\array_shift($e); $e = \\array_unique([...$e, \"b\"]); echo $head, \"|\", \\count($e);",
+    );
+    assert_eq!(out, "a|2");
+}
+
+/// `array_splice`'s receiver, published into a frame slot a LATER store widens to boxed `Mixed`.
+///
+/// The splice's write-back went through the ordinary local store, whose boxing path TRANSFERS
+/// the SSA value's reference into the new cell while that same value stays live for the splice
+/// call and is released again by the cleanup — so the cell pointed at freed storage. The first
+/// fixture is `DebugClassLoader::checkCase` in structure; the second needs no retype at all and
+/// was wrong on `a61b5de243` too (`$c = null` widens the slot without ever consulting the
+/// widening rule), which is what proves the defect is the splice's and not the widening's.
+#[test]
+fn test_array_splice_receiver_survives_a_later_widening_of_its_slot() {
+    let out = compile_and_run(
+        "<?php $tail = [\"aa\", \"bb\", \"c\" . $argc]; \\array_splice($tail, 0, 1); $tail = \"/\" . \\implode(\"/\", $tail); echo \\strlen($tail), \"|\", $tail;",
+    );
+    assert_eq!(out, "6|/bb/c1");
+
+    let out = compile_and_run(
+        "<?php $c = [\"bb\", \"a\" . $argc]; \\array_splice($c, 0, 1); echo \\count($c), \"|\", $c[0]; $c = null; \\var_dump($c);",
+    );
+    assert_eq!(out, "1|a1NULL\n");
+}
+
+/// The same splice receiver with a heap-tracked element type, so a transferred owner would show
+/// up as a leak rather than only as a wrong value.
+#[test]
+fn test_array_splice_into_a_widened_slot_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $t = [\"aa\" . $argc, \"bb\" . $argc]; \\array_splice($t, 0, 1); echo $t[0]; $t = \\count($t); echo \"|\", $t;",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bb1|1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "the splice receiver's owner must not be transferred into the boxed slot: {}",
+        out.stderr
+    );
+}
+
 /// A `++` after the branch, which disqualifies the mixed-storage marking and so leaves the store
 /// on the widening arm — both when the branch is skipped and when it is taken.
 ///

@@ -250,9 +250,15 @@ impl Checker {
                 //
                 // Recorded before the iterable is inferred so an iterable that fails to type is
                 // still treated as aliased.
+                //
+                // Both names are REF-BOUND rather than merely lent: `$v` is a cell
+                // `typed_foreach` keeps alive across the whole loop (and past it, as PHP
+                // leaves it bound to the last element), and the iterable holds the elements
+                // those cells point into. Neither slot may be re-represented by a widening.
                 if *value_by_ref {
-                    self.record_reference_alias_root(array);
+                    self.record_ref_bound_alias_root(array);
                     self.ref_aliased_locals.insert(value_var.clone());
+                    self.ref_bound_locals.insert(value_var.clone());
                 }
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
                 if let PhpType::Array(elem_ty) = &arr_ty {
