@@ -227,3 +227,25 @@ g($argc); g($argc + 1); g($argc + 2);
 
     assert_eq!(out, "a|b|db|db|b|db|");
 }
+
+/// An empty `default:` written before another case falls through into that case for any
+/// unmatched subject, exactly like PHP: `f(3)` prints `b|`. Before the fix the empty default had
+/// no position, was placed last, and an unmatched subject left the switch (issue #881).
+#[test]
+fn test_dead_code_elimination_keeps_empty_middle_default_fallthrough_into_next_case() {
+    let out = compile_and_run(
+        r#"<?php
+function f($x) {
+    switch ($x) {
+        case 1: echo "a"; break;
+        default:
+        case 2: echo "b"; break;
+    }
+    echo "|";
+}
+f($argc); f($argc + 1); f($argc + 2);
+"#,
+    );
+
+    assert_eq!(out, "a|b|b|");
+}
