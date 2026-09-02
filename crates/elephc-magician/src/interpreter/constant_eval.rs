@@ -110,6 +110,7 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
         "ICONV_IMPL" => EvalPredefinedConstant::String(elephc_iconv::implementation_name(is_macos)),
         "ICONV_VERSION" => EvalPredefinedConstant::String(elephc_iconv::ICONV_VERSION),
         "PHP_OS" => EvalPredefinedConstant::String(eval_php_os_name()),
+        "PHP_OS_FAMILY" => EvalPredefinedConstant::String(eval_php_os_family_name()),
         "PHP_VERSION" => EvalPredefinedConstant::String(
             crate::eval_php_profile::eval_php_version_string(),
         ),
@@ -132,6 +133,15 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
 }
 
 fn eval_php_os_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Darwin"
+    } else {
+        "Linux"
+    }
+}
+
+/// Returns the PHP OS-family constant for the host platform running the eval bridge.
+fn eval_php_os_family_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "Darwin"
     } else {
