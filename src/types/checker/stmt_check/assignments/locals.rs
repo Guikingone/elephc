@@ -1110,11 +1110,13 @@ fn merge_local_assignment_type(
             // takes when the name's slot is not the value's home, and the same one this function
             // takes for a `Span::dummy()` assignment.
             //
-            // Eligibility is `Checker::local_binding_is_widenable`: this frame's own storage, no
-            // other name reaching the same cell, and the store at conditional depth 0 — see that
-            // predicate for the measured reason the depth condition survives here even though a
-            // widening needs no proof that the store runs. `--strict-locals` keeps the hard error,
-            // which is the whole point of the flag.
+            // Eligibility is `Checker::local_binding_is_widenable`: this frame's own storage and
+            // no other name reaching the same cell. The store's conditional DEPTH is deliberately
+            // not part of it — a kill must prove the store runs before abandoning a slot, while a
+            // widening keeps the slot and lets `store_local` widen it, which is sound on both
+            // paths. What that costs is paid in lowering, where `join_arm_types` joins the merge
+            // through the widened frame slot instead of through the untaken arm's type.
+            // `--strict-locals` keeps the hard error, which is the whole point of the flag.
             if !checker.strict_locals && checker.local_binding_is_widenable(name) {
                 let message = format!(
                     "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",

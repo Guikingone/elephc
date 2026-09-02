@@ -1669,17 +1669,23 @@ fn test_unset_inside_try_catch_finally_records_no_kill() {
     }
 }
 
-/// The same non-eligibility as an ERROR, in the shapes where the straight-line retype cannot
-/// rescue the program: a re-binding assignment that is itself inside a branch, and an
-/// expression-form one. Both are the hard `cannot reassign` a kill would have avoided.
+/// The same non-eligibility, in the shapes where the straight-line re-bind cannot rescue the
+/// program: a re-binding assignment that is itself inside a branch, and an expression-form one.
 ///
-/// Only the BRANCH shape is still that error. The expression-form one is a depth-0 store, which
-/// the widening arm accepts — a re-bind there has no well-defined result value to hand back to the
-/// enclosing expression, but a widening keeps the slot and hands back what it just stored. `php -n`
-/// prints `s`, and so does the compiled program; `--strict-locals` keeps the hard error.
+/// NEITHER is the hard error any more. Both are depth-independent widenings: the slot stays and
+/// `store_local` widens it, which is sound whether or not the branch is taken (the value semantics
+/// of the taken branch are pinned end to end by
+/// `codegen::locals_retype::test_store_inside_a_branch_after_a_try_unset_answers`). What the
+/// `unset` inside the `try` still does NOT do is end the binding — `local_bind_kill_sites` stays
+/// empty for it, which is what the sibling test above asserts — and `--strict-locals` still
+/// rejects every one of these shapes.
 #[test]
 fn test_unset_inside_try_leaves_the_pre_feature_error() {
-    expect_error(
+    expect_warning(
+        "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } if ($argc > 1) { $a = \"s\"; } echo $a;",
+        "$a changes type from int to string",
+    );
+    expect_error_strict(
         "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } if ($argc > 1) { $a = \"s\"; } echo $a;",
         "cannot reassign $a from int to string",
     );
@@ -1698,28 +1704,28 @@ fn test_unset_inside_try_leaves_the_pre_feature_error() {
     );
 }
 
-/// A retype assignment whose RHS can THROW is no exception to the depth-0 gate.
+/// A retype assignment whose RHS can THROW is a WIDENING, not a re-bind, and that is what makes
+/// it safe inside a `try`.
 ///
-/// The straight-line retype requires conditional depth 0 (`merge_local_assignment_type`'s sibling
-/// of `Checker::local_binding_is_killable`), and `try` raises depth for its whole body exactly
-/// like an `if` with no `else`. Probed via `--check`: `$s = "heap" . $argc; try { $s =
-/// mightThrow($argc); } catch (...) {}`, where `mightThrow` returns `int`, stays the ordinary
-/// depth-gated hard error — whether the RHS can throw changes nothing the checker looks at. This
-/// LITERAL shape never reaches lowering, so it is pinned here rather than as a codegen e2e
-/// fixture.
+/// It used to be refused outright, because the straight-line re-bind requires conditional depth 0
+/// and `try` raises depth for its whole body exactly like an `if` with no `else`. The widening arm
+/// has no depth condition, so the shape compiles — and the ownership risk the refusal was standing
+/// in for is not reintroduced. A RE-BIND releases the old slot value before the store
+/// (`rebind_local_for_retype`), so an RHS that throws after that release would unwind past a slot
+/// holding freed memory; a widening releases nothing of its own and the RHS is fully lowered
+/// BEFORE `store_local` touches the slot, so an unwind leaves the old value intact. `php -n`
+/// agrees: the caught path still prints the untouched `heap1`, which
+/// `codegen::locals_retype::test_widening_inside_a_try_whose_rhs_throws_keeps_the_old_value` pins
+/// end to end.
 ///
-/// This is not the last word on the underlying ownership risk, though: moving the depth-0 retype
-/// into a CALLEE and the `try` into the CALLER reaches a shape that DOES compile, because the
-/// retype is no longer nested inside the `try` at all — only the CALL that can throw is. See
-/// `codegen::locals_retype::test_retype_whose_throwing_rhs_unwinds_out_of_the_callee_frame` for
-/// the e2e fixture that pins the unwind-across-a-pending-release case this rejection alone would
-/// otherwise leave uncovered.
+/// The unwind-across-a-pending-release case the old rejection left uncovered stays covered by
+/// `codegen::locals_retype::test_retype_whose_throwing_rhs_unwinds_out_of_the_callee_frame`, where
+/// the depth-0 re-bind sits in a CALLEE and only the CALL is inside the caller's `try`.
 #[test]
-fn test_retype_inside_try_with_throwing_rhs_stays_the_depth_gated_error() {
-    expect_error(
-        "<?php function mightThrow(int $n): int { if ($n === 1) { throw new Exception(\"boom\"); } return $n; } $s = \"heap\" . $argc; try { $s = mightThrow($argc); } catch (Exception $e) {} echo $s;",
-        "cannot reassign $s from string to int",
-    );
+fn test_retype_inside_try_with_throwing_rhs_is_widened_not_refused() {
+    let source = "<?php function mightThrow(int $n): int { if ($n === 1) { throw new Exception(\"boom\"); } return $n; } $s = \"heap\" . $argc; try { $s = mightThrow($argc); } catch (Exception $e) {} echo $s;";
+    expect_warning(source, "$s changes type from string to int");
+    expect_error_strict(source, "cannot reassign $s from string to int");
 }
 
 /// A NAMED by-reference argument (`f(x: $a)`) aliases `$a` exactly like the positional form.
@@ -1975,24 +1981,31 @@ fn test_storage_this_frame_does_not_own_is_never_widened() {
     }
 }
 
-/// The CURRENT conditional depth is the one kill condition the widening arm keeps.
+/// The CURRENT conditional depth is NOT a condition of the widening arm.
 ///
-/// Not because a widening needs the store to be proven to run — it does not — but because the
-/// lowering it degrades to is measurably wrong there. With the depth condition removed,
-/// `$i = strlen('ab'); if ($argc > 0) { $i = 'si'; } echo $i;` printed `0` where php prints `si`,
-/// and only when further code followed in the same body; a branch-divergent local needs the
-/// whole-frame boxed slot `mixed_storage_scan` hands out, not a join at one store. Until that scan
-/// can type such a value, these keep their loud error instead of becoming silently wrong output.
+/// A kill has to prove the store runs before it may abandon a slot; a widening proves nothing —
+/// it keeps the slot and lets `store_local` widen it, which is sound on the taken and the untaken
+/// path alike. `if (\is_string($extensions)) { $extensions = [$extensions]; }` is ordinary PHP and
+/// the single most common shape the hard error was rejecting.
+///
+/// It was gated for a while on the LOWERING being wrong, not on the checker: the widened frame
+/// slot is boxed, and a merge that restored an older, narrower fact made the read below the branch
+/// ask for a representation the slot no longer holds — `$i = \strlen('ab'); if ($argc > 0) { $i =
+/// 'si'; } echo $i;` printed `0` instead of `si`. That is fixed where it belongs, in
+/// `store_local`'s whole-frame boxed contract for a widened slot and in `join_arm_types`. Both
+/// fixtures below are byte-verified against `php -n` by
+/// `codegen::locals_retype::test_store_inside_a_branch_answers_like_php`.
 #[test]
-fn test_a_store_inside_a_branch_is_not_widened() {
-    expect_error(
-        "<?php function f(int $n): string { if ($n > 0) { $n = \"s\"; } return (string) $n; } echo f(1);",
-        "cannot reassign $n from int to string",
-    );
-    expect_error(
-        "<?php $i = \\strlen(\"ab\"); if ($argc > 0) { $i = \"si\"; } echo $i; $j = 1; echo $j;",
-        "cannot reassign $i from int to string",
-    );
+fn test_a_store_inside_a_branch_is_widened() {
+    let param =
+        "<?php function f(int $n): string { if ($n > 0) { $n = \"s\"; } return (string) $n; } echo f(1);";
+    expect_warning(param, "$n changes type from int to string");
+    expect_error_strict(param, "cannot reassign $n from int to string");
+
+    let local =
+        "<?php $i = \\strlen(\"ab\"); if ($argc > 0) { $i = \"si\"; } echo $i; $j = 1; echo $j;";
+    expect_warning(local, "$i changes type from int to string");
+    expect_error_strict(local, "cannot reassign $i from int to string");
 }
 
 /// The `unset()` kill is MODE-INDEPENDENT: `--strict-locals` only tightens the two permissive
@@ -2026,12 +2039,31 @@ fn test_unset_then_assign_has_no_warning() {
     expect_no_warning("<?php $a = 0; unset($a); $a = \"ciao\";", "changes type");
 }
 
-/// A conditional incompatible reassignment is not kill/rebind-eligible. The `$a++`
-/// write also blocks Task 6's mixed-storage marking, so this fixture stays an error
-/// through the whole plan (a plain conditional retype becomes legal in Task 6).
+/// A conditional incompatible reassignment is not kill/rebind-eligible, and the `$a++` write
+/// blocks the mixed-storage marking as well — so what is left is the WIDENING arm, and that is
+/// what this fixture takes.
+///
+/// Neither of the two decisions this test was written to pin has changed: no binding is re-bound
+/// (nothing is recorded in `local_retype_sites`) and the name is not marked (no "boxed mixed
+/// storage" warning). Only the fallback did — from a hard error to the storage widening this
+/// compiler used before precise re-binds existed. `--strict-locals` still refuses it.
 #[test]
-fn test_conditional_retype_still_errors() {
-    expect_error("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;", "cannot reassign");
+fn test_conditional_retype_is_widened_not_rebound_or_marked() {
+    let source = "<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;";
+    expect_warning(source, "$a changes type from int to string");
+    expect_no_warning(source, "boxed mixed storage");
+    expect_error_strict(source, "cannot reassign");
+    let result = check_source_full(source).expect("the widened fixture must type-check");
+    assert!(
+        result.local_retype_sites.is_empty(),
+        "a widening records no re-bind site: {:?}",
+        result.local_retype_sites
+    );
+    assert!(
+        result.mixed_storage_store_sites.is_empty(),
+        "the ++ write must still block marking: {:?}",
+        result.mixed_storage_store_sites
+    );
 }
 
 /// Interplay: a conditional unset leaves the binding alive, so a later depth-0
@@ -2526,10 +2558,22 @@ fn test_ref_aliased_never_mixed() {
     expect_error("<?php $a = 0; $r =& $a; if ($argc > 1) { $a = 1; } else { $a = \"x\"; }", "cannot reassign");
 }
 
-/// A non-Assign write (++) blocks marking: the divergent assignment stays an error.
+/// A non-Assign write (++) blocks marking: the divergent assignment gets no boxed-storage
+/// decision, and falls back to the plain widening instead.
+///
+/// The subject of this test is the MARKING, and it is asserted directly here rather than through
+/// the hard error it used to imply: no "boxed mixed storage" warning, no store sites recorded.
 #[test]
 fn test_incdec_write_blocks_marking() {
-    expect_error("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;", "cannot reassign");
+    let source = "<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;";
+    expect_no_warning(source, "boxed mixed storage");
+    let result = check_source_full(source).expect("the widened fixture must type-check");
+    assert!(
+        result.mixed_storage_store_sites.is_empty(),
+        "a ++ write must leave the name unmarked: {:?}",
+        result.mixed_storage_store_sites
+    );
+    expect_error_strict(source, "cannot reassign");
 }
 
 /// unset anywhere in the body blocks marking: the name stays unmarked, so the
@@ -3001,12 +3045,21 @@ fn test_concatenation_of_inexactly_typed_operands_is_still_exact() {
 
 /// A concatenation still only counts as evidence, never as a licence: a write the scan cannot
 /// model reaching the same name disqualifies it exactly as before.
+///
+/// "Disqualified" is asserted as what it is — no mark, no store sites — instead of through the
+/// hard error it used to imply. The store itself is now the ordinary depth-independent widening,
+/// and `--strict-locals` still refuses it.
 #[test]
 fn test_concatenation_evidence_does_not_survive_a_disqualifying_write() {
-    expect_error(
-        "<?php $a = 0; if ($argc > 1) { $a = \"s\" . $argc; } $a++;",
-        "cannot reassign",
+    let source = "<?php $a = 0; if ($argc > 1) { $a = \"s\" . $argc; } $a++;";
+    expect_no_warning(source, "boxed mixed storage");
+    let result = check_source_full(source).expect("the widened fixture must type-check");
+    assert!(
+        result.mixed_storage_store_sites.is_empty(),
+        "the ++ write must disqualify the concatenation evidence: {:?}",
+        result.mixed_storage_store_sites
     );
+    expect_error_strict(source, "cannot reassign");
 }
 
 /// Marking verification for every end-to-end fixture in `codegen::locals_retype` that claims the

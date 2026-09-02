@@ -2326,33 +2326,41 @@ fn test_strict_locals_rejects_both_include_forms() {
     }
 }
 
-/// The `unset` KILL is the shape `require_once` genuinely takes away: it is depth-gated like the
-/// straight-line retype, and nothing else picks the pair up, so the program that compiles under a
-/// plain `require` is a hard `cannot reassign` under `require_once`.
+/// The `unset` KILL is the shape `require_once` genuinely takes away: it is depth-gated, and the
+/// guarded include raises the depth of every statement it wraps.
+///
+/// What the guard no longer changes is whether the program COMPILES. The store that follows the
+/// ineligible kill is picked up by the depth-independent widening arm, so both include forms run
+/// and print what `php -n` prints (`|s`); the difference is confined to the decision, which is
+/// asserted directly — a plain `require` records a re-bind for `$q`, a `require_once` records
+/// none and warns about a widening instead.
 #[test]
 fn test_require_once_makes_a_top_level_unset_kill_ineligible() {
     const KILL_LIB: &str = "<?php\n$q = 1;\nunset($q);\n$q = \"s\";\necho \"|\", $q;\n";
-    let error = compile_files_error_message(
+    let warnings = check_files_diagnostics(
         &[
             ("main.php", "<?php\nrequire_once 'lib.php';\n"),
             ("lib.php", KILL_LIB),
         ],
         "main.php",
+        false,
     )
-    .expect("a guarded top-level unset must not be kill-eligible");
+    .expect("the guarded include must still type-check");
     assert!(
-        error.contains("cannot reassign $q from int to string"),
-        "expected the pre-feature error, got: {error}"
+        warnings
+            .iter()
+            .any(|warning| warning.contains("$q changes type from int to string")),
+        "a guarded top-level unset is not kill-eligible, so the store widens: {warnings:?}"
     );
 
-    let out = compile_and_run_files(
-        &[
-            ("main.php", "<?php\nrequire 'lib.php';\n"),
-            ("lib.php", KILL_LIB),
-        ],
-        "main.php",
-    );
-    assert_eq!(out, "|s");
+    for form in ["require_once", "require"] {
+        let main = format!("<?php\n{form} 'lib.php';\n");
+        let out = compile_and_run_files(
+            &[("main.php", main.as_str()), ("lib.php", KILL_LIB)],
+            "main.php",
+        );
+        assert_eq!(out, "|s", "{form} must run like php -n");
+    }
 }
 
 /// A `switch` arm is a conditional branch like an `if` arm, so a local assigned incompatible
@@ -2756,4 +2764,219 @@ fn test_reads_above_a_widening_store_still_answer() {
         "<?php function f(string $s): string { $kept = $s . \"!\"; $s = \\strlen($s); return $kept . \"/\" . $s; } echo f(\"ab\" . $argc);",
     );
     assert_eq!(out, "ab1!/3");
+}
+
+// ---------------------------------------------------------------------------
+// A store inside a BRANCH: the depth-independent widening arm, end to end.
+//
+// Every fixture below is byte-verified against `php -n` (argc == 1, which is what the harness
+// runs the compiled binary with). They exist because the checker's acceptance is only half the
+// answer: the store widens the local's frame slot to boxed storage, and a read below the branch
+// that still assumed the pre-branch representation printed `0` for a string. `store_local`'s
+// whole-frame boxed contract for a widened slot, `join_arm_types` and the `while` exit's
+// re-assertion are what these pin.
+// ---------------------------------------------------------------------------
+
+/// The two shapes `error_tests::type_system::test_a_store_inside_a_branch_is_widened` accepts,
+/// run for their VALUES.
+///
+/// `f(1)` takes the branch and returns the string; `f(0)` does not and returns the parameter's
+/// own `int`, so one fixture covers both edges of the merge. The second source is the one that
+/// printed `I:0` before the join was fixed — the trailing `$j` is what stops the tail below the
+/// branch from being duplicated into the arms, which is the only reason the miscompile ever
+/// looked order-dependent.
+#[test]
+fn test_store_inside_a_branch_answers_like_php() {
+    let out = compile_and_run(
+        "<?php function f(int $n): string { if ($n > 0) { $n = \"s\"; } return (string) $n; } echo f(1), \"|\", f(0);",
+    );
+    assert_eq!(out, "s|0");
+
+    let out = compile_and_run(
+        "<?php $i = \\strlen(\"ab\"); if ($argc > 0) { $i = \"si\"; } echo $i; $j = 1; echo $j;",
+    );
+    assert_eq!(out, "si1");
+}
+
+/// The same store in the `else` arm, where the merge's stale fact came from the THEN arm instead.
+#[test]
+fn test_store_inside_an_else_arm_answers() {
+    let out = compile_and_run(
+        "<?php $e = \\strlen(\"ab\"); if ($argc > 5) { echo \"never\"; } else { $e = \"se\"; } echo $e, \"|\", \\gettype($e);",
+    );
+    assert_eq!(out, "se|string");
+}
+
+/// Nested branches: the inner merge widens, the outer one must not narrow the fact back.
+#[test]
+fn test_store_inside_a_nested_if_answers() {
+    let out = compile_and_run(
+        "<?php $n = \\strlen(\"abc\"); if ($argc > 0) { if ($argc < 5) { $n = \"sn\"; } } echo $n, \"|\", \\gettype($n);",
+    );
+    assert_eq!(out, "sn|string");
+}
+
+/// A `foreach` body, which has no type join of its own: the fact the widening store installs is
+/// what the read below the loop has to keep.
+#[test]
+fn test_store_inside_a_foreach_body_answers() {
+    let out = compile_and_run(
+        "<?php $f = \\strlen(\"abcd\"); foreach ([1, 2] as $x) { $f = \"sf\" . $x; } echo $f, \"|\", \\gettype($f);",
+    );
+    assert_eq!(out, "sf2|string");
+}
+
+/// A `while` body, whose exit deliberately restores the types as of the CONDITION — and so used
+/// to undo the widening the body performed, reading the boxed slot as `int` and printing `0`.
+#[test]
+fn test_store_inside_a_while_body_answers() {
+    let out = compile_and_run(
+        "<?php $b = \\strlen(\"ab\"); $k = 0; while ($k < 2) { $b = \"sb\" . $k; ++$k; } echo $b, \"|\", \\gettype($b);",
+    );
+    assert_eq!(out, "sb1|string");
+}
+
+/// The other edge of every loop: a body that never runs must leave the pre-loop value readable
+/// at its own type, not at the type the body would have stored.
+#[test]
+fn test_zero_trip_loops_keep_the_pre_loop_value() {
+    for (source, expected) in [
+        (
+            "<?php $a = \\strlen(\"ab\"); while ($argc > 5) { $a = \"sa\"; } echo $a, \"|\", \\gettype($a);",
+            "2|integer",
+        ),
+        (
+            "<?php $c = \\strlen(\"ab\"); for ($i = 0; $i < $argc - 5; ++$i) { $c = \"sc\"; } echo $c, \"|\", \\gettype($c);",
+            "2|integer",
+        ),
+        (
+            "<?php $e = \\strlen(\"ab\"); foreach ([] as $v) { $e = \"se\"; } echo $e, \"|\", \\gettype($e);",
+            "2|integer",
+        ),
+    ] {
+        assert_eq!(compile_and_run(source), expected, "for: {source}");
+    }
+}
+
+/// A `try` body and a `catch` body are branches too, and neither has a type join of its own.
+#[test]
+fn test_store_inside_a_try_or_catch_answers() {
+    let out = compile_and_run(
+        "<?php $t = \\strlen(\"ab\"); try { $t = \"st\"; } finally { echo \"f|\"; } echo $t, \"|\", \\gettype($t);",
+    );
+    assert_eq!(out, "f|st|string");
+
+    let out = compile_and_run(
+        "<?php $c = \\strlen(\"ab\"); try { throw new Exception(\"x\"); } catch (Throwable $e) { $c = \"sc\"; } echo $c, \"|\", \\gettype($c);",
+    );
+    assert_eq!(out, "sc|string");
+}
+
+/// A widening whose RHS THROWS: the store never runs, so the slot still holds the old value and
+/// the `catch` must read it back at the type it actually has.
+///
+/// This is the shape the depth gate used to refuse outright. A re-bind would have released the
+/// old value before the RHS ran; a widening releases nothing, and `store_local` is reached only
+/// after the RHS is fully lowered — so the unwind leaves `heap1` intact, exactly as `php -n`
+/// prints it.
+#[test]
+fn test_widening_inside_a_try_whose_rhs_throws_keeps_the_old_value() {
+    let out = compile_and_run(
+        "<?php function mightThrow(int $n): int { if ($n === 2) { throw new Exception(\"boom\"); } return $n; } $t = \"heap\" . $argc; try { $t = mightThrow($argc + 1); } catch (Exception $e) { echo \"caught|\"; } echo $t, \"|\", \\gettype($t);",
+    );
+    assert_eq!(out, "caught|heap1|string");
+
+    let out = compile_and_run(
+        "<?php function mightThrow(int $n): int { if ($n === 2) { throw new Exception(\"boom\"); } return $n; } $s = \"heap\" . $argc; try { $s = mightThrow($argc); } catch (Exception $e) { echo \"caught|\"; } echo $s, \"|\", \\gettype($s);",
+    );
+    assert_eq!(out, "1|integer");
+}
+
+/// A `switch` arm, whose join already went through the frame storage contract — the fixture is
+/// here so the whole family is covered by one file.
+#[test]
+fn test_store_inside_a_switch_arm_answers() {
+    let out = compile_and_run(
+        "<?php $s = \\strlen(\"ab\"); switch ($argc) { case 1: $s = \"ss\"; break; default: break; } echo $s, \"|\", \\gettype($s);",
+    );
+    assert_eq!(out, "ss|string");
+}
+
+/// A ternary arm and a short-circuit arm: expression-level branches, which have no local-type
+/// join at all, so the widening store's own fact is what carries past them.
+#[test]
+fn test_store_inside_an_expression_branch_answers() {
+    let out = compile_and_run(
+        "<?php $g = \\strlen(\"ab\"); $h = $argc > 5 ? ($g = \"sg\") : \"other\"; echo $g, \"|\", \\gettype($g), \"|\", $h;",
+    );
+    assert_eq!(out, "2|integer|other");
+
+    let out = compile_and_run(
+        "<?php $p = \\strlen(\"ab\"); $q = ($argc > 5) && ($p = \"sp\"); echo $p, \"|\", \\gettype($p);",
+    );
+    assert_eq!(out, "2|integer");
+}
+
+/// The order-dependent pair, in BOTH orders.
+///
+/// `w6` (a widening with a second one below it) printed `I:0` while `w9` — the same two widenings
+/// swapped — printed both correctly, which is what made the bug look like an ordering problem.
+/// It was not: the second construct merely stopped the tail below the first branch from being
+/// duplicated into its arms, where each copy carried its own arm's type. Both orders now answer.
+#[test]
+fn test_the_order_dependent_widening_pair_answers_in_both_orders() {
+    let out = compile_and_run(
+        "<?php $i = \\strlen(\"ab\"); if ($argc > 0) { $i = \"si\"; } echo \"I:\", $i; $j = \"j\" . $argc; if ($argc > 0) { $j = \\strlen($j); } echo \"|J:\", $j;",
+    );
+    assert_eq!(out, "I:si|J:2");
+
+    let out = compile_and_run(
+        "<?php $j = \"j\" . $argc; if ($argc > 0) { $j = \\strlen($j); } echo \"J:\", $j; $i = \\strlen(\"ab\"); if ($argc > 0) { $i = \"si\"; } echo \"|I:\", $i;",
+    );
+    assert_eq!(out, "J:2|I:si");
+}
+
+/// The shape this whole change exists for: Symfony's `Filesystem\Path::getExtension`, verbatim
+/// in structure — a guard that retypes its own subject from `string` to `array`, followed by a
+/// read of the widened local.
+///
+/// Both call sites matter. `ext("php")` takes the branch and counts the wrapped array;
+/// `ext(["a", "b"])` does not and counts the argument it was given, so the same `count($x)` is
+/// reached with a boxed string-turned-array on one path and a plain array on the other.
+#[test]
+fn test_is_string_guard_wrapping_its_own_subject_answers() {
+    let out = compile_and_run(
+        "<?php function ext($x): int { if (\\is_string($x)) { $x = [$x]; } return \\count($x); } echo ext(\"php\"), \"|\", ext([\"a\", \"b\"]);",
+    );
+    assert_eq!(out, "1|2");
+}
+
+/// An `unset` inside a `try` records no kill, so the binding survives and the store inside the
+/// branch below it is a widening. Pins the value half of
+/// `error_tests::type_system::test_unset_inside_try_leaves_the_pre_feature_error`, whose own
+/// fixture leaves the branch untaken.
+#[test]
+fn test_store_inside_a_branch_after_a_try_unset_answers() {
+    let out = compile_and_run(
+        "<?php $a = 1; try { unset($a); } finally { echo \"f|\"; } if ($argc > 0) { $a = \"s\"; } echo $a, \"|\", \\gettype($a);",
+    );
+    assert_eq!(out, "f|s|string");
+}
+
+/// A `++` after the branch, which disqualifies the mixed-storage marking and so leaves the store
+/// on the widening arm — both when the branch is skipped and when it is taken.
+///
+/// The taken half is the one that reads the boxed slot back as a string and increments it as PHP
+/// does (`"y"` -> `"z"`). `php -n` also emits `Deprecated: Increment on non-numeric string` there,
+/// which this compiler does not yet raise; that diagnostic gap is unrelated to the local's storage
+/// and the VALUE is what this fixture pins.
+#[test]
+fn test_incdec_after_a_widening_branch_answers() {
+    let out =
+        compile_and_run("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++; echo $a, \"|\", \\gettype($a);");
+    assert_eq!(out, "1|integer");
+
+    let out =
+        compile_and_run("<?php $b = 0; if ($argc > 0) { $b = \"y\"; } $b++; echo $b, \"|\", \\gettype($b);");
+    assert_eq!(out, "z|string");
 }

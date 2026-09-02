@@ -520,7 +520,7 @@ impl Checker {
     /// question — may the old frame slot be ABANDONED, so the store mints a fresh one. Widening
     /// does not abandon anything: the slot stays and `store_local` joins its storage type.
     ///
-    /// TWO of the kill's conditions are dropped, and only those two:
+    /// THREE of the kill's conditions are dropped, and only those three:
     ///
     /// - the BINDING's conditional depth, which the kill reads as `Some(0)`. That test answers
     ///   "bound unconditionally by this body" and rejects two different things at once: a binding
@@ -535,24 +535,29 @@ impl Checker {
     ///   does not;
     /// - the typed-local set, which at this point holds type-hinted PARAMETERS (a declared LOCAL
     ///   returns from the `declared_local_types` arm above before reaching here). A parameter's
-    ///   type hint is a call-boundary contract, not a storage contract for the rest of the body.
+    ///   type hint is a call-boundary contract, not a storage contract for the rest of the body;
+    /// - the CURRENT conditional depth, which the kill needs because a kill must PROVE the store
+    ///   runs before it may abandon a slot, and a widening proves nothing: it keeps the slot and
+    ///   lets `store_local` widen it, which is sound whether or not the branch is taken.
+    ///   `if (\is_string($extensions)) { $extensions = [$extensions]; }` — Symfony's
+    ///   `Filesystem\Path::getExtension` — is the shape, and it is the single most common one in
+    ///   real code: on the stock fixture the depth condition alone accounted for 208 of the 234
+    ///   `cannot reassign` errors.
     ///
-    /// The CURRENT conditional depth is deliberately NOT dropped, even though widening needs no
-    /// proof that the store runs. Measured: with the depth condition removed,
-    /// `$i = \strlen('ab'); if ($argc > 0) { $i = 'si'; } echo $i;` printed `0` where php prints
-    /// `si`, and it did so only when a SECOND widening decision appeared later in the same body —
-    /// swapping the two made both correct. A store inside a branch needs the whole-frame boxed slot
-    /// `mixed_storage_scan` hands out, not a join at one store; until that scan can type the
-    /// divergent value (its `has_exact_syntactic_type` covers literals, casts and `.` only), the
-    /// branch shapes keep their loud error rather than becoming silently wrong output.
+    ///   Dropping it was gated on lowering, not on the checker. A store inside a branch widens the
+    ///   local's FRAME slot, and until `join_arm_types` learned to join the merge through that
+    ///   widened slot, the code below the branch was lowered against the untaken arm's type:
+    ///   `$i = \strlen('ab'); if ($argc > 0) { $i = 'si'; } echo $i;` printed `0` (an `int` load of
+    ///   a boxed slot holding a string) instead of `si`. That is fixed in the `if` join itself,
+    ///   where a switch's edges have always been joined; measured against `php -n`, byte-identical.
     ///
     /// Everything else the kill demands is kept, plus the program-global veto the kill applies
     /// separately: a by-reference parameter, a `=&` alias, a `global` write through a cell another
     /// body owns and a `static` whose storage outlives the call all stay hard errors rather than
-    /// becoming a silent widening of storage this frame does not own.
+    /// becoming a silent widening of storage this frame does not own. `--strict-locals` still
+    /// rejects every one of these shapes, at every depth.
     pub(crate) fn local_binding_is_widenable(&self, name: &str) -> bool {
         !self.body_contains_eval
-            && self.local_conditional_depth == 0
             && !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)
             && !self.active_ref_params.contains(name)

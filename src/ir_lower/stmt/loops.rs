@@ -55,6 +55,12 @@ pub(super) fn lower_while(
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.restore_local_types(condition_exit_types);
+    // …but a store in the BODY that widened a slot to boxed storage is not a body-only narrowing
+    // to be undone: the exit is reached from iterations where that store ran, so the restored
+    // narrow fact would be a claim about the slot's content that no longer holds on every incoming
+    // edge. `$b = \strlen('ab'); $k = 0; while ($k < 2) { $b = 'sb' . $k; ++$k; } echo $b;` read
+    // the boxed slot as `int` and printed `0` where PHP prints `sb1`.
+    ctx.reassert_widened_local_storage_types();
     ctx.restore_initialized_slots(condition_exit_initialized);
     ctx.clear_static_callable_locals();
 }

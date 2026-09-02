@@ -127,6 +127,7 @@ pub(crate) struct LoweringSnapshot {
     ref_bound_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     foreach_int_key_locals: HashSet<String>,
+    storage_widened_locals: HashSet<String>,
     array_conversions: HashMap<String, PhpType>,
     speculating: bool,
     closure_count: usize,
@@ -305,6 +306,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// still promoting for keys that may be strings (generic `Array(Mixed)`,
     /// `AssocArray`, `Mixed`, `Union` sources).
     foreach_int_key_locals: HashSet<String>,
+    /// Locals whose frame slot a store WIDENED to a boxed representation, so the slot holds
+    /// several runtime shapes for the REST of the frame and every later read of the name has to
+    /// be a boxed read. Filled by `store_local_impl`; see the comment at the widening there.
+    storage_widened_locals: HashSet<String>,
     /// Joined storage representation conversions observed while lowering this function.
     array_conversions: HashMap<String, PhpType>,
     /// Whether the current statement lowering is a disposable discovery pass.
@@ -447,6 +452,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_bound_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
+            storage_widened_locals: HashSet::new(),
             array_conversions: HashMap::new(),
             speculating: false,
             return_type,
@@ -497,6 +503,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_bound_locals: self.ref_bound_locals.clone(),
             ref_cell_owner_locals: self.ref_cell_owner_locals.clone(),
             foreach_int_key_locals: self.foreach_int_key_locals.clone(),
+            storage_widened_locals: self.storage_widened_locals.clone(),
             array_conversions: self.array_conversions.clone(),
             speculating: self.speculating,
             closure_count: self.closures.len(),
@@ -536,6 +543,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_bound_locals = snapshot.ref_bound_locals;
         self.ref_cell_owner_locals = snapshot.ref_cell_owner_locals;
         self.foreach_int_key_locals = snapshot.foreach_int_key_locals;
+        self.storage_widened_locals = snapshot.storage_widened_locals;
         self.array_conversions = snapshot.array_conversions;
         self.speculating = snapshot.speculating;
         self.closures.truncate(snapshot.closure_count);
@@ -790,6 +798,29 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Updates only the flow-sensitive PHP type fact for a local.
     pub(crate) fn set_local_logical_type(&mut self, name: &str, ty: PhpType) {
         self.local_types.insert(name.to_string(), ty);
+    }
+
+    /// Re-asserts the boxed frame-storage type of every local a store has WIDENED, after a
+    /// snapshot restore put an older, narrower fact back.
+    ///
+    /// Only one construct needs it. A `while` exit deliberately restores the types as of the
+    /// CONDITION rather than the body's, so a body-only narrowing does not leak past a false
+    /// condition — but that restore also undoes a widening the body performed, and the loop exit
+    /// is reached from iterations where the body DID run. `$b = \strlen('ab'); while (…) { $b =
+    /// 'sb'; } echo $b;` read the slot as `int` and printed `0`. Every other construct keeps the
+    /// fact the widening store installed and needs nothing here.
+    pub(crate) fn reassert_widened_local_storage_types(&mut self) {
+        let widened = self
+            .storage_widened_locals
+            .iter()
+            .filter_map(|name| {
+                let slot = *self.local_slots.get(name)?;
+                Some((name.clone(), self.builder.local_php_type(slot)))
+            })
+            .collect::<Vec<(String, PhpType)>>();
+        for (name, ty) in widened {
+            self.set_local_logical_type(&name, ty);
+        }
     }
 
     /// Returns `true` if a local slot has already been declared for `name`.
@@ -1740,7 +1771,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             php_type
         };
-        let local_type_after_store = if !preserve_storage_type
+        let mut local_type_after_store = if !preserve_storage_type
             && matches!(php_type.codegen_repr(), PhpType::Void)
         {
             // Preserve the runtime distinction between a concrete value and an ordinary null
@@ -1750,6 +1781,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             php_type.clone()
         };
         let slot = self.declare_local(name, php_type.clone());
+        let storage_before_store = self.builder.local_php_type(slot).codegen_repr();
         // Backend frame layout uses the final widened slot type for every load
         // and store, so cleanup loads must be typed after this store's widening.
         // For ref-bound locals, keep the existing slot type to avoid widening
@@ -1767,6 +1799,55 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             php_type.clone()
         };
         self.builder.widen_local_storage_type(slot, widen_type);
+        // A store that WIDENED an existing slot to a different runtime representation makes the
+        // slot boxed for the rest of the frame, and the name's logical type has to say so from
+        // here on.
+        //
+        // `$i = \strlen('ab'); if (…) { $i = 'si'; } echo $i;` is the shape. The store inside the
+        // branch widens `$i`'s slot `int` -> boxed `Mixed`; leaving its LOGICAL type at the value's
+        // own `string` (or, past a merge that restores an older snapshot, back at `int`) makes a
+        // later read ask for a representation the slot no longer holds unconditionally, and
+        // `__rt_mixed_cast_int` on the boxed `"si"` printed `0` where PHP prints `si`. The same
+        // stale fact leaked out of every construct that has no type join of its own: a `try` whose
+        // callee threw before the store, a zero-trip `for`/`foreach`, a ternary or `&&` arm.
+        //
+        // Recording the WIDENING itself, rather than patching each construct's exit, is what makes
+        // the answer construct-independent: from this store onwards `$i` reads as the slot's
+        // storage type wherever it is read, exactly like a name the checker's `mixed_storage_scan`
+        // marked (whose contract is the same boxed slot, forced from its FIRST store) and like
+        // `string_incdec_locals`. Narrowing back to a concrete value is still available where it is
+        // sound — a guard's `is_string($i)` unboxes the LOADED value inside the branch, which is
+        // where the runtime tag check belongs.
+        //
+        // Only a widening of an ALREADY DECLARED slot counts. The slot a store mints is at its own
+        // value's type by construction and claims nothing about another path; and `unset`
+        // (`preserve_storage_type`), a ref-bound name (its home is the cell) and a global-backed
+        // name (`store_local` types it from the symbol) all keep the representations they have.
+        //
+        // And only a widening INTO a boxed representation counts. That is the one that makes the
+        // slot hold several runtime shapes at once, so that the shape a read must assume stops
+        // being a property of the last store. `Array(int)` -> `Array(string)` is not it: the slot
+        // still holds one container, and reconciling those element types is the
+        // `ArrayToMixed`/`ArrayToHash` machinery's job (`repr_fixpoint`, `arm_conversions`), which
+        // this must not pre-empt. `TaggedScalar` is not it either — a nullable scalar's tag word
+        // is the nullable lowering's own contract.
+        let widened_storage = self.builder.local_php_type(slot);
+        if previous_slot.is_some()
+            && !preserve_storage_type
+            && !is_ref_bound
+            && !uses_global
+            && previous_kind == LocalKind::PhpLocal
+            && widened_storage.codegen_repr() != storage_before_store
+            && matches!(
+                widened_storage.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            )
+        {
+            self.storage_widened_locals.insert(name.to_string());
+        }
+        if self.storage_widened_locals.contains(name) && !preserve_storage_type && !is_ref_bound {
+            local_type_after_store = self.builder.local_php_type(slot);
+        }
         let source = value;
         let source_is_owning_temporary = self.value_is_owning_temporary(value);
         let transfer_catch_source_to_store = matches!(
