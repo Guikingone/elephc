@@ -1,6 +1,6 @@
 ---
 title: "get_extension_funcs()"
-description: "Returns functions exported by a loaded extension."
+description: "Returns functions exported by a loaded extension. Weak calls coerce int, float, and bool to string and deprecate null; strict calls accept only string, while arrays, resources, and non-Stringable objects throw TypeError. Extension names are case-insensitive."
 sidebar:
   order: 328
 ---
@@ -11,7 +11,7 @@ sidebar:
 function get_extension_funcs(string $extension): mixed
 ```
 
-Returns functions exported by a loaded extension.
+Returns functions exported by a loaded extension. Weak calls coerce int, float, and bool to string and deprecate null; strict calls accept only string, while arrays, resources, and non-Stringable objects throw TypeError. Extension names are case-insensitive.
 
 **Parameters**:
 - `$extension` (`string`)

@@ -401,7 +401,13 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
     if eval_method_parameter_type_accepts_exact(param_type, value, context, values)? {
         return Ok(value);
     }
+    if eval_method_parameter_accepts_int_to_float(param_type, value, values)? {
+        return values.cast_float(value);
+    }
     if param_type.is_intersection() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if context.strict_types() {
         return Err(EvalStatus::RuntimeFatal);
     }
     for variant in param_type.variants() {
@@ -475,6 +481,21 @@ fn eval_method_parameter_variant_accepts_exact(
         EvalParameterTypeVariant::Object => Ok(tag == EVAL_TAG_OBJECT),
         EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
     }
+}
+
+/// Returns whether PHP's strict-safe `int` to `float` widening applies to this parameter.
+fn eval_method_parameter_accepts_int_to_float(
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_INT || param_type.is_intersection() {
+        return Ok(false);
+    }
+    Ok(param_type
+        .variants()
+        .iter()
+        .any(|variant| matches!(variant, EvalParameterTypeVariant::Float)))
 }
 
 /// Returns whether an object value satisfies one class/interface parameter target.

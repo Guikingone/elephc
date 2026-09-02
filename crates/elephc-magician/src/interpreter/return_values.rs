@@ -8,7 +8,7 @@
 //!
 //! Key details:
 //! - `self` resolves to the declaring owner, while `static` resolves to the called class.
-//! - Return values use weak scalar coercions like parameter binding, with dedicated handling for `void` and `never`.
+//! - Return coercion follows the declaring callable's lexical strictness, unlike caller-site parameter binding.
 
 use super::*;
 
@@ -17,6 +17,7 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
     return_type: Option<&EvalParameterType>,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
+    strict_types: bool,
     control: EvalControl,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -28,6 +29,7 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
             return_type,
             return_owner,
             called_class_name,
+            strict_types,
             result,
             context,
             values,
@@ -66,6 +68,7 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
         return_type,
         return_owner,
         called_class_name,
+        context.strict_types(),
         value,
         context,
         values,
@@ -105,6 +108,7 @@ fn eval_declared_explicit_return_value(
     return_type: Option<&EvalParameterType>,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
+    strict_types: bool,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -121,6 +125,7 @@ fn eval_declared_explicit_return_value(
         return_type,
         return_owner,
         called_class_name,
+        strict_types,
         value,
         context,
         values,
@@ -132,6 +137,7 @@ fn eval_declared_return_value(
     return_type: &EvalParameterType,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
+    strict_types: bool,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -146,7 +152,13 @@ fn eval_declared_return_value(
     )? {
         return Ok(value);
     }
+    if eval_declared_return_accepts_int_to_float(return_type, value, values)? {
+        return values.cast_float(value);
+    }
     if return_type.is_intersection() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if strict_types {
         return Err(EvalStatus::RuntimeFatal);
     }
     for variant in return_type.variants() {
@@ -262,6 +274,21 @@ fn eval_declared_return_variant_accepts_exact(
         EvalParameterTypeVariant::Object => Ok(tag == EVAL_TAG_OBJECT),
         EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
     }
+}
+
+/// Returns whether PHP's strict-safe `int` to `float` widening applies to this return type.
+fn eval_declared_return_accepts_int_to_float(
+    return_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_INT || return_type.is_intersection() {
+        return Ok(false);
+    }
+    Ok(return_type
+        .variants()
+        .iter()
+        .any(|variant| matches!(variant, EvalParameterTypeVariant::Float)))
 }
 
 /// Returns whether an object value satisfies one class-like declared return target.

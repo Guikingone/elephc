@@ -1,9 +1,9 @@
 ---
-title: "DateTime php-src Compliance Spec v4.3"
+title: "DateTime php-src Compliance Spec v4.4"
 description: "Candidat ext/date corrigé après audit statique contre php-src 8.5.10-dev."
 ---
 
-# DateTime php-src Compliance Spec v4.3
+# DateTime php-src Compliance Spec v4.4
 
 ## Référence normative
 
@@ -114,11 +114,12 @@ suivent php-src, y compris le type concret rejeté dans les `TypeError` de `add(
 
 Magician conserve la directive de fichier `declare(strict_types=0|1)` dans son EvalIR et retient ce
 mode lexical sur les fonctions, closures et méthodes de classes/traits/enums déclarées par le
-fragment. Les appels à `get_extension_funcs()` écrits dans leurs corps appliquent donc le même
-binding scalaire strict ou coercitif que PHP : un corps strict rejette `int`, `float`, `bool`,
-`null`, ressources et objets, même lorsqu'il est invoqué depuis un fragment faible, et inversement.
-La coercition des arguments transmis *à* un callable reste celle de son site appelant, comme dans
-php-src.
+fragment. Les appels à `get_extension_funcs()` écrits dans leurs corps et la validation de leurs
+retours appliquent donc le même binding scalaire strict ou coercitif que PHP : un corps strict
+rejette `int`, `float`, `bool`, `null`, ressources et objets, même lorsqu'il est invoqué depuis un
+fragment faible, et inversement. La coercition des arguments transmis *à* un callable reste celle
+de son site appelant, tandis que le retour reste celle du callable qui l'a déclaré; l'élargissement
+PHP `int` vers `float` est conservé dans les deux modes.
 
 ### Reflection, sérialisation et debug
 
@@ -190,11 +191,18 @@ lieu du `int` php-src, et l'absence initiale de `strict_types` dans Magician. Un
 ultérieure a identifié F1 : le premier correctif ne conservait la stricte compilation que dans
 l'état ambiant du programme, perdant le mode lexical des callables retardés. La correction F1
 retient ce mode sur chaque `EvalFunction` et `EvalClassMethod`, le propage aux closures et aux
-méthodes importées de traits, ne l'active que pendant l'exécution du corps, puis restaure le mode
-appelant sur tous les retours et exceptions. C'est conforme à la règle de portée lexicale de
+méthodes importées de traits. F2 a ensuite établi que les paramètres et retours typés devaient
+également suivre les deux côtés distincts de la règle Zend : les paramètres observent le site
+appelant, les retours le callable qui contient le `return`. La correction active donc le mode
+enregistré pour le contrôle de retour, garde le mode appelant pendant le binding, refuse les
+coercitions scalaires interdites en mode strict et conserve uniquement l'élargissement `int` vers
+`float`. La documentation générée de `get_extension_funcs()` vient désormais des données validées
+du contrat/générateur plutôt que de Markdown édité. C'est conforme à la règle de portée lexicale de
 [la documentation PHP](https://www.php.net/manual/en/language.types.declarations.php#language.types.declarations.strict)
 et au flag d'op-array propagé par
 [`zend_compile_func_decl()`](https://github.com/php/php-src/blob/47b563cbb856ec19155aacc3246931dfacbebd21/Zend/zend_compile.c#L7329-L7368).
+La distinction explicite entre le flag argument et le flag retour est définie par
+[`ZEND_ARG_USES_STRICT_TYPES` et `ZEND_RET_USES_STRICT_TYPES`](https://github.com/php/php-src/blob/47b563cbb856ec19155aacc3246931dfacbebd21/Zend/zend_compile.h#L627-L639).
 Cette correction invalide les locks précédents et impose une nouvelle revue statique complète avant
 toute exécution de parité.
 

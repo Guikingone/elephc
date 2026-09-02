@@ -16,6 +16,9 @@ sidebar:
 
 ### Lowering notes
 
+- Uses `lower_get_extension_funcs_args` and the direct-Rust-AST helper in `src/get_extension_funcs_prelude.rs` for PHP-compatible string binding.
+- Weak calls coerce scalar values and deprecate null; strict calls reject every non-string, while arrays, resources, and non-Stringable objects throw catchable TypeError values.
+- The production helper never embeds PHP source or routes binding through the PHP parser.
 - Uses the `runtime_call` strategy from the single-source builtin descriptor.
 - Emits the typed EIR target `runtime.get_extension_funcs` through `BuiltinLoweringContext`.
 - The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.

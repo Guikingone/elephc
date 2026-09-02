@@ -260,6 +260,114 @@ return 3;"#,
     assert_eq!(values.get(result), FakeValue::Int(3));
 }
 
+/// Verifies PHP uses the caller mode for parameters and declaration mode for returns.
+#[test]
+fn execute_program_scopes_callable_scalar_coercion_like_php() {
+    let strict_definitions = parse_fragment(
+        br#"declare(strict_types=1);
+class StrictTypeScope {
+    public static function parameter(int $value): int { return $value; }
+    public static function invalidReturn(): int { return "12"; }
+    public static function floatParameter(float $value): float { return $value; }
+    public static function floatReturn(): float { return 12; }
+}"#,
+    )
+    .expect("parse strict callable definitions");
+    let weak_parameter_call = parse_fragment(
+        br#"return StrictTypeScope::parameter("12");"#,
+    )
+    .expect("parse weak parameter call");
+    let strict_parameter_call = parse_fragment(
+        br#"declare(strict_types=1); return StrictTypeScope::parameter("12");"#,
+    )
+    .expect("parse strict parameter call");
+    let weak_return_call = parse_fragment(
+        br#"return StrictTypeScope::invalidReturn();"#,
+    )
+    .expect("parse weak caller of strict return");
+    let strict_float_call = parse_fragment(
+        br#"declare(strict_types=1);
+$parameter = StrictTypeScope::floatParameter(12);
+$returned = StrictTypeScope::floatReturn();
+return $parameter + $returned;"#,
+    )
+    .expect("parse strict int to float widening call");
+    let weak_definitions = parse_fragment(
+        br#"class WeakTypeScope {
+    public static function weakReturn(): int { return "12"; }
+}"#,
+    )
+    .expect("parse weak callable definitions");
+    let strict_weak_return_call = parse_fragment(
+        br#"declare(strict_types=1); return WeakTypeScope::weakReturn();"#,
+    )
+    .expect("parse strict caller of weak return");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program_with_context(
+        &mut context,
+        &strict_definitions,
+        &mut scope,
+        &mut values,
+    )
+    .expect("declare strict methods");
+    let weak_parameter = execute_program_with_context(
+        &mut context,
+        &weak_parameter_call,
+        &mut scope,
+        &mut values,
+    )
+    .expect("weak caller should coerce its int parameter");
+    assert_eq!(values.get(weak_parameter), FakeValue::Int(12));
+
+    assert_eq!(
+        execute_program_with_context(
+            &mut context,
+            &strict_parameter_call,
+            &mut scope,
+            &mut values,
+        )
+        .expect_err("strict caller must reject a string for an int parameter"),
+        EvalStatus::RuntimeFatal
+    );
+    assert_eq!(
+        execute_program_with_context(
+            &mut context,
+            &weak_return_call,
+            &mut scope,
+            &mut values,
+        )
+        .expect_err("strict method return must not inherit a weak caller mode"),
+        EvalStatus::RuntimeFatal
+    );
+    let strict_float = execute_program_with_context(
+        &mut context,
+        &strict_float_call,
+        &mut scope,
+        &mut values,
+    )
+    .expect("int to float widening remains valid in strict PHP");
+    assert_eq!(values.get(strict_float), FakeValue::Float(24.0));
+
+    execute_program_with_context(
+        &mut context,
+        &weak_definitions,
+        &mut scope,
+        &mut values,
+    )
+    .expect("declare weak method");
+    let weak_return = execute_program_with_context(
+        &mut context,
+        &strict_weak_return_call,
+        &mut scope,
+        &mut values,
+    )
+    .expect("weak declaration must retain return coercion under a strict caller");
+    assert_eq!(values.get(weak_return), FakeValue::Int(12));
+}
+
 /// Verifies eval rejects method return values that do not satisfy declarations.
 #[test]
 fn execute_program_rejects_invalid_eval_method_return_type_values() {

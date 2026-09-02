@@ -123,7 +123,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     ),
     registry_contract!(
         "get_extension_funcs", System, [param!("extension", Str)], None, Mixed,
-        "Returns functions exported by a loaded extension.", false, None, None
+        "Returns functions exported by a loaded extension. Weak calls coerce int, float, and bool to string and deprecate null; strict calls accept only string, while arrays, resources, and non-Stringable objects throw TypeError. Extension names are case-insensitive.", false, None, None
     ),
     registry_contract!(
         "getrandmax", Math, [], None, Int,
