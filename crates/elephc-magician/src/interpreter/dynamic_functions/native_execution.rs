@@ -17,9 +17,15 @@ pub(in crate::interpreter) fn eval_native_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args =
-        eval_native_function_call_args(&function, args, context, caller_scope, values)?;
-    eval_native_function_with_values(function, evaluated_args, context, values)
+    let callable_name = function.name().to_string();
+    context.push_function(callable_name);
+    let result = (|| {
+        let evaluated_args =
+            eval_native_function_call_args(&function, args, context, caller_scope, values)?;
+        eval_native_function_with_values(function, evaluated_args, context, values)
+    })();
+    context.pop_function();
+    result
 }
 
 /// Invokes a registered AOT function after its arguments have been bound and staged.
@@ -58,7 +64,7 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
     match (result, writeback) {
         (Err(status), _) | (_, Err(status)) => Err(status),
         (Ok(result), Ok(())) => {
-            eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
+            eval_declared_native_return_value(function.return_type(), Some(function.name()), None, result, context, values)
         }
     }
 }

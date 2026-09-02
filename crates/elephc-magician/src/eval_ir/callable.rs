@@ -40,6 +40,7 @@ impl EvalClosureCapture {
 #[derive(Debug, Clone)]
 pub struct EvalFunction {
     name: String,
+    display_name: String,
     source_location: Option<EvalSourceLocation>,
     strict_types: bool,
     attributes: Vec<EvalAttribute>,
@@ -57,6 +58,7 @@ impl PartialEq for EvalFunction {
     /// Compares function metadata while ignoring retained source-location decoration.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
+            && self.display_name == other.display_name
             && self.strict_types == other.strict_types
             && self.attributes == other.attributes
             && self.params == other.params
@@ -78,8 +80,10 @@ impl EvalFunction {
         let parameter_defaults = vec![None; params.len()];
         let parameter_is_by_ref = vec![false; params.len()];
         let parameter_is_variadic = vec![false; params.len()];
+        let name = name.into();
         Self {
-            name: name.into(),
+            display_name: name.clone(),
+            name,
             source_location: None,
             strict_types: false,
             attributes: Vec::new(),
@@ -103,6 +107,12 @@ impl EvalFunction {
     /// Retains the strict-types mode of the compilation unit that owns this body.
     pub const fn with_strict_types(mut self, strict_types: bool) -> Self {
         self.strict_types = strict_types;
+        self
+    }
+
+    /// Attaches the PHP-visible callable identity used in runtime diagnostics.
+    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
+        self.display_name = display_name.into();
         self
     }
 
@@ -154,6 +164,11 @@ impl EvalFunction {
     /// Returns the original source spelling of this eval-declared function name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the PHP-visible callable identity used in runtime diagnostics.
+    pub fn display_name(&self) -> &str {
+        &self.display_name
     }
 
     /// Returns eval-fragment source-location metadata, when retained.

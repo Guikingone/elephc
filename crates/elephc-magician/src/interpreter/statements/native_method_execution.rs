@@ -196,6 +196,9 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature_owner = bridge_scope.unwrap_or(class_name);
+    let callable_name = format!("{}::{}", signature_owner.trim_start_matches('\\'), method_name);
+    context.push_function(callable_name);
+    let outcome = (|| {
     let signature = context.native_method_signature(signature_owner, method_name);
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
     let bound_args =
@@ -225,6 +228,9 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
             values,
         ),
     }
+    })();
+    context.pop_function();
+    outcome
 }
 
 /// Calls one generated/AOT static method after native signature binding.
@@ -383,6 +389,9 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature_owner = bridge_scope.unwrap_or(class_name);
+    let callable_name = format!("{}::{}", signature_owner.trim_start_matches('\\'), method_name);
+    context.push_function(callable_name);
+    let outcome = (|| {
     let signature = context.native_static_method_signature(signature_owner, method_name);
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
     let bound_args =
@@ -412,6 +421,9 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
             values,
         ),
     }
+    })();
+    context.pop_function();
+    outcome
 }
 
 /// Returns whether a generated/AOT class has an instance `__call()` fallback.

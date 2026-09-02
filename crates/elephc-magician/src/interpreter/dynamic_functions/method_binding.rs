@@ -12,6 +12,7 @@ use super::*;
 
 /// Binds evaluated method arguments using a selected by-reference target policy.
 pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
+    callable_name: &str,
     params: &[String],
     parameter_types: &[Option<EvalParameterType>],
     parameter_defaults: &[Option<EvalExpr>],
@@ -52,6 +53,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
     for arg in evaluated_args {
         if let Some(name) = arg.name {
             bind_dynamic_named_method_arg(
+                callable_name,
                 params,
                 parameter_types,
                 parameter_is_by_ref,
@@ -67,6 +69,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
             )?;
         } else {
             bind_dynamic_positional_method_arg(
+                callable_name,
                 params,
                 &mut bound_args,
                 parameter_types,
@@ -102,7 +105,15 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
         }
         if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
             let bound = value.as_mut().ok_or(EvalStatus::RuntimeFatal)?;
-            bound.value = eval_method_parameter_value(param_type, bound.value, context, values)?;
+            bound.value = eval_method_parameter_value(
+                param_type,
+                bound.value,
+                callable_name,
+                position + 1,
+                params.get(position).map(String::as_str),
+                context,
+                values,
+            )?;
         }
     }
 
@@ -145,6 +156,7 @@ fn evaluated_args_contain_named_variadic_values(
 
 /// Binds one positional method argument to a fixed parameter or variadic array.
 fn bind_dynamic_positional_method_arg(
+    callable_name: &str,
     params: &[String],
     bound_args: &mut [Option<BoundMethodArg>],
     parameter_types: &[Option<EvalParameterType>],
@@ -175,6 +187,8 @@ fn bind_dynamic_positional_method_arg(
             parameter_types,
             variadic_index,
             value,
+            callable_name,
+            argument_number,
             context,
             values,
         )?;
@@ -226,6 +240,7 @@ fn bind_dynamic_positional_method_arg(
 
 /// Binds one named method argument to a fixed parameter or variadic array.
 fn bind_dynamic_named_method_arg(
+    callable_name: &str,
     params: &[String],
     parameter_types: &[Option<EvalParameterType>],
     parameter_is_by_ref: &[bool],
@@ -267,6 +282,10 @@ fn bind_dynamic_named_method_arg(
         parameter_types,
         variadic_index,
         value,
+        callable_name,
+        variadic_index
+            .and_then(|index| index.checked_add(1))
+            .ok_or(EvalStatus::RuntimeFatal)?,
         context,
         values,
     )?;
@@ -350,6 +369,8 @@ fn eval_variadic_method_parameter_value(
     parameter_types: &[Option<EvalParameterType>],
     variadic_index: Option<usize>,
     value: RuntimeCellHandle,
+    callable_name: &str,
+    argument_number: usize,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -358,7 +379,15 @@ fn eval_variadic_method_parameter_value(
     else {
         return Ok(value);
     };
-    eval_method_parameter_value(param_type, value, context, values)
+    eval_method_parameter_value(
+        param_type,
+        value,
+        callable_name,
+        argument_number,
+        None,
+        context,
+        values,
+    )
 }
 
 /// Returns the matching non-variadic parameter index for one PHP named argument.
@@ -395,6 +424,9 @@ fn bind_dynamic_variadic_arg(
 pub(in crate::interpreter) fn eval_method_parameter_value(
     param_type: &EvalParameterType,
     value: RuntimeCellHandle,
+    callable_name: &str,
+    argument_number: usize,
+    parameter_name: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -405,10 +437,10 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
         return values.cast_float(value);
     }
     if param_type.is_intersection() {
-        return eval_throw_parameter_type_error(param_type, value, context, values);
+        return eval_throw_parameter_type_error(param_type, value, callable_name, argument_number, parameter_name, context, values);
     }
     if context.strict_types() {
-        return eval_throw_parameter_type_error(param_type, value, context, values);
+        return eval_throw_parameter_type_error(param_type, value, callable_name, argument_number, parameter_name, context, values);
     }
     for variant in param_type.variants() {
         if let Some(coerced) =
@@ -417,21 +449,27 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
             return Ok(coerced);
         }
     }
-    eval_throw_parameter_type_error(param_type, value, context, values)
+    eval_throw_parameter_type_error(param_type, value, callable_name, argument_number, parameter_name, context, values)
 }
 
 /// Schedules PHP's catchable TypeError for one rejected declared parameter value.
 fn eval_throw_parameter_type_error<T>(
     param_type: &EvalParameterType,
     value: RuntimeCellHandle,
+    callable_name: &str,
+    argument_number: usize,
+    parameter_name: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let callable = context.current_function().unwrap_or("{callable}");
     let expected = eval_parameter_type_name(param_type);
     let actual = eval_runtime_type_name(value, values)?;
+    let parameter = parameter_name.map_or_else(
+        || format!("Argument #{argument_number}"),
+        |name| format!("Argument #{argument_number} (${name})"),
+    );
     eval_throw_type_error(
-        &format!("{callable}(): Argument must be of type {expected}, {actual} given"),
+        &format!("{callable_name}(): {parameter} must be of type {expected}, {actual} given"),
         context,
         values,
     )

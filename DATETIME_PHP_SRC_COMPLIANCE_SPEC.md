@@ -1,9 +1,9 @@
 ---
-title: "DateTime php-src Compliance Spec v4.5"
+title: "DateTime php-src Compliance Spec v4.6"
 description: "Candidat ext/date corrigé après audit statique contre php-src 8.5.10-dev."
 ---
 
-# DateTime php-src Compliance Spec v4.5
+# DateTime php-src Compliance Spec v4.6
 
 ## Référence normative
 
@@ -211,6 +211,11 @@ F3 a ensuite remplacé les rejets `RuntimeFatal` de validation paramètre/retour
 sur le `null` final émis par php-src. Le rejet de `return;` pour un callable typé demeure distinct,
 comme le compilateur Zend le formule dans
 [`zend_emit_return_type_check()`](https://github.com/php/php-src/blob/47b563cbb856ec19155aacc3246931dfacbebd21/Zend/zend_compile.c#L2623-L2667).
+F4 conserve désormais l'identité PHP explicite du callable et les métadonnées de paramètre au
+travers du binding, des callbacks, des closures, des méthodes et des signatures natives/AOT : les
+diagnostics n'infèrent plus le target depuis une pile appelante ambiguë. Cela rend possible le nom
+qualifié, l'ordinal et le nom du paramètre attendus par
+[`zend_verify_arg_error()`](https://github.com/php/php-src/blob/47b563cbb856ec19155aacc3246931dfacbebd21/Zend/zend_execute.c#L684-L731).
 Cette correction invalide les locks précédents et impose une nouvelle revue statique complète avant
 toute exécution de parité.
 

@@ -197,7 +197,18 @@ pub(super) fn apply_native_callable_bound_arg_types(
             apply_native_callable_variadic_arg_type(param_type, bound_arg, context, values)?;
         } else {
             bound_arg.value =
-                eval_method_parameter_value(param_type, bound_arg.value, context, values)?;
+                {
+                    let callable_name = context.current_function().unwrap_or("{callable}").to_string();
+                    eval_method_parameter_value(
+                    param_type,
+                    bound_arg.value,
+                    &callable_name,
+                    position + 1,
+                    signature.param_names().get(position).map(String::as_str),
+                    context,
+                    values,
+                    )?
+                };
         }
     }
     Ok(())
@@ -214,7 +225,16 @@ pub(super) fn apply_native_callable_variadic_arg_type(
     for position in 0..len {
         let key = values.array_iter_key(bound_arg.value, position)?;
         let value = values.array_get(bound_arg.value, key)?;
-        let value = eval_method_parameter_value(param_type, value, context, values)?;
+        let callable_name = context.current_function().unwrap_or("{callable}").to_string();
+        let value = eval_method_parameter_value(
+            param_type,
+            value,
+            &callable_name,
+            position + 1,
+            None,
+            context,
+            values,
+        )?;
         bound_arg.value = values.array_set(bound_arg.value, key, value)?;
     }
     Ok(())

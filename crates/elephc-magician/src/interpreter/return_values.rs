@@ -15,6 +15,7 @@ use super::*;
 
 /// Applies one declared function or method return type to a completed control result.
 pub(in crate::interpreter) fn eval_declared_return_control_value(
+    callable_name: &str,
     return_type: Option<&EvalParameterType>,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
@@ -24,10 +25,11 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match control {
-        EvalControl::None => eval_declared_implicit_return_value(return_type, context, values),
+        EvalControl::None => eval_declared_implicit_return_value(callable_name, return_type, context, values),
         EvalControl::ReturnVoid => eval_declared_void_return_value(return_type, values),
         EvalControl::Return(result) => eval_declared_explicit_return_value(
             return_type,
+            callable_name,
             return_owner,
             called_class_name,
             strict_types,
@@ -65,8 +67,10 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
     if eval_declared_return_type_is_never(return_type) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let callable_name = context.current_function().unwrap_or("{callable}").to_string();
     eval_declared_return_value(
         return_type,
+        &callable_name,
         return_owner,
         called_class_name,
         context.strict_types(),
@@ -78,6 +82,7 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
 
 /// Materializes an implicit return according to the declared return type.
 fn eval_declared_implicit_return_value(
+    callable_name: &str,
     return_type: Option<&EvalParameterType>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -90,7 +95,7 @@ fn eval_declared_implicit_return_value(
     {
         return values.null();
     }
-    eval_throw_missing_return_type_error(return_type, context, values)
+    eval_throw_missing_return_type_error(callable_name, return_type, context, values)
 }
 
 /// Materializes `return;` according to the declared return type.
@@ -110,6 +115,7 @@ fn eval_declared_void_return_value(
 /// Validates or coerces an explicit returned value according to a declared return type.
 fn eval_declared_explicit_return_value(
     return_type: Option<&EvalParameterType>,
+    callable_name: &str,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
     strict_types: bool,
@@ -127,6 +133,7 @@ fn eval_declared_explicit_return_value(
     }
     eval_declared_return_value(
         return_type,
+        callable_name,
         return_owner,
         called_class_name,
         strict_types,
@@ -139,6 +146,7 @@ fn eval_declared_explicit_return_value(
 /// Applies a non-void declared return type to one returned runtime value.
 fn eval_declared_return_value(
     return_type: &EvalParameterType,
+    callable_name: &str,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
     strict_types: bool,
@@ -160,10 +168,10 @@ fn eval_declared_return_value(
         return values.cast_float(value);
     }
     if return_type.is_intersection() {
-        return eval_throw_return_type_error(return_type, value, context, values);
+        return eval_throw_return_type_error(callable_name, return_type, value, context, values);
     }
     if strict_types {
-        return eval_throw_return_type_error(return_type, value, context, values);
+        return eval_throw_return_type_error(callable_name, return_type, value, context, values);
     }
     for variant in return_type.variants() {
         if let Some(coerced) =
@@ -172,21 +180,21 @@ fn eval_declared_return_value(
             return Ok(coerced);
         }
     }
-    eval_throw_return_type_error(return_type, value, context, values)
+    eval_throw_return_type_error(callable_name, return_type, value, context, values)
 }
 
 /// Schedules PHP's catchable TypeError for one rejected declared return value.
 fn eval_throw_return_type_error<T>(
+    callable_name: &str,
     return_type: &EvalParameterType,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let callable = context.current_function().unwrap_or("{callable}");
     let expected = eval_parameter_type_name(return_type);
     let actual = eval_runtime_type_name(value, values)?;
     eval_throw_type_error(
-        &format!("{callable}(): Return value must be of type {expected}, {actual} returned"),
+        &format!("{callable_name}(): Return value must be of type {expected}, {actual} returned"),
         context,
         values,
     )
@@ -194,14 +202,14 @@ fn eval_throw_return_type_error<T>(
 
 /// Schedules PHP's catchable TypeError for an implicit non-nullable return.
 fn eval_throw_missing_return_type_error<T>(
+    callable_name: &str,
     return_type: &EvalParameterType,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let callable = context.current_function().unwrap_or("{callable}");
     let expected = eval_parameter_type_name(return_type);
     eval_throw_type_error(
-        &format!("{callable}(): Return value must be of type {expected}, none returned"),
+        &format!("{callable_name}(): Return value must be of type {expected}, none returned"),
         context,
         values,
     )
