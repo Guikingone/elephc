@@ -253,18 +253,42 @@ fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv 
             continue;
         }
 
-        for arm_type in arm_types {
-            let PhpType::Array(_) = arm_type else {
-                continue 'names;
-            };
-        }
-        if !arms
+        if arm_types
             .iter()
-            .all(|arm| local_slot_is_convertible(ctx, &name, &arm.initialized))
+            .all(|arm_type| matches!(arm_type, PhpType::Array(_)))
         {
+            if !arms
+                .iter()
+                .all(|arm| local_slot_is_convertible(ctx, &name, &arm.initialized))
+            {
+                continue;
+            }
+            joined.insert(name, PhpType::Array(Box::new(PhpType::Mixed)));
             continue;
         }
-        joined.insert(name, PhpType::Array(Box::new(PhpType::Mixed)));
+
+        // The arms disagree and no in-place array conversion reconciles them:
+        // `$i = \strlen('ab'); if (…) { $i = 'si'; }` leaves `int` on one edge and `string` on
+        // the other. Falling through with NO joined fact left the merge block reading the
+        // LAST arm's fact — the untaken `else`'s `int` — while the store in the `then` arm had
+        // already widened the frame slot to boxed `Mixed` (`Builder::widen_local_storage_type`).
+        // The `echo` below the branch was then lowered as an `int` load of a boxed slot holding
+        // the string, so `__rt_mixed_cast_int` printed `0` where PHP prints `si` — and only when
+        // something below the branch kept the tail from being duplicated into the arms, which is
+        // what made the miscompile look order-dependent.
+        //
+        // The slot's frame storage type is the join every edge already agreed to: every store
+        // widened it, so it can represent what any arm left in the slot, and reading at it makes
+        // the guard's narrowing an unbox APPLIED TO THE LOADED VALUE inside the arm — where the
+        // runtime tag check belongs. This is the contract `join_switch_type_envs` has always used
+        // for a switch's edges; the `if` join is the outlier being brought into line.
+        //
+        // A name with no frame slot is left alone: its home is not this frame (an extern C
+        // global bypasses the slot entirely, `store_local` types it from the symbol), so the
+        // storage type this rule reads does not exist and the pre-existing behaviour stands.
+        if let Some(slot) = ctx.local_slots.get(&name) {
+            joined.insert(name, ctx.builder.local_php_type(*slot));
+        }
     }
     joined
 }
