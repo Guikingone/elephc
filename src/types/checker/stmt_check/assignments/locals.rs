@@ -1192,7 +1192,40 @@ fn merge_local_assignment_type(
                 ),
             ));
         }
-        if let Some(merged_ty) = merged_ty {
+        // A store the value's type FITS keeps the binding's type, which is right for a merge
+        // across control flow and wrong for a straight-line assignment: PHP replaces the value,
+        // so the name holds exactly what was stored.
+        //
+        // It only shows when the binding is a UNION, because that is the only shape a fitting
+        // value can be strictly narrower than. `ContainerBuilderDebugDumpPass::process` is the
+        // one in the fixture: `$file = $container->getParameter(…)` binds
+        // `array|bool|string|int|float|UnitEnum|null`, `$file = substr_replace($file, '.ser', -4)`
+        // stores a `string` into it — and the call three lines later reported
+        // `Filesystem::chmod parameter $files expects Union([Str, Iterable]), got
+        // Union([Array(Mixed), Bool, Str, Int, Float, Object("UnitEnum"), Void])`, the type
+        // `$file` had BEFORE the store.
+        //
+        // Restricted to conditional depth 0, which is the same proof the `unset` kill demands:
+        // the store dominates everything after it, so nothing downstream can be reached with the
+        // wider value still in the name. Inside a branch or a loop body the merge has to stand —
+        // a `while` back edge and an untaken arm both deliver the old type to the code below.
+        //
+        // And restricted to storage this FRAME owns, for the same reason the widening is: a
+        // by-reference parameter, a `=&` alias, a `global` and a `static` are all reachable by
+        // another name whose view of the cell this store does not get to narrow.
+        let narrows_a_union_in_straight_line = matches!(existing, PhpType::Union(_))
+            && !matches!(ty, PhpType::Union(_) | PhpType::Mixed)
+            && merged_ty.as_ref() == Some(existing)
+            && checker.local_conditional_depth == 0
+            && !checker.name_is_seeded_program_storage(name)
+            && !checker.top_level_binding_is_program_global(name)
+            && !checker.active_ref_params.contains(name)
+            && !checker.ref_bound_locals.contains(name)
+            && !checker.active_globals.contains(name)
+            && !checker.static_local_names.contains(name);
+        if narrows_a_union_in_straight_line {
+            env.insert(name.to_string(), ty.clone());
+        } else if let Some(merged_ty) = merged_ty {
             if &merged_ty != existing {
                 env.insert(name.to_string(), merged_ty);
             }

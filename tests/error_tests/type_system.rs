@@ -2380,6 +2380,45 @@ fn test_seeded_superglobal_not_killable() {
     expect_error("<?php unset($_SERVER); $_SERVER = 5;", "cannot reassign");
 }
 
+/// A STRAIGHT-LINE store whose value fits a union binding narrows it to what was actually stored.
+///
+/// The merge kept the binding's type whenever the value fit it, which is right across control
+/// flow and wrong for an assignment that dominates everything after it — PHP replaces the value.
+/// `ContainerBuilderDebugDumpPass::process` is the shape: `$file` is bound
+/// `array|bool|string|int|float|UnitEnum|null` by `getParameter()`, `substr_replace()` stores a
+/// `string` into it, and the `Filesystem::chmod($file, …)` three lines below reported
+/// `expects Union([Str, Iterable]), got Union([Array(Mixed), Bool, Str, Int, Float, …])` — the
+/// type `$file` had BEFORE the store.
+///
+/// The two controls are what keep it a narrowing rather than a guess: a store inside a BRANCH
+/// leaves the union standing, because the code below is reached from the arm that did not run;
+/// and a by-reference PARAMETER is never narrowed, because another name reaches the same cell.
+#[test]
+fn test_a_straight_line_store_narrows_a_union_binding() {
+    expect_no_error(
+        "<?php class F { public function chmod(string|iterable $f): int { return \\strlen((string) $f); } } \
+         function p(string $n): array|bool|string|int|float|null { return $n . \".xml\"; } \
+         function run(F $fs): int { $file = p(\"d\"); $file = \\substr_replace($file, \".ser\", -4); return $fs->chmod($file); } \
+         echo run(new F());",
+    );
+
+    expect_error(
+        "<?php class F { public function chmod(string|iterable $f): int { return \\strlen((string) $f); } } \
+         function p(int $n): array|string|int { return $n > 0 ? \"abc\" : 5; } \
+         function run(F $fs, int $n): int { $file = p($n); if ($n > 5) { $file = \"zz\"; } return $fs->chmod($file); } \
+         echo run(new F(), 1);",
+        "expects Union([Str, Iterable])",
+    );
+
+    expect_error(
+        "<?php class F { public function chmod(string|iterable $f): int { return \\strlen((string) $f); } } \
+         function w(array|string|int &$p): void { $p = \"z\"; } \
+         function run(F $fs): int { $v = 5; w($v); return $fs->chmod($v); } \
+         echo run(new F());",
+        "expects Union([Str, Iterable])",
+    );
+}
+
 /// A superglobal assignment is not a re-binding at all: it stores into the program's request
 /// storage, whose type — a hash with `Str` keys and `Mixed` values — nothing about the
 /// assignment can change. So ANY array is accepted and the environment keeps that type, exactly

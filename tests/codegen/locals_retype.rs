@@ -3025,6 +3025,19 @@ fn test_array_splice_into_a_widened_slot_leaves_a_clean_heap() {
     );
 }
 
+/// The value half of `error_tests::type_system::test_a_straight_line_store_narrows_a_union_binding`:
+/// the local really does hold what the straight-line store put there, on both call paths of the
+/// union-returning callee.
+#[test]
+fn test_a_straight_line_store_into_a_union_local_answers() {
+    let out = compile_and_run(
+        "<?php function pick(int $n): array|string|int { return $n > 0 ? \"abc\" : 5; } \
+         function run(int $n): string { $file = pick($n); $file = \"q\" . $n; return $file; } \
+         echo run($argc), \"|\", \\gettype(run(0));",
+    );
+    assert_eq!(out, "q1|string");
+}
+
 /// A widening in a body that also calls `eval()`.
 ///
 /// The eval body refused every widening because the KILL refuses one: a kill drops the name's
