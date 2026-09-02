@@ -12,6 +12,7 @@
 use elephc_monitoring_contract::{active_traceparent, EventHooks};
 
 extern "C" {
+    static elephc_monitor_event_active_fn: usize;
     static elephc_instr_network_fn: usize;
     static elephc_instr_network_wait_fn: usize;
     static elephc_monitor_active: u64;
@@ -21,6 +22,7 @@ extern "C" {
 pub(crate) fn hooks() -> EventHooks {
     EventHooks::new(
         active(),
+        unsafe { std::ptr::addr_of!(elephc_monitor_event_active_fn).read() },
         unsafe { std::ptr::addr_of!(elephc_instr_network_fn).read() },
         unsafe { std::ptr::addr_of!(elephc_instr_network_wait_fn).read() },
     )
@@ -40,6 +42,8 @@ pub(crate) fn traceparent() -> Option<String> {
 // inert slots in their own executable. Production staticlibs never define them.
 #[cfg(test)]
 mod slot_stub {
+    #[no_mangle]
+    static elephc_monitor_event_active_fn: usize = 0;
     #[no_mangle]
     static elephc_instr_network_fn: usize = 0;
     #[no_mangle]

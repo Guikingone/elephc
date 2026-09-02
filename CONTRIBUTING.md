@@ -606,9 +606,10 @@ I/O bridges should depend on `elephc-monitoring-contract` and call its
 `EventHooks` helper through category-specific runtime slots. Keep database and
 network slots separate so query budgets, N+1 analysis and network budgets
 cannot contaminate each other. The event consumer owns its capture-window gate,
-while bridge-side timing and trace propagation must stay dormant outside an
-active exact capture, including avoiding clock reads and steady-state
-per-operation allocations.
+and must publish an active-window callback when that state is not represented
+by the exact-capture word. Bridge-side timing must avoid clock reads outside
+either active window, while trace propagation stays scoped to an exact trace
+context. Steady-state dormant paths must not allocate per operation.
 
 Set `whole_archive: true` only when the staticlib has link-time side effects that
 must survive (e.g. a provider registration) or owns the program entry point (like

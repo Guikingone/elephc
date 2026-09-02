@@ -81,19 +81,40 @@ impl MonitoringPolicy {
 pub struct EventHooks {
     /// Whether bridge-side timing and trace work is active right now.
     active: bool,
+    /// Optional consumer callback for a monitoring window not represented by `active`.
+    active_fn: usize,
     operation_fn: usize,
     wait_fn: usize,
 }
 
 impl EventHooks {
     /// Builds hooks from runtime slot addresses already read by the bridge.
-    pub const fn new(active: bool, operation_fn: usize, wait_fn: usize) -> Self {
-        Self { active, operation_fn, wait_fn }
+    pub const fn new(
+        active: bool,
+        active_fn: usize,
+        operation_fn: usize,
+        wait_fn: usize,
+    ) -> Self {
+        Self {
+            active,
+            active_fn,
+            operation_fn,
+            wait_fn,
+        }
     }
 
     /// Returns whether a monitor capture is active right now.
-    pub const fn is_active(self) -> bool {
-        self.active
+    pub fn is_active(self) -> bool {
+        if self.active {
+            return true;
+        }
+        if self.active_fn == 0 {
+            return false;
+        }
+        let function = unsafe {
+            std::mem::transmute::<usize, unsafe extern "C" fn() -> u32>(self.active_fn)
+        };
+        unsafe { function() != 0 }
     }
 
     /// Sends one category-specific operation to the installed event consumer.
@@ -113,7 +134,7 @@ impl EventHooks {
 
     /// Runs `body` and reports its elapsed nanoseconds only while monitoring is active.
     pub fn timed<T>(self, body: impl FnOnce() -> T) -> T {
-        if !self.active || self.wait_fn == 0 {
+        if self.wait_fn == 0 || !self.is_active() {
             return body();
         }
         let started = Instant::now();
@@ -162,6 +183,13 @@ mod tests {
 
     static OPERATIONS: AtomicU64 = AtomicU64::new(0);
     static WAIT: AtomicU64 = AtomicU64::new(0);
+    static WINDOW_ACTIVE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// Reports the fixture's consumer-owned monitoring window state.
+    unsafe extern "C" fn window_active() -> u32 {
+        u32::from(WINDOW_ACTIVE.load(Ordering::Relaxed))
+    }
 
     /// Records one fixture operation through the same C ABI shape as the runtime slot.
     unsafe extern "C" fn note() {
@@ -180,6 +208,7 @@ mod tests {
         WAIT.store(0, Ordering::Relaxed);
         let hooks = EventHooks::new(
             false,
+            0,
             note as *const () as usize,
             wait as *const () as usize,
         );
@@ -196,6 +225,7 @@ mod tests {
         WAIT.store(0, Ordering::Relaxed);
         let hooks = EventHooks::new(
             true,
+            0,
             note as *const () as usize,
             wait as *const () as usize,
         );
@@ -203,6 +233,22 @@ mod tests {
         assert_eq!(hooks.timed(|| 11), 11);
         assert_eq!(OPERATIONS.load(Ordering::Relaxed), 1);
         assert!(WAIT.load(Ordering::Relaxed) > 0);
+    }
+
+    /// Verifies a consumer-owned window enables timing without the exact-capture flag.
+    #[test]
+    fn consumer_window_enables_timing() {
+        WAIT.store(0, Ordering::Relaxed);
+        WINDOW_ACTIVE.store(true, Ordering::Relaxed);
+        let hooks = EventHooks::new(
+            false,
+            window_active as *const () as usize,
+            0,
+            wait as *const () as usize,
+        );
+        assert_eq!(hooks.timed(|| 13), 13);
+        assert!(WAIT.load(Ordering::Relaxed) > 0);
+        WINDOW_ACTIVE.store(false, Ordering::Relaxed);
     }
 
     /// Verifies traceparent validation rejects injection and zero-identity shapes.

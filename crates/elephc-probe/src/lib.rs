@@ -271,6 +271,17 @@ fn event_window_active(base: usize) -> bool {
     ASKED.load(Ordering::Relaxed)
         || unsafe { region_asked(base) }.load(Ordering::Acquire) == ASK_ACTIVE
 }
+
+/// Reports whether bridge-side event timing belongs to the probe's active window.
+///
+/// Reached through a runtime slot because a remote ask is shared across worker
+/// processes and is therefore not represented by each worker's exact-capture word.
+#[no_mangle]
+pub extern "C" fn elephc_probe_event_active() -> u32 {
+    let base = REGION.load(Ordering::Relaxed);
+    u32::from(base != 0 && event_window_active(base))
+}
+
 /// I/O events are **not sampled**. A driver call fires exactly one, so these
 /// counts are exact — the sampler's statistical nature applies to *time*, which
 /// it observes 1000x/second, not to events it is told about. Keeping the two
@@ -3390,6 +3401,7 @@ mod tests {
         REGION.store(base, Ordering::Relaxed);
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
         let was_asked = ASKED.swap(false, Ordering::Relaxed);
+        assert_eq!(elephc_probe_event_active(), 0);
 
         for _ in 0..7 {
             elephc_probe_note_io();
@@ -3398,6 +3410,7 @@ mod tests {
         assert!(event_report(base).is_empty(), "pre-ask callbacks must be inert");
 
         unsafe { region_asked(base) }.store(ASK_INITIALIZING, Ordering::Release);
+        assert_eq!(elephc_probe_event_active(), 0);
         elephc_probe_note_io();
         elephc_probe_note_wait(100);
         assert!(
@@ -3413,6 +3426,7 @@ mod tests {
         unsafe { event_word(base, 0, 2) }.store(12, Ordering::Relaxed);
         unsafe { event_word(base, 0, 3) }.store(1_200, Ordering::Relaxed);
         activate_shared_window(base);
+        assert_eq!(elephc_probe_event_active(), 1);
         elephc_probe_note_io();
         elephc_probe_note_io();
         elephc_probe_note_wait(23);
@@ -3429,6 +3443,7 @@ mod tests {
         ASKED.store(was_asked, Ordering::Relaxed);
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
         REGION.store(0, Ordering::Relaxed);
+        assert_eq!(elephc_probe_event_active(), 0);
     }
 
     #[test]

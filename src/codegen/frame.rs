@@ -1434,6 +1434,16 @@ fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
         0,
     );
     if !ctx.shared.instrument.is_on() {
+        // Let bridges ask whether the probe's shared event window is active.
+        // Unlike the exact-capture word, this observes remote asks in workers.
+        let event_active = target.extern_symbol("elephc_probe_event_active");
+        abi::emit_symbol_address(ctx.emitter, scratch, &event_active);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            scratch,
+            &target.extern_symbol("elephc_monitor_event_active_fn"),
+            0,
+        );
         let note_io = target.extern_symbol("elephc_probe_note_io");
         abi::emit_symbol_address(ctx.emitter, scratch, &note_io);
         abi::emit_store_reg_to_symbol(

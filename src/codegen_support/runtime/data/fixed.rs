@@ -313,6 +313,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // it. One check, in one place: repeating it would consume the control
     // channel's marker twice and the second reader would see nothing.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_monitor_active"), 8, target));
+    // elephc_monitor_event_active_fn: optional callback for a monitoring
+    // consumer whose shared event window is not represented by the exact-slice
+    // word above. The sampled probe installs it so bridges can avoid clock reads
+    // while dormant without losing remote-probe wait measurements.
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_monitor_event_active_fn"),
+        8,
+        target,
+    ));
     // elephc_probe_allocs_ptr: the ADDRESS of `_gc_allocs`, published under
     // --probe so the sampler can read the allocation counter without declaring
     // that symbol itself. `_gc_allocs` is spelled with a hardcoded underscore

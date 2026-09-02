@@ -47,6 +47,7 @@ mod instr_io {
     use elephc_monitoring_contract::EventHooks;
 
     extern "C" {
+        static elephc_monitor_event_active_fn: usize;
         static elephc_instr_io_fn: usize;
         static elephc_instr_query_fn: usize;
         static elephc_instr_wait_fn: usize;
@@ -60,6 +61,7 @@ mod instr_io {
     fn hooks() -> EventHooks {
         EventHooks::new(
             asked(),
+            unsafe { std::ptr::addr_of!(elephc_monitor_event_active_fn).read() },
             unsafe { std::ptr::addr_of!(elephc_instr_io_fn).read() },
             unsafe { std::ptr::addr_of!(elephc_instr_wait_fn).read() },
         )
@@ -114,6 +116,8 @@ mod instr_io {
     // never in the staticlib, so a real program's `.comm` is not duplicated.
     #[cfg(test)]
     mod slot_stub {
+        #[no_mangle]
+        static elephc_monitor_event_active_fn: usize = 0;
         #[no_mangle]
         static elephc_instr_io_fn: usize = 0;
         #[no_mangle]
