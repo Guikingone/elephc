@@ -172,7 +172,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, [rsp+16]");                                   // rax = new descriptor
     emitter.instruction("mov rdx, [rsp+8]");                                    // rdx = new $this receiver
     emitter.instruction("mov [rax+64], rdx");                                   // replace the captured object with the new receiver
-    emitter.instruction("mov rdi, rdx");                                        // pass the new receiver to the incref helper
+    emitter.instruction("mov rax, rdx");                                        // pass the new receiver in rax, the register __rt_incref reads
     emitter.instruction("call __rt_incref");                                    // the bound descriptor now owns a reference to $this
     emitter.instruction("jmp __rt_closure_bind_return");                        // skip the Mixed boxing path
 
@@ -200,4 +200,93 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // emit the fatal before exiting
     crate::codegen_support::abi::emit_exit(emitter, 1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Emits `__rt_closure_bind` for one target and returns the assembly text.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_closure_bind(&mut emitter);
+        emitter.output()
+    }
+
+    /// `__rt_incref` reads its argument in `x0`/`rax`, never in the SysV first argument
+    /// register, so the object-capture arm has to hand it the receiver THERE.
+    ///
+    /// The x86_64 arm passed the receiver in `rdi` while `rax` still held the freshly allocated
+    /// descriptor, so the call retained the DESCRIPTOR and never retained `$this`: one reference
+    /// too many on the closure and one too few on the receiver, which is a use-after-free waiting
+    /// for the caller's last release. Nothing local catches it — only the `linux-x86_64` CI shard
+    /// executes this helper, and the aarch64 arm (`mov x0, x2`) has always been right — so the
+    /// register is pinned here, on BOTH targets, from the emitted text.
+    #[test]
+    fn the_object_capture_arm_passes_this_in_the_incref_input_register() {
+        for (target, expected, label) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "mov x0, x2",
+                "bl __rt_incref",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "mov rax, rdx",
+                "call __rt_incref",
+            ),
+        ] {
+            let asm = emit_for(target);
+            let before = asm
+                .split(label)
+                .next()
+                .unwrap_or_else(|| panic!("no {label} in __rt_closure_bind for {target:?}:\n{asm}"));
+            let last_move = before
+                .lines()
+                .rev()
+                .find(|line| line.trim_start().starts_with("mov "))
+                .unwrap_or_else(|| panic!("no register move before {label} for {target:?}:\n{asm}"));
+            assert!(
+                last_move.trim_start().starts_with(expected),
+                "the move immediately before {label} must load the receiver into the register \
+                 __rt_incref reads ({expected}), got `{}` for {target:?}",
+                last_move.trim()
+            );
+        }
+    }
+
+    /// The receiver `__rt_incref` is handed must be the one just stored into the capture slot,
+    /// not the descriptor that happens to be in the result register.
+    ///
+    /// The control for the test above: it would still pass if the arm moved the DESCRIPTOR into
+    /// `rax`, because that is also a `mov rax, …`. Here the same register is read out of the
+    /// stack slot holding the new `$this` (`[rsp+8]` / `[sp, #8]`) and stored into the capture
+    /// slot at offset 64 before the retain, which is what makes it the receiver.
+    #[test]
+    fn the_retained_receiver_is_the_one_stored_into_the_capture_slot() {
+        for (target, load, store) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "ldr x2, [sp, #8]",
+                "str x2, [x0, #64]",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "mov rdx, [rsp+8]",
+                "mov [rax+64], rdx",
+            ),
+        ] {
+            let asm = emit_for(target);
+            assert!(
+                asm.contains(load),
+                "the object-capture arm must load the new receiver ({target:?}):\n{asm}"
+            );
+            assert!(
+                asm.contains(store),
+                "the object-capture arm must store the new receiver into the capture slot \
+                 ({target:?}):\n{asm}"
+            );
+        }
+    }
 }
