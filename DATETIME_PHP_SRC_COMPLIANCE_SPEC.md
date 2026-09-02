@@ -1,9 +1,9 @@
 ---
-title: "DateTime php-src Compliance Spec v4.6"
+title: "DateTime php-src Compliance Spec v4.7"
 description: "Candidat ext/date corrigé après audit statique contre php-src 8.5.10-dev."
 ---
 
-# DateTime php-src Compliance Spec v4.6
+# DateTime php-src Compliance Spec v4.7
 
 ## Référence normative
 
@@ -216,6 +216,9 @@ travers du binding, des callbacks, des closures, des méthodes et des signatures
 diagnostics n'infèrent plus le target depuis une pile appelante ambiguë. Cela rend possible le nom
 qualifié, l'ordinal et le nom du paramètre attendus par
 [`zend_verify_arg_error()`](https://github.com/php/php-src/blob/47b563cbb856ec19155aacc3246931dfacbebd21/Zend/zend_execute.c#L684-L731).
+F5 prolonge un compteur checked unique sur les éléments positionnels et les clés nommées capturés
+par une variadique typée; le diagnostic utilise donc l'ordinal PHP réel de l'élément, sans inventer
+de nom de paramètre pour une clé variadique.
 Cette correction invalide les locks précédents et impose une nouvelle revue statique complète avant
 toute exécution de parité.
 

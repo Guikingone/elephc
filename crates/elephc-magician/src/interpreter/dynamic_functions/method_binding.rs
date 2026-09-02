@@ -58,6 +58,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                 parameter_types,
                 parameter_is_by_ref,
                 variadic_index,
+                &mut next_variadic_index,
                 &mut bound_args,
                 &name,
                 arg.value,
@@ -245,6 +246,7 @@ fn bind_dynamic_named_method_arg(
     parameter_types: &[Option<EvalParameterType>],
     parameter_is_by_ref: &[bool],
     variadic_index: Option<usize>,
+    next_variadic_index: &mut i64,
     bound_args: &mut [Option<BoundMethodArg>],
     name: &str,
     value: RuntimeCellHandle,
@@ -278,20 +280,26 @@ fn bind_dynamic_named_method_arg(
         return Err(EvalStatus::RuntimeFatal);
     }
     let key = values.string(name)?;
+    let argument_number = variadic_index
+        .and_then(|index| {
+            usize::try_from(*next_variadic_index)
+                .ok()
+                .and_then(|offset| index.checked_add(offset))
+        })
+        .and_then(|index| index.checked_add(1))
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    *next_variadic_index = next_variadic_index
+        .checked_add(1)
+        .ok_or(EvalStatus::RuntimeFatal)?;
     let value = eval_variadic_method_parameter_value(
         parameter_types,
         variadic_index,
         value,
         callable_name,
-        variadic_index
-            .and_then(|index| index.checked_add(1))
-            .ok_or(EvalStatus::RuntimeFatal)?,
+        argument_number,
         context,
         values,
     )?;
-    let argument_number = variadic_index
-        .and_then(|index| index.checked_add(1))
-        .ok_or(EvalStatus::RuntimeFatal)?;
     let ref_target = method_parameter_ref_target(
         params,
         parameter_is_by_ref,
