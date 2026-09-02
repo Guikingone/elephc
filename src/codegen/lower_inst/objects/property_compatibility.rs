@@ -90,6 +90,9 @@ pub(super) fn ensure_property_value_supported(
     if property_values::can_unbox_mixed_to_array_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if property_values::can_unbox_mixed_to_callable_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     Err(CodegenIrError::unsupported(format!(
         "{} assigning PHP type {:?} to {}::${} with PHP type {:?}",
         inst.op.name(),

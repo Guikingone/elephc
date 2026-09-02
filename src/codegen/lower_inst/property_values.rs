@@ -26,6 +26,15 @@ pub(super) fn can_unbox_mixed_to_object_property(
         && matches!(slot_ty.codegen_repr(), PhpType::Object(_))
 }
 
+/// Returns true when a boxed Mixed value can be unboxed into a callable property slot.
+pub(super) fn can_unbox_mixed_to_callable_property(
+    value_ty: &PhpType,
+    slot_ty: &PhpType,
+) -> bool {
+    matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(slot_ty.codegen_repr(), PhpType::Callable)
+}
+
 /// Returns true when a boxed Mixed value can satisfy generic PHP array property storage.
 pub(super) fn can_unbox_mixed_to_array_property(
     value_ty: &PhpType,
@@ -168,4 +177,44 @@ pub(super) fn emit_mixed_object_for_property_store(ctx: &mut FunctionContext<'_>
         ctx.emitter,
         &PhpType::Object(String::new()), // retain the object independently for property storage
     );
+}
+
+/// Unboxes a Mixed property value into an independently retained callable descriptor.
+///
+/// A callable-typed property has to be reachable from a boxed value because PHP's own idiom puts
+/// one there: `self::$make ??= self::make(...)` reads the property, boxes both the read and the
+/// first-class callable so the two branches meet at one `Mixed`, and then assigns that back into
+/// the `\Closure`-typed slot. Without this adapter the store had no representation to write and
+/// refused, which is what `DependencyInjection\Container::get()` compiles to.
+///
+/// A descriptor slot holds one pointer, so the unboxed low word IS the value; it is retained the
+/// same way a directly typed callable store retains it. Any other payload is a PHP `TypeError`,
+/// not a silent null — assigning a non-callable to a `\Closure` property is an error in PHP too.
+pub(super) fn emit_mixed_callable_for_property_store(ctx: &mut FunctionContext<'_>) {
+    let callable_label = ctx.next_label("prop_store_mixed_value_callable");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #10");                             // runtime tag 10 identifies a callable descriptor payload
+            ctx.emitter.instruction(&format!("b.eq {}", callable_label));       // store descriptor payloads through the concrete slot path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 10");                             // runtime tag 10 identifies a callable descriptor payload
+            ctx.emitter.instruction(&format!("je {}", callable_label));         // store descriptor payloads through the concrete slot path
+        }
+    }
+    exceptions::emit_type_error(
+        ctx,
+        "Cannot assign non-callable value to property of type callable",
+    );
+    ctx.emitter.label(&callable_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // promote the unboxed descriptor pointer into the result register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // promote the unboxed descriptor pointer into the result register
+        }
+    }
+    crate::codegen_support::callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
 }

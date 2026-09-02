@@ -630,3 +630,68 @@ echo $second(21);
     );
     assert_eq!(out, "41|42");
 }
+
+/// Verifies `self::$closure ??= self::method(...)` reaches a `\Closure`-typed static property.
+///
+/// `??=` reads the property and evaluates the default in two branches that have to meet at one
+/// value, so BOTH sides are boxed into a `Mixed` cell and that cell is what the assignment writes
+/// back. The store had no way to put a boxed value into a descriptor slot and refused, which is
+/// how `Symfony\Component\DependencyInjection\Container::get()` — written exactly this way —
+/// stopped the whole compile. The instance-property form is the same store on the other property
+/// path and is covered here too. Calling twice proves the descriptor SURVIVES the store: the
+/// second call reads the property instead of re-creating it.
+#[test]
+fn test_coalescing_assign_of_a_first_class_callable_into_a_closure_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    private static \Closure $make;
+    private \Closure $format;
+
+    public function get(string $id): string {
+        return (self::$make ??= self::make(...))($id);
+    }
+
+    public function formatted(string $id): string {
+        $this->format ??= strtoupper(...);
+        return ($this->format)($id);
+    }
+
+    private static function make(string $id): string {
+        return "made:" . $id;
+    }
+}
+$r = new Registry();
+echo $r->get('x'), "\n";
+echo $r->get('y'), "\n";
+echo $r->formatted('ab'), "\n";
+echo $r->formatted('cd'), "\n";
+"#,
+    );
+    assert_eq!(out, "made:x\nmade:y\nAB\nCD\n");
+}
+
+/// Verifies a boxed NON-callable assigned to a `\Closure`-typed static property is a catchable
+/// `TypeError`, exactly as in PHP — not a silently stored null.
+#[test]
+fn test_assigning_a_boxed_non_callable_to_a_closure_typed_property_throws() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    private static \Closure $make;
+
+    public function set(mixed $v): void {
+        self::$make = $v;
+    }
+}
+$c = new C();
+try {
+    $c->set(5);
+    echo "no error\n";
+} catch (\TypeError $e) {
+    echo "TypeError caught\n";
+}
+"#,
+    );
+    assert_eq!(out, "TypeError caught\n");
+}

@@ -106,6 +106,7 @@ pub(super) fn load_property_store_value_to_result(
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
             PhpType::Object(_) => property_values::emit_mixed_object_for_property_store(ctx),
+            PhpType::Callable => property_values::emit_mixed_callable_for_property_store(ctx),
             PhpType::Array(_) | PhpType::AssocArray { .. } => {
                 property_values::emit_mixed_array_for_property_store(ctx, slot_ty)
             }
