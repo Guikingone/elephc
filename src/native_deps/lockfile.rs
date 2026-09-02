@@ -259,6 +259,16 @@ mod tests {
         assert_eq!(lock.package[0].target[0].archives[0], "lib/libelephc_pcre2_shim.a");
     }
 
+    /// Verifies the committed curl example lock includes every current catalog target.
+    #[test]
+    fn curl_example_lock_matches_current_catalog() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let manifest =
+            ManifestDocument::load(&root.join("examples/curl-get/elephc.toml")).unwrap();
+        let lock = NativeLock::load(&root.join("examples/curl-get/elephc.lock")).unwrap();
+        lock.validate_current(&manifest).unwrap();
+    }
+
     /// Verifies every stale catalog dimension and unknown field fails closed.
     #[test]
     fn stale_or_extended_lock_is_rejected() {
