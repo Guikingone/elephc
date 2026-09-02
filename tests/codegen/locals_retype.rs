@@ -3025,6 +3025,44 @@ fn test_array_splice_into_a_widened_slot_leaves_a_clean_heap() {
     );
 }
 
+/// A widening in a body that also calls `eval()`.
+///
+/// The eval body refused every widening because the KILL refuses one: a kill drops the name's
+/// frame slot and mints a fresh one, while the eval scope addresses caller locals BY NAME, so the
+/// fragment then reads a slot the rest of the body no longer uses. All three shapes the gate was
+/// measured on printed NOTHING that way. A widening abandons nothing — it keeps the slot and lets
+/// `store_local` box it, which is the representation the eval scope wants, and is exactly why the
+/// branch-divergent `Mixed`-storage marking was never gated either.
+///
+/// Every position matters and each is a separate edge: the widening BEFORE the eval (both with
+/// and without a refused `unset` in between), the eval before it, a fragment that WRITES the name
+/// before the widening, and a fragment that writes it after a widening in a branch. The kill and
+/// the re-bind are still refused — `error_tests::type_system::test_retype_in_an_eval_body_is_an_error`
+/// asserts that half.
+#[test]
+fn test_widening_beside_an_eval_answers() {
+    let out = compile_and_run("<?php $a = \"old\" . $argc; $a = 7; eval('echo $a;');");
+    assert_eq!(out, "7");
+
+    let out = compile_and_run("<?php $a = \"old\" . $argc; unset($a); $a = 7; eval('echo $a;');");
+    assert_eq!(out, "7");
+
+    let out = compile_and_run(
+        "<?php $a = \\strlen(\"ab\"); eval('echo $a;'); $a = \"si\"; echo \"|\", $a, \"|\", \\gettype($a);",
+    );
+    assert_eq!(out, "2|si|string");
+
+    let out = compile_and_run(
+        "<?php $a = \\strlen(\"ab\"); eval('$a = 9;'); echo $a; $a = \"si\"; echo \"|\", $a, \"|\", \\gettype($a);",
+    );
+    assert_eq!(out, "9|si|string");
+
+    let out = compile_and_run(
+        "<?php $a = \\strlen(\"ab\"); if ($argc > 0) { $a = \"si\"; } eval('echo $a; $a = \"w\";'); echo \"|\", $a, \"|\", \\gettype($a);",
+    );
+    assert_eq!(out, "si|w|string");
+}
+
 /// A `++` after the branch, which disqualifies the mixed-storage marking and so leaves the store
 /// on the widening arm — both when the branch is skipped and when it is taken.
 ///

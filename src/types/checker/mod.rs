@@ -582,7 +582,18 @@ impl Checker {
     ///   by-reference PARAMETER lends its slot address for one call and keeps its own frame
     ///   storage afterwards, so it widens like any other local — `sort($c); … $c = 'x';` and the
     ///   `array_shift` / `array_pop` / `array_splice` / `preg_match_all` / `uksort` shapes it
-    ///   stands for. [`Checker::ref_bound_locals`] is the narrower set this reads.
+    ///   stands for. [`Checker::ref_bound_locals`] is the narrower set this reads;
+    /// - the EVAL-body flag, for the reason [`Checker::local_binding_is_killable`]'s own doc
+    ///   already gives for exempting the `Mixed`-storage marking. The kill needs it because ending
+    ///   a binding DROPS the name's frame slot and mints a fresh one, while the eval scope
+    ///   addresses caller locals BY NAME — the fragment then reads or writes a slot the rest of
+    ///   the body no longer uses, which is why all three repros there printed nothing. A widening
+    ///   drops nothing: it keeps the slot and lets `store_local` box it, which is the
+    ///   representation the eval scope wants anyway. `ContainerBuilder::createService` is the
+    ///   shape — one `eval()` at its line 1129 made `$factory = fn (…) => …` 36 lines below it a
+    ///   hard error. Measured against `php -n` and byte-identical: the widening before the eval
+    ///   with and without a refused `unset` between them, the eval before the widening, a fragment
+    ///   that WRITES the name on either side of it, and a widening inside a branch.
     ///
     /// Everything else the kill demands is kept, plus the program-global veto the kill applies
     /// separately: a by-reference parameter, a `=&` alias, a `global` write through a cell another
@@ -590,8 +601,7 @@ impl Checker {
     /// becoming a silent widening of storage this frame does not own. `--strict-locals` still
     /// rejects every one of these shapes, at every depth.
     pub(crate) fn local_binding_is_widenable(&self, name: &str) -> bool {
-        !self.body_contains_eval
-            && !self.name_is_seeded_program_storage(name)
+        !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)
             && !self.active_ref_params.contains(name)
             && !self.ref_bound_locals.contains(name)

@@ -3442,35 +3442,61 @@ fn test_unset_without_eval_still_records_a_kill_site() {
     );
 }
 
-/// The binding the kill no longer ends is still there, so a later INCOMPATIBLE assignment is the
-/// pre-feature hard error rather than a fresh binding.
+/// The binding the kill no longer ends is still there, so a later INCOMPATIBLE assignment does
+/// not get a fresh slot: no kill site and no re-bind site are recorded, which is the decision.
 ///
 /// Measured before the gate: this compiled with no diagnostic at all and printed NOTHING where
-/// PHP prints `7`.
+/// PHP prints `7` — because the re-bind ABANDONED the slot the eval fragment then addressed by
+/// name. Both halves of that are still refused here. What takes over is the WIDENING, which
+/// abandons nothing: it keeps the slot and lets `store_local` box it, which is the very
+/// representation the eval scope wants (the same reason `mixed_storage_scan`'s marking was never
+/// gated). `codegen::locals_retype::test_widening_beside_an_eval_answers` runs it: `7`, php's
+/// answer. `--strict-locals` still refuses the shape outright.
 #[test]
 fn test_kill_then_rebind_in_an_eval_body_is_an_error() {
-    expect_error(
-        "<?php $a = \"old\" . $argc; unset($a); $a = 7; eval('echo $a;');",
-        "cannot reassign $a",
+    let source = "<?php $a = \"old\" . $argc; unset($a); $a = 7; eval('echo $a;');";
+    let result =
+        check_source_full(source).expect("the widening must carry this shape in permissive mode");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "an eval body may not abandon a slot the fragment addresses by name: {:?}",
+        result.local_bind_kill_sites
     );
+    assert!(
+        result.local_retype_sites.is_empty(),
+        "…and may not re-bind one either: {:?}",
+        result.local_retype_sites
+    );
+    expect_warning(source, "$a changes type from string to int");
+    expect_error_strict(source, "cannot reassign $a");
 }
 
-/// The straight-line RETYPE is gated by the same rule, and for the same reason: it too abandons
-/// the name's slot and mints a fresh one.
+/// The straight-line RETYPE is refused by the same rule, and for the same reason: it too would
+/// abandon the name's slot and mint a fresh one.
 ///
 /// This shape has no `unset` in it at all, and it was the second silent miscompile found while
 /// fixing the first: measured before the gate, `$a = "old"; $a = 7; eval('echo $a;');` compiled
-/// with only the retype warning and printed NOTHING where PHP prints `7`.
+/// with only the retype warning and printed NOTHING where PHP prints `7`. Read here off the
+/// absent re-bind site, since the widening now carries the shape and prints `7` like php.
 #[test]
 fn test_retype_in_an_eval_body_is_an_error() {
-    expect_error(
+    for source in [
         "<?php $a = \"old\"; $a = 7; eval('echo $a;');",
-        "cannot reassign $a",
-    );
-    expect_error(
         "<?php $a = \"old\" . $argc; $a = 7; eval('echo $a;');",
-        "cannot reassign $a",
-    );
+    ] {
+        let result = check_source_full(source).expect("the widening must carry this shape");
+        assert!(
+            result.local_retype_sites.is_empty(),
+            "an eval body may not re-bind a local: {:?}",
+            result.local_retype_sites
+        );
+        assert!(
+            result.local_bind_kill_sites.is_empty(),
+            "…nor kill one: {:?}",
+            result.local_bind_kill_sites
+        );
+        expect_error_strict(source, "cannot reassign $a");
+    }
 }
 
 /// An `eval` in a CLOSURE body poisons that closure's scope only. The closure gets its own body
