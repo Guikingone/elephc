@@ -36,7 +36,7 @@
 //!   for the same reason: without it, a handle reused across two multi runs would
 //!   report the concatenation of both bodies from `curl_multi_getcontent()`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_int, c_long, c_uint, c_void};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -146,6 +146,10 @@ pub(crate) struct MultiEntry {
     /// Used ONLY to detach them before `curl_multi_cleanup`; the PHP-visible
     /// add-order list lives on the `CurlMultiHandle` object.
     attached: Vec<i64>,
+    /// Easy handles already counted as network operations for their current
+    /// attachment. Completion or removal clears the id so a later transfer is
+    /// counted independently.
+    monitored_easy: HashSet<i64>,
     /// The `CURLMcode` from the most recent multi operation on this handle,
     /// backing PHP's `curl_multi_errno()`.
     last_errno: CURLMcode,
@@ -268,6 +272,7 @@ pub extern "C" fn elephc_curl_multi_init() -> i64 {
             MultiEntry {
                 multi,
                 attached: Vec::new(),
+                monitored_easy: HashSet::new(),
                 last_errno: CURLM_OK,
                 last_message: InfoMessage::default(),
             },
@@ -330,6 +335,7 @@ pub extern "C" fn elephc_curl_multi_remove(multi_id: i64, easy_id: i64) -> i32 {
         entry.last_errno = code;
         if code == CURLM_OK {
             entry.attached.retain(|&id| id != easy_id);
+            entry.monitored_easy.remove(&easy_id);
         }
         code
     })
@@ -351,13 +357,30 @@ pub extern "C" fn elephc_curl_multi_remove(multi_id: i64, easy_id: i64) -> i32 {
 #[no_mangle]
 pub extern "C" fn elephc_curl_multi_perform(multi_id: i64) -> i64 {
     handles::ffi_guard(pack_perform(0, CURLM_BAD_HANDLE), || {
-        let multi = {
-            let guard = handles::lock_recover(multis());
-            let Some(entry) = guard.get(&multi_id) else {
+        let (multi, attached, new_operations) = {
+            let mut guard = handles::lock_recover(multis());
+            let Some(entry) = guard.get_mut(&multi_id) else {
                 return pack_perform(0, CURLM_BAD_HANDLE);
             };
-            entry.multi
+            let attached = entry.attached.clone();
+            let new_operations = attached
+                .iter()
+                .filter(|easy_id| entry.monitored_easy.insert(**easy_id))
+                .count();
+            (entry.multi, attached, new_operations)
         };
+        {
+            let mut guard = handles::lock_recover(handles::handles());
+            for easy_id in attached {
+                if let Some(entry) = guard.get_mut(&easy_id) {
+                    unsafe { crate::abi::refresh_monitor_traceparent(entry) };
+                }
+            }
+        }
+        let hooks = crate::monitoring::hooks();
+        for _ in 0..new_operations {
+            hooks.note_operation();
+        }
         // Opens a fresh callback-throw scope, exactly as `elephc_curl_easy_perform` does.
         // Without it the process-wide gate raised by a throw in an EARLIER
         // `curl_multi_exec()` call would still be set here and would silently suppress
@@ -403,7 +426,8 @@ pub extern "C" fn elephc_curl_multi_select(multi_id: i64, timeout_ms: i64) -> i3
         // while never handing libcurl a truncated wrap-around.
         let timeout = timeout_ms.clamp(c_int::MIN as i64, c_int::MAX as i64) as c_int;
         let mut numfds: c_int = 0;
-        let code = unsafe {
+        let hooks = crate::monitoring::hooks();
+        let code = hooks.timed(|| unsafe {
             curl_multi_wait(
                 multi,
                 std::ptr::null_mut(),
@@ -411,7 +435,7 @@ pub extern "C" fn elephc_curl_multi_select(multi_id: i64, timeout_ms: i64) -> i3
                 timeout,
                 &mut numfds as *mut c_int,
             )
-        };
+        });
         record_errno(multi_id, code);
         if code != CURLM_OK {
             return -1;
@@ -483,6 +507,9 @@ pub extern "C" fn elephc_curl_multi_info_read(multi_id: i64, field: i64) -> i64 
         let Some(entry) = guard.get_mut(&multi_id) else {
             return 0;
         };
+        if easy_id != 0 {
+            entry.monitored_easy.remove(&easy_id);
+        }
         entry.last_message = InfoMessage {
             // libcurl's own `msg` verbatim, exactly as php-src's `add_assoc_long(…, "msg",
             // tmp_msg->msg)` reports it. `CURLMSG_DONE` is the only value libcurl has ever

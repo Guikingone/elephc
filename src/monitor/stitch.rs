@@ -311,8 +311,10 @@ pub(crate) fn stitch_report(slices: &[Slice]) -> String {
             };
             let queries: u64 = slice.graph.nodes.iter().map(|n| n.io_exclusive).sum();
             let waited: u64 = slice.graph.nodes.iter().map(|n| n.wait_exclusive).sum();
+            let network: u64 = slice.graph.nodes.iter().map(|node| node.network_ops).sum();
+            let network_wait: u64 = slice.graph.nodes.iter().map(|node| node.network_wait).sum();
             out.push_str(&format!(
-                "{:indent$}{} {}  {}  {}  {} fn{}{}\n",
+                "{:indent$}{} {}  {}  {}  {} fn{}{}{}{}\n",
                 "",
                 if depth == 0 { "●" } else { "└─" },
                 slice.service,
@@ -326,6 +328,16 @@ pub(crate) fn stitch_report(slices: &[Slice]) -> String {
                 },
                 if waited > 0 {
                     format!("  {} waiting", fmt_ns(waited))
+                } else {
+                    String::new()
+                },
+                if network > 0 {
+                    format!("  {network} network")
+                } else {
+                    String::new()
+                },
+                if network_wait > 0 {
+                    format!("  {} network-wait", fmt_ns(network_wait))
                 } else {
                     String::new()
                 },
@@ -450,6 +462,13 @@ pub(crate) fn run_stitch(cmd: &MonitorCommand) -> i32 {
                     functions: slice.graph.nodes.len(),
                     queries: slice.graph.nodes.iter().map(|n| n.io_exclusive).sum(),
                     wait_ns: slice.graph.nodes.iter().map(|n| n.wait_exclusive).sum(),
+                    network_ops: slice.graph.nodes.iter().map(|node| node.network_ops).sum(),
+                    network_wait_ns: slice
+                        .graph
+                        .nodes
+                        .iter()
+                        .map(|node| node.network_wait)
+                        .sum(),
                     start_us: trace.start_us,
                     top,
                 })

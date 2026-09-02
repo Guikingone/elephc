@@ -674,6 +674,7 @@ dependencies = [
  "elephc-curl",
  "elephc-image",
  "elephc-magician",
+ "elephc-monitoring-contract",
  "elephc-pdo",
  "elephc-phar",
  "elephc-probe",
@@ -733,6 +734,7 @@ dependencies = [
 name = "elephc-curl"
 version = "0.1.0"
 dependencies = [
+ "elephc-monitoring-contract",
  "libc",
  "serde_json",
 ]
@@ -775,11 +777,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "elephc-monitoring-contract"
+version = "0.1.0"
+
+[[package]]
 name = "elephc-pdo"
 version = "0.1.0"
 dependencies = [
  "bytes",
  "chrono",
+ "elephc-monitoring-contract",
  "futures-util",
  "libloading",
  "libpq",

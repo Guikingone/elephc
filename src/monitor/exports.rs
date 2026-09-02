@@ -159,6 +159,8 @@ pub(crate) fn export_otlp(slices: &[Slice], endpoint: &str) -> i32 {
         let start_ns = start_us.saturating_mul(1_000);
         let queries: u64 = slice.graph.nodes.iter().map(|n| n.io_exclusive).sum();
         let wait_ns: u64 = slice.graph.nodes.iter().map(|n| n.wait_exclusive).sum();
+        let network_ops: u64 = slice.graph.nodes.iter().map(|node| node.network_ops).sum();
+        let network_wait_ns: u64 = slice.graph.nodes.iter().map(|node| node.network_wait).sum();
         let name = if trace.route.is_empty() {
             slice.service.clone()
         } else {
@@ -180,6 +182,8 @@ pub(crate) fn export_otlp(slices: &[Slice], endpoint: &str) -> i32 {
                 ("elephc.functions".to_string(), slice.graph.nodes.len() as i64),
                 ("elephc.queries".to_string(), queries as i64),
                 ("elephc.wait_ns".to_string(), wait_ns as i64),
+                ("elephc.network_operations".to_string(), network_ops as i64),
+                ("elephc.network_wait_ns".to_string(), network_wait_ns as i64),
             ],
             string_attributes,
         });

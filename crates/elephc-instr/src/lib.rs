@@ -108,6 +108,10 @@ struct FnAcc {
     /// Self time minus this wait is an unclassified non-DB remainder.
     incl_wait: u64,
     excl_wait: u64,
+    /// Outgoing network operations attributed directly to the active function.
+    network_ops: u64,
+    /// Nanoseconds blocked in outgoing network work by the active function.
+    network_wait: u64,
     /// Live activations on the stack — inclusive is credited only when this
     /// returns to zero, so recursion is not double counted.
     depth: u32,
@@ -972,6 +976,26 @@ impl State {
         }
     }
 
+    /// Attributes one outgoing network operation to the active PHP function.
+    fn note_network(&mut self) {
+        let Some(id) = self.stack.last().map(|frame| frame.id) else {
+            return;
+        };
+        if let Some(acc) = self.fns.get_mut(id as usize) {
+            acc.network_ops = acc.network_ops.wrapping_add(1);
+        }
+    }
+
+    /// Attributes blocked outgoing-network time to the active PHP function.
+    fn note_network_wait(&mut self, ns: u64) {
+        let Some(id) = self.stack.last().map(|frame| frame.id) else {
+            return;
+        };
+        if let Some(acc) = self.fns.get_mut(id as usize) {
+            acc.network_wait = acc.network_wait.wrapping_add(ns);
+        }
+    }
+
     /// Drops every accumulator so the next dump reports only what follows it.
     /// The live stack is cleared too: a dump happens at a point where nothing
     /// of this slice is still running, and carrying frames across the boundary
@@ -1084,7 +1108,7 @@ impl State {
             let incl_ret = acc.incl_allocs as i64 - acc.incl_frees as i64;
             let excl_ret = acc.excl_allocs as i64 - acc.excl_frees as i64;
             out.push_str(&format!(
-                "elephc-instr: {} calls={} incl_ns={} excl_ns={} incl_allocs={} excl_allocs={} incl_io={} excl_io={} incl_ret={} excl_ret={} incl_wait={} excl_wait={}\n",
+                "elephc-instr: {} calls={} incl_ns={} excl_ns={} incl_allocs={} excl_allocs={} incl_io={} excl_io={} incl_ret={} excl_ret={} incl_wait={} excl_wait={} network_ops={} network_wait={}\n",
                 name_of(id),
                 acc.calls,
                 // Ticks became nanoseconds here, once, rather than twice per
@@ -1099,7 +1123,9 @@ impl State {
                 incl_ret,
                 excl_ret,
                 acc.incl_wait,
-                acc.excl_wait
+                acc.excl_wait,
+                acc.network_ops,
+                acc.network_wait,
             ));
         }
         let mut edges: Vec<(&(u32, u32), &(u64, u64))> = self.edges.iter().collect();
@@ -1158,6 +1184,24 @@ pub extern "C" fn elephc_instr_wait(ns: u64) {
         return;
     }
     WAIT_NS.fetch_add(ns, Ordering::Relaxed);
+}
+
+/// Records one outgoing network operation against the active function.
+#[no_mangle]
+pub extern "C" fn elephc_instr_network() {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    STATE.with(|state| state.borrow_mut().note_network());
+}
+
+/// Records blocked outgoing-network nanoseconds against the active function.
+#[no_mangle]
+pub extern "C" fn elephc_instr_network_wait(ns: u64) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    STATE.with(|state| state.borrow_mut().note_network_wait(ns));
 }
 
 /// How many distinct statement shapes one slice may record.
@@ -5106,6 +5150,8 @@ mod tests {
         let mut s = State::default();
         s.enter_sim(0, 0, 0, 0, 0, 0);
         s.enter_sim(1, 0, 0, 0, 0, 0);
+        s.note_network();
+        s.note_network_wait(2_000);
         s.exit_sim(1, 40, 7, 5, 3, 0); // hot: 7 allocs, 5 frees, 3 io ops
         s.exit_sim(0, 50, 8, 5, 3, 0);
         let names = vec!["{main}".to_string(), "hot".to_string()];
@@ -5114,6 +5160,11 @@ mod tests {
         // never freed, so the run retains 3 in total.
         assert!(out.contains("elephc-instr: {main} calls=1 incl_ns=50 excl_ns=10 incl_allocs=8 excl_allocs=1 incl_io=3 excl_io=0 incl_ret=3 excl_ret=1"), "{out}");
         assert!(out.contains("elephc-instr: hot calls=1 incl_ns=40 excl_ns=40 incl_allocs=7 excl_allocs=7 incl_io=3 excl_io=3 incl_ret=2 excl_ret=2"), "{out}");
+        let hot = out
+            .lines()
+            .find(|line| line.starts_with("elephc-instr: hot "))
+            .expect("hot row");
+        assert!(hot.contains("network_ops=1 network_wait=2000"), "{out}");
         assert!(out.contains("elephc-instr-edge: {main} -> hot count=1 ns=40"), "{out}");
     }
 

@@ -338,6 +338,8 @@ pub(crate) static EMPTY_NODE: std::sync::LazyLock<crate::call_graph::GraphNode> 
         retained_exclusive: 0,
         wait_inclusive: 0,
         wait_exclusive: 0,
+        network_ops: 0,
+        network_wait: 0,
         causes: Vec::new(),
     });
 
@@ -371,6 +373,8 @@ pub(crate) const ASSERT_METRICS: &[(&str, &str)] = &[
     ("self_ms", "milliseconds of its own time"),
     ("incl_ms", "milliseconds including everything it calls"),
     ("wait_ms", "milliseconds blocked inside a driver call"),
+    ("network", "outgoing network operations it issues itself"),
+    ("network_wait_ms", "milliseconds blocked in outgoing network work"),
     ("time_pct", "inclusive time as a percentage of the run"),
 ];
 
@@ -388,6 +392,8 @@ pub(crate) fn assert_metric_value(
         "self_ms" => Some(node.exclusive as f64 / 1_000_000.0),
         "incl_ms" => Some(node.inclusive as f64 / 1_000_000.0),
         "wait_ms" => Some(node.wait_exclusive as f64 / 1_000_000.0),
+        "network" => Some(node.network_ops as f64),
+        "network_wait_ms" => Some(node.network_wait as f64 / 1_000_000.0),
         "time_pct" => Some(100.0 * node.inclusive as f64 / root_ns as f64),
         _ => None,
     }
@@ -409,6 +415,8 @@ pub(crate) fn assert_run_total(metric: &str, graph: &crate::call_graph::CallGrap
         "queries" => Some(sum_excl(|n| n.io_exclusive as f64)),
         "self_ms" | "incl_ms" => Some(root_ns as f64 / 1_000_000.0),
         "wait_ms" => Some(sum_excl(|n| n.wait_exclusive as f64) / 1_000_000.0),
+        "network" => Some(sum_excl(|n| n.network_ops as f64)),
+        "network_wait_ms" => Some(sum_excl(|n| n.network_wait as f64) / 1_000_000.0),
         "time_pct" => Some(100.0),
         _ => None,
     }

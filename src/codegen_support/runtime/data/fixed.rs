@@ -335,6 +335,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // reports the nanoseconds through it, which separates recorded DB wait from
     // each function's remaining wall time. Zero (inert) in a normal binary.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_wait_fn"), 8, target));
+    // elephc_instr_network_fn: category-specific companion used by outgoing
+    // network bridges. Keeping this separate from the DB slot preserves query
+    // budgets and N+1 analysis when a request also performs HTTP calls.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_network_fn"), 8, target));
+    // elephc_instr_network_wait_fn: blocked network duration reported without
+    // folding it into the DB-driver wait metric.
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_instr_network_wait_fn"),
+        8,
+        target,
+    ));
     // elephc_instr_trace_fn: fourth companion slot, filled with
     // elephc_instr_trace_begin under --instrument. The web bridge calls it at
     // the start of every request with the inbound W3C `traceparent`, so a

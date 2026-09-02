@@ -92,6 +92,29 @@ pub(crate) fn instrument_recommendations(graph: &crate::call_graph::CallGraph) -
             ));
         }
     }
+    let total_network_wait: u64 = graph.nodes.iter().map(|n| n.network_wait).sum();
+    if root_ns > 0 && total_network_wait > 0 {
+        let pct = 100.0 * total_network_wait as f64 / root_ns as f64;
+        if pct >= 25.0 {
+            let worst = graph
+                .nodes
+                .iter()
+                .max_by_key(|node| node.network_wait)
+                .filter(|node| node.network_wait > 0);
+            let who = worst.map_or(String::new(), |node| {
+                format!(
+                    " - {} blocks longest ({})",
+                    node.name,
+                    fmt_ns(node.network_wait)
+                )
+            });
+            hints.push(format!(
+                "• the run is network-bound: {:.0}% of it ({}) is outgoing network wait{who}",
+                pct,
+                fmt_ns(total_network_wait)
+            ));
+        }
+    }
     // Query hotspot: which function issues the most DB queries.
     let total_io: u64 = graph.nodes.iter().map(|n| n.io_exclusive).sum();
     if total_io > 0 {
@@ -312,6 +335,8 @@ pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph 
             let retained_exclusive = instr_field_i64(metrics, "excl_ret=");
             let wait_inclusive = instr_field(metrics, "incl_wait=");
             let wait_exclusive = instr_field(metrics, "excl_wait=");
+            let network_ops = instr_field(metrics, "network_ops=");
+            let network_wait = instr_field(metrics, "network_wait=");
             index.insert(name.to_string(), nodes.len());
             nodes.push(GraphNode {
                 name: name.to_string(),
@@ -326,6 +351,8 @@ pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph 
                 retained_exclusive,
                 wait_inclusive,
                 wait_exclusive,
+                network_ops,
+                network_wait,
                 causes: Vec::new(),
             });
         }
@@ -469,6 +496,8 @@ pub(crate) fn instrument_table(graph: &crate::call_graph::CallGraph) -> String {
     let has_ret = graph.nodes.iter().any(|n| n.retained_inclusive != 0);
     // And the wait column: only when some call actually blocked in a driver.
     let has_wait = graph.nodes.iter().any(|n| n.wait_inclusive > 0);
+    let has_network = graph.nodes.iter().any(|node| node.network_ops > 0);
+    let has_network_wait = graph.nodes.iter().any(|node| node.network_wait > 0);
     for node in nodes {
         let incl = 100.0 * node.inclusive as f64 / root as f64;
         let excl = 100.0 * node.exclusive as f64 / root as f64;
@@ -494,8 +523,18 @@ pub(crate) fn instrument_table(graph: &crate::call_graph::CallGraph) -> String {
         } else {
             String::new()
         };
+        let network = if has_network {
+            format!("  network {}", node.network_ops)
+        } else {
+            String::new()
+        };
+        let network_wait = if has_network_wait {
+            format!("  network-wait {}", fmt_ns(node.network_wait))
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
-            "{name:<27} {}  incl {incl:>5.1}%  self {excl:>5.1}%  calls {calls}  self {}  allocs {}{queries}{retained}{wait}\n",
+            "{name:<27} {}  incl {incl:>5.1}%  self {excl:>5.1}%  calls {calls}  self {}  allocs {}{queries}{retained}{wait}{network}{network_wait}\n",
             bar(incl, 20),
             fmt_ns(node.exclusive),
             node.alloc_exclusive,
