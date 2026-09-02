@@ -202,23 +202,22 @@ pub(crate) fn build_if_chain_body(
     elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
     else_body: Option<Vec<Stmt>>,
 ) -> Vec<Stmt> {
-    if let Some(((condition, then_body), rest)) = elseif_clauses.split_first() {
-        let nested_else_body = normalize_optional_block(Some(build_if_chain_body(
-            rest.to_vec(),
-            else_body,
-        )));
-        vec![Stmt::new(
-            StmtKind::If {
-                condition: condition.clone(),
-                then_body: then_body.clone(),
-                elseif_clauses: Vec::new(),
-                else_body: nested_else_body,
-            },
-            condition.span,
-        )]
-    } else {
-        else_body.unwrap_or_default()
-    }
+    let mut clauses = elseif_clauses.into_iter();
+    let Some((condition, then_body)) = clauses.next() else {
+        return else_body.unwrap_or_default();
+    };
+    let nested_else_body =
+        normalize_optional_block(Some(build_if_chain_body(clauses.collect(), else_body)));
+    let span = condition.span;
+    vec![Stmt::new(
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses: Vec::new(),
+            else_body: nested_else_body,
+        },
+        span,
+    )]
 }
 
 /// Materializes the effective execution path of a switch starting from an
