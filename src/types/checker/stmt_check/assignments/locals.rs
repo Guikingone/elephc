@@ -1033,6 +1033,14 @@ fn merge_local_assignment_type(
         env.insert(name.to_string(), PhpType::Mixed);
         return Ok(());
     }
+    // The widening arm below warns WITHOUT recording a decision site, so its warning has no site
+    // key a later walk could retract it through. This visit re-decides the site, so retract it
+    // here — below the mark's early return, because the MARK files its own warning against these
+    // same (span, name) keys (`mixed_storage_scan`) and retracting it there would silently delete
+    // the diagnostic of a decision that is still standing.
+    checker
+        .binding_decision_warnings
+        .remove(&(span, name.to_string()));
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty);
         if merged_ty.is_none() {
@@ -1089,6 +1097,41 @@ fn merge_local_assignment_type(
                 // dropped at the top of `check_assign`). Clearing again would discard the
                 // NEW binding's metadata instead: `$f = 1; $f = function (int $a) {…};
                 // $f("s")` would lose the signature that reports the bad argument.
+                env.insert(name.to_string(), ty.clone());
+                return Ok(());
+            }
+            // The precise re-bind was refused, but PHP still ALLOWS the write: a local may hold a
+            // value of any type at any point, and `function f(int $a) { $a = "s"; … }` — a write to
+            // a type-hinted parameter — is ordinary code that the hard error rejected outright.
+            // Fall back to the storage-widening path this compiler used before precise re-binds
+            // existed: bind the new type in the environment and record NO retype span, so lowering
+            // keeps the slot and `store_local` joins its storage type instead of abandoning it.
+            // Correct, just less precise — the same degradation `rebind_local_for_retype` already
+            // takes when the name's slot is not the value's home, and the same one this function
+            // takes for a `Span::dummy()` assignment.
+            //
+            // Eligibility is `Checker::local_binding_is_widenable`: this frame's own storage, no
+            // other name reaching the same cell, and the store at conditional depth 0 — see that
+            // predicate for the measured reason the depth condition survives here even though a
+            // widening needs no proof that the store runs. `--strict-locals` keeps the hard error,
+            // which is the whole point of the flag.
+            if !checker.strict_locals && checker.local_binding_is_widenable(name) {
+                let message = format!(
+                    "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",
+                    name, existing, ty
+                );
+                if span.identifies_a_node() {
+                    checker.binding_decision_warnings.insert(
+                        (span, name.to_string()),
+                        CompileWarning::new(span, &message),
+                    );
+                } else {
+                    checker.warnings.push(CompileWarning::new(span, &message));
+                }
+                // Deliberately NOT recorded in `local_retype_sites`, and the binding depth is
+                // deliberately left alone: no binding ended here, so nothing downstream may
+                // abandon the slot or judge a later decision against a binding this arm did not
+                // create.
                 env.insert(name.to_string(), ty.clone());
                 return Ok(());
             }

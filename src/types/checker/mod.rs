@@ -509,6 +509,58 @@ impl Checker {
             && !self.typed_local_names.contains(name)
     }
 
+    /// True when `name`'s binding may simply TAKE a type it cannot merge with, leaving its frame
+    /// slot in place for `store_local` to widen — the storage path every incompatible reassignment
+    /// used before precise re-binds existed.
+    ///
+    /// PHP has no illegal local reassignment. `function f(int $a) { $a = "s"; … }` — a write to a
+    /// TYPE-HINTED parameter — is ordinary code that `php -n` runs, and so is a write to a
+    /// `foreach`/`list()`/`catch` name the body never assigned through `check_assign`. Both are
+    /// refused by [`Checker::local_binding_is_killable`], which answers the strictly harder
+    /// question — may the old frame slot be ABANDONED, so the store mints a fresh one. Widening
+    /// does not abandon anything: the slot stays and `store_local` joins its storage type.
+    ///
+    /// TWO of the kill's conditions are dropped, and only those two:
+    ///
+    /// - the BINDING's conditional depth, which the kill reads as `Some(0)`. That test answers
+    ///   "bound unconditionally by this body" and rejects two different things at once: a binding
+    ///   created inside a branch, and a name with NO entry at all. A missing entry is deliberate
+    ///   for every name a conditional group INTRODUCES without an assignment — a `foreach` or
+    ///   `list()` target, a `catch` variable, a builtin out-parameter — because the kill cannot
+    ///   tell it apart from depth ≥ 1 and sweeping them in was measurably expensive. Widening CAN
+    ///   tell them apart, and asks the question it actually cares about instead:
+    ///   [`Checker::name_is_seeded_program_storage`], the enumerated set of names whose storage is
+    ///   not this frame's (superglobals everywhere, `$argc`/`$argv` and extern C globals at top
+    ///   level). A `catch` variable is an ordinary frame slot and widens; `$_SERVER` is not and
+    ///   does not;
+    /// - the typed-local set, which at this point holds type-hinted PARAMETERS (a declared LOCAL
+    ///   returns from the `declared_local_types` arm above before reaching here). A parameter's
+    ///   type hint is a call-boundary contract, not a storage contract for the rest of the body.
+    ///
+    /// The CURRENT conditional depth is deliberately NOT dropped, even though widening needs no
+    /// proof that the store runs. Measured: with the depth condition removed,
+    /// `$i = \strlen('ab'); if ($argc > 0) { $i = 'si'; } echo $i;` printed `0` where php prints
+    /// `si`, and it did so only when a SECOND widening decision appeared later in the same body —
+    /// swapping the two made both correct. A store inside a branch needs the whole-frame boxed slot
+    /// `mixed_storage_scan` hands out, not a join at one store; until that scan can type the
+    /// divergent value (its `has_exact_syntactic_type` covers literals, casts and `.` only), the
+    /// branch shapes keep their loud error rather than becoming silently wrong output.
+    ///
+    /// Everything else the kill demands is kept, plus the program-global veto the kill applies
+    /// separately: a by-reference parameter, a `=&` alias, a `global` write through a cell another
+    /// body owns and a `static` whose storage outlives the call all stay hard errors rather than
+    /// becoming a silent widening of storage this frame does not own.
+    pub(crate) fn local_binding_is_widenable(&self, name: &str) -> bool {
+        !self.body_contains_eval
+            && self.local_conditional_depth == 0
+            && !self.name_is_seeded_program_storage(name)
+            && !self.top_level_binding_is_program_global(name)
+            && !self.active_ref_params.contains(name)
+            && !self.ref_aliased_locals.contains(name)
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
+    }
+
     /// True when `name` is bound in a body's INCOMING environment by seeding rather than by
     /// anything the body does, and the storage behind it is not this frame's.
     ///

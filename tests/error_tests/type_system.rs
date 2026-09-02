@@ -1672,13 +1672,22 @@ fn test_unset_inside_try_catch_finally_records_no_kill() {
 /// The same non-eligibility as an ERROR, in the shapes where the straight-line retype cannot
 /// rescue the program: a re-binding assignment that is itself inside a branch, and an
 /// expression-form one. Both are the hard `cannot reassign` a kill would have avoided.
+///
+/// Only the BRANCH shape is still that error. The expression-form one is a depth-0 store, which
+/// the widening arm accepts — a re-bind there has no well-defined result value to hand back to the
+/// enclosing expression, but a widening keeps the slot and hands back what it just stored. `php -n`
+/// prints `s`, and so does the compiled program; `--strict-locals` keeps the hard error.
 #[test]
 fn test_unset_inside_try_leaves_the_pre_feature_error() {
     expect_error(
         "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } if ($argc > 1) { $a = \"s\"; } echo $a;",
         "cannot reassign $a from int to string",
     );
-    expect_error(
+    expect_warning(
+        "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } $b = ($a = \"s\"); echo $b;",
+        "changes type from int to string",
+    );
+    expect_error_strict(
         "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } $b = ($a = \"s\"); echo $b;",
         "cannot reassign $a from int to string",
     );
@@ -1744,9 +1753,31 @@ fn test_typed_local_not_killable() {
 
 /// Parameters with a declared type hint are a contract: never killable.
 /// (An untyped parameter stays killable — pin that too.)
+///
+/// "Not killable" is about the KILL, which is what this test names and what it still asserts: no
+/// kill site is recorded for `$a`, so `unset($a)` stays the typing no-op it was. The reassignment
+/// that follows is a different decision, and it is no longer an error in permissive mode: a
+/// parameter's type hint is a CALL-BOUNDARY contract, not a storage contract for the rest of the
+/// body, so the store widens the parameter's own frame slot
+/// (`Checker::local_binding_is_widenable`). `php -n` prints `x` for this program, and the compiled
+/// program prints `x` too. `--strict-locals` keeps the hard error.
 #[test]
 fn test_typed_param_not_killable() {
-    expect_error("<?php function f(int $a) { unset($a); $a = \"x\"; } f(1);", "cannot reassign");
+    let result = check_source_full("<?php function f(int $a) { unset($a); $a = \"x\"; echo $a; } f(1);")
+        .expect("a typed parameter's unset-then-retype must type-check in permissive mode");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "a typed parameter is never killable: {:?}",
+        result.local_bind_kill_sites
+    );
+    expect_warning(
+        "<?php function f(int $a) { unset($a); $a = \"x\"; echo $a; } f(1);",
+        "changes type from int to string",
+    );
+    expect_error_strict(
+        "<?php function f(int $a) { unset($a); $a = \"x\"; echo $a; } f(1);",
+        "cannot reassign $a from int to string",
+    );
     expect_no_error("<?php function f($a) { unset($a); $a = \"x\"; echo $a; } f(1);");
 }
 
@@ -1781,11 +1812,27 @@ fn test_builtin_by_ref_call_arg_not_killable() {
 
 /// A `foreach` value target is bound inside the loop, which may never run, so it is not
 /// killable at depth 0 afterwards — even though nothing ever assigned it via `check_assign`.
+///
+/// The KILL is still refused, which is what the name says. The reassignment after it is not: a
+/// `foreach` value variable is an ordinary slot in this frame, so the store WIDENS it
+/// (`Checker::local_binding_is_widenable` asks `name_is_seeded_program_storage`, not the binding
+/// depth the kill reads). `php -n` prints `x`, and so does the compiled program.
 #[test]
 fn test_foreach_bound_local_not_killable() {
-    expect_error(
+    let result = check_source_full("<?php foreach ([1, 2] as $v) {} unset($v); $v = \"x\"; echo $v;")
+        .expect("a foreach target's unset-then-retype must type-check in permissive mode");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "a foreach-bound local is never killable: {:?}",
+        result.local_bind_kill_sites
+    );
+    expect_warning(
         "<?php foreach ([1, 2] as $v) {} unset($v); $v = \"x\"; echo $v;",
-        "cannot reassign",
+        "changes type from int to string",
+    );
+    expect_error_strict(
+        "<?php foreach ([1, 2] as $v) {} unset($v); $v = \"x\"; echo $v;",
+        "cannot reassign $v from int to string",
     );
 }
 
@@ -1870,6 +1917,82 @@ fn test_implicit_retype_warns_by_default() {
 #[test]
 fn test_implicit_retype_errors_under_strict_locals() {
     expect_error_strict("<?php $a = 0; $a = \"ciao\"; echo $a;", "cannot reassign $a");
+}
+
+/// A depth-0 reassignment the RE-BIND cannot take still compiles: it WIDENS the slot instead.
+///
+/// `Checker::local_binding_is_killable` answers "may the old frame slot be abandoned", and its
+/// extra conditions exist to make that abandonment provably safe. A widening abandons nothing —
+/// the slot stays and `store_local` joins its storage type — so the two shapes below, which the
+/// kill refuses and `php -n` runs without comment, no longer fail to compile:
+///
+/// - a TYPE-HINTED parameter, whose hint is a call-boundary contract rather than a storage
+///   contract for the body (`function f(int $n) { $n = "s"; }`);
+/// - a name a conditional group INTRODUCED without an assignment, which therefore has no binding
+///   depth recorded at all — a `foreach` value target here, reassigned after the loop; `list()`
+///   targets, `catch` variables and builtin out-parameters are the same shape.
+///
+/// Both keep the hard error under `--strict-locals`, which is what the flag is for. The measured
+/// runtime parity is in `codegen::locals_retype`.
+#[test]
+fn test_depth_zero_retype_the_rebind_refuses_still_widens() {
+    expect_warning(
+        "<?php function f(int $n): string { $n = \"s\"; return $n; } echo f(1);",
+        "changes type from int to string",
+    );
+    expect_error_strict(
+        "<?php function f(int $n): string { $n = \"s\"; return $n; } echo f(1);",
+        "cannot reassign $n from int to string",
+    );
+    expect_warning(
+        "<?php foreach ([1, 2] as $v) {} $v = \"x\"; echo $v;",
+        "changes type from int to string",
+    );
+    expect_error_strict(
+        "<?php foreach ([1, 2] as $v) {} $v = \"x\"; echo $v;",
+        "cannot reassign $v from int to string",
+    );
+}
+
+/// Storage that is NOT this frame's is refused in BOTH modes, however ordinary the PHP is.
+///
+/// `Checker::local_binding_is_widenable` widens a slot; it does not get to widen one another body
+/// owns. A superglobal, `$argv`, a `global`-declared name, a `static` local, a `=&` alias and a
+/// by-reference parameter therefore keep the hard error rather than becoming a silent widening —
+/// the same six refusals the kill applies, kept for the same reason. These are the controls that
+/// stop the widening arm from being satisfiable by simply accepting everything.
+#[test]
+fn test_storage_this_frame_does_not_own_is_never_widened() {
+    for source in [
+        "<?php $_SERVER = 5; var_dump($_SERVER);",
+        "<?php $argv = \"s\"; echo $argv;",
+        "<?php $g = 1; function f() { global $g; $g = \"x\"; } f(); echo $g;",
+        "<?php function f() { static $a = 1; $a = \"x\"; echo $a; } f();",
+        "<?php $a = 1; $r =& $a; $a = \"x\"; echo $a;",
+        "<?php function f(int &$x) { $x = \"s\"; } $a = 1; f($a); echo $a;",
+    ] {
+        expect_error(source, "cannot reassign");
+    }
+}
+
+/// The CURRENT conditional depth is the one kill condition the widening arm keeps.
+///
+/// Not because a widening needs the store to be proven to run — it does not — but because the
+/// lowering it degrades to is measurably wrong there. With the depth condition removed,
+/// `$i = strlen('ab'); if ($argc > 0) { $i = 'si'; } echo $i;` printed `0` where php prints `si`,
+/// and only when further code followed in the same body; a branch-divergent local needs the
+/// whole-frame boxed slot `mixed_storage_scan` hands out, not a join at one store. Until that scan
+/// can type such a value, these keep their loud error instead of becoming silently wrong output.
+#[test]
+fn test_a_store_inside_a_branch_is_not_widened() {
+    expect_error(
+        "<?php function f(int $n): string { if ($n > 0) { $n = \"s\"; } return (string) $n; } echo f(1);",
+        "cannot reassign $n from int to string",
+    );
+    expect_error(
+        "<?php $i = \\strlen(\"ab\"); if ($argc > 0) { $i = \"si\"; } echo $i; $j = 1; echo $j;",
+        "cannot reassign $i from int to string",
+    );
 }
 
 /// The `unset()` kill is MODE-INDEPENDENT: `--strict-locals` only tightens the two permissive
@@ -2152,11 +2275,25 @@ fn test_seeded_argv_not_killable() {
 
 /// A by-VALUE closure capture is seeded from the enclosing frame, so it is not killable inside
 /// the closure body either.
+///
+/// Not WIDENABLE is a different question, and the answer is the opposite one: the capture is
+/// seeded, but it is seeded into a slot the CLOSURE's own frame owns (see
+/// `Checker::name_is_seeded_program_storage`, which deliberately excludes captures and
+/// parameters), so the store after the refused kill widens that slot. `php -n` prints `x`.
 #[test]
 fn test_by_value_capture_not_killable_inside_closure() {
-    expect_error(
+    let result = check_source_full(
         "<?php $a = 1; $f = function () use ($a) { unset($a); $a = \"x\"; return $a; }; echo $f();",
-        "cannot reassign",
+    )
+    .expect("a captured name's unset-then-retype must type-check in permissive mode");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "a by-value capture is never killable: {:?}",
+        result.local_bind_kill_sites
+    );
+    expect_error_strict(
+        "<?php $a = 1; $f = function () use ($a) { unset($a); $a = \"x\"; return $a; }; echo $f();",
+        "cannot reassign $a from int to string",
     );
 }
 

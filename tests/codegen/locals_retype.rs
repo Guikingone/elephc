@@ -2716,3 +2716,44 @@ fn test_by_ref_foreach_still_writes_through_and_unsets() {
         out.stderr
     );
 }
+
+/// A TYPE-HINTED parameter reassigned to an incompatible type at depth 0 keeps its frame slot and
+/// widens it, and the program prints what `php -n` prints.
+///
+/// A parameter's type hint is a CALL-BOUNDARY contract: it says what the caller may pass, not what
+/// the body's slot may hold for the rest of the call. `Checker::local_binding_is_killable` refuses
+/// the precise re-bind here — a declared type is a contract it will not abandon a slot for — so
+/// before `Checker::local_binding_is_widenable` existed the whole program was rejected with
+/// `cannot reassign $n from int to string`. `php -n` prints `s|3`.
+#[test]
+fn test_typed_param_retype_widens_its_own_slot() {
+    let out = compile_and_run(
+        "<?php function f(int $n, string $s): string { $n = \"s\"; $s = \\strlen($s); return $n . \"|\" . $s; } echo f($argc, \"abc\");",
+    );
+    assert_eq!(out, "s|3");
+}
+
+/// The same for a name a conditional group INTRODUCED without ever assigning it: a `foreach` value
+/// target has no binding depth recorded at all, which the kill reads as "not a binding this body
+/// created" and refuses. Widening asks the question it actually needs — is this slot this frame's
+/// own storage — and a `foreach` value variable's is. `php -n` prints `done1`.
+#[test]
+fn test_foreach_target_retype_widens_after_the_loop() {
+    let out =
+        compile_and_run("<?php foreach ([1, 2, $argc] as $v) {} $v = \"done\" . $argc; echo $v;");
+    assert_eq!(out, "done1");
+}
+
+/// A widening store must not corrupt a read of the OLD binding written above it.
+///
+/// The re-bind path releases the previous occupant and abandons the slot; the widening path does
+/// neither, so a value a read above already captured stays valid and the slot simply joins its
+/// storage type. Both halves of the answer are heap strings, so a stale pointer would print
+/// garbage rather than a merely wrong integer. `php -n` prints `ab1!/3`.
+#[test]
+fn test_reads_above_a_widening_store_still_answer() {
+    let out = compile_and_run(
+        "<?php function f(string $s): string { $kept = $s . \"!\"; $s = \\strlen($s); return $kept . \"/\" . $s; } echo f(\"ab\" . $argc);",
+    );
+    assert_eq!(out, "ab1!/3");
+}
