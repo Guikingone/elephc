@@ -74,6 +74,7 @@ pub(in crate::parser::stmt) fn parse_class_decl(
     Ok(Stmt::new(
         StmtKind::ClassDecl {
             name,
+            doc_comment: None,
             extends,
             implements,
             is_abstract,
@@ -154,6 +155,7 @@ pub(crate) fn parse_anonymous_class(
     register_anonymous_class(Stmt::new(
         StmtKind::ClassDecl {
             name: name.clone(),
+            doc_comment: None,
             extends,
             implements,
             is_abstract: false,

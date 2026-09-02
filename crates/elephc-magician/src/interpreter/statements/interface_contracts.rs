@@ -24,6 +24,32 @@ pub(super) fn pending_class_interface_names(class: &EvalClass, context: &ElephcE
     interfaces
 }
 
+/// Returns the most-specific interface contracts declared by a pending class.
+///
+/// A child interface may legally redeclare a parent method with a narrower return type. Signature
+/// validation must therefore use the child contract once, rather than rechecking the overridden
+/// parent contract as an independent requirement. The full inherited list remains available for
+/// class-relation and enum/Throwable checks that require every ancestor name.
+pub(super) fn pending_class_contract_interface_names(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Vec<String> {
+    let interfaces = pending_class_interface_names(class, context);
+    interfaces
+        .iter()
+        .filter(|interface| {
+            !interfaces.iter().any(|candidate| {
+                !candidate.eq_ignore_ascii_case(interface)
+                    && context
+                        .interface_parent_names(candidate)
+                        .iter()
+                        .any(|parent| parent.eq_ignore_ascii_case(interface))
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 /// Adds one interface and its eval-declared parent interfaces to a pending class list.
 pub(super) fn push_pending_class_interface_tree(
     interface: &str,
@@ -55,7 +81,7 @@ pub(super) fn pending_class_builtin_interface_method_requirements(
     context: &ElephcEvalContext,
 ) -> Vec<(String, EvalInterfaceMethod)> {
     let mut requirements = Vec::new();
-    for interface in pending_class_interface_names(class, context) {
+    for interface in pending_class_contract_interface_names(class, context) {
         requirements.extend(builtin_interface_method_requirements(&interface));
     }
     requirements
@@ -68,7 +94,7 @@ pub(super) fn pending_class_aot_interface_method_requirements(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalAotInterfaceMethodRequirement>, EvalStatus> {
     let mut requirements = Vec::new();
-    for interface in pending_class_interface_names(class, context) {
+    for interface in pending_class_contract_interface_names(class, context) {
         if context.has_interface(&interface) || !values.interface_exists(&interface)? {
             continue;
         }
@@ -86,7 +112,7 @@ pub(super) fn pending_class_aot_interface_property_requirements(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<(String, EvalInterfaceProperty)>, EvalStatus> {
     let mut requirements = Vec::new();
-    for interface in pending_class_interface_names(class, context) {
+    for interface in pending_class_contract_interface_names(class, context) {
         if context.has_interface(&interface) || !values.interface_exists(&interface)? {
             continue;
         }

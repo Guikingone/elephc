@@ -36,6 +36,11 @@ impl Parser {
         self.expect(TokenKind::LBracket)?;
         if self.consume(TokenKind::RBracket) {
             self.expect(TokenKind::Equal)?;
+            if self.consume(TokenKind::Ampersand) {
+                let source = self.parse_expr()?;
+                self.expect_semicolon()?;
+                return Ok(vec![EvalStmt::ArrayAppendReferenceBind { name, source }]);
+            }
             let value = self.parse_expr()?;
             self.expect_semicolon()?;
             return Ok(vec![EvalStmt::ArrayAppendVar { name, value }]);
@@ -48,6 +53,12 @@ impl Parser {
         };
         let mut nested = false;
         while self.consume(TokenKind::LBracket) {
+            if self.consume(TokenKind::RBracket) {
+                self.expect(TokenKind::Equal)?;
+                let value = self.parse_expr()?;
+                self.expect_semicolon()?;
+                return Ok(vec![EvalStmt::ArrayAppend { target, value }]);
+            }
             nested = true;
             let nested_index = self.parse_expr()?;
             self.expect(TokenKind::RBracket)?;
@@ -64,13 +75,27 @@ impl Parser {
                 default: Box::new(default),
             })]);
         }
-        if nested {
-            let Some(op) = assignment_op(self.current()) else {
-                return Err(EvalParseError::UnexpectedToken);
-            };
+        if matches!(self.current(), TokenKind::Equal)
+            && matches!(self.peek(), TokenKind::Ampersand)
+        {
             self.advance();
-            let value = self.parse_expr()?;
+            self.advance();
+            let source = self.parse_expr()?;
             self.expect_semicolon()?;
+            return Ok(vec![EvalStmt::ArrayReferenceBind { target, source }]);
+        }
+        let Some(op) = assignment_op(self.current()) else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        self.advance();
+        if op.is_none() && self.consume(TokenKind::Ampersand) {
+            let source = self.parse_expr()?;
+            self.expect_semicolon()?;
+            return Ok(vec![EvalStmt::ArrayReferenceBind { target, source }]);
+        }
+        let value = self.parse_expr()?;
+        self.expect_semicolon()?;
+        if nested || op.is_some() {
             let expression = match op {
                 Some(op) => EvalExpr::CompoundAssign {
                     target: Box::new(target),
@@ -84,9 +109,6 @@ impl Parser {
             };
             return Ok(vec![EvalStmt::Expr(expression)]);
         }
-        self.expect(TokenKind::Equal)?;
-        let value = self.parse_expr()?;
-        self.expect_semicolon()?;
         Ok(vec![EvalStmt::ArraySetVar { name, index, value }])
     }
 
@@ -112,7 +134,7 @@ impl Parser {
         }])
     }
 
-    /// Parses `foreach (expr as $value) { ... }` or `foreach (expr as $key => $value) { ... }`.
+    /// Parses value, key-value, and array-destructuring `foreach` targets.
     pub(in crate::parser) fn parse_foreach_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LParen)?;
@@ -121,30 +143,70 @@ impl Parser {
             return Err(EvalParseError::UnexpectedToken);
         }
         self.advance();
-        let TokenKind::DollarIdent(value_name) = self.current() else {
-            return Err(EvalParseError::ExpectedVariable);
-        };
-        let value_name = value_name.clone();
-        self.advance();
-        let (key_name, value_name) = if matches!(self.current(), TokenKind::FatArrow) {
+        let (first_value_name, first_targets, first_by_ref) = self.parse_foreach_value_target()?;
+        let (key_name, value_name, targets, value_by_ref) = if matches!(self.current(), TokenKind::FatArrow) {
             self.advance();
-            let TokenKind::DollarIdent(next_value_name) = self.current() else {
+            if first_targets.is_some() || first_by_ref {
                 return Err(EvalParseError::ExpectedVariable);
-            };
-            let key_name = value_name;
-            let value_name = next_value_name.clone();
-            self.advance();
-            (Some(key_name), value_name)
+            }
+            let (value_name, targets, value_by_ref) = self.parse_foreach_value_target()?;
+            (Some(first_value_name), value_name, targets, value_by_ref)
         } else {
-            (None, value_name)
+            (None, first_value_name, first_targets, first_by_ref)
         };
         self.expect(TokenKind::RParen)?;
-        let body = self.parse_statement_body_or_alternative("endforeach")?;
+        let mut body = self.parse_statement_body_or_alternative("endforeach")?;
+        if let Some(targets) = targets {
+            body.insert(
+                0,
+                EvalStmt::ArrayDestructure {
+                    targets,
+                    value: EvalExpr::LoadVar(value_name.clone()),
+                },
+            );
+        }
         Ok(vec![EvalStmt::Foreach {
             array,
             key_name,
             value_name,
+            value_by_ref,
             body,
         }])
+    }
+
+    /// Parses a simple variable or a short-array destructuring foreach value target.
+    fn parse_foreach_value_target(
+        &mut self,
+    ) -> Result<(String, Option<Vec<Option<String>>>, bool), EvalParseError> {
+        let by_ref = self.consume(TokenKind::Ampersand);
+        if let TokenKind::DollarIdent(value_name) = self.current() {
+            let value_name = value_name.clone();
+            self.advance();
+            return Ok((value_name, None, by_ref));
+        }
+        if by_ref {
+            return Err(EvalParseError::ExpectedVariable);
+        }
+        self.expect(TokenKind::LBracket)?;
+        let mut targets = Vec::new();
+        while !self.consume(TokenKind::RBracket) {
+            if self.consume(TokenKind::Comma) {
+                targets.push(None);
+                continue;
+            }
+            let TokenKind::DollarIdent(name) = self.current() else {
+                return Err(EvalParseError::ExpectedVariable);
+            };
+            targets.push(Some(name.clone()));
+            self.advance();
+            if self.consume(TokenKind::RBracket) {
+                break;
+            }
+            self.expect(TokenKind::Comma)?;
+        }
+        if targets.is_empty() {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        Ok(("\0elephc_foreach_destructure".to_string(), Some(targets), false))
     }
 }

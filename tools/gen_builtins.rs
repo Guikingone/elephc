@@ -92,7 +92,7 @@ fn contract_record_json(contract: &BuiltinContract) -> Value {
         "internal": contract.internal,
         "extension": contract.extension,
         "params": signature_params_json(signature),
-        "variadic": signature.variadic,
+        "variadic": signature.variadic.map(|variadic| variadic.name),
         "returns": type_name(contract.returns),
         "by_ref_return": contract.by_ref_return,
         "min_args": contract.min_args,
@@ -115,7 +115,7 @@ fn aot_support_json(contract: &BuiltinContract) -> Value {
     let signature = profile.signature;
     let common = json!({
         "params": signature_params_json(signature),
-        "variadic": signature.variadic,
+        "variadic": signature.variadic.map(|variadic| variadic.name),
         "required_param_count": signature.required_param_count(),
         "signature_override_reason": profile.override_reason.map(aot_override_reason_name),
     });
@@ -242,6 +242,7 @@ fn default_json(default: DefaultSpec) -> Value {
 fn type_name(ty: TypeSpec) -> &'static str {
     match ty {
         TypeSpec::Int => "int",
+        TypeSpec::NullableInt => "?int",
         TypeSpec::Float => "float",
         TypeSpec::Str => "string",
         TypeSpec::Bool => "bool",

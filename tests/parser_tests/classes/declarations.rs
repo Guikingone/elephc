@@ -46,6 +46,19 @@ fn test_parse_class_decl() {
     }
 }
 
+/// Verifies a PHP class doc comment is retained as declaration metadata while member comments remain parseable.
+#[test]
+fn test_parse_class_decl_retains_doc_comment() {
+    let stmts = parse_source(
+        "<?php /**\n * Reflection metadata.\n */ class Documented { /** method docs */ public function run() {} }",
+    );
+    let StmtKind::ClassDecl { doc_comment, methods, .. } = &stmts[0].kind else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(doc_comment.as_deref(), Some("/**\n * Reflection metadata.\n */"));
+    assert_eq!(methods.len(), 1);
+}
+
 /// Verifies PHP 8.3 class-constant types are retained in the parsed AST while
 /// a semi-reserved constant name followed by `=` remains untyped.
 #[test]
@@ -271,6 +284,41 @@ fn test_parse_interface_decl() {
             assert!(methods[0].body.is_empty());
         }
         _ => panic!("Expected InterfaceDecl"),
+    }
+}
+
+/// Verifies interface member doc comments remain parser trivia rather than declarations.
+#[test]
+fn test_parse_interface_body_ignores_doc_comments() {
+    let stmts = parse_source(
+        "<?php interface DocumentedContract { /** Documents the method. */ public function run(): void; }",
+    );
+    match &stmts[0].kind {
+        StmtKind::InterfaceDecl { methods, .. } => {
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].name, "run");
+        }
+        _ => panic!("Expected InterfaceDecl"),
+    }
+}
+
+/// Verifies doc comments before promoted constructor parameters remain parser trivia.
+#[test]
+fn test_parse_promoted_parameter_ignores_doc_comment() {
+    let stmts = parse_source(
+        "<?php class DocumentedParameter { public function __construct(/** @var string */ public string $value) {} }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ClassDecl {
+            methods, properties, ..
+        } => {
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].params[0].0, "value");
+            assert_eq!(properties.len(), 1);
+            assert_eq!(properties[0].name, "value");
+            assert!(properties[0].is_promoted);
+        }
+        _ => panic!("Expected ClassDecl"),
     }
 }
 

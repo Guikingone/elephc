@@ -228,6 +228,21 @@ pub trait RuntimeValueOps {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Calls a named method and writes its result through caller-owned storage.
+    ///
+    /// Runtime-backed implementations may override this to keep a native pointer out of the
+    /// Rust `Result` return ABI while crossing an assembly bridge.
+    fn method_call_out(
+        &mut self,
+        object: RuntimeCellHandle,
+        method: &str,
+        args: Vec<RuntimeCellHandle>,
+        result: &mut RuntimeCellHandle,
+    ) -> Result<(), EvalStatus> {
+        *result = self.method_call(object, method, args)?;
+        Ok(())
+    }
+
     /// Calls a named static method through the generated AOT bridge.
     fn static_method_call(
         &mut self,
@@ -305,6 +320,14 @@ pub trait RuntimeValueOps {
 
     /// Returns generated AOT ReflectionClass modifier flags for one class.
     fn reflection_class_flags(&mut self, class_name: &str) -> Result<Option<u64>, EvalStatus>;
+
+    /// Returns the generated AOT class doc comment when the class declares one.
+    fn reflection_class_doc_comment(
+        &mut self,
+        _class_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        Ok(None)
+    }
 
     /// Returns the canonical generated AOT class-like name for a case-insensitive lookup.
     fn reflection_canonical_class_name(
@@ -394,6 +417,20 @@ pub trait RuntimeValueOps {
         object: RuntimeCellHandle,
         args: Vec<RuntimeCellHandle>,
     ) -> Result<(), EvalStatus>;
+
+    /// Calls a runtime constructor using the resolved AOT declaring class as dispatch target.
+    ///
+    /// The default preserves existing test/embedding behavior. Generated-runtime adapters
+    /// override it when an eval-declared child inherits a constructor from an AOT ancestor,
+    /// whose runtime class id differs from the ancestor's constructor slot.
+    fn construct_object_for_class(
+        &mut self,
+        _class_name: &str,
+        object: RuntimeCellHandle,
+        args: Vec<RuntimeCellHandle>,
+    ) -> Result<(), EvalStatus> {
+        self.construct_object(object, args)
+    }
 
     /// Returns whether a runtime class table contains the requested class name.
     fn class_exists(&mut self, name: &str) -> Result<bool, EvalStatus>;
@@ -500,6 +537,15 @@ pub trait RuntimeValueOps {
 
     /// Releases one owned runtime cell that is no longer held by the eval scope.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
+
+    /// Copies one PHP value for by-value assignment.
+    ///
+    /// Runtime adapters override this to create a detached Mixed cell while
+    /// retaining refcounted payloads. The default keeps lightweight test
+    /// adapters compatible when their values have no independent storage.
+    fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.retain(value)
+    }
 
     /// Retains one runtime cell so the eval caller receives an independent owner.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;

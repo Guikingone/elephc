@@ -52,6 +52,23 @@ echo $f->x;
     assert_eq!(out, "42");
 }
 
+/// An explicit object-to-array cast must retain its shared property-walk body after dead stripping.
+#[test]
+fn test_object_to_array_cast_survives_dead_strip() {
+    let out = compile_cli_file_and_run(
+        r#"<?php
+class DeadStripObjectArrayCast {
+    public int $public = 7;
+    private string $private = "secret";
+}
+$properties = (array) new DeadStripObjectArrayCast();
+echo $properties["public"] . ":" . $properties["\0DeadStripObjectArrayCast\0private"];
+"#,
+        &[],
+    );
+    assert_eq!(out, "7:secret");
+}
+
 /// Ensures a boxed string cast keeps the separately atomized inline-value helper alive.
 #[test]
 fn test_mixed_string_cast_helper_survives_dead_strip() {

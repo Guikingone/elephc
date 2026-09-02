@@ -507,16 +507,16 @@ impl Checker {
                         if let Some(name) = output_variable(arg) {
                             let capture_type = if builtin_name
                                 .eq_ignore_ascii_case("preg_match_all")
+                                && expanded_args.get(3).is_none()
                             {
-                                if expanded_args.get(3).is_some() {
-                                    PhpType::Mixed
-                                } else {
-                                    PhpType::Array(Box::new(PhpType::Str))
-                                }
-                            } else if expanded_args.get(3).is_some() {
-                                PhpType::Mixed
+                                PhpType::Array(Box::new(PhpType::Str))
                             } else {
-                                PhpType::Str
+                                // A pattern that declares a named capture group makes PHP's
+                                // `$matches` an ordered hash rather than a list, and the runtime
+                                // only learns which one it is from the compiled pattern. The
+                                // gradual element type is the one that reads both key kinds back
+                                // out of whichever storage the match actually produced.
+                                PhpType::Mixed
                             };
                             env.insert(name.clone(), PhpType::Array(Box::new(capture_type)));
                         }

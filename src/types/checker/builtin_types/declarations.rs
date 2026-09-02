@@ -17,11 +17,14 @@ use crate::types::traits::FlattenedClass;
 
 use super::exception::{
     builtin_exception_code_property, builtin_exception_constructor_method,
+    builtin_exception_file_property,
     builtin_exception_get_code_method, builtin_exception_get_file_method,
     builtin_exception_get_line_method, builtin_exception_get_message_method,
     builtin_exception_get_previous_method, builtin_exception_get_trace_as_string_method,
+    builtin_exception_line_property,
     builtin_exception_get_trace_method, builtin_exception_message_property,
-    builtin_exception_previous_property, builtin_exception_to_string_method,
+    builtin_exception_previous_property, builtin_exception_string_property,
+    builtin_exception_to_string_method, builtin_exception_trace_property,
     builtin_throwable_methods,
 };
 use super::fiber::builtin_fiber_methods;
@@ -130,6 +133,10 @@ pub(crate) fn inject_builtin_throwables(
             properties: vec![
                 builtin_exception_message_property(),
                 builtin_exception_code_property(),
+                builtin_exception_string_property(),
+                builtin_exception_file_property(),
+                builtin_exception_line_property(),
+                builtin_exception_trace_property(),
                 builtin_exception_previous_property(),
             ],
             methods: vec![
@@ -162,6 +169,10 @@ pub(crate) fn inject_builtin_throwables(
             properties: vec![
                 builtin_exception_message_property(),
                 builtin_exception_code_property(),
+                builtin_exception_string_property(),
+                builtin_exception_file_property(),
+                builtin_exception_line_property(),
+                builtin_exception_trace_property(),
                 builtin_exception_previous_property(),
             ],
             methods: vec![

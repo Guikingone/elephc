@@ -25,7 +25,7 @@ use crate::codegen::callable_dispatch::{
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::runtime_callable_invoker::RuntimeCallableInvoker;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::{Function, LocalKind, Module, Op};
 use crate::codegen::lower_inst::builtins::eval::{
     eval_native_function_bridge_supported, eval_native_instance_method_bridge_supported,
     eval_native_static_method_bridge_supported,
@@ -43,8 +43,8 @@ const MIXED_SELECTOR_BYTES: usize = 64;
 const SAVED_OBJECT_RECEIVER_BYTES: usize = 16;
 const MIXED_TAG_STRING: i64 = 1;
 const MIXED_TAG_OBJECT: i64 = 6;
-const EVAL_DYNAMIC_CALLABLE_INVOKER_LABEL: &str = "__elephc_eval_dynamic_callable_invoker";
-const EVAL_DYNAMIC_CALLABLE_ENTRY_LABEL: &str = "__elephc_eval_dynamic_callable_entry";
+pub(crate) const EVAL_DYNAMIC_CALLABLE_INVOKER_LABEL: &str = "__elephc_eval_dynamic_callable_invoker";
+pub(crate) const EVAL_DYNAMIC_CALLABLE_ENTRY_LABEL: &str = "__elephc_eval_dynamic_callable_entry";
 const EVAL_DYNAMIC_CONTEXT_CAPTURE: usize = 0;
 const EVAL_DYNAMIC_CALLBACK_CAPTURE: usize = 1;
 const EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES: usize = 32;
@@ -153,7 +153,19 @@ impl EvalCallableDescriptorSupport {
 
 /// Returns true when eval bridges may need to turn PHP callbacks into descriptors.
 pub(super) fn module_needs_eval_callable_descriptor_support(module: &Module) -> bool {
-    module_uses_eval(module) && module_has_callable_aot_method_param(module)
+    module_uses_eval(module)
+        && (module_has_callable_aot_method_param(module)
+            || module_has_runtime_callable_normalization(module))
+}
+
+/// Returns true when eval-produced Mixed values can be converted into callable descriptors.
+///
+/// This covers a Closure returned from an include/eval activation and later passed through an
+/// ordinary PHP `callable` boundary. Unlike eval-to-native method adapters, normalization happens
+/// in the generated caller body, so it still needs the shared callback descriptor template.
+fn module_has_runtime_callable_normalization(module: &Module) -> bool {
+    all_module_functions(module)
+        .any(|function| function.instructions.iter().any(|inst| inst.op == Op::NormalizeCallable))
 }
 
 /// Returns true when the EIR module contains a function that can call eval.
@@ -502,7 +514,7 @@ fn emit_eval_invokable_object_lookup_helper(
 }
 
 /// Emits the static descriptor template for eval-owned callback values.
-fn eval_dynamic_callable_descriptor(data: &mut DataSection) -> String {
+pub(crate) fn eval_dynamic_callable_descriptor(data: &mut DataSection) -> String {
     let captures = vec![
         (
             "__elephc_eval_callable_context".to_string(),
@@ -1119,6 +1131,7 @@ fn emit_eval_instance_method_descriptor_entry_wrapper_body(
     let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
     let (actual_stack_offsets, actual_overflow_bytes) =
         descriptor_entry_stack_offsets(&actual_assignments);
+    let actual_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(emitter.target, actual_overflow_bytes);
     let frame_size = descriptor_entry_frame_size(incoming_types.len());
 
     abi::emit_frame_prologue(emitter, frame_size);
@@ -1156,7 +1169,13 @@ fn emit_eval_instance_method_descriptor_entry_wrapper_body(
             actual_stack_offsets[idx],
         );
     }
+    if actual_stack_pad_bytes > 0 {
+        abi::emit_reserve_temporary_stack(emitter, actual_stack_pad_bytes);
+    }
     abi::emit_call_label(emitter, &method_symbol(class_name, method_key));
+    if actual_stack_pad_bytes > 0 {
+        abi::emit_release_temporary_stack(emitter, actual_stack_pad_bytes);
+    }
     if actual_overflow_bytes > 0 {
         abi::emit_release_temporary_stack(emitter, actual_overflow_bytes);
     }
@@ -1185,6 +1204,7 @@ fn emit_eval_static_method_descriptor_entry_wrapper_body(
     let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
     let (actual_stack_offsets, actual_overflow_bytes) =
         descriptor_entry_stack_offsets(&actual_assignments);
+    let actual_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(emitter.target, actual_overflow_bytes);
     let frame_size = descriptor_entry_frame_size(visible_arg_types.len());
 
     abi::emit_frame_prologue(emitter, frame_size);
@@ -1226,7 +1246,13 @@ fn emit_eval_static_method_descriptor_entry_wrapper_body(
             );
         }
     }
+    if actual_stack_pad_bytes > 0 {
+        abi::emit_reserve_temporary_stack(emitter, actual_stack_pad_bytes);
+    }
     abi::emit_call_label(emitter, &static_method_symbol(impl_class, method_key));
+    if actual_stack_pad_bytes > 0 {
+        abi::emit_release_temporary_stack(emitter, actual_stack_pad_bytes);
+    }
     if actual_overflow_bytes > 0 {
         abi::emit_release_temporary_stack(emitter, actual_overflow_bytes);
     }

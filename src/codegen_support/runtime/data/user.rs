@@ -685,7 +685,7 @@ pub(crate) fn emit_runtime_data_user(
             for (idx, name) in info.attribute_names.iter().enumerate() {
                 let name_label = format!("_attr_name_{}", name_id);
                 name_id += 1;
-                out.push_str(&format!(".globl {0}\n{0}:\n", name_label));
+                out.push_str(&format!("{0}:\n", name_label));
                 out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(name)));
 
                 let empty_fallback = Vec::new();
@@ -707,7 +707,7 @@ pub(crate) fn emit_runtime_data_user(
                                 let label = format!("_attr_arg_str_{}", arg_str_id);
                                 arg_str_id += 1;
                                 let bytes = crate::string_bytes::literal_bytes(value);
-                                out.push_str(&format!(".globl {0}\n{0}:\n", label));
+                                out.push_str(&format!("{0}:\n", label));
                                 out.push_str(&format!(
                                     "    .ascii \"{}\"\n",
                                     escaped_bytes(&bytes)
@@ -742,7 +742,7 @@ pub(crate) fn emit_runtime_data_user(
                     out.push_str("    .p2align 3\n");
                     let block_label = format!("_attr_args_{}", args_block_id);
                     args_block_id += 1;
-                    out.push_str(&format!(".globl {0}\n{0}:\n", block_label));
+                    out.push_str(&format!("{0}:\n", block_label));
                     for (tag, lo, hi) in arg_rows {
                         out.push_str(&format!("    .quad {}\n", tag));
                         out.push_str(&format!("    .quad {}\n", lo));
@@ -1185,7 +1185,7 @@ fn emit_name_lookup_data(
     sorted_names.sort();
     for (idx, name) in sorted_names.iter().enumerate() {
         out.push_str(&format!(
-            ".globl {0}_{1}\n{0}_{1}:\n    .ascii \"{2}\"\n",
+            "{0}_{1}:\n    .ascii \"{2}\"\n",
             label_prefix,
             idx,
             escaped_ascii(name)
@@ -1363,17 +1363,17 @@ fn push_eval_reflection_method_lookup_row(
     let method_label = format!("_eval_reflection_method_name_{}", *index);
     let declaring_label = format!("_eval_reflection_method_declaring_class_{}", *index);
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         class_label,
         escaped_ascii(class_name)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         method_label,
         escaped_ascii(method_name)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         declaring_label,
         escaped_ascii(declaring_class)
     ));
@@ -1536,17 +1536,17 @@ fn emit_eval_reflection_property_lookup_data(
             );
             let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
             out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                "{0}:\n    .ascii \"{1}\"\n",
                 class_label,
                 escaped_ascii(class_name)
             ));
             out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                "{0}:\n    .ascii \"{1}\"\n",
                 property_label,
                 escaped_ascii(property_name)
             ));
             out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                "{0}:\n    .ascii \"{1}\"\n",
                 declaring_label,
                 escaped_ascii(declaring_class)
             ));
@@ -1572,17 +1572,17 @@ fn emit_eval_reflection_property_lookup_data(
             );
             let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
             out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                "{0}:\n    .ascii \"{1}\"\n",
                 class_label,
                 escaped_ascii(class_name)
             ));
             out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                "{0}:\n    .ascii \"{1}\"\n",
                 property_label,
                 escaped_ascii(property_name)
             ));
             out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                "{0}:\n    .ascii \"{1}\"\n",
                 declaring_label,
                 escaped_ascii(declaring_class)
             ));
@@ -1642,7 +1642,10 @@ fn eval_reflection_static_property_declaring_class<'a>(
         .unwrap_or(reflected_class)
 }
 
-/// Emits AOT class flag rows consumed by eval ReflectionClass metadata probes.
+/// Emits AOT class rows consumed by eval ReflectionClass metadata probes.
+///
+/// Each row stores the canonical name, class flags, and an optional class doc comment. The
+/// shared row keeps all eval bridge lookups keyed identically and avoids a second class scan.
 fn emit_eval_reflection_class_lookup_data(
     out: &mut String,
     sorted_classes: &[(&String, &ClassInfo)],
@@ -1658,11 +1661,26 @@ fn emit_eval_reflection_class_lookup_data(
         }
         let class_label = format!("_eval_reflection_class_name_{}", index);
         out.push_str(&format!(
-            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            "{0}:\n    .ascii \"{1}\"\n",
             class_label,
             escaped_ascii(class_name)
         ));
-        entries.push((class_label, class_name.len(), flags));
+        let doc_comment = class_info.doc_comment.as_deref();
+        let doc_label = doc_comment.map(|_| format!("_eval_reflection_class_doc_{}", index));
+        if let (Some(doc_label), Some(doc_comment)) = (&doc_label, doc_comment) {
+            out.push_str(&format!(
+                "{0}:\n    .ascii \"{1}\"\n",
+                doc_label,
+                escaped_ascii(doc_comment)
+            ));
+        }
+        entries.push((
+            class_label,
+            class_name.len(),
+            flags,
+            doc_label,
+            doc_comment.map_or(0, str::len),
+        ));
         index += 1;
     }
     for (interface_name, interface_info) in sorted_interfaces {
@@ -1672,11 +1690,11 @@ fn emit_eval_reflection_class_lookup_data(
         }
         let class_label = format!("_eval_reflection_class_name_{}", index);
         out.push_str(&format!(
-            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            "{0}:\n    .ascii \"{1}\"\n",
             class_label,
             escaped_ascii(interface_name)
         ));
-        entries.push((class_label, interface_name.len(), flags));
+        entries.push((class_label, interface_name.len(), flags, None, 0));
         index += 1;
     }
     let mut sorted_trait_lines = declared_trait_source_lines.iter().collect::<Vec<_>>();
@@ -1689,11 +1707,11 @@ fn emit_eval_reflection_class_lookup_data(
         }
         let class_label = format!("_eval_reflection_class_name_{}", index);
         out.push_str(&format!(
-            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            "{0}:\n    .ascii \"{1}\"\n",
             class_label,
             escaped_ascii(trait_name)
         ));
-        entries.push((class_label, trait_name.len(), flags));
+        entries.push((class_label, trait_name.len(), flags, None, 0));
         index += 1;
     }
 
@@ -1701,10 +1719,12 @@ fn emit_eval_reflection_class_lookup_data(
     out.push_str(".globl _eval_reflection_class_count\n_eval_reflection_class_count:\n");
     out.push_str(&format!("    .quad {}\n", entries.len()));
     out.push_str(".globl _eval_reflection_classes\n_eval_reflection_classes:\n");
-    for (class_label, class_len, flags) in entries {
+    for (class_label, class_len, flags, doc_label, doc_len) in entries {
         out.push_str(&format!("    .quad {}\n", class_label));
         out.push_str(&format!("    .quad {}\n", class_len));
         out.push_str(&format!("    .quad {}\n", flags));
+        out.push_str(&format!("    .quad {}\n", doc_label.unwrap_or_else(|| "0".to_string())));
+        out.push_str(&format!("    .quad {}\n", doc_len));
     }
 }
 
@@ -1803,12 +1823,12 @@ fn push_eval_reflection_class_interface_row(
     let class_label = format!("_eval_reflection_class_interface_class_{}", *index);
     let interface_label = format!("_eval_reflection_class_interface_name_{}", *index);
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         class_label,
         escaped_ascii(class_name)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         interface_label,
         escaped_ascii(interface_name)
     ));
@@ -1880,12 +1900,12 @@ fn push_eval_reflection_class_trait_row(
     let class_label = format!("_eval_reflection_class_trait_class_{}", *index);
     let trait_label = format!("_eval_reflection_class_trait_name_{}", *index);
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         class_label,
         escaped_ascii(class_name)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         trait_label,
         escaped_ascii(trait_name)
     ));
@@ -1952,17 +1972,17 @@ fn push_eval_reflection_class_trait_alias_row(
     let alias_label = format!("_eval_reflection_class_trait_alias_name_{}", *index);
     let source_label = format!("_eval_reflection_class_trait_alias_source_{}", *index);
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         class_label,
         escaped_ascii(class_name)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         alias_label,
         escaped_ascii(alias)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         source_label,
         escaped_ascii(source)
     ));
@@ -2910,6 +2930,7 @@ mod tests {
         ClassInfo {
             class_id,
             declaration_span: crate::span::Span::dummy(),
+            doc_comment: None,
             parent: None,
             is_abstract: false,
             is_final: false,

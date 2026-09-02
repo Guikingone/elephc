@@ -57,6 +57,12 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_exists(
         abi::int_arg_reg_name(ctx.emitter.target, 2),
         name_len as i64,
     );
+    let autoload_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    if let Some(&autoload) = inst.operands.first() {
+        ctx.load_value_to_reg(autoload, autoload_arg)?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, autoload_arg, 1);
+    }
     let symbol = ctx
         .emitter
         .target

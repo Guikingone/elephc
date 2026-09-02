@@ -41,6 +41,25 @@ fn prune(source: &str) -> (Program, crate::types::CheckResult) {
     (program, check)
 }
 
+/// Prunes one fixture after name resolution and static class-alias collection.
+fn prune_resolved(source: &str) -> (Program, crate::types::CheckResult) {
+    let program = crate::name_resolver::resolve(parse(source)).expect("fixture must resolve");
+    let mut check = crate::types::check(&program).expect("fixture must type check");
+    let inventory = PreludeInventory::new();
+    let roots = HashSet::new();
+    let program = prune_unreachable_declarations(
+        program,
+        &mut check,
+        PruneOptions {
+            inventory: &inventory,
+            forced_groups: &roots,
+            exported_functions: &roots,
+            eval_forced: false,
+        },
+    );
+    (program, check)
+}
+
 /// Returns whether a top-level function declaration survives.
 fn has_function(program: &[crate::parser::ast::Stmt], name: &str) -> bool {
     program.iter().any(|statement| {
@@ -369,6 +388,26 @@ fn scan_literal_function_exists_is_a_reference_not_a_hazard() {
 #[test]
 fn scan_eval_is_dynamic_function() {
     let usage = scan_program(&parse("<?php eval('echo 1;');"));
+    assert!(usage.hazards.dynamic_function);
+    assert!(usage.hazards.dynamic_method);
+    assert!(usage.hazards.dynamic_class);
+}
+
+/// Verifies a resolver-preserved runtime include widens reachability like opaque eval source.
+#[test]
+fn scan_runtime_dynamic_include_is_eval_hazard() {
+    let usage = scan_program(&parse(
+        "<?php __elephc_dynamic_include($path, false, true);",
+    ));
+    assert!(usage.hazards.dynamic_function);
+    assert!(usage.hazards.dynamic_method);
+    assert!(usage.hazards.dynamic_class);
+}
+
+/// Verifies an unresolved include statement widens reachability for its opaque runtime source.
+#[test]
+fn scan_unresolved_include_statement_is_eval_hazard() {
+    let usage = scan_program(&parse("<?php require $path;"));
     assert!(usage.hazards.dynamic_function);
     assert!(usage.hazards.dynamic_method);
     assert!(usage.hazards.dynamic_class);
@@ -764,6 +803,35 @@ fn prune_keeps_static_method_for_literal_method_exists() {
         "<?php class T { public static function hidden(): int { return 1; } } echo method_exists('T', 'hidden') ? 'y' : 'n';",
     );
     assert!(has_method(&program, "T", "hidden"));
+}
+
+/// Verifies a static class alias retains its target's inherited callable surface for opaque code.
+#[test]
+fn prune_keeps_class_alias_target_method_hierarchy() {
+    let (program, _) = prune_resolved(
+        "<?php class ParentTarget { public function inherited(): int { return 1; } } class Target extends ParentTarget { public static function config(array $config): array { return $config; } } class_alias('Target', 'AliasTarget'); echo 'ok';",
+    );
+    assert!(has_method(&program, "Target", "config"));
+    assert!(has_method(&program, "ParentTarget", "inherited"));
+}
+
+/// Verifies aliases declared in deferred methods still retain their target's callable hierarchy.
+#[test]
+fn prune_keeps_class_alias_target_methods_from_deferred_method() {
+    let (program, _) = prune_resolved(
+        "<?php class ParentTarget { public function inherited(): int { return 1; } } class Target extends ParentTarget { public static function config(array $config): array { return $config; } } class AliasRegistrar { public static function register(): void { class_alias('Target', 'AliasTarget'); } } echo 'ok';",
+    );
+    assert!(has_method(&program, "Target", "config"));
+    assert!(has_method(&program, "ParentTarget", "inherited"));
+}
+
+/// Verifies a ReflectionClass class constant roots the reflected class's methods.
+#[test]
+fn prune_keeps_reflection_class_constant_target_methods() {
+    let (program, _) = prune_resolved(
+        "<?php class Target { public static function config(array $config): array { return $config; } } $reflection = new ReflectionClass(Target::class); echo $reflection->getMethod('config')->getName();",
+    );
+    assert!(has_method(&program, "Target", "config"));
 }
 
 /// Verifies instantiated classes retain static magic hooks such as `__set_state`.

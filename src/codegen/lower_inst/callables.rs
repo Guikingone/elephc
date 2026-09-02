@@ -256,8 +256,9 @@ pub(in crate::codegen) fn lower_mixed_callable_descriptor_invoke_inline(
     arg_mixed: ValueId,
     op_name: &str,
 ) -> Result<()> {
+    let has_eval_context = super::builtins::has_eval_context(ctx);
     if ctx.runtime_callable_candidates(callable).is_none()
-        && !super::builtins::has_eval_context(ctx)
+        && !has_eval_context
     {
         return lower_open_mixed_callable_descriptor_invoke_via_value(
             ctx, inst, callable, arg_mixed, op_name,
@@ -273,7 +274,11 @@ pub(in crate::codegen) fn lower_mixed_callable_descriptor_invoke_inline(
     let static_cases = runtime_static_method_descriptor_cases(ctx, None);
     let array_label = (!instance_targets.is_empty() || !static_cases.is_empty())
         .then(|| ctx.next_label("mixed_callable_array"));
-    let object_label = (!invokable_targets.is_empty())
+    // An eval-owned Closure is represented as a PHP object instead of an EIR
+    // callable descriptor. Keep the object arm available whenever the eval
+    // bridge is active so it can validate and invoke that object after native
+    // `__invoke` candidates have been exhausted.
+    let object_label = (!invokable_targets.is_empty() || has_eval_context)
         .then(|| ctx.next_label("mixed_callable_object"));
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
     let owned_flag_reg = runtime_descriptor_owned_flag_reg(ctx);
@@ -363,27 +368,53 @@ pub(in crate::codegen) fn lower_mixed_callable_descriptor_invoke_inline(
         abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
         abi::emit_jump(ctx.emitter, &invoke_label);
         ctx.emitter.label(&array_miss_label);
-        emit_runtime_callable_array_no_match_abort(ctx);
+        abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
+        if has_eval_context {
+            super::builtins::lower_eval_callable_call_array(ctx, inst, callable, arg_mixed)?;
+            abi::emit_jump(ctx.emitter, &done_label);
+        } else {
+            emit_runtime_callable_array_no_match_abort(ctx);
+        }
     }
 
     // Boxed object (tag 6): dispatch its public `__invoke` implementation by
-    // runtime class id, capturing the unboxed receiver in a descriptor.
+    // runtime class id, capturing the unboxed receiver in a descriptor. An
+    // eval-owned Closure object has no static `__invoke` body in this module,
+    // so unresolved cases fall through to Magician's callable bridge.
     if let Some(object_label) = &object_label {
         ctx.emitter.label(object_label);
-        emit_push_mixed_unbox_payload(ctx);
-        emit_invokable_object_descriptor_lookup(
-            ctx,
-            &invokable_targets,
-            MIXED_VALUE_PAYLOAD_OFFSET,
-            &fatal_label,
-        )?;
-        abi::emit_reg_move(
-            ctx.emitter,
-            descriptor_reg,
-            abi::int_result_reg(ctx.emitter),
-        );
-        abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
-        abi::emit_jump(ctx.emitter, &invoke_label);
+        if invokable_targets.is_empty() {
+            debug_assert!(has_eval_context);
+            super::builtins::lower_eval_callable_call_array(ctx, inst, callable, arg_mixed)?;
+            abi::emit_jump(ctx.emitter, &done_label);
+        } else {
+            let object_miss_label = if has_eval_context {
+                ctx.next_label("mixed_callable_object_eval")
+            } else {
+                fatal_label.clone()
+            };
+            emit_push_mixed_unbox_payload(ctx);
+            emit_invokable_object_descriptor_lookup(
+                ctx,
+                &invokable_targets,
+                MIXED_VALUE_PAYLOAD_OFFSET,
+                &object_miss_label,
+            )?;
+            abi::emit_reg_move(
+                ctx.emitter,
+                descriptor_reg,
+                abi::int_result_reg(ctx.emitter),
+            );
+            abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
+            abi::emit_jump(ctx.emitter, &invoke_label);
+
+            if has_eval_context {
+                ctx.emitter.label(&object_miss_label);
+                abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
+                super::builtins::lower_eval_callable_call_array(ctx, inst, callable, arg_mixed)?;
+                abi::emit_jump(ctx.emitter, &done_label);
+            }
+        }
     }
 
     ctx.emitter.label(&invoke_label);
@@ -459,6 +490,7 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
     retain_existing_descriptor: bool,
     strict_php: bool,
 ) -> Result<()> {
+    let has_eval_callback_owner_fallback = ctx.module.required_runtime_features.eval_bridge;
     let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
     let invokable_targets = instance_targets
         .iter()
@@ -466,9 +498,11 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
         .cloned()
         .collect::<Vec<_>>();
     let static_cases = runtime_static_method_descriptor_cases(ctx, None);
-    let array_label = (!instance_targets.is_empty() || !static_cases.is_empty())
+    let array_label = (!instance_targets.is_empty()
+        || !static_cases.is_empty()
+        || has_eval_callback_owner_fallback)
         .then(|| ctx.next_label("mixed_callable_value_array"));
-    let object_label = (!invokable_targets.is_empty())
+    let object_label = (!invokable_targets.is_empty() || has_eval_callback_owner_fallback)
         .then(|| ctx.next_label("mixed_callable_value_object"));
     let descriptor_label = ctx.next_label("mixed_callable_value_descriptor");
     let string_label = ctx.next_label("mixed_callable_value_string");
@@ -540,7 +574,14 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
         )?;
         abi::emit_jump(ctx.emitter, &selected_label);
         ctx.emitter.label(&array_miss_label);
-        emit_runtime_callable_array_no_match_abort(ctx);
+        abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
+        if has_eval_callback_owner_fallback {
+            emit_eval_owned_callable_descriptor(ctx, callable, &fatal_label)?;
+            emit_runtime_descriptor_owned_flag(ctx, true);
+            abi::emit_jump(ctx.emitter, &done_label);
+        } else {
+            emit_runtime_callable_array_no_match_abort(ctx);
+        }
         ctx.emitter.label(&selected_label);
         abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
         abi::emit_jump(ctx.emitter, &done_label);
@@ -548,25 +589,141 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
 
     if let Some(object_label) = &object_label {
         ctx.emitter.label(object_label);
-        emit_push_mixed_unbox_payload(ctx);
-        let selected_label = ctx.next_label("mixed_callable_value_object_done");
-        let object_miss_label = ctx.next_label("mixed_callable_value_object_missing");
-        emit_invokable_object_descriptor_lookup(
-            ctx,
-            &invokable_targets,
-            MIXED_VALUE_PAYLOAD_OFFSET,
-            &object_miss_label,
-        )?;
-        abi::emit_jump(ctx.emitter, &selected_label);
-        ctx.emitter.label(&object_miss_label);
-        emit_mixed_callable_not_callable_fatal(ctx, op_name);
-        ctx.emitter.label(&selected_label);
-        abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
-        abi::emit_jump(ctx.emitter, &done_label);
+        if invokable_targets.is_empty() {
+            debug_assert!(has_eval_callback_owner_fallback);
+            emit_eval_owned_callable_descriptor(ctx, callable, &fatal_label)?;
+            emit_runtime_descriptor_owned_flag(ctx, true);
+            abi::emit_jump(ctx.emitter, &done_label);
+        } else {
+            emit_push_mixed_unbox_payload(ctx);
+            let selected_label = ctx.next_label("mixed_callable_value_object_done");
+            let object_miss_label = ctx.next_label("mixed_callable_value_object_missing");
+            emit_invokable_object_descriptor_lookup(
+                ctx,
+                &invokable_targets,
+                MIXED_VALUE_PAYLOAD_OFFSET,
+                &object_miss_label,
+            )?;
+            abi::emit_jump(ctx.emitter, &selected_label);
+            ctx.emitter.label(&object_miss_label);
+            abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
+            if has_eval_callback_owner_fallback {
+                emit_eval_owned_callable_descriptor(ctx, callable, &fatal_label)?;
+                emit_runtime_descriptor_owned_flag(ctx, true);
+                abi::emit_jump(ctx.emitter, &done_label);
+            } else {
+                emit_mixed_callable_not_callable_fatal(ctx, op_name);
+            }
+            ctx.emitter.label(&selected_label);
+            abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
+            abi::emit_jump(ctx.emitter, &done_label);
+        }
     }
 
     ctx.emitter.label(&fatal_label);
     emit_mixed_callable_not_callable_fatal(ctx, op_name);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Builds an owned descriptor for a Closure object that outlived the eval frame that created it.
+///
+/// Magician registers each dynamic Closure object in the process-local object-owner table. This
+/// lookup recovers that persistent context, validates the boxed value with Magician, and captures
+/// both pointers in the existing callback-adapter descriptor used by eval-to-native bridges.
+fn emit_eval_owned_callable_descriptor(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    fail_label: &str,
+) -> Result<()> {
+    const CONTEXT_OFFSET: usize = 0;
+    const CALLBACK_OFFSET: usize = 16;
+    const SCRATCH_BYTES: usize = 32;
+    const CAPTURE_BYTES: usize = 32;
+    const CONTEXT_CAPTURE: usize = 0;
+    const CALLBACK_CAPTURE: usize = 1;
+
+    let descriptor_label = crate::codegen::eval_callable_helpers::eval_dynamic_callable_descriptor(ctx.data);
+    let capture_offset = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET;
+    let total_bytes = capture_offset + CAPTURE_BYTES;
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter).to_string();
+    let failed_label = ctx.next_label("eval_owned_callable_descriptor_failed");
+    let done_label = ctx.next_label("eval_owned_callable_descriptor_done");
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    ctx.load_value_to_result(callable)?;
+    abi::emit_store_to_sp(ctx.emitter, &result_reg, CALLBACK_OFFSET);
+
+    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, CALLBACK_OFFSET);
+    let owner_symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_callable_owner_context");
+    abi::emit_call_label(ctx.emitter, &owner_symbol);
+    abi::emit_store_to_sp(ctx.emitter, &result_reg, CONTEXT_OFFSET);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &failed_label);
+
+    let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, context_arg, CONTEXT_OFFSET);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, CALLBACK_OFFSET);
+    let is_callable_symbol = ctx.emitter.target.extern_symbol("__elephc_eval_is_callable");
+    abi::emit_call_label(ctx.emitter, &is_callable_symbol);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &failed_label);
+
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, CALLBACK_OFFSET);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_load_int_immediate(ctx.emitter, &result_reg, total_bytes as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    abi::emit_reg_move(ctx.emitter, &descriptor_reg, &result_reg);
+    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+        ctx.emitter,
+        &descriptor_reg,
+        &descriptor_label,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", CONTEXT_OFFSET);
+            abi::emit_store_to_address(
+                ctx.emitter,
+                "x10",
+                &descriptor_reg,
+                capture_offset + CONTEXT_CAPTURE * 16,
+            );
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", CALLBACK_OFFSET);
+            abi::emit_store_to_address(
+                ctx.emitter,
+                "x10",
+                &descriptor_reg,
+                capture_offset + CALLBACK_CAPTURE * 16,
+            );
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", CONTEXT_OFFSET);
+            abi::emit_store_to_address(
+                ctx.emitter,
+                "r10",
+                &descriptor_reg,
+                capture_offset + CONTEXT_CAPTURE * 16,
+            );
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", CALLBACK_OFFSET);
+            abi::emit_store_to_address(
+                ctx.emitter,
+                "r10",
+                &descriptor_reg,
+                capture_offset + CALLBACK_CAPTURE * 16,
+            );
+        }
+    }
+    abi::emit_reg_move(ctx.emitter, &result_reg, &descriptor_reg);
+    abi::emit_release_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&failed_label);
+    abi::emit_release_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    abi::emit_jump(ctx.emitter, fail_label);
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -1664,6 +1821,17 @@ fn lower_runtime_string_callable_array_descriptor_invoke(
     arg_mixed: ValueId,
     op_name: &str,
 ) -> Result<()> {
+    if super::builtins::has_eval_context(ctx) {
+        normalize_typed_callable_array_to_mixed(ctx, callable)?;
+        return lower_runtime_mixed_callable_array_descriptor_invoke(
+            ctx,
+            inst,
+            callable,
+            arg_mixed,
+            op_name,
+        );
+    }
+
     let static_cases = runtime_static_method_descriptor_cases(ctx, None);
     if static_cases.is_empty() {
         return Err(CodegenIrError::unsupported(
@@ -1748,7 +1916,7 @@ pub(super) fn emit_runtime_callable_array_descriptor_value(
 
 /// Copies a typed callable-array candidate into boxed Mixed slots so descriptor selection can
 /// inspect each selector's runtime tag rather than trusting a stale flow-inferred element type.
-fn normalize_typed_callable_array_to_mixed(
+pub(crate) fn normalize_typed_callable_array_to_mixed(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
 ) -> Result<()> {
@@ -2881,9 +3049,15 @@ fn emit_selected_template_with_saved_receiver_capture(
 
 /// Emits the fatal path for runtime callable arrays without a matching method.
 fn emit_runtime_callable_array_no_match_abort(ctx: &mut FunctionContext<'_>) {
-    let (message_label, message_len) = ctx
-        .data
-        .add_string(b"Fatal error: callable array did not resolve to an invokable target\n");
+    let message = if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        format!(
+            "Fatal error: callable array did not resolve to an invokable target in {}\n",
+            ctx.function.name
+        )
+    } else {
+        "Fatal error: callable array did not resolve to an invokable target\n".to_owned()
+    };
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #2");                              // write the callable-array failure diagnostic to stderr

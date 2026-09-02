@@ -389,6 +389,9 @@ fn collect_arrow_expr_variables(expr: &EvalExpr, names: &mut Vec<String>) {
                 }
             }
         }
+        EvalExpr::ArrayDestructureAssign { value, .. } => {
+            collect_arrow_expr_variables(value, names);
+        }
         EvalExpr::ArrayGet { array, index } => {
             collect_arrow_expr_variables(array, names);
             collect_arrow_expr_variables(index, names);
@@ -448,6 +451,9 @@ fn collect_arrow_expr_variables(expr: &EvalExpr, names: &mut Vec<String>) {
         } => {
             collect_arrow_expr_variables(object, names);
             collect_arrow_expr_variables(method, names);
+        }
+        EvalExpr::PostfixIncDec { target, .. } => {
+            collect_arrow_expr_variables(target, names);
         }
         EvalExpr::StaticMethodCallable { method, .. }
         | EvalExpr::DynamicStaticPropertyGet {

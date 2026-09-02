@@ -568,6 +568,28 @@ echo ($i == $m ? "y" : "n"), ($m == $i ? "y" : "n"), ($i == $h["n"] ? "y" : "n")
     assert_eq!(out, "yyyn");
 }
 
+/// Regression: a `Mixed` string compared with a generic array element must use PHP's runtime
+/// loose-comparison table rather than coercing both strings to integer zero.
+#[test]
+fn test_loose_eq_mixed_string_and_generic_array_value() {
+    let out = compile_and_run(
+        r#"<?php
+function compareGenericArrayValue(mixed $needle, array $values): string
+{
+    foreach ($values as $value) {
+        return $needle == $value ? 'same' : 'different';
+    }
+
+    return 'empty';
+}
+
+echo compareGenericArrayValue('cache.adapter.system', ['cache.system']), '|';
+echo compareGenericArrayValue('cache.adapter.system', ['cache.adapter.system']);
+"#,
+    );
+    assert_eq!(out, "different|same");
+}
+
 
 /// Regression for #397: loose equality with a Mixed operand holding a float
 /// must not truncate the float to int before comparison. `1.5 == 1` must be

@@ -1213,6 +1213,40 @@ echo $f();
     assert_eq!(out, "6");
 }
 
+/// Verifies an object-held closure preserves a nested associative map returned from a foreach.
+///
+/// Configuration builders commonly retain normalizer closures and call them later through a
+/// property. The nested assignment and the array return must retain the same map rather than
+/// degrading its child value to null at the callable boundary.
+#[test]
+fn test_object_held_closure_returns_nested_associative_map() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureMapNormalizer {
+    private \Closure $normalizer;
+
+    public function __construct() {
+        $this->normalizer = static function (array $values): array {
+            foreach ($values as $key => $value) {
+                $values[$key]['services'] = $value;
+            }
+
+            return $values;
+        };
+    }
+
+    public function normalize(array $values): array {
+        return ($this->normalizer)($values);
+    }
+}
+
+$result = (new ClosureMapNormalizer())->normalize(['App\\' => []]);
+echo get_debug_type($result['App\\']['services'] ?? null);
+"#,
+    );
+    assert_eq!(out, "array");
+}
+
 /// Verifies an arrow function defined in a method auto-captures `$this`.
 #[test]
 fn test_arrow_in_method_auto_captures_this() {

@@ -13,10 +13,12 @@
 //!   a concatenation token stream the existing grammar already understands.
 
 mod scan;
+mod php_tags;
 mod strings;
 #[cfg(test)]
 mod tests;
 mod token;
 
 pub(crate) use scan::tokenize;
+pub(crate) use php_tags::{contains_php_open_tag, find_php_close_tag};
 pub(crate) use token::{Token, TokenKind};

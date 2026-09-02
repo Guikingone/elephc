@@ -238,8 +238,14 @@ impl ElephcEvalContext {
         let class_name = self
             .resolve_class_name(class_name)
             .unwrap_or_else(|| class_name.to_string());
-        self.dynamic_objects
-            .insert(identity, normalize_class_name(&class_name));
+        if self
+            .dynamic_objects
+            .insert(identity, normalize_class_name(&class_name))
+            .is_none()
+        {
+            self.live_dynamic_objects
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         crate::ffi::dynamic_destructors::register_dynamic_object_context(identity, self as *mut Self);
         self.dynamic_destructing_objects.remove(&identity);
         self.dynamic_destructed_objects.remove(&identity);
@@ -247,9 +253,9 @@ impl ElephcEvalContext {
             .retain(|(object, _)| *object != identity);
     }
 
-    /// Removes one dynamic object identity and returns its owned overlay property cells.
-    pub fn forget_dynamic_object(&mut self, identity: u64) -> Vec<RuntimeCellHandle> {
-        self.dynamic_objects.remove(&identity);
+    /// Removes one dynamic object and returns its owned properties plus deferred-free state.
+    pub fn forget_dynamic_object(&mut self, identity: u64) -> (Vec<RuntimeCellHandle>, bool) {
+        let removed_dynamic_object = self.dynamic_objects.remove(&identity).is_some();
         self.closure_objects.remove(&identity);
         self.dynamic_destructing_objects.remove(&identity);
         self.dynamic_destructed_objects.remove(&identity);
@@ -268,7 +274,8 @@ impl ElephcEvalContext {
         self.dynamic_initialized_properties
             .retain(|(object, _)| *object != identity);
         crate::ffi::dynamic_destructors::unregister_dynamic_object(identity);
-        property_values
+        let should_finalize = removed_dynamic_object && self.forget_dynamic_object_owner();
+        (property_values, should_finalize)
     }
 
     /// Returns one retained-by-context overlay value for an eval object property slot.
@@ -425,6 +432,35 @@ impl ElephcEvalContext {
         }
     }
 
+    /// Returns whether one dynamic object's declaring class satisfies a class-like target.
+    pub fn dynamic_object_is_a(&self, identity: u64, target: &str) -> bool {
+        if let Some(class_key) = self.dynamic_objects.get(&identity) {
+            return self.class_is_a(class_key, target, false);
+        }
+        #[cfg(not(test))]
+        {
+            let Some(owner) =
+                crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+            else {
+                return false;
+            };
+            let Some(owner) = (unsafe { owner.as_ref() }) else {
+                return false;
+            };
+            if owner.abi_version() != ABI_VERSION {
+                return false;
+            }
+            return owner
+                .dynamic_objects
+                .get(&identity)
+                .is_some_and(|class_key| owner.class_is_a(class_key, target, false));
+        }
+        #[cfg(test)]
+        {
+            false
+        }
+    }
+
     /// Binds one eval object property slot to a persistent PHP reference target.
     pub fn bind_dynamic_property_alias(
         &mut self,
@@ -456,25 +492,25 @@ impl ElephcEvalContext {
             .remove(&(identity, storage_property_name.to_string()))
     }
 
-    /// Binds one runtime array element slot to a PHP reference target.
+    /// Binds one runtime array payload slot to a PHP reference target.
     pub fn bind_array_element_alias(
         &mut self,
-        array: RuntimeCellHandle,
+        array_identity: u64,
         key: EvalArrayReferenceKey,
         target: EvalReferenceTarget,
     ) -> Option<EvalReferenceTarget> {
         self.array_element_aliases
-            .insert((array.as_ptr() as usize, key), target)
+            .insert((array_identity, key), target)
     }
 
-    /// Returns the persistent reference target bound to one runtime array element slot.
+    /// Returns the persistent reference target bound to one runtime array payload slot.
     pub fn array_element_alias(
         &self,
-        array: RuntimeCellHandle,
+        array_identity: u64,
         key: &EvalArrayReferenceKey,
     ) -> Option<&EvalReferenceTarget> {
         self.array_element_aliases
-            .get(&(array.as_ptr() as usize, key.clone()))
+            .get(&(array_identity, key.clone()))
     }
 
     /// Marks one eval object storage slot as initialized.
@@ -529,5 +565,24 @@ impl ElephcEvalContext {
         for property in initialized {
             self.mark_dynamic_property_initialized(clone_identity, &property);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies an eval object keeps its metadata context alive until its final release.
+    #[test]
+    fn dynamic_object_retains_context_until_forget() {
+        let mut context = ElephcEvalContext::new();
+        context.register_dynamic_object(0xCAFE, "DeferredObject");
+        context.register_dynamic_object(0xCAFE, "DeferredObject");
+
+        assert!(!context.request_retained_context_free());
+        let (properties, should_finalize) = context.forget_dynamic_object(0xCAFE);
+
+        assert!(properties.is_empty());
+        assert!(should_finalize);
     }
 }

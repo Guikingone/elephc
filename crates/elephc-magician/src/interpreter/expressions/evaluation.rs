@@ -104,9 +104,20 @@ pub(in crate::interpreter) fn eval_array_get_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if values.type_tag(array)? != EVAL_TAG_OBJECT {
-        if let Some(target) = eval_array_reference_key(index, values)?
-            .and_then(|key| context.array_element_alias(array, &key).cloned())
-        {
+        let array_identity = values.raw_value_word(array)?;
+        let key = eval_array_reference_key(index, values)?;
+        let target = key.as_ref().and_then(|key| {
+            context
+                .array_element_alias(array_identity, &key)
+                .cloned()
+        });
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            eprintln!(
+                "[elephc-eval-trace] phase=array_reference_read identity={array_identity:#x} key={key:?} bound={}",
+                target.is_some(),
+            );
+        }
+        if let Some(target) = target {
             return eval_reference_target_value(&target, context, values);
         }
         return values.array_get(array, index);
@@ -144,11 +155,70 @@ pub(super) fn eval_cast_expr(
             values.cast_string(value)
         }
         EvalCastType::Bool => values.cast_bool(value),
+        EvalCastType::Array => eval_array_cast_value(value, context, values),
     }
 }
 
+/// Casts one dynamic eval value to a PHP array while preserving array ownership and keys.
+fn eval_array_cast_value(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match values.type_tag(value)? {
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => values.retain(value),
+        EVAL_TAG_NULL => values.array_new(0),
+        EVAL_TAG_OBJECT => eval_object_array_cast_value(value, context, values),
+        _ => {
+            let array = values.array_new(1)?;
+            let key = values.int(0)?;
+            let result = values.array_set(array, key, value);
+            values.release(key)?;
+            result
+        }
+    }
+}
+
+/// Casts the runtime-visible public properties of one object to an associative PHP array.
+fn eval_object_array_cast_value(
+    object: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let property_count = values.object_property_len(object)?;
+    let identity = values.object_identity(object)?;
+    let dynamic_properties = context.dynamic_property_values_for_clone(identity);
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=array_cast_object identity={identity:#x} runtime_properties={property_count} dynamic_properties={}",
+            dynamic_properties.len(),
+        );
+    }
+    let mut emitted_properties = std::collections::HashSet::new();
+    let mut result = values.assoc_new(property_count + dynamic_properties.len())?;
+    for (property, value) in dynamic_properties {
+        let key = values.string(&property)?;
+        result = values.array_set(result, key, value)?;
+        emitted_properties.insert(property);
+    }
+    for position in 0..property_count {
+        let key = values.object_property_iter_key(object, position)?;
+        let property_bytes = values.string_bytes(key)?;
+        values.release(key)?;
+        let property = String::from_utf8(property_bytes)
+            .map_err(|_| EvalStatus::RuntimeFatal)?;
+        if !emitted_properties.insert(property.clone()) {
+            continue;
+        }
+        let value = values.property_get(object, &property)?;
+        let key = values.string(&property)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
 /// Constructs an object after the target class name and constructor arguments have been evaluated.
-pub(super) fn eval_new_object_result(
+pub(in crate::interpreter) fn eval_new_object_result(
     class_name: &str,
     args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,

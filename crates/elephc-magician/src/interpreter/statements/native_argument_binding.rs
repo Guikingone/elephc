@@ -81,6 +81,17 @@ pub(in crate::interpreter) fn native_bound_arg_values(
     args.iter().map(|arg| arg.value).collect()
 }
 
+/// Returns whether native argument write-back has any caller storage to update.
+///
+/// Ordinary by-value calls carry no reference targets, so skipping their no-op write-back avoids
+/// crossing the runtime-value boundary after a native result has been produced.
+pub(in crate::interpreter) fn native_bound_args_require_writeback(
+    args: &[BoundMethodArg],
+) -> bool {
+    args.iter()
+        .any(|arg| arg.ref_target.is_some() || !arg.variadic_ref_targets.is_empty())
+}
+
 /// Writes native AOT by-reference argument cells back to their eval caller targets.
 pub(in crate::interpreter) fn write_back_native_callable_ref_args(
     bound_args: &[BoundMethodArg],

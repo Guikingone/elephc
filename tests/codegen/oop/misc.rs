@@ -378,6 +378,31 @@ try {
     assert_eq!(out, "ok|caught");
 }
 
+/// Verifies a dynamically selected construction keeps its object payload after crossing a
+/// nominal interface-parameter boundary, rather than forwarding the transient Mixed cell.
+#[test]
+fn test_dynamic_new_nominal_parameter_boundary_preserves_object_payload() {
+    let out = compile_and_run(
+        r#"<?php
+interface DynamicNominalConsumer {}
+
+final class DynamicNominalImplementation implements DynamicNominalConsumer {
+    public function label(): string {
+        return 'ok';
+    }
+}
+
+function consumeDynamicNominal(DynamicNominalConsumer $value): string {
+    return $value->label();
+}
+
+$class = DynamicNominalImplementation::class;
+echo consumeDynamicNominal(new $class);
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Tests that a Child class inheriting Base's constructor properly specializes the
 /// base class's string property type, so `new Child("Ada")` works without explicit
 /// constructor in the child.

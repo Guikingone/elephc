@@ -624,7 +624,7 @@ impl ElephcEvalContext {
         methods
     }
 
-    /// Collects eval interface methods without duplicating inherited method names.
+    /// Collects eval interface methods with child declarations overriding inherited names.
     pub(super) fn collect_interface_method_requirements(
         &self,
         interface_name: &str,
@@ -639,6 +639,12 @@ impl ElephcEvalContext {
         let Some(interface) = self.interface(interface_name) else {
             return;
         };
+        for method in interface.methods() {
+            let key = method.name().to_ascii_lowercase();
+            if seen_methods.insert(key) {
+                methods.push((interface.name().to_string(), method.clone()));
+            }
+        }
         for parent in interface.parents() {
             self.collect_interface_method_requirements(
                 parent,
@@ -646,12 +652,6 @@ impl ElephcEvalContext {
                 seen_interfaces,
                 seen_methods,
             );
-        }
-        for method in interface.methods() {
-            let key = method.name().to_ascii_lowercase();
-            if seen_methods.insert(key) {
-                methods.push((interface.name().to_string(), method.clone()));
-            }
         }
     }
 

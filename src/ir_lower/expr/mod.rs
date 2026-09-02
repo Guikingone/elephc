@@ -821,8 +821,25 @@ fn lower_new_dynamic_planned_dispatch(
     }
 
     ctx.builder.position_at_end(merge);
-    let null = lower_null(ctx, expr);
-    ctx.unset_local(&name_temp, null, Some(expr.span));
+    if name_type == PhpType::Str {
+        // A null scalar has no string-register payload. Writing it through a Str hidden slot
+        // would leave stale pointer/length registers behind, then release an unrelated live
+        // allocation. Replace the consumed class-name temporary with a static empty string so
+        // the ordinary retaining store clears its prior owner using the correct ABI shape.
+        let empty_name_data = ctx.intern_string("");
+        let empty_name = ctx.emit_value(
+            Op::ConstStr,
+            Vec::new(),
+            Some(Immediate::Data(empty_name_data)),
+            PhpType::Str,
+            Op::ConstStr.default_effects(),
+            Some(expr.span),
+        );
+        ctx.store_local(&name_temp, empty_name, PhpType::Str, Some(expr.span));
+    } else {
+        let null = lower_null(ctx, expr);
+        ctx.unset_local(&name_temp, null, Some(expr.span));
+    }
     Some(take_owned_temp(ctx, &result_temp, expr.span))
 }
 
@@ -1162,6 +1179,9 @@ fn lower_new_dynamic_generic(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if ctx.web {
+        ctx.declare_eval_context_local();
+    }
     let mut operands = vec![name_value.value];
     operands.extend(lower_args(ctx, args));
     ctx.emit_value(
@@ -1177,3 +1197,4 @@ fn lower_new_dynamic_generic(
 pub(crate) use indexed_array_literals::ir_array_storage_type;
 pub(crate) use assoc_array_literals::merge_ir_assoc_value_type;
 pub(crate) use indexed_array_literals::merge_ir_indexed_element_type;
+pub(in crate::ir_lower) use assignments::lower_conditional_non_local_null_coalesce_assignment;

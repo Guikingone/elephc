@@ -15,7 +15,7 @@
 use super::util::{clear_result, write_outcome};
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
 use crate::errors::EvalStatus;
-use crate::interpreter;
+use crate::interpreter::{self, RuntimeValueOps};
 use crate::runtime_hooks::ElephcRuntimeOps;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
@@ -31,6 +31,83 @@ pub unsafe extern "C" fn __elephc_eval_is_callable(
     callback: *mut RuntimeCell,
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe { eval_is_callable_inner(ctx, callback) }).unwrap_or(0)
+}
+
+/// Returns the live eval context that owns a PHP Closure object, or null for every other value.
+///
+/// # Safety
+/// `callback` must be null or a live boxed runtime cell. The lookup borrows only the object
+/// identity; a context remains alive after its AOT frame returns while this Closure is live.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_callable_owner_context(
+    callback: *mut RuntimeCell,
+) -> *mut ElephcEvalContext {
+    std::panic::catch_unwind(|| unsafe { eval_callable_owner_context_inner(callback) })
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Returns the live eval context that declared a dynamic PHP function, or null when absent.
+///
+/// # Safety
+/// `name_ptr` must be null or readable for `name_len` bytes. The context remains live for the
+/// current request and is removed from this registry before a web worker recycles its heap.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_function_owner_context(
+    name_ptr: *const u8,
+    name_len: u64,
+) -> *mut ElephcEvalContext {
+    std::panic::catch_unwind(|| unsafe { eval_function_owner_context_inner(name_ptr, name_len) })
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Registers an AOT callback in the persistent SPL autoload table of its eval context.
+///
+/// # Safety
+/// `ctx` must be a valid bridge context and `callback` must be a live boxed runtime cell.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_spl_autoload(
+    ctx: *mut ElephcEvalContext,
+    callback: *mut RuntimeCell,
+    prepend: i32,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        let (context, created_context) = if let Some(context) = ctx.as_mut() {
+            (context, false)
+        } else {
+            let context = crate::ffi::context::__elephc_eval_context_new();
+            let Some(context) = context.as_mut() else {
+                return 0;
+            };
+            (context, true)
+        };
+        if context.abi_version() != ABI_VERSION || callback.is_null() {
+            return 0;
+        }
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            eprintln!("[elephc-eval-trace] phase=aot_autoload_register stage=entered callback={callback:p} prepend={prepend}");
+        }
+        let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+        let result = crate::interpreter::register_runtime_spl_autoload_callback(
+            RuntimeCellHandle::from_raw(callback),
+            prepend != 0,
+            context,
+            &mut values,
+        );
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            eprintln!("[elephc-eval-trace] phase=aot_autoload_register stage=registered success={}", result.is_ok());
+        }
+        if created_context {
+            let context_ptr = context as *mut ElephcEvalContext;
+            if context.request_retained_context_free() {
+                crate::ffi::context::finalize_eval_context_free(context_ptr);
+            }
+        }
+        result.map(|_| 1).unwrap_or(0)
+    })
+    .unwrap_or(0)
 }
 
 /// Dispatches a callback value with a PHP argument array through the eval context.
@@ -76,6 +153,65 @@ unsafe fn eval_is_callable_inner(
         Ok(callable) => i32::from(callable),
         Err(_) => 0,
     }
+}
+
+/// Looks up a closure's owning context from its native object identity.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_callable_owner_context`; the caller owns the boxed callback cell for
+/// the full duration of this lookup.
+#[cfg(not(test))]
+unsafe fn eval_callable_owner_context_inner(
+    callback: *mut RuntimeCell,
+) -> *mut ElephcEvalContext {
+    if callback.is_null() {
+        return std::ptr::null_mut();
+    }
+    let callback = RuntimeCellHandle::from_raw(callback);
+    let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
+    let Ok(identity) = values.object_identity(callback) else {
+        return std::ptr::null_mut();
+    };
+    let Some(context) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+    else {
+        return std::ptr::null_mut();
+    };
+    let Some(context_ref) = (unsafe { context.as_ref() }) else {
+        return std::ptr::null_mut();
+    };
+    if context_ref.abi_version() != ABI_VERSION
+        || context_ref.closure_object_target(identity).is_none()
+    {
+        return std::ptr::null_mut();
+    }
+    context
+}
+
+/// Resolves one PHP function name through the request-local dynamic declaration registry.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_function_owner_context`; the name slice remains borrowed only during
+/// this lookup.
+#[cfg(not(test))]
+unsafe fn eval_function_owner_context_inner(
+    name_ptr: *const u8,
+    name_len: u64,
+) -> *mut ElephcEvalContext {
+    if name_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(name) = std::str::from_utf8(unsafe {
+        std::slice::from_raw_parts(name_ptr, name_len as usize)
+    }) else {
+        return std::ptr::null_mut();
+    };
+    let Some(context) = crate::context::global_eval_function_owner_context(name) else {
+        return std::ptr::null_mut();
+    };
+    let Some(context_ref) = (unsafe { context.as_ref() }) else {
+        return std::ptr::null_mut();
+    };
+    (context_ref.abi_version() == ABI_VERSION).then_some(context).unwrap_or(std::ptr::null_mut())
 }
 
 /// Runs the eval callable-array ABI body after installing a panic boundary.

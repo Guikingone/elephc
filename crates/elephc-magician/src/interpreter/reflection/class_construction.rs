@@ -18,6 +18,9 @@ pub(super) fn eval_reflection_class_new(
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("class_name")], evaluated_args)?;
     let class_name = eval_reflection_class_target_name(args[0], context, values)?;
+    if !eval_reflection_class_like_or_runtime_exists(&class_name, context, values)? {
+        let _ = crate::interpreter::eval_spl_autoload_class(&class_name, context, values)?;
+    }
     let reflected_name = context
         .resolve_class_like_name(&class_name)
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
@@ -109,7 +112,7 @@ pub(super) fn eval_reflection_class_owner_object_result(
         let trait_names = eval_reflection_aot_class_trait_names(&canonical_name, values)?;
         let parent_class_name = eval_reflection_aot_parent_class_name(&canonical_name, values)?;
         let attributes = context.native_class_attributes(&canonical_name);
-        return eval_reflection_owner_object(
+        let object = eval_reflection_owner_object(
             owner_kind,
             &canonical_name,
             &attributes,
@@ -130,13 +133,21 @@ pub(super) fn eval_reflection_class_owner_object_result(
             None,
             context,
             values,
+        )?;
+        let doc_comment = values.reflection_class_doc_comment(&canonical_name)?;
+        return eval_reflection_apply_class_doc_comment(
+            owner_kind,
+            object,
+            doc_comment.as_deref(),
+            context,
+            values,
         )
         .map(Some);
     };
     let interface_names =
         eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
     let flags = eval_reflection_eval_metadata_flags(&metadata, context, values)?;
-    eval_reflection_owner_object(
+    let object = eval_reflection_owner_object(
         owner_kind,
         &metadata.resolved_name,
         &metadata.attributes,
@@ -157,8 +168,41 @@ pub(super) fn eval_reflection_class_owner_object_result(
         None,
         context,
         values,
+    )?;
+    eval_reflection_apply_class_doc_comment(
+        owner_kind,
+        object,
+        metadata.doc_comment.as_deref(),
+        context,
+        values,
     )
     .map(Some)
+}
+
+/// Stores a reflected class doc comment in native ReflectionClass-compatible slots.
+fn eval_reflection_apply_class_doc_comment(
+    owner_kind: u64,
+    object: RuntimeCellHandle,
+    doc_comment: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT
+    ) {
+        return Ok(object);
+    }
+    let Some(doc_comment) = doc_comment else {
+        return Ok(object);
+    };
+    let doc_comment = values.string(doc_comment)?;
+    let has_doc_comment = values.bool_value(true)?;
+    eval_reflection_with_declaring_class_scope("ReflectionClass", context, |_| {
+        values.property_set(object, "__doc_comment", doc_comment)?;
+        values.property_set(object, "__has_doc_comment", has_doc_comment)
+    })?;
+    Ok(object)
 }
 
 /// Builds the minimal ReflectionClass metadata object for PHP's builtin Closure class.

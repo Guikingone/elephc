@@ -134,6 +134,10 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
     let mut cases = Vec::new();
 
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        if matches!(tokens[*pos].0, Token::DocComment(_)) {
+            *pos += 1;
+            continue;
+        }
         // Capture any `#[...]` attribute groups attached to the next member —
         // they're attached to the resulting property or method below.
         let member_attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
@@ -707,6 +711,10 @@ fn parse_interface_body(
     let mut constants = Vec::new();
 
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        if matches!(tokens[*pos].0, Token::DocComment(_)) {
+            *pos += 1;
+            continue;
+        }
         // Attributes may decorate interface methods (e.g. `#[Deprecated]`).
         let member_attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
         if *pos >= tokens.len() || matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {

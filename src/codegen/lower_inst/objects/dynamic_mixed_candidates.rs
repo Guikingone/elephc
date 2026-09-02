@@ -66,6 +66,15 @@ pub(super) fn dynamic_new_mixed_candidates(
     Ok(candidates)
 }
 
+/// Counts the AOT classes that would expand a generic dynamic-new dispatch.
+pub(super) fn dynamic_new_mixed_aot_candidate_count(ctx: &FunctionContext<'_>) -> usize {
+    ctx.module
+        .class_infos
+        .keys()
+        .filter(|class_name| is_dynamic_new_mixed_aot_candidate(class_name))
+        .count()
+}
+
 /// Returns AOT candidates that can be allocated without constructor dispatch.
 pub(super) fn dynamic_new_without_constructor_mixed_candidates(
     ctx: &FunctionContext<'_>,

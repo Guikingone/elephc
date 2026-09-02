@@ -295,15 +295,17 @@ fn dynamic_class_exists_reports_declared_eval_class() {
     let missing = b"missing";
 
     let existing_result = unsafe {
-        __elephc_eval_dynamic_class_exists(&ctx, existing.as_ptr(), existing.len() as u64)
+        __elephc_eval_dynamic_class_exists(&mut ctx, existing.as_ptr(), existing.len() as u64, 0)
     };
     let qualified_result = unsafe {
-        __elephc_eval_dynamic_class_exists(&ctx, qualified.as_ptr(), qualified.len() as u64)
+        __elephc_eval_dynamic_class_exists(&mut ctx, qualified.as_ptr(), qualified.len() as u64, 0)
     };
-    let folded_result =
-        unsafe { __elephc_eval_dynamic_class_exists(&ctx, folded.as_ptr(), folded.len() as u64) };
-    let missing_result =
-        unsafe { __elephc_eval_dynamic_class_exists(&ctx, missing.as_ptr(), missing.len() as u64) };
+    let folded_result = unsafe {
+        __elephc_eval_dynamic_class_exists(&mut ctx, folded.as_ptr(), folded.len() as u64, 0)
+    };
+    let missing_result = unsafe {
+        __elephc_eval_dynamic_class_exists(&mut ctx, missing.as_ptr(), missing.len() as u64, 0)
+    };
 
     assert_eq!(existing_result, 1);
     assert_eq!(qualified_result, 1);

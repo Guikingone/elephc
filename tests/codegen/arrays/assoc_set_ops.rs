@@ -116,6 +116,29 @@ foreach ((new PriorityGroups())->flatten() as $value) {
     assert_eq!(out, "101112");
 }
 
+/// Verifies a gradual `array_merge()` retains the runtime class identity of object elements.
+///
+/// The helper returns `array<mixed>`, so the subsequent foreach and method call exercise the
+/// boxed-object bridge instead of relying on a concrete array element representation.
+#[test]
+fn test_gradual_array_merge_preserves_object_method_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+class MergeDispatchProbe {
+    public function process(): string { return "processed"; }
+}
+function gradual(mixed $value): mixed { return $value; }
+$first = gradual([new MergeDispatchProbe()]);
+$result = array_merge($first, gradual([]));
+foreach ($result as $pass) {
+    echo get_class($pass), ":", $pass->process();
+}
+"#,
+    );
+
+    assert_eq!(out, "MergeDispatchProbe:processed");
+}
+
 /// Verifies `array_unique()` preserves the first associative keys for gradual Mixed values.
 #[test]
 fn test_array_unique_assoc_mixed_preserves_first_keys() {

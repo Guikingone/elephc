@@ -61,6 +61,50 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_is_callable(
     store_if_result(ctx, inst)
 }
 
+/// Registers an AOT SPL callback in the same persistent eval context used by runtime includes.
+pub(in crate::codegen::lower_inst::builtins) fn lower_eval_spl_autoload_register(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count_between(inst, "spl_autoload_register", 1, 3)?;
+    let callback = expect_operand(inst, 0)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    if matches!(ctx.value_php_type(callback)?.codegen_repr(), PhpType::Array(element) if element.codegen_repr() != PhpType::Mixed) {
+        crate::codegen::lower_inst::callables::normalize_typed_callable_array_to_mixed(ctx, callback)?;
+    }
+    store_eval_mixed_operand_at(ctx, callback, EVAL_TEMP_CELL_OFFSET)?;
+    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, EVAL_TEMP_CELL_OFFSET);
+    let prepend_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    if let Some(prepend) = inst.operands.get(2).copied() {
+        let prepend_ty = ctx.load_value_to_result(prepend)?.codegen_repr();
+        if prepend_ty != PhpType::Bool {
+            return Err(CodegenIrError::unsupported(format!(
+                "spl_autoload_register() prepend lowering for PHP type {:?}",
+                prepend_ty
+            )));
+        }
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        if prepend_arg != result_reg {
+            ctx.emitter
+                .instruction(&format!("mov {}, {}", prepend_arg, result_reg));
+        }
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, prepend_arg, 0);
+    }
+    // The registration ABI allocates an independent request-scoped context for AOT callers.
+    // Loading `$prepend` uses the result register, so write the null context last.
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_spl_autoload");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    box_eval_bool_result_if_mixed(ctx, inst);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers member-existence introspection through eval dynamic metadata.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_member_exists(
     ctx: &mut FunctionContext<'_>,
@@ -217,6 +261,42 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
+}
+
+/// Branches on an eval-owned object's named class or interface relation without a local context.
+///
+/// Nominal boundaries in an AOT function may receive an object from a request-global eval
+/// autoloader.  Passing a null context lets the bridge recover that object's registered owner,
+/// while a false result deliberately falls through to the ordinary native metadata matcher.
+pub(in crate::codegen::lower_inst::builtins) fn emit_eval_object_is_a_named_fallback(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    target_class: &str,
+    matched_label: &str,
+    native_fallback_label: &str,
+) -> Result<()> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_eval_object_operand(ctx, object)?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
+    let (target_label, target_len) = ctx.data.add_string(target_class.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), &target_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        target_len as i64,
+    );
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_object_is_a");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, matched_label);
+    abi::emit_jump(ctx.emitter, native_fallback_label);
+    Ok(())
 }
 
 /// Lowers object/class relation predicates whose target is a runtime string or object cell.

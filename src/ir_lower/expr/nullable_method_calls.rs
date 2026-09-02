@@ -185,6 +185,12 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
     expr: &Expr,
 ) -> LoweredValue {
     let receiver_type = strip_void_from_union(ctx.builder.value_php_type(object.value));
+    let object = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+        ctx,
+        object,
+        &receiver_type,
+        Some(expr.span),
+    );
     let receiver_name = ctx.declare_hidden_temp(receiver_type.clone());
     ctx.store_local(&receiver_name, object, receiver_type, Some(expr.span));
     let receiver = Expr::new(ExprKind::Variable(receiver_name), expr.span);

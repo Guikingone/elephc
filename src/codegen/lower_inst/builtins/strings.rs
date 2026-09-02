@@ -71,7 +71,7 @@ pub(crate) use replace_wrap::{lower_str_pad, lower_string_replace, lower_wordwra
 pub(crate) use scalar::{lower_chr, lower_number_format, lower_ord};
 pub(crate) use search::{
     lower_str_contains, lower_str_repeat, lower_string_position, lower_string_span, lower_strstr,
-    lower_strrchr, lower_substr, lower_substr_replace,
+    lower_strpbrk, lower_strrchr, lower_substr, lower_substr_replace,
 };
 pub(crate) use simple::{
     lower_binary_string_runtime, lower_grapheme_strrev, lower_html_escape, lower_lcfirst,

@@ -141,7 +141,8 @@ fn bind_array_element_reference(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let key = eval_array_reference_key(key, values)?.ok_or(EvalStatus::RuntimeFatal)?;
-    context.bind_array_element_alias(array, key, target);
+    let array_identity = values.raw_value_word(array)?;
+    context.bind_array_element_alias(array_identity, key, target);
     Ok(())
 }
 
@@ -164,6 +165,17 @@ pub(in crate::interpreter) fn eval_array_reference_key(
         EVAL_TAG_BOOL | EVAL_TAG_FLOAT => EvalArrayReferenceKey::Int(eval_int_value(key, values)?),
         _ => return Ok(None),
     }))
+}
+
+/// Materializes a stable eval array-reference key as a temporary runtime cell.
+pub(in crate::interpreter) fn eval_array_reference_key_value(
+    key: &EvalArrayReferenceKey,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match key {
+        EvalArrayReferenceKey::Int(value) => values.int(*value),
+        EvalArrayReferenceKey::String(bytes) => values.string_bytes_value(bytes),
+    }
 }
 
 /// Advances an array literal's automatic key after an integer-normalized explicit key.

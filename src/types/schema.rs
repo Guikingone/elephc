@@ -254,6 +254,8 @@ pub struct ClassInfo {
     pub class_id: u64,
     /// Source span of the class-like declaration, or `Span::dummy()` for compiler-injected classes.
     pub declaration_span: crate::span::Span,
+    /// Verbatim PHP doc comment declared directly on this class, when present.
+    pub doc_comment: Option<String>,
     pub parent: Option<String>,
     pub is_abstract: bool,
     pub is_final: bool,

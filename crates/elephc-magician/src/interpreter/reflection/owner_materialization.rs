@@ -33,6 +33,7 @@ pub(super) fn eval_reflection_owner_object(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let include_class_members = !eval_reflection_owner_uses_class_metadata(owner_kind);
     eval_reflection_owner_object_with_members(
         owner_kind,
         reflected_name,
@@ -52,7 +53,7 @@ pub(super) fn eval_reflection_owner_object(
         method_modifiers,
         constant_value,
         backing_value,
-        true,
+        include_class_members,
         context,
         values,
     )
@@ -322,19 +323,19 @@ pub(super) fn eval_reflection_owner_object_with_members(
 pub(super) fn eval_reflection_related_class_result(
     owner_kind: u64,
     related_class_name: Option<&str>,
-    include_class_members: bool,
+    _include_class_members: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(related_class_name) = related_class_name else {
         return values.bool_value(false);
     };
-    if eval_reflection_owner_uses_class_metadata(owner_kind) && include_class_members {
-        return eval_reflection_full_class_object_result(related_class_name, context, values);
-    }
     if matches!(
         owner_kind,
-        EVAL_REFLECTION_OWNER_METHOD
+        EVAL_REFLECTION_OWNER_CLASS
+            | EVAL_REFLECTION_OWNER_OBJECT
+            | EVAL_REFLECTION_OWNER_ENUM
+            | EVAL_REFLECTION_OWNER_METHOD
             | EVAL_REFLECTION_OWNER_PROPERTY
             | EVAL_REFLECTION_OWNER_CLASS_CONSTANT
             | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE

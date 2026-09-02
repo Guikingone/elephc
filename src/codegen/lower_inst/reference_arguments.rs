@@ -213,7 +213,7 @@ pub(super) fn call_arg_temp_slot_size(ty: &PhpType) -> usize {
     }
 }
 
-/// Plans caller-side Mixed cells needed for scalar locals passed to by-reference Mixed params.
+/// Plans temporary by-reference cells for caller/callee representation boundaries.
 pub(super) fn plan_ref_arg_writebacks(
     ctx: &FunctionContext<'_>,
     args: &[ValueId],
@@ -222,28 +222,39 @@ pub(super) fn plan_ref_arg_writebacks(
 ) -> Result<Vec<RefArgWriteback>> {
     let mut writebacks = Vec::new();
     for (param_index, value) in args.iter().enumerate() {
-        if !ref_params[param_index] || param_types[param_index].codegen_repr() != PhpType::Mixed {
+        if !ref_params[param_index] {
             continue;
         }
         let source_ty = ctx.raw_value_php_type(*value)?.codegen_repr();
-        if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
-            continue;
-        }
         // A non-local by-reference argument has no caller variable to update. It is materialized
         // as a throwaway ref cell below; only local sources participate in writeback planning.
         let Ok(source) = local_ref_arg_source(ctx, *value) else {
             continue;
         };
-        reject_unsupported_mixed_ref_writeback_source(
-            &source_ty,
-            &ctx.function.name,
-            source.slot,
-        )?;
+        let cell_ty = param_types[param_index].codegen_repr();
+        let kind = match (&source_ty, &cell_ty) {
+            (source_ty, PhpType::Mixed) if !matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) => {
+                reject_unsupported_mixed_ref_writeback_source(
+                    source_ty,
+                    &ctx.function.name,
+                    source.slot,
+                )?;
+                RefArgWritebackKind::ConcreteToMixed
+            }
+            (PhpType::Mixed, PhpType::Array(element))
+                if element.codegen_repr() == PhpType::Mixed =>
+            {
+                RefArgWritebackKind::MixedArrayToRawArray
+            }
+            _ => continue,
+        };
         writebacks.push(RefArgWriteback {
             param_index,
             source_value: *value,
             source_slot: source.slot,
             source_ty,
+            cell_ty,
+            kind,
             cell_offset: 0,
         });
     }
@@ -274,16 +285,25 @@ pub(super) fn reject_unsupported_mixed_ref_writeback_source(
     )))
 }
 
-/// Emits persistent caller-stack Mixed cells used by scalar-to-Mixed by-reference args.
+/// Emits persistent caller-stack cells used by representation-bridging by-reference args.
 pub(super) fn emit_ref_arg_temp_cells(
     ctx: &mut FunctionContext<'_>,
     writebacks: &mut [RefArgWriteback],
 ) -> Result<()> {
     let total = writebacks.len();
     for (index, writeback) in writebacks.iter_mut().enumerate() {
-        ctx.load_value_to_result(writeback.source_value)?;
-        emit_box_current_value_as_mixed(ctx.emitter, &writeback.source_ty);
-        abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
+        match writeback.kind {
+            RefArgWritebackKind::ConcreteToMixed => {
+                ctx.load_value_to_result(writeback.source_value)?;
+                emit_box_current_value_as_mixed(ctx.emitter, &writeback.source_ty);
+            }
+            RefArgWritebackKind::MixedArrayToRawArray => {
+                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                ctx.load_value_to_reg(writeback.source_value, arg_reg)?;
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
+            }
+        }
+        abi::emit_push_result_value(ctx.emitter, &writeback.cell_ty);
         writeback.cell_offset = (total - index - 1) * 16;
     }
     Ok(())
@@ -378,7 +398,7 @@ pub(super) fn store_pushed_value_to_ref_cell(ctx: &mut FunctionContext<'_>, cell
     }
 }
 
-/// Writes temporary Mixed by-reference cells back into the original caller locals.
+/// Writes temporary representation-bridging by-reference cells back into caller locals.
 pub(super) fn emit_ref_arg_writebacks(
     ctx: &mut FunctionContext<'_>,
     writebacks: &[RefArgWriteback],
@@ -389,16 +409,24 @@ pub(super) fn emit_ref_arg_writebacks(
             abi::int_result_reg(ctx.emitter),
             writeback.cell_offset,
         );
-        if ctx.local_php_type(writeback.source_slot)?.codegen_repr() == PhpType::Mixed {
-            emit_mixed_ref_writeback_to_gradual_local(ctx, writeback)?;
-            continue;
+        match writeback.kind {
+            RefArgWritebackKind::ConcreteToMixed => {
+                if ctx.local_php_type(writeback.source_slot)?.codegen_repr() == PhpType::Mixed {
+                    emit_mixed_ref_writeback_to_gradual_local(ctx, writeback)?;
+                    continue;
+                }
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+                store_current_scalar_result_to_ref_source(ctx, writeback)?;
+                abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            }
+            RefArgWritebackKind::MixedArrayToRawArray => {
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &writeback.cell_ty);
+                emit_mixed_ref_writeback_to_gradual_local(ctx, writeback)?;
+            }
         }
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-        move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
-        store_current_scalar_result_to_ref_source(ctx, writeback)?;
-        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     }
     abi::emit_release_temporary_stack(ctx.emitter, writebacks.len() * 16);
     Ok(())

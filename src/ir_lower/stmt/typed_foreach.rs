@@ -100,7 +100,9 @@ pub(super) fn coerce_typed_assign_value(
         PhpType::Str if matches!(source_ty, PhpType::Object(_)) => {
             coerce_to_string_at_span(ctx, value, Some(span))
         }
-        target @ (PhpType::Callable | PhpType::Object(_)) if source_ty == PhpType::Mixed => {
+        target @ (PhpType::Callable | PhpType::Object(_) | PhpType::Iterable)
+            if source_ty == PhpType::Mixed =>
+        {
             ctx.emit_value(
                 Op::MixedUnbox,
                 vec![value.value],
@@ -131,17 +133,14 @@ pub(super) fn lower_foreach(
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
-    // Orthogonal to the borrowed fetch-for-write pin taken after `IterStart` below: that one
-    // keeps a by-reference element or property container alive, while this one takes the loop's
-    // reference on an object source. Borrowed fetch-for-write sources are containers, never
-    // objects, so `retain_object_foreach_source` returns them untouched and the flag still
-    // describes `source`.
+    // By-reference sources need their declared container shape. By-value ordinary objects are
+    // normalized to their visible properties before `IterStart`; both paths take their own
+    // lifetime pin below after the iterator has captured the source pointer.
     let source = if value_by_ref {
         source
     } else {
         normalize_plain_object_foreach_source(ctx, source, array.span)
     };
-    let source = retain_object_foreach_source(ctx, source, array.span);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
@@ -167,16 +166,19 @@ pub(super) fn lower_foreach(
         Op::IterStart.default_effects(),
         Some(array.span),
     );
-    // Take the loop's own lifetime reference on a borrowed fetch-for-write source after
-    // `IterStart`.
-    // The order is the whole point: `IterStart` splits a by-reference source through
-    // `__rt_array_ensure_unique`, so a pin taken before it would put the element back at
-    // refcount 2 and hand the loop a private copy — the very miscompile issue #580 fixes.
-    // Taken here, the split has already happened and the iterator has already captured the
-    // pointer, so the pin only keeps that storage alive.
-    let source_pin = source_is_borrowed_fetch
-        .then(|| pin_by_ref_foreach_borrowed_source(ctx, source, array.span))
-        .flatten();
+    // The iterator borrows its source pointer, so the loop needs an independent lifetime
+    // reference. For by-value arrays this is also PHP's snapshot boundary: a body write may
+    // COW the source for the visible array while the iterator continues over the original hash.
+    // The pin is deliberately taken after `IterStart`: a by-reference source may be made unique
+    // during initialization, and pinning it beforehand would make that split target a discarded
+    // copy (issue #580).
+    let source_pin = if value_by_ref {
+        source_is_borrowed_fetch
+            .then(|| pin_by_ref_foreach_borrowed_source(ctx, source, array.span))
+            .flatten()
+    } else {
+        pin_by_value_foreach_source(ctx, source, array.span)
+    };
     if let Some(key_var) = key_var {
         initialize_foreach_mixed_local_if_needed(ctx, key_var, key_needs_null_init, array.span);
     }
@@ -228,6 +230,7 @@ pub(super) fn lower_foreach(
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
+    let surrounding_try_handler_stack = ctx.try_handler_stack.clone();
     let cleanup = ctx
         .value_is_owning_temporary(source)
         .then_some(LoopCleanup {
@@ -277,6 +280,7 @@ pub(super) fn lower_foreach(
     }
     lower_block(ctx, body);
     ctx.loop_stack.pop();
+    ctx.try_handler_stack = surrounding_try_handler_stack;
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
@@ -455,42 +459,36 @@ pub(super) fn initialize_foreach_mixed_local_if_needed(
     ctx.store_foreach_initializer_local_only(name, boxed, PhpType::Mixed, Some(span));
 }
 
-/// Takes the loop's own reference on an object `foreach` source.
+/// Takes the by-value loop's independent lifetime reference on a refcounted source.
 ///
-/// Iterating an object — a user `Iterator`/`IteratorAggregate`, or a `Generator` —
-/// must keep it alive for the whole loop even when the body drops every other
-/// owner (`foreach ($it as $v) { unset($it); }`), so the loop needs a reference of
-/// its own. `Op::IterStart` used to take that reference with a bare backend
-/// `incref` that nothing ever balanced, leaking the object and everything it owned
-/// once per loop. It is taken here instead, as an `Op::Acquire` whose result is an
-/// owning temporary: the loop's exit block and its `LoopCleanup` (early `return`,
-/// multi-level `break`) already release such a value exactly once.
-///
-/// The reference the *lowered source expression* carried is dropped right away
-/// under the pre-existing "owning temporary" rule, so a fresh
-/// `foreach (make_iter() as $v)` temporary is still released exactly once — just
-/// before the loop rather than after it, which the acquire above makes safe.
-///
-/// Non-object sources are returned untouched: the iterator aliases an array or
-/// hash source, so retaining one would change its refcount and therefore its
-/// copy-on-write behaviour inside the loop body.
-fn retain_object_foreach_source(
+/// The iterator stores only a borrowed array/hash/object pointer. PHP keeps that source alive
+/// for the duration of `foreach`: if the loop body replaces an array element, copy-on-write
+/// publishes a new container to the property/local while iteration continues over the original
+/// insertion order. Without this pin, replacing the visible owner frees the iterator's table and
+/// truncates the loop after its first element. The lifetime-pin marker protects the paired
+/// acquire/release from the EIR peephole because the raised reference count is observable through
+/// that COW boundary.
+fn pin_by_value_foreach_source(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     span: Span,
-) -> LoweredValue {
+) -> Option<LoopCleanup> {
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
     if !matches!(
-        ctx.builder.value_php_type(source.value).codegen_repr(),
-        PhpType::Object(_)
+        source_ty,
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Iterable
+            | PhpType::Mixed
+            | PhpType::Object(_)
+            | PhpType::Union(_)
     ) {
-        return source;
+        return None;
     }
-    let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
-    if retained.value == source.value {
-        return source;
+    let pin = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, source, Some(span));
+    if pin.value == source.value {
+        return None;
     }
-    if ctx.value_is_owning_temporary(source) {
-        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
-    }
-    retained
+    ctx.builder.set_value_ownership(pin.value, Ownership::Owned);
+    Some(LoopCleanup { value: pin, span })
 }

@@ -420,9 +420,10 @@ fn validate_opcode_rules(
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
         | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
-        | EvalClassExists | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect | Nop => {
+        | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
+        EvalClassExists => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         EvalLiteralCall | EvalFunctionCallArray | EvalScopeGet => {
             check_count(inst_id, inst, 1, "1")
         }

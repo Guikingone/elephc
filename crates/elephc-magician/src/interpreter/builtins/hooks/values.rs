@@ -293,6 +293,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Strtr,
     /// Dispatches `strrchr(...)`.
     Strrchr,
+    /// Dispatches `strpbrk(...)`.
+    Strpbrk,
     /// Dispatches `strstr(...)`.
     Strstr,
     /// Dispatches `substr(...)`.
@@ -690,6 +692,10 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Strrchr => two_args(evaluated_args, values, eval_strrchr_result),
+            Self::Strpbrk => match evaluated_args {
+                [string, characters] => eval_strpbrk_result(*string, *characters, context, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Strstr => match evaluated_args {
                 [haystack, needle] => eval_strstr_result(*haystack, *needle, false, values),
                 [haystack, needle, before_needle] => {

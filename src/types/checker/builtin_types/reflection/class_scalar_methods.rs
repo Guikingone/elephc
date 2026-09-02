@@ -64,6 +64,41 @@ pub(super) fn builtin_reflection_class_string_method(method_name: &str, property
     }
 }
 
+/// Returns `ReflectionClass::getDocComment()` with PHP's `string|false` absence contract.
+pub(super) fn builtin_reflection_class_doc_comment_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let has_doc_comment = reflection_this_property("__has_doc_comment", dummy_span);
+    let doc_comment = reflection_this_property("__doc_comment", dummy_span);
+    ClassMethod {
+        name: "getDocComment".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(string_or_bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::Ternary {
+                    condition: Box::new(has_doc_comment),
+                    then_expr: Box::new(doc_comment),
+                    else_expr: Box::new(Expr::new(ExprKind::BoolLiteral(false), dummy_span)),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public `ReflectionClass` integer method backed by one private slot.
 pub(super) fn builtin_reflection_class_int_method(method_name: &str, property: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();

@@ -13,6 +13,7 @@ mod closures;
 mod expr_calls;
 mod func_args;
 mod language_features;
+mod nested_mixed;
 mod constants_and_system;
 mod state_and_variadics;
 mod pipe;

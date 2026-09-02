@@ -288,6 +288,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Strtr,
     /// Dispatches `strrchr(...)`.
     Strrchr,
+    /// Dispatches `strpbrk(...)`.
+    Strpbrk,
     /// Dispatches `strstr(...)`.
     Strstr,
     /// Dispatches `substr(...)`.
@@ -550,6 +552,7 @@ impl EvalDirectHook {
             Self::Strval => eval_builtin_strval(args, context, scope, values),
             Self::Strtr => eval_builtin_strtr(args, context, scope, values),
             Self::Strrchr => eval_builtin_strrchr(args, context, scope, values),
+            Self::Strpbrk => eval_builtin_strpbrk(args, context, scope, values),
             Self::Strstr => eval_builtin_strstr(args, context, scope, values),
             Self::Substr => eval_builtin_substr(args, context, scope, values),
             Self::SubstrReplace => eval_builtin_substr_replace(args, context, scope, values),

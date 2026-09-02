@@ -9,6 +9,7 @@
 //! - Postfix operations preserve PHP chaining and dynamic member evaluation order.
 
 use super::*;
+use super::precedence::is_assignment_target;
 
 impl Parser {
 
@@ -146,6 +147,24 @@ impl Parser {
             if self.consume(TokenKind::DoubleColon) {
                 expr = self.parse_dynamic_static_member_expr(expr)?;
                 continue;
+            }
+            if self.consume(TokenKind::PlusPlus) {
+                if !is_assignment_target(&expr) {
+                    return Err(EvalParseError::UnexpectedToken);
+                }
+                return Ok(EvalExpr::PostfixIncDec {
+                    target: Box::new(expr),
+                    increment: true,
+                });
+            }
+            if self.consume(TokenKind::MinusMinus) {
+                if !is_assignment_target(&expr) {
+                    return Err(EvalParseError::UnexpectedToken);
+                }
+                return Ok(EvalExpr::PostfixIncDec {
+                    target: Box::new(expr),
+                    increment: false,
+                });
             }
             let nullsafe = if self.consume(TokenKind::Arrow) {
                 false

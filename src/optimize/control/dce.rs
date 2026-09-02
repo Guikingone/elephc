@@ -742,6 +742,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
         }],
         StmtKind::ClassDecl {
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -760,6 +761,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             vec![Stmt {
                 kind: StmtKind::ClassDecl {
                     name,
+                    doc_comment,
                     extends,
                     implements,
                     is_abstract,

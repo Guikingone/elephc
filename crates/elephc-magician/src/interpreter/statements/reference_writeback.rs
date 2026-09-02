@@ -273,7 +273,7 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
                 return Err(EvalStatus::RuntimeFatal);
             };
             write_back_method_array_element_ref_target(
-                scope, array_name, *index, value, context, values,
+                scope, array_name, index, value, context, values,
             )
         }
         EvalReferenceTarget::NestedArrayElement {
@@ -281,7 +281,7 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             index,
         } => write_back_method_nested_array_element_ref_target(
             array_target,
-            *index,
+            index,
             value,
             context,
             values,
@@ -426,6 +426,23 @@ pub(super) fn write_back_invoker_heap_slot(
 pub(super) fn write_back_method_array_element_ref_target(
     scope: &mut ElephcEvalScope,
     array_name: &str,
+    index: &EvalArrayReferenceKey,
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let index = eval_array_reference_key_value(index, values)?;
+    let result = write_back_method_array_element_ref_target_value(
+        scope, array_name, index, value, context, values,
+    );
+    values.release(index)?;
+    result
+}
+
+/// Stores one by-reference result using an already materialized array-key cell.
+fn write_back_method_array_element_ref_target_value(
+    scope: &mut ElephcEvalScope,
+    array_name: &str,
     index: RuntimeCellHandle,
     value: RuntimeCellHandle,
     context: &ElephcEvalContext,
@@ -453,6 +470,22 @@ pub(super) fn write_back_method_array_element_ref_target(
 
 /// Stores one by-reference method result in an element of a nested caller-side array target.
 pub(super) fn write_back_method_nested_array_element_ref_target(
+    array_target: &EvalReferenceTarget,
+    index: &EvalArrayReferenceKey,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let index = eval_array_reference_key_value(index, values)?;
+    let result = write_back_method_nested_array_element_ref_target_value(
+        array_target, index, value, context, values,
+    );
+    values.release(index)?;
+    result
+}
+
+/// Stores one by-reference result using an already materialized nested array key.
+fn write_back_method_nested_array_element_ref_target_value(
     array_target: &EvalReferenceTarget,
     index: RuntimeCellHandle,
     value: RuntimeCellHandle,

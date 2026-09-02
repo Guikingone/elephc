@@ -9,6 +9,8 @@
 //! - Tag 5 (associative): shallow-clones the payload hash and normalizes every value to a boxed
 //!   Mixed cell, matching the EIR `AssocArray<Mixed, Mixed>` result contract.
 //! - Tag 4 (indexed): rebuilds a hash, boxing each element via `__rt_mixed_array_get`.
+//! - Nested Mixed wrappers are transparent: tag 7 cells are peeled before selecting an array
+//!   representation, matching other gradual array consumers.
 //! - Null/non-array payloads terminate with the shared gradual array-boundary `TypeError`.
 //! - The returned hash is independently owned (refcount 1), so a single release frees it.
 
@@ -18,6 +20,30 @@ use crate::codegen::platform::Arch;
 
 /// Length in bytes of the shared `_array_arg_type_error_msg` fatal string.
 const ARRAY_ARG_TYPE_ERROR_MSG_LEN: usize = 78;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies both target emitters peel nested Mixed cells before array dispatch.
+    #[test]
+    fn test_mixed_to_owned_hash_peels_nested_mixed_wrappers_on_all_targets() {
+        let mut arm = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_mixed_to_owned_hash(&mut arm);
+        let arm = arm.output();
+        assert!(arm.contains("    cmp x9, #7\n"));
+        assert!(arm.contains("    b __rt_mixed_to_owned_hash_unwrap\n"));
+        assert!(arm.contains("__rt_mixed_to_owned_hash_dispatch:\n"));
+
+        let mut x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_mixed_to_owned_hash(&mut x86);
+        let x86 = x86.output();
+        assert!(x86.contains("    cmp r10, 7\n"));
+        assert!(x86.contains("    jmp __rt_mixed_to_owned_hash_unwrap\n"));
+        assert!(x86.contains("__rt_mixed_to_owned_hash_dispatch:\n"));
+    }
+}
 
 /// Emits the `__rt_mixed_to_owned_hash` runtime helper. Dispatches per target.
 pub fn emit_mixed_to_owned_hash(emitter: &mut Emitter) {
@@ -40,10 +66,16 @@ fn emit_mixed_to_owned_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #48");                                     // reserve frame for the conversion state
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish the local frame
-    emitter.instruction("str x0, [sp, #0]");                                    // save the boxed Mixed receiver pointer
-
     emitter.instruction("cbz x0, __rt_mixed_to_owned_hash_bad");                // null is not a valid gradual array operand
+    emitter.label("__rt_mixed_to_owned_hash_unwrap");
     emitter.instruction("ldr x9, [x0]");                                        // load the Mixed runtime tag
+    emitter.instruction("cmp x9, #7");                                          // does this box wrap another Mixed cell?
+    emitter.instruction("b.ne __rt_mixed_to_owned_hash_dispatch");              // dispatch once the concrete payload tag is reached
+    emitter.instruction("ldr x0, [x0, #8]");                                    // follow the nested boxed value
+    emitter.instruction("cbz x0, __rt_mixed_to_owned_hash_bad");                // a null nested cell cannot represent an array
+    emitter.instruction("b __rt_mixed_to_owned_hash_unwrap");                   // peel arbitrarily nested Mixed wrappers
+    emitter.label("__rt_mixed_to_owned_hash_dispatch");
+    emitter.instruction("str x0, [sp, #0]");                                    // retain the canonical boxed array cell for indexed element reads
     emitter.instruction("cmp x9, #5");                                          // tag 5 = associative array?
     emitter.instruction("b.eq __rt_mixed_to_owned_hash_assoc");                 // shallow-clone the hash payload
     emitter.instruction("cmp x9, #4");                                          // tag 4 = indexed array?
@@ -133,11 +165,18 @@ fn emit_mixed_to_owned_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 48");                                         // reserve aligned local storage for the conversion state
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed Mixed receiver pointer
-
     emitter.instruction("test rdi, rdi");                                       // null receiver → fresh empty hash
     emitter.instruction("je __rt_mixed_to_owned_hash_bad");                     // null is not a valid gradual array operand
+    emitter.label("__rt_mixed_to_owned_hash_unwrap");
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the Mixed runtime tag
+    emitter.instruction("cmp r10, 7");                                          // does this box wrap another Mixed cell?
+    emitter.instruction("jne __rt_mixed_to_owned_hash_dispatch");              // dispatch once the concrete payload tag is reached
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // follow the nested boxed value
+    emitter.instruction("test rdi, rdi");                                       // a null nested cell cannot represent an array
+    emitter.instruction("je __rt_mixed_to_owned_hash_bad");
+    emitter.instruction("jmp __rt_mixed_to_owned_hash_unwrap");                 // peel arbitrarily nested Mixed wrappers
+    emitter.label("__rt_mixed_to_owned_hash_dispatch");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // retain the canonical boxed array cell for indexed element reads
     emitter.instruction("cmp r10, 5");                                          // tag 5 = associative array?
     emitter.instruction("je __rt_mixed_to_owned_hash_assoc");                   // shallow-clone the hash payload
     emitter.instruction("cmp r10, 4");                                          // tag 4 = indexed array?

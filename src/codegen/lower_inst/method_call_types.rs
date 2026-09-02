@@ -50,12 +50,22 @@ pub(super) struct BorrowedStackMixedArg {
     pub(super) source_ty: PhpType,
 }
 
-/// A caller-side scalar local boxed into a temporary Mixed by-reference cell.
+/// Representation bridge used by a temporary caller-side by-reference cell.
+pub(super) enum RefArgWritebackKind {
+    /// A concrete caller value is boxed while a gradual callee mutates it.
+    ConcreteToMixed,
+    /// A boxed dynamic array is exposed as a raw array only for a typed callee.
+    MixedArrayToRawArray,
+}
+
+/// A caller-side value that crosses a by-reference representation boundary.
 pub(super) struct RefArgWriteback {
     pub(super) param_index: usize,
     pub(super) source_value: ValueId,
     pub(super) source_slot: LocalSlotId,
     pub(super) source_ty: PhpType,
+    pub(super) cell_ty: PhpType,
+    pub(super) kind: RefArgWritebackKind,
     pub(super) cell_offset: usize,
 }
 

@@ -1957,6 +1957,22 @@ foreach ($mapped as $key => $value) {
     assert_eq!(out, "first=integer;second=string;");
 }
 
+/// Verifies `array_map()` normalizes a runtime-promoted `array<mixed>` to a key-preserving hash.
+#[test]
+fn test_array_map_promoted_mixed_array_preserves_dynamic_string_key() {
+    let out = compile_and_run(
+        r#"<?php
+$source = $argc > 1 ? 'return "other";' : 'return "service";';
+$key = eval($source);
+$values = [];
+$values[$key] = 41;
+$mapped = array_map(static fn (mixed $value): int => $value + 1, $values);
+echo $mapped[$key];
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 /// Verifies a gradual source is runtime-validated, preserves indexed and associative keys, and
 /// releases its normalized hash after transferring the mapped result into a Mixed cell.
 #[test]

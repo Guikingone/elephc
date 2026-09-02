@@ -36,6 +36,205 @@ pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
     Box::into_raw(Box::new(ElephcEvalContext::new()))
 }
 
+/// Publishes one generated context's complete AOT metadata for null-context fallback execution.
+///
+/// # Safety
+/// `ctx` must be null or a live context handle allocated by `__elephc_eval_context_new()`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_context_publish_aot_metadata(
+    ctx: *const ElephcEvalContext,
+) {
+    #[cfg(not(test))]
+    if let Some(context) = unsafe { ctx.as_ref() } {
+        crate::context::publish_global_eval_aot_metadata(context);
+    }
+    #[cfg(test)]
+    let _ = ctx;
+}
+
+/// Imports the process-global immutable AOT snapshot into one generated context.
+///
+/// Returns one when metadata was available and loaded, otherwise zero so the
+/// generated registration helper can publish the first snapshot.
+///
+/// # Safety
+/// `ctx` must be null or a live context handle allocated by `__elephc_eval_context_new()`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_context_try_sync_aot_metadata(
+    ctx: *mut ElephcEvalContext,
+) -> i64 {
+    #[cfg(not(test))]
+    {
+        let Some(context) = (unsafe { ctx.as_mut() }) else {
+            return 0;
+        };
+        return i64::from(crate::context::sync_global_eval_aot_metadata(context));
+    }
+    #[cfg(test)]
+    {
+        let _ = ctx;
+        0
+    }
+}
+
+/// Reports the generated function and method when AOT dispatch rejects a null receiver.
+///
+/// # Safety
+/// Both byte ranges must be valid UTF-8 when their corresponding lengths are non-zero.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_trace_aot_null_method_receiver(
+    function_ptr: *const u8,
+    function_len: u64,
+    method_ptr: *const u8,
+    method_len: u64,
+    line: u64,
+) {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
+        return;
+    }
+    let Ok(function) = abi_name_to_string(function_ptr, function_len) else {
+        return;
+    };
+    let Ok(method) = abi_name_to_string(method_ptr, method_len) else {
+        return;
+    };
+    eprintln!(
+        "[elephc-eval-trace] phase=aot_method_call_non_object function={function:?} method={method:?} line={line}",
+    );
+}
+
+/// Reports the unmodified receiver word that reached an AOT null-method fatal.
+///
+/// # Safety
+/// Both byte ranges must be valid UTF-8 when their corresponding lengths are non-zero.
+/// `receiver` is logged as an integer only and is never dereferenced.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_trace_aot_raw_null_method_receiver(
+    function_ptr: *const u8,
+    function_len: u64,
+    method_ptr: *const u8,
+    method_len: u64,
+    line: u64,
+    receiver: usize,
+) {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
+        return;
+    }
+    let Ok(function) = abi_name_to_string(function_ptr, function_len) else {
+        return;
+    };
+    let Ok(method) = abi_name_to_string(method_ptr, method_len) else {
+        return;
+    };
+    let representation = match receiver {
+        0 => "zero",
+        0x7fff_ffff_ffff_fffe => "null-sentinel",
+        1 => "true-scalar",
+        _ => "other",
+    };
+    eprintln!(
+        "[elephc-eval-trace] phase=aot_method_call_null_receiver_raw function={function:?} method={method:?} line={line} receiver={receiver:#x} representation={representation}",
+    );
+}
+
+/// Reports an opt-in EIR exception-handler push or pop with its resulting top.
+///
+/// # Safety
+/// `function_ptr` must reference UTF-8 for `function_len` bytes when the length
+/// is non-zero. `top` is logged as an integer and is never dereferenced.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_trace_aot_handler_top(
+    event: u64,
+    token: u64,
+    top: usize,
+    function_ptr: *const u8,
+    function_len: u64,
+) {
+    if std::env::var_os("ELEPHC_HANDLER_TRACE").is_none() {
+        return;
+    }
+    let function = if function_len == 0 {
+        "<native-boundary>".to_string()
+    } else {
+        let Ok(function) = abi_name_to_string(function_ptr, function_len) else {
+            return;
+        };
+        function
+    };
+    let event = match event {
+        1 => "push",
+        2 => "pop",
+        3 => "native-pop",
+        _ => "unknown",
+    };
+    eprintln!(
+        "[elephc-handler-trace] event={event} function={function:?} token={token} top={top:#x}"
+    );
+}
+
+/// Reports a boxed AOT property receiver before or after an opt-in property write trace point.
+///
+/// # Safety
+/// `site_ptr` must name a valid UTF-8 byte range and `cell` must be a readable boxed Mixed cell.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_trace_aot_property_cell(
+    site_ptr: *const u8,
+    site_len: u64,
+    cell: *const usize,
+) {
+    if std::env::var_os("ELEPHC_AOT_PROPERTY_TRACE").is_none() {
+        return;
+    }
+    let Ok(site) = abi_name_to_string(site_ptr, site_len) else {
+        return;
+    };
+    if let Some(filter) = std::env::var_os("ELEPHC_AOT_PROPERTY_TRACE_FILTER") {
+        if !site.contains(filter.to_string_lossy().as_ref()) {
+            return;
+        }
+    }
+    if cell.is_null() {
+        eprintln!("[elephc-aot-property-trace] site={site:?} cell=null");
+        return;
+    }
+    let words = unsafe { [*cell, *cell.add(1), *cell.add(2)] };
+    eprintln!("[elephc-aot-property-trace] site={site:?} cell={cell:p} words={words:#x?}");
+}
+
+/// Reports an opt-in AOT typed-property receiver without changing its ownership.
+///
+/// # Safety
+/// `site_ptr` must name a valid UTF-8 byte range; `object` is null or points at
+/// a readable AOT object header; and `value` is readable as an object only when
+/// `value_is_object` is non-zero.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_trace_aot_raw_property_receiver(
+    site_ptr: *const u8,
+    site_len: u64,
+    object: *const usize,
+    value: usize,
+    value_is_object: u64,
+) {
+    if std::env::var_os("ELEPHC_AOT_PROPERTY_TRACE").is_none() {
+        return;
+    }
+    let Ok(site) = abi_name_to_string(site_ptr, site_len) else {
+        return;
+    };
+    if let Some(filter) = std::env::var_os("ELEPHC_AOT_PROPERTY_TRACE_FILTER") {
+        if !site.contains(filter.to_string_lossy().as_ref()) {
+            return;
+        }
+    }
+    let class_id = (!object.is_null()).then(|| unsafe { *object });
+    let value_class_id = (value_is_object != 0 && value != 0)
+        .then(|| unsafe { *(value as *const usize) });
+    eprintln!(
+        "[elephc-aot-property-trace] site={site:?} object={object:p} class_id={class_id:?} value={value:#x} value_is_object={} value_class_id={value_class_id:?}",
+        value_is_object != 0,
+    );
+}
+
 /// Marks this program's eval bridge as strict-PHP: extension builtins
 /// (`ptr_*`, `buffer_*`, `class_attribute_*`) disappear from eval dispatch and
 /// introspection, matching the PHP interpreter where those names do not exist.
@@ -69,13 +268,53 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
 /// that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) {
-    if !ctx.is_null() {
-        if let Some(context) = unsafe { ctx.as_ref() } {
-            context.unregister_dynamic_object_context();
-        }
-        crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
-        drop(Box::from_raw(ctx));
+    let should_finalize = unsafe { ctx.as_ref() }
+        .is_some_and(ElephcEvalContext::request_retained_context_free);
+    if should_finalize {
+        unsafe { finalize_eval_context_free(ctx) };
     }
+}
+
+/// Performs the final one-time destruction of a context with no retained PHP functions or closures.
+///
+/// # Safety
+/// `ctx` must be a unique live handle returned by `__elephc_eval_context_new()`. Callers first
+/// gate this through `ElephcEvalContext::request_retained_context_free()` or the matching last
+/// retained-owner release, so no PHP callable can retain the pointer after this point.
+pub(crate) unsafe fn finalize_eval_context_free(ctx: *mut ElephcEvalContext) {
+    if ctx.is_null() {
+        return;
+    }
+    let owned_global_scope = if let Some(context) = unsafe { ctx.as_mut() } {
+        context.unregister_dynamic_object_context();
+        context.take_owned_global_scope()
+    } else {
+        None
+    };
+    crate::context::unregister_global_eval_functions_for_context(ctx);
+    crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
+    if let Some(scope) = owned_global_scope {
+        unsafe { crate::ffi::scope::__elephc_eval_scope_free(scope) };
+    }
+    unsafe { drop(Box::from_raw(ctx)) };
+}
+
+/// Transfers an eval global scope to a context that outlives its AOT frame.
+///
+/// # Safety
+/// `ctx` and `scope` must be live bridge handles from the same generated frame. A nonzero result
+/// means ownership moved to the context and the frame must not free `scope` itself.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_context_retain_global_scope(
+    ctx: *mut ElephcEvalContext,
+    scope: *mut ElephcEvalScope,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        ctx.as_mut()
+            .is_some_and(|context| context.retain_global_scope_for_request(scope))
+            .into()
+    })
+    .unwrap_or(0)
 }
 
 /// Records source metadata for the next eval fragment executed in this context.

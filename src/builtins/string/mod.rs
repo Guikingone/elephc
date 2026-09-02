@@ -94,6 +94,7 @@ pub mod strncasecmp;
 pub mod strncmp;
 pub mod stripos;
 pub mod strpos;
+pub mod strpbrk;
 pub mod strrev;
 pub mod strripos;
 pub mod strrchr;

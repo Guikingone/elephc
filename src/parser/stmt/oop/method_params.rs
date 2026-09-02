@@ -55,6 +55,9 @@ pub(super) fn parse_method_params(
     let mut promoted_assignments = Vec::new();
 
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+        while *pos < tokens.len() && matches!(tokens[*pos].0, Token::DocComment(_)) {
+            *pos += 1;
+        }
         if !params.is_empty() || variadic.is_some() {
             expect_token(
                 tokens,
@@ -65,6 +68,9 @@ pub(super) fn parse_method_params(
             // Allow a trailing comma before the closing paren (PHP 8.0+).
             if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
                 break;
+            }
+            while *pos < tokens.len() && matches!(tokens[*pos].0, Token::DocComment(_)) {
+                *pos += 1;
             }
         }
         // PHP 8.0 parameter attributes — also covers attributes preceding a

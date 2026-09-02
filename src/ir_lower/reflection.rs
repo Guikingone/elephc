@@ -6,11 +6,11 @@
 //!
 //! Key details:
 //! - Native programs lower Reflection classes to a fixed point from EIR types and calls.
-//! - Dynamic eval keeps the full Reflection surface because names are resolved at runtime.
+//! - Eval-owned Reflection values are executed by Magician and do not root unrelated AOT bodies.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::ir::{Function, Module, Op};
+use crate::ir::{Function, Immediate, IrType, Module, Op};
 use crate::parser::ast::ExprKind;
 use crate::types::{CheckResult, FunctionSig, PhpType};
 
@@ -40,8 +40,10 @@ const BUILTIN_REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionIntersectionType",
 ];
 
-/// Lowers only synthetic Reflection classes reachable from native EIR, or the full
-/// surface when the dynamic eval bridge can construct and invoke them by name.
+/// Lowers only synthetic Reflection classes reachable from native EIR.
+///
+/// Reflection values owned by the dynamic eval bridge are dispatched by Magician, whose
+/// interpreter exposes the complete Reflection surface without forcing those bodies into AOT.
 pub(super) fn lower_referenced_builtin_methods(
     module: &mut Module,
     check_result: &CheckResult,
@@ -49,9 +51,9 @@ pub(super) fn lower_referenced_builtin_methods(
     fiber_return_sigs: &HashMap<String, FunctionSig>,
 ) {
     loop {
-        let classes = referenced_builtin_reflection_classes(module);
+        let methods = referenced_builtin_reflection_methods(module);
         let before = module.class_methods.len();
-        for class_name in classes {
+        for (class_name, methods) in methods {
             lower_builtin_reflection_property_init_thunk(
                 &class_name,
                 module,
@@ -61,6 +63,7 @@ pub(super) fn lower_referenced_builtin_methods(
             );
             lower_builtin_reflection_class_methods(
                 &class_name,
+                &methods,
                 module,
                 check_result,
                 constants,
@@ -103,75 +106,115 @@ fn lower_builtin_reflection_property_init_thunk(
     );
 }
 
-/// Collects Reflection class owners reachable from lowered values and calls.
-fn referenced_builtin_reflection_classes(module: &Module) -> BTreeSet<String> {
-    let mut classes = BTreeSet::new();
-    if module.required_runtime_features.eval_bridge {
-        for class_name in BUILTIN_REFLECTION_CLASS_NAMES {
-            insert_builtin_reflection_class(module, class_name, &mut classes);
-        }
-        return classes;
-    }
-
+/// Collects Reflection constructors and methods reachable from EIR calls and descriptors.
+fn referenced_builtin_reflection_methods(module: &Module) -> BTreeMap<String, BTreeSet<String>> {
+    let mut methods = BTreeMap::new();
     for function in all_lowered_functions(module) {
-        collect_builtin_reflection_class_from_type(
-            module,
-            &function.return_php_type,
-            &mut classes,
-        );
-        for param in &function.params {
-            collect_builtin_reflection_class_from_type(module, &param.php_type, &mut classes);
-        }
-        for local in &function.locals {
-            collect_builtin_reflection_class_from_type(module, &local.php_type, &mut classes);
-        }
-        for value in &function.values {
-            collect_builtin_reflection_class_from_type(module, &value.php_type, &mut classes);
-        }
-
         for inst in &function.instructions {
+            if instruction_uses_mixed_string_dispatch(function, inst) {
+                collect_builtin_reflection_methods_for_receiver_type(
+                    module,
+                    &PhpType::Mixed,
+                    "__toString",
+                    &mut methods,
+                );
+            }
             match inst.op {
                 Op::ObjectNew => {
                     if let Some(class_name) = class_data_name(module, inst) {
-                        insert_builtin_reflection_class(module, class_name, &mut classes);
+                        insert_builtin_reflection_method(module, class_name, "__construct", &mut methods);
                     }
                 }
                 Op::DynamicObjectNew => {
                     if let Some((fallback_class, required_parent)) =
                         dynamic_object_new_metadata_names(module, inst)
                     {
-                        insert_builtin_reflection_class(module, fallback_class, &mut classes);
-                        insert_builtin_reflection_class(module, required_parent, &mut classes);
+                        insert_builtin_reflection_method(
+                            module,
+                            fallback_class,
+                            "__construct",
+                            &mut methods,
+                        );
+                        insert_builtin_reflection_method(
+                            module,
+                            required_parent,
+                            "__construct",
+                            &mut methods,
+                        );
                     }
                 }
                 Op::StaticMethodCall => {
-                    if let Some((class_name, _)) =
+                    if let Some((class_name, method_name)) =
                         string_data_name(module, inst).and_then(|name| name.rsplit_once("::"))
                     {
-                        insert_builtin_reflection_class(module, class_name, &mut classes);
+                        insert_builtin_reflection_method(module, class_name, method_name, &mut methods);
                     }
                 }
                 Op::MethodCall | Op::NullsafeMethodCall => {
-                    collect_dynamic_reflection_method_candidates(
+                    collect_builtin_reflection_method_call(module, function, inst, &mut methods);
+                }
+                Op::FirstClassCallableNew => {
+                    collect_builtin_reflection_first_class_callable(
                         module,
                         function,
                         inst,
-                        &mut classes,
+                        &mut methods,
                     );
                 }
                 _ => {}
             }
         }
     }
-    classes
+    methods
 }
 
-/// Adds Reflection implementations that a mixed/union method receiver may dispatch to.
-fn collect_dynamic_reflection_method_candidates(
+/// Returns whether one EIR string context can dispatch a boxed receiver through `__toString`.
+fn instruction_uses_mixed_string_dispatch(function: &Function, inst: &crate::ir::Instruction) -> bool {
+    let string_context = inst.op == Op::EchoValue
+        || (inst.op == Op::Cast && inst.immediate == Some(Immediate::CastTarget(IrType::Str)));
+    string_context && inst.operands.first().is_some_and(|operand| {
+        function.value(*operand).is_some_and(|value| {
+            matches!(
+                value.php_type.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            )
+        })
+    })
+}
+
+/// Adds the Reflection method selected by an `object::method` first-class callable descriptor.
+fn collect_builtin_reflection_first_class_callable(
     module: &Module,
     function: &Function,
     inst: &crate::ir::Instruction,
-    classes: &mut BTreeSet<String>,
+    methods: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    let Some(method_name) = string_data_name(module, inst)
+        .and_then(|name| name.strip_prefix("object::"))
+    else {
+        return;
+    };
+    let Some(receiver) = inst.operands.first().copied() else {
+        return;
+    };
+    let Some(receiver_type) = function.value(receiver).map(|value| value.php_type.codegen_repr())
+    else {
+        return;
+    };
+    collect_builtin_reflection_methods_for_receiver_type(
+        module,
+        &receiver_type,
+        method_name,
+        methods,
+    );
+}
+
+/// Adds the concrete Reflection implementation(s) that can service one EIR method call.
+fn collect_builtin_reflection_method_call(
+    module: &Module,
+    function: &Function,
+    inst: &crate::ir::Instruction,
+    methods: &mut BTreeMap<String, BTreeSet<String>>,
 ) {
     let Some(receiver) = inst.operands.first().copied() else {
         return;
@@ -180,46 +223,54 @@ fn collect_dynamic_reflection_method_candidates(
     else {
         return;
     };
-    if !matches!(receiver_type, PhpType::Mixed | PhpType::Union(_)) {
-        return;
-    }
     let Some(method_name) = string_data_name(module, inst) else {
         return;
     };
-    let method_key = php_method_key(method_name);
-    for (class_name, class_info) in &module.class_infos {
-        if class_info.methods.contains_key(&method_key) {
-            insert_builtin_reflection_class(module, class_name, classes);
-        }
-    }
+    collect_builtin_reflection_methods_for_receiver_type(
+        module,
+        &receiver_type,
+        method_name,
+        methods,
+    );
 }
 
-/// Adds Reflection class names nested in one EIR-visible PHP type.
-fn collect_builtin_reflection_class_from_type(
+/// Adds methods for the exact or gradual Reflection receiver alternatives in one PHP type.
+fn collect_builtin_reflection_methods_for_receiver_type(
     module: &Module,
-    php_type: &PhpType,
-    classes: &mut BTreeSet<String>,
+    receiver_type: &PhpType,
+    method_name: &str,
+    methods: &mut BTreeMap<String, BTreeSet<String>>,
 ) {
-    match php_type {
+    match receiver_type {
         PhpType::Object(class_name) => {
-            insert_builtin_reflection_class(module, class_name, classes);
-        }
-        PhpType::Array(element) | PhpType::Buffer(element) => {
-            collect_builtin_reflection_class_from_type(module, element, classes);
-        }
-        PhpType::AssocArray { key, value } => {
-            collect_builtin_reflection_class_from_type(module, key, classes);
-            collect_builtin_reflection_class_from_type(module, value, classes);
+            insert_builtin_reflection_method(module, class_name, method_name, methods);
         }
         PhpType::Union(members) => {
             for member in members {
-                collect_builtin_reflection_class_from_type(module, member, classes);
+                collect_builtin_reflection_methods_for_receiver_type(
+                    module,
+                    member,
+                    method_name,
+                    methods,
+                );
             }
         }
-        PhpType::Pointer(Some(class_name)) => {
-            insert_builtin_reflection_class(module, class_name, classes);
+        PhpType::Mixed => {
+            let method_key = php_method_key(method_name);
+            let candidates = module
+                .class_infos
+                .iter()
+                .filter(|(_, class_info)| class_info.methods.contains_key(&method_key))
+                .map(|(class_name, _)| class_name.clone())
+                .collect::<Vec<_>>();
+            for class_name in candidates {
+                insert_builtin_reflection_method(module, &class_name, method_name, methods);
+            }
         }
-        PhpType::Int
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
+        | PhpType::Int
         | PhpType::Float
         | PhpType::Str
         | PhpType::Bool
@@ -227,40 +278,41 @@ fn collect_builtin_reflection_class_from_type(
         | PhpType::Void
         | PhpType::Never
         | PhpType::Iterable
-        | PhpType::Mixed
         | PhpType::Callable
         | PhpType::Packed(_)
-        | PhpType::Pointer(None)
+        | PhpType::Pointer(_)
         | PhpType::Resource(_)
         | PhpType::TaggedScalar => {}
     }
 }
 
-/// Inserts one canonical Reflection class plus Reflection ancestors and method owners.
-fn insert_builtin_reflection_class(
+/// Inserts the owning builtin Reflection implementation for one reachable method.
+fn insert_builtin_reflection_method(
     module: &Module,
     class_name: &str,
-    classes: &mut BTreeSet<String>,
+    method_name: &str,
+    methods: &mut BTreeMap<String, BTreeSet<String>>,
 ) {
     let Some(canonical) = canonical_builtin_reflection_class_name(class_name) else {
         return;
     };
-    if !module.class_infos.contains_key(canonical) || !classes.insert(canonical.to_string()) {
-        return;
-    }
     let Some(class_info) = module.class_infos.get(canonical) else {
         return;
     };
-    let dependencies = class_info
-        .parent
-        .iter()
-        .chain(class_info.method_impl_classes.values())
-        .chain(class_info.static_method_impl_classes.values())
-        .cloned()
-        .collect::<Vec<_>>();
-    for dependency in dependencies {
-        insert_builtin_reflection_class(module, &dependency, classes);
-    }
+    let method_key = php_method_key(method_name);
+    let implementation = class_info
+        .method_impl_classes
+        .get(&method_key)
+        .or_else(|| class_info.static_method_impl_classes.get(&method_key))
+        .map(String::as_str)
+        .unwrap_or(canonical);
+    let Some(owner) = canonical_builtin_reflection_class_name(implementation) else {
+        return;
+    };
+    methods
+        .entry(owner.to_string())
+        .or_default()
+        .insert(method_key);
 }
 
 /// Resolves a class spelling to the canonical builtin Reflection name.
@@ -275,6 +327,7 @@ pub(super) fn canonical_builtin_reflection_class_name(class_name: &str) -> Optio
 /// Lowers all concrete synthetic methods for one builtin reflection class.
 fn lower_builtin_reflection_class_methods(
     class_name: &str,
+    reachable_methods: &BTreeSet<String>,
     module: &mut Module,
     check_result: &CheckResult,
     constants: &HashMap<String, (ExprKind, PhpType)>,
@@ -290,6 +343,9 @@ fn lower_builtin_reflection_class_methods(
         }
         let generated_body;
         let method_key = crate::names::php_symbol_key(&method.name);
+        if !reachable_methods.contains(&method_key) {
+            continue;
+        }
         if class_method_already_lowered(module, class_name, &method_key, method.is_static) {
             continue;
         }

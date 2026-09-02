@@ -10,7 +10,7 @@
 use super::*;
 
 /// Applies member increment/decrement to a runtime value using PHP numeric semantics.
-pub(super) fn eval_inc_dec_value(
+pub(in crate::interpreter) fn eval_inc_dec_value(
     current: RuntimeCellHandle,
     increment: bool,
     values: &mut impl RuntimeValueOps,
@@ -55,7 +55,28 @@ pub(in crate::interpreter) fn eval_release_value(
     values: &mut impl RuntimeValueOps,
     value: RuntimeCellHandle,
 ) -> Result<(), EvalStatus> {
-    if let Some(identity) = values.final_object_identity_for_release(value)? {
+    let final_identity = values.final_object_identity_for_release(value)?;
+    if std::env::var_os("ELEPHC_EVAL_RELEASE_TRACE").is_some()
+        && values.type_tag(value)? == EVAL_TAG_OBJECT
+    {
+        let class_name = values.object_class_name(value)?;
+        let class_bytes = values.string_bytes(class_name);
+        values.release(class_name)?;
+        let class_name = String::from_utf8(class_bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let matches_filter = std::env::var_os("ELEPHC_EVAL_RELEASE_TRACE_FILTER")
+            .is_none_or(|filter| class_name.contains(filter.to_string_lossy().as_ref()));
+        if matches_filter {
+            let cell_ptr = value.as_ptr().cast::<u8>();
+            let cell_refs = unsafe { cell_ptr.sub(12).cast::<u32>().read() } & 0x7fff_ffff;
+            let object_ptr = unsafe { value.as_ptr().cast::<usize>().add(1).read() as *const u8 };
+            let object_refs = (!object_ptr.is_null())
+                .then(|| unsafe { object_ptr.sub(12).cast::<u32>().read() } & 0x7fff_ffff);
+            eprintln!(
+                "[elephc-eval-trace] phase=release_object class={class_name:?} final_identity={final_identity:?} cell_refs={cell_refs} object_refs={object_refs:?}"
+            );
+        }
+    }
+    if let Some(identity) = final_identity {
         eval_dynamic_destructor_for_release(identity, value, context, values)?;
     }
     values.release(value)
@@ -424,6 +445,83 @@ pub(in crate::interpreter) fn eval_array_destructure_stmt(
     Ok(())
 }
 
+/// Evaluates a positional short-array destructuring assignment and returns its RHS value.
+pub(in crate::interpreter) fn eval_array_destructure_assign(
+    targets: &[Option<String>],
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let assigned = eval_expr(value, context, scope, values)?;
+    let tag = values.type_tag(assigned)?;
+    if tag == EVAL_TAG_NULL {
+        return eval_array_destructure_assign_null_targets(targets, assigned, context, scope, values);
+    }
+    if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        values.warning(&format!(
+            "Cannot use {} as array",
+            eval_array_destructure_type_name(tag)
+        ))?;
+        return eval_array_destructure_assign_null_targets(targets, assigned, context, scope, values);
+    }
+    for (position, target) in targets.iter().enumerate() {
+        let Some(target) = target else {
+            continue;
+        };
+        let index = values.int(position as i64)?;
+        let element = eval_array_get_result(assigned, index, context, values)?;
+        eval_release_value(context, values, index)?;
+        for replaced in set_scope_cell(
+            context,
+            scope,
+            target.clone(),
+            element,
+            ScopeCellOwnership::Owned,
+        )? {
+            eval_release_value(context, values, replaced)?;
+        }
+    }
+    Ok(assigned)
+}
+
+/// Assigns PHP null to every positional destructuring target while preserving the RHS result.
+fn eval_array_destructure_assign_null_targets(
+    targets: &[Option<String>],
+    assigned: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    for target in targets.iter().flatten() {
+        let null = values.null()?;
+        for replaced in set_scope_cell(
+            context,
+            scope,
+            target.clone(),
+            null,
+            ScopeCellOwnership::Owned,
+        )? {
+            eval_release_value(context, values, replaced)?;
+        }
+    }
+    Ok(assigned)
+}
+
+/// Maps runtime tags to PHP's array-destructuring warning spelling.
+fn eval_array_destructure_type_name(tag: u64) -> &'static str {
+    match tag {
+        EVAL_TAG_INT => "int",
+        EVAL_TAG_STRING => "string",
+        EVAL_TAG_FLOAT => "float",
+        EVAL_TAG_BOOL => "bool",
+        EVAL_TAG_OBJECT => "object",
+        EVAL_TAG_RESOURCE => "resource",
+        EVAL_TAG_CALLABLE => "callable",
+        _ => "unknown",
+    }
+}
+
 /// Executes `$object->property[] = value`, dispatching ArrayAccess property values when needed.
 pub(super) fn eval_property_array_append_result(
     object: RuntimeCellHandle,
@@ -603,7 +701,7 @@ pub(super) fn eval_array_set_index(
 }
 
 /// Converts indexed arrays to associative arrays before writing a non-numeric string key.
-pub(super) fn eval_array_set_target_for_index(
+pub(in crate::interpreter) fn eval_array_set_target_for_index(
     array: RuntimeCellHandle,
     index: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,

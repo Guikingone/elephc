@@ -28,6 +28,28 @@ impl ElephcEvalContext {
         true
     }
 
+    /// Records the physical file that defined one eval class for method magic constants.
+    pub(crate) fn set_class_source_file(&mut self, class_name: &str, file: String) {
+        if file.is_empty() {
+            return;
+        }
+        let file = std::fs::canonicalize(&file)
+            .unwrap_or_else(|_| std::path::PathBuf::from(file))
+            .to_string_lossy()
+            .into_owned();
+        self.class_source_files
+            .insert(normalize_class_name(class_name), file.clone());
+        #[cfg(not(test))]
+        crate::context::register_global_eval_class_source(class_name, file);
+    }
+
+    /// Returns the source file that supplied one eval class declaration, when known.
+    pub(crate) fn class_source_file(&self, class_name: &str) -> Option<&str> {
+        self.class_source_files
+            .get(&normalize_class_name(class_name))
+            .map(String::as_str)
+    }
+
     /// Imports eval-declared process-global class-like metadata not yet known by this context.
     #[cfg(not(test))]
     pub fn sync_global_eval_classes(&mut self) {
@@ -48,7 +70,10 @@ impl ElephcEvalContext {
                 continue;
             };
             self.declared_class_names.push(class.name().to_string());
-            self.classes.insert(key, class);
+            self.classes.insert(key.clone(), class);
+            if let Some(file) = registry.class_source_files.get(&key) {
+                self.class_source_files.insert(key.clone(), file.clone());
+            }
         }
         for name in &registry.declared_interface_names {
             let key = normalize_class_name(name);

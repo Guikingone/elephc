@@ -238,6 +238,25 @@ pub(in crate::ir_lower) fn coerce_to_string_at_span(
             span,
         );
     }
+    // A boxed gradual value is physically one integer-sized cell even when its runtime payload
+    // is a string. Inspecting only `ir_type` would route that cell through `IToStr` and stringify
+    // its address. The PHP representation is authoritative at this boundary, so unwrap/cast the
+    // Mixed cell before considering the physical scalar register class.
+    if matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        let result = ctx.emit_value(
+            Op::Cast,
+            vec![value.value],
+            Some(Immediate::CastTarget(IrType::Str)),
+            PhpType::Str,
+            Op::Cast.default_effects(),
+            span,
+        );
+        release_coerced_source_if_owned(ctx, value, span);
+        return result;
+    }
     match value.ir_type {
         IrType::Str => value,
         IrType::I64 | IrType::TaggedScalar => ctx.emit_value(Op::IToStr, vec![value.value], None, PhpType::Str, Op::IToStr.default_effects(), span),

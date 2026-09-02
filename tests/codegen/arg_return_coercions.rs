@@ -89,6 +89,38 @@ foreach (objectValues() as $value) {
     assert_eq!(out, "12|left3right4|5");
 }
 
+/// Verifies a boxed Mixed array narrows before assignment into a declared iterable property.
+///
+/// Property writes use the same declared boundary as parameters and returns: a runtime array
+/// carried in Mixed storage must become iterable payload storage before `PropSet`, rather than
+/// reaching codegen as an incompatible boxed cell.
+#[test]
+fn test_mixed_array_assigns_to_declared_iterable_property() {
+    let out = compile_and_run(
+        r#"<?php
+class IterablePropertyBox {
+    private iterable $values;
+
+    public function __construct(mixed $values) {
+        $this->values = $values;
+    }
+
+    public function render(): string {
+        $result = '';
+        foreach ($this->values as $value) {
+            $result .= $value;
+        }
+
+        return $result;
+    }
+}
+
+echo (new IterablePropertyBox(['a', 'b']))->render();
+"#,
+    );
+    assert_eq!(out, "ab");
+}
+
 /// Verifies an exception handler inside a statically infinite loop does not keep the loop's
 /// synthetic exit reachable and materialize a zero-operand `iterable` return placeholder.
 #[test]

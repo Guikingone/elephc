@@ -27,7 +27,7 @@ use crate::codegen_support::platform::Arch;
 /// (`refcount == 0` and no retained `kind`, else it is unlinked as poison). Under `--heap-debug`
 /// the same poison is caught loudly at alloc entry by `__rt_heap_debug_validate_free_list`.
 ///
-/// Input: `x0` (ARM) / `rax` (x86_64) = requested payload bytes (minimum 8 enforced).
+/// Input: `x0` (ARM) / `rax` (x86_64) = requested payload bytes (rounded up to 16).
 /// Output: `x0` / `rax` = user pointer (header + 16).
 ///
 /// Updates `_gc_allocs`, `_gc_live`, and `_gc_peak` counters on every allocation.
@@ -42,11 +42,14 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.comment("--- runtime: heap_alloc (free-list + bump) ---");
     emitter.label_global("__rt_heap_alloc");
 
-    // -- enforce minimum allocation of 8 bytes (free payload needs space for next ptr) --
+    // -- normalize every payload to the runtime's 16-byte allocation alignment --
     emitter.instruction("cmp x0, #8");                                          // is requested size < 8?
     emitter.instruction("b.ge __rt_heap_alloc_start");                          // skip if already >= 8
     emitter.instruction("mov x0, #8");                                          // round up to minimum 8 bytes
     emitter.label("__rt_heap_alloc_start");
+    emitter.instruction("add x0, x0, #15");                                     // reserve room to round the payload up to the next 16-byte boundary
+    emitter.instruction("lsr x0, x0, #4");                                      // divide by the 16-byte runtime allocation alignment
+    emitter.instruction("lsl x0, x0, #4");                                      // restore the aligned payload byte count before any heap pointer arithmetic
 
     // -- debug mode: validate the free list before consuming it --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_debug_enabled");
@@ -258,10 +261,12 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
 
     // -- fatal error: heap memory exhausted --
     emitter.label("__rt_heap_exhausted");
+    emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the failed request and immediate caller return address across fatal writes
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_err_msg");
     emitter.instruction("mov x2, #35");                                         // message length: "Fatal error: heap memory exhausted\n"
     emitter.syscall(4);
+    emit_heap_exhaustion_stats(emitter);
     emitter.instruction("mov x0, #1");                                          // exit code 1
     emitter.syscall(1);
 }
@@ -279,11 +284,13 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: heap_alloc (free-list + bump) ---");
     emitter.label_global("__rt_heap_alloc");
 
-    // -- enforce minimum allocation of 8 bytes (free payload needs space for next ptr) --
+    // -- normalize every payload to the runtime's 16-byte allocation alignment --
     emitter.instruction("cmp rax, 8");                                          // is the requested payload smaller than the minimum reusable block size?
     emitter.instruction("jge __rt_heap_alloc_start");                           // keep the original request when it already satisfies the minimum payload size
     emitter.instruction("mov rax, 8");                                          // round tiny allocations up so free blocks can still carry a next pointer
     emitter.label("__rt_heap_alloc_start");
+    emitter.instruction("add rax, 15");                                         // reserve room to round the payload up to the next 16-byte boundary
+    emitter.instruction("and rax, -16");                                        // keep the aligned payload size before any heap pointer arithmetic
 
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before consuming cached free-list state
@@ -484,12 +491,157 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 
     // -- fatal error: heap memory exhausted --
     emitter.label("__rt_heap_exhausted");
+    emitter.instruction("mov r11, QWORD PTR [rsp]");                            // capture the immediate caller return address before reserving fatal-report storage
+    emitter.instruction("sub rsp, 16");                                         // reserve aligned storage for the failed allocation request and return address
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // preserve the aligned failed allocation request across fatal writes
+    emitter.instruction("mov QWORD PTR [rsp + 8], r11");                        // preserve the immediate caller return address beside the failed request
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the heap exhaustion fatal error message
     crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_err_msg");
     emitter.instruction("mov edx, 35");                                         // pass the exact heap exhaustion message length to the Linux write syscall
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // print the fatal heap exhaustion message to stderr
+    emit_heap_exhaustion_stats(emitter);
     emitter.instruction("mov edi, 1");                                          // exit code 1 for heap exhaustion
     emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process after reporting heap exhaustion
+}
+
+/// Emits allocator counters immediately before a terminal heap-exhaustion exit.
+fn emit_heap_exhaustion_stats(emitter: &mut Emitter) {
+    emit_heap_exhaustion_hash_origin(emitter);
+    emit_heap_exhaustion_caller_return_address(emitter);
+    emit_heap_exhaustion_requested_bytes(emitter);
+    for (label, value) in [
+        ("_heap_stats_allocs_msg", "_gc_allocs"),
+        ("_heap_stats_frees_msg", "_gc_frees"),
+        ("_heap_stats_live_msg", "_gc_live"),
+        ("_heap_stats_peak_msg", "_gc_peak"),
+        ("_heap_stats_bump_msg", "_heap_off"),
+        ("_heap_stats_max_msg", "_heap_max"),
+    ] {
+        let len = match label {
+            "_heap_stats_allocs_msg" => b"Heap stats: allocs=".len(),
+            "_heap_stats_frees_msg" => b" frees=".len(),
+            "_heap_stats_live_msg" => b" live=".len(),
+            "_heap_stats_peak_msg" => b" peak=".len(),
+            "_heap_stats_bump_msg" => b" bump=".len(),
+            "_heap_stats_max_msg" => b" max=".len(),
+            _ => unreachable!("heap stat label table is exhaustive"),
+        };
+        crate::codegen_support::emit_write_literal_stderr(emitter, label, len);
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                crate::codegen_support::abi::emit_symbol_address(emitter, "x0", value);
+                emitter.instruction("ldr x0, [x0]");                            // load the selected allocator counter for decimal formatting
+            }
+            Arch::X86_64 => {
+                crate::codegen_support::abi::emit_symbol_address(emitter, "rax", value);
+                emitter.instruction("mov rax, QWORD PTR [rax]");                // load the selected allocator counter for decimal formatting
+            }
+        }
+        crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
+        crate::codegen_support::emit_write_current_string_stderr(emitter);
+    }
+    crate::codegen_support::emit_write_literal_stderr(emitter, "_heap_stats_nl", 1);
+}
+
+/// Emits the `__rt_hash_new` caller captured before that helper invokes the allocator.
+fn emit_heap_exhaustion_hash_origin(emitter: &mut Emitter) {
+    crate::codegen_support::emit_write_literal_stderr(
+        emitter,
+        "_heap_stats_hash_origin_msg",
+        b"Heap stats: hash_new_origin=".len(),
+    );
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_stats_hash_origin");
+            emitter.instruction("ldr x0, [x9]");                                // load the hash-construction caller captured before its allocator call
+            crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
+            crate::codegen_support::emit_write_current_string_stderr(emitter);
+        }
+        Arch::X86_64 => {
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_stats_hash_origin");
+            emitter.instruction("mov rax, QWORD PTR [r11]");                    // load the hash-construction caller captured before its allocator call
+            crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
+            crate::codegen_support::emit_write_current_string_stderr(emitter);
+        }
+    }
+}
+
+/// Emits the immediate runtime caller address captured at terminal heap exhaustion.
+fn emit_heap_exhaustion_caller_return_address(emitter: &mut Emitter) {
+    crate::codegen_support::emit_write_literal_stderr(
+        emitter,
+        "_heap_stats_return_msg",
+        b"Heap stats: caller_return=".len(),
+    );
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [sp, #8]");                            // reload the call-site return address captured before fatal reporting clobbers link register state
+            crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
+            crate::codegen_support::emit_write_current_string_stderr(emitter);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                // reload the call-site return address captured before fatal reporting clobbers caller-saved state
+            crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
+            crate::codegen_support::emit_write_current_string_stderr(emitter);
+        }
+    }
+}
+
+/// Emits the normalized request that the allocator could not fit in the heap arena.
+fn emit_heap_exhaustion_requested_bytes(emitter: &mut Emitter) {
+    crate::codegen_support::emit_write_literal_stderr(
+        emitter,
+        "_heap_stats_request_msg",
+        b"Heap stats: request=".len(),
+    );
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [sp]");                                // reload the failed allocation request for decimal formatting
+            crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
+            crate::codegen_support::emit_write_current_string_stderr(emitter);
+            emitter.instruction("add sp, sp, #16");                             // release the request preservation slot after reporting it
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                    // reload the failed allocation request for decimal formatting
+            crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
+            crate::codegen_support::emit_write_current_string_stderr(emitter);
+            emitter.instruction("add rsp, 16");                                 // release the request preservation slot after reporting it
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies both allocator targets report the counters that explain terminal exhaustion.
+    #[test]
+    fn heap_exhaustion_reports_allocation_counters() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_heap_alloc(&mut emitter);
+            let asm = emitter.output();
+            for label in [
+                "_heap_stats_allocs_msg",
+                "_heap_stats_frees_msg",
+                "_heap_stats_live_msg",
+                "_heap_stats_peak_msg",
+                "_heap_stats_bump_msg",
+                "_heap_stats_max_msg",
+                "_heap_stats_hash_origin_msg",
+                "_heap_stats_return_msg",
+                "_heap_stats_request_msg",
+                "_heap_stats_nl",
+            ] {
+                assert!(asm.contains(label), "{target:?}: {label} missing");
+            }
+            assert!(asm.contains("__rt_itoa"), "{target:?}: no counter formatting");
+        }
+    }
 }

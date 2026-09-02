@@ -21,6 +21,7 @@ pub struct EvalClass {
     parent: Option<String>,
     interfaces: Vec<String>,
     attributes: Vec<EvalAttribute>,
+    doc_comment: Option<String>,
     traits: Vec<String>,
     trait_adaptations: Vec<EvalTraitAdaptation>,
     constants: Vec<EvalClassConstant>,
@@ -39,6 +40,7 @@ impl PartialEq for EvalClass {
             && self.parent == other.parent
             && self.interfaces == other.interfaces
             && self.attributes == other.attributes
+            && self.doc_comment == other.doc_comment
             && self.traits == other.traits
             && self.trait_adaptations == other.trait_adaptations
             && self.constants == other.constants
@@ -270,6 +272,7 @@ impl EvalClass {
             parent,
             interfaces,
             attributes: Vec::new(),
+            doc_comment: None,
             traits,
             trait_adaptations,
             constants,
@@ -296,6 +299,12 @@ impl EvalClass {
     /// Returns a copy of this class with class-like attributes attached.
     pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
         self.attributes = attributes;
+        self
+    }
+
+    /// Returns a copy of this class with an optional verbatim PHP doc comment attached.
+    pub fn with_doc_comment_option(mut self, doc_comment: Option<String>) -> Self {
+        self.doc_comment = doc_comment;
         self
     }
 
@@ -360,6 +369,11 @@ impl EvalClass {
     /// Returns attributes declared directly on this eval class.
     pub fn attributes(&self) -> &[EvalAttribute] {
         &self.attributes
+    }
+
+    /// Returns the verbatim PHP doc comment attached to this class, when declared.
+    pub fn doc_comment(&self) -> Option<&str> {
+        self.doc_comment.as_deref()
     }
 
     /// Returns trait names used directly by this eval class.

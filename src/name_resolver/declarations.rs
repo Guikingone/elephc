@@ -73,6 +73,7 @@ pub(super) fn resolve_decl_stmt(
         }
         StmtKind::ClassDecl {
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -91,6 +92,7 @@ pub(super) fn resolve_decl_stmt(
             Ok(Some(Stmt::with_attributes(
                 StmtKind::ClassDecl {
                     name: canonical_name_for_decl(namespace, name),
+                    doc_comment: doc_comment.clone(),
                     extends: extends.as_ref().map(|name| {
                         resolved_name(resolved_class_name(name, namespace, imports, symbols))
                     }),

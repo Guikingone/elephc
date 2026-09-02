@@ -302,7 +302,7 @@ use calls::*;
 #[allow(unused_imports)]
 use scope_access::*;
 #[allow(unused_imports)]
-use introspection::*;
+pub(in crate::codegen::lower_inst::builtins) use introspection::*;
 #[allow(unused_imports)]
 use symbol_queries::*;
 #[allow(unused_imports)]
@@ -346,14 +346,17 @@ pub(super) use calls::{lower_dynamic_include, lower_eval};
 pub(super) use extract::lower_extract;
 pub(super) use dynamic_calls::{
     lower_eval_function_call, lower_eval_function_call_array, lower_eval_method_call,
+    lower_eval_property_get,
     lower_eval_native_frame_static_method_call, lower_eval_native_frame_static_property_get,
     lower_eval_native_frame_static_property_set, lower_eval_object_new,
     lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,
 };
 pub(in crate::codegen::lower_inst) use dynamic_calls::lower_eval_owned_method_call;
-pub(super) use native_object_construction::lower_eval_native_object_new;
+pub(super) use native_object_construction::{
+    lower_eval_native_object_new, lower_eval_native_object_new_fallback,
+};
 pub(super) use introspection::{
-    lower_eval_callable_call_array, lower_eval_class_relation, lower_eval_is_callable,
+    emit_eval_object_is_a_named_fallback, lower_eval_callable_call_array, lower_eval_class_relation, lower_eval_is_callable,
     lower_eval_member_exists, lower_eval_object_class_name, lower_eval_object_is_a,
     lower_eval_object_is_a_dynamic,
 };

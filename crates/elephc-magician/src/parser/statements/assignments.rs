@@ -120,6 +120,10 @@ impl Parser {
         self.expect(TokenKind::LBracket)?;
         if self.consume(TokenKind::RBracket) {
             self.expect(TokenKind::Equal)?;
+            if self.consume(TokenKind::Ampersand) {
+                let source = self.parse_expr()?;
+                return Ok(vec![EvalStmt::ArrayAppendReferenceBind { name, source }]);
+            }
             let value = self.parse_expr()?;
             return Ok(vec![EvalStmt::ArrayAppendVar { name, value }]);
         }
@@ -131,6 +135,11 @@ impl Parser {
         };
         let mut nested = false;
         while self.consume(TokenKind::LBracket) {
+            if self.consume(TokenKind::RBracket) {
+                self.expect(TokenKind::Equal)?;
+                let value = self.parse_expr()?;
+                return Ok(vec![EvalStmt::ArrayAppend { target, value }]);
+            }
             nested = true;
             let nested_index = self.parse_expr()?;
             self.expect(TokenKind::RBracket)?;
@@ -146,12 +155,24 @@ impl Parser {
                 default: Box::new(default),
             })]);
         }
-        if nested {
-            let Some(op) = assignment_op(self.current()) else {
-                return Err(EvalParseError::UnexpectedToken);
-            };
+        if matches!(self.current(), TokenKind::Equal)
+            && matches!(self.peek(), TokenKind::Ampersand)
+        {
             self.advance();
-            let value = self.parse_expr()?;
+            self.advance();
+            let source = self.parse_expr()?;
+            return Ok(vec![EvalStmt::ArrayReferenceBind { target, source }]);
+        }
+        let Some(op) = assignment_op(self.current()) else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        self.advance();
+        if op.is_none() && self.consume(TokenKind::Ampersand) {
+            let source = self.parse_expr()?;
+            return Ok(vec![EvalStmt::ArrayReferenceBind { target, source }]);
+        }
+        let value = self.parse_expr()?;
+        if nested || op.is_some() {
             let expression = match op {
                 Some(op) => EvalExpr::CompoundAssign {
                     target: Box::new(target),
@@ -165,8 +186,6 @@ impl Parser {
             };
             return Ok(vec![EvalStmt::Expr(expression)]);
         }
-        self.expect(TokenKind::Equal)?;
-        let value = self.parse_expr()?;
         Ok(vec![EvalStmt::ArraySetVar { name, index, value }])
     }
 

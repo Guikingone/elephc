@@ -675,7 +675,9 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
                 })
                 || default.as_ref().is_some_and(|body| body_contains_eval_call(body))
         }
-        StmtKind::Include { path, .. } => expr_contains_eval_call(path),
+        // A resolver-preserved include/require executes through Magician and may declare PHP
+        // functions even when its path expression contains no literal `eval()` call.
+        StmtKind::Include { .. } => true,
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. } => body_contains_eval_call(body),
@@ -727,7 +729,9 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
 pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::FunctionCall { name, args } => {
-            is_eval_call_name(name) || args.iter().any(expr_contains_eval_call)
+            is_eval_call_name(name)
+                || name.as_str() == crate::names::DYNAMIC_INCLUDE_FUNCTION
+                || args.iter().any(expr_contains_eval_call)
         }
         ExprKind::BinaryOp { left, right, .. } => {
             expr_contains_eval_call(left) || expr_contains_eval_call(right)

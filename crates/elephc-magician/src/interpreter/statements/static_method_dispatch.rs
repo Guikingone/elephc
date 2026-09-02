@@ -230,6 +230,20 @@ pub(super) fn eval_static_method_call_result_resolved(
     )? {
         return Ok(result);
     }
+    // PHP gives registered SPL autoloaders one chance to materialize an otherwise unknown class
+    // before reporting the static call as undefined. Re-dispatch after a successful load so the
+    // normal eval-declared or AOT-native method paths remain the single execution mechanism.
+    if eval_spl_autoload_class(&class_name, context, values)? {
+        return eval_static_method_call_result_resolved(
+            class_name,
+            called_class_name,
+            method_name,
+            evaluated_args,
+            lexical_scope,
+            context,
+            values,
+        );
+    }
     eval_native_static_method_with_evaluated_args(
         &class_name,
         method_name,

@@ -20,9 +20,15 @@ mod evaluation;
 pub(in crate::interpreter) use evaluation::{
     eval_array_access_object_matches, eval_array_get_result, eval_binary_result,
     eval_closure_object_expr, eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
+    eval_new_object_result,
 };
 use evaluation::*;
-use null_coalesce_assign::{eval_assign, eval_compound_assign, eval_null_coalesce_assign};
+pub(in crate::interpreter) use null_coalesce_assign::{
+    eval_array_append, eval_array_append_reference_bind, eval_array_reference_bind,
+};
+use null_coalesce_assign::{
+    eval_assign, eval_compound_assign, eval_null_coalesce_assign, eval_postfix_inc_dec,
+};
 
 /// Evaluates one expression to an opaque runtime-cell handle.
 pub(in crate::interpreter) fn eval_expr(
@@ -52,6 +58,9 @@ pub(in crate::interpreter) fn eval_expr(
             let array = eval_expr(array, context, scope, values)?;
             let index = eval_expr(index, context, scope, values)?;
             eval_array_get_result(array, index, context, values)
+        }
+        EvalExpr::ArrayDestructureAssign { targets, value } => {
+            eval_array_destructure_assign(targets, value, context, scope, values)
         }
         EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
         EvalExpr::Cast { target, expr } => eval_cast_expr(target, expr, context, scope, values),
@@ -86,13 +95,23 @@ pub(in crate::interpreter) fn eval_expr(
             method,
             args,
         } => {
+            let receiver_is_temporary = eval_method_receiver_is_temporary(object);
             let object = eval_expr(object, context, scope, values)?;
-            let method = eval_dynamic_member_name(method, context, scope, values)?;
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_method_call_result_with_evaluated_args(
+            let result = (|| {
+                let method = eval_dynamic_member_name(method, context, scope, values)?;
+                let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
+                eval_method_call_result_with_evaluated_args(
+                    object,
+                    &method,
+                    evaluated_args,
+                    context,
+                    values,
+                )
+            })();
+            eval_method_call_with_temporary_receiver_cleanup(
                 object,
-                &method,
-                evaluated_args,
+                receiver_is_temporary,
+                result,
                 context,
                 values,
             )
@@ -250,12 +269,22 @@ pub(in crate::interpreter) fn eval_expr(
             method,
             args,
         } => {
+            let receiver_is_temporary = eval_method_receiver_is_temporary(object);
             let object = eval_expr(object, context, scope, values)?;
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_method_call_result_with_evaluated_args(
+            let result = (|| {
+                let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
+                eval_method_call_result_with_evaluated_args(
+                    object,
+                    method,
+                    evaluated_args,
+                    context,
+                    values,
+                )
+            })();
+            eval_method_call_with_temporary_receiver_cleanup(
                 object,
-                method,
-                evaluated_args,
+                receiver_is_temporary,
+                result,
                 context,
                 values,
             )
@@ -265,15 +294,25 @@ pub(in crate::interpreter) fn eval_expr(
             method,
             args,
         } => {
+            let receiver_is_temporary = eval_method_receiver_is_temporary(object);
             let object = eval_expr(object, context, scope, values)?;
-            if values.is_null(object)? {
-                return values.null();
-            }
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_method_call_result_with_evaluated_args(
+            let result = (|| {
+                if values.is_null(object)? {
+                    return values.null();
+                }
+                let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
+                eval_method_call_result_with_evaluated_args(
+                    object,
+                    method,
+                    evaluated_args,
+                    context,
+                    values,
+                )
+            })();
+            eval_method_call_with_temporary_receiver_cleanup(
                 object,
-                method,
-                evaluated_args,
+                receiver_is_temporary,
+                result,
                 context,
                 values,
             )
@@ -283,16 +322,26 @@ pub(in crate::interpreter) fn eval_expr(
             method,
             args,
         } => {
+            let receiver_is_temporary = eval_method_receiver_is_temporary(object);
             let object = eval_expr(object, context, scope, values)?;
-            if values.is_null(object)? {
-                return values.null();
-            }
-            let method = eval_dynamic_member_name(method, context, scope, values)?;
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_method_call_result_with_evaluated_args(
+            let result = (|| {
+                if values.is_null(object)? {
+                    return values.null();
+                }
+                let method = eval_dynamic_member_name(method, context, scope, values)?;
+                let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
+                eval_method_call_result_with_evaluated_args(
+                    object,
+                    &method,
+                    evaluated_args,
+                    context,
+                    values,
+                )
+            })();
+            eval_method_call_with_temporary_receiver_cleanup(
                 object,
-                &method,
-                evaluated_args,
+                receiver_is_temporary,
+                result,
                 context,
                 values,
             )
@@ -310,6 +359,9 @@ pub(in crate::interpreter) fn eval_expr(
         }
         EvalExpr::CompoundAssign { target, op, value } => {
             eval_compound_assign(target, *op, value, context, scope, values)
+        }
+        EvalExpr::PostfixIncDec { target, increment } => {
+            eval_postfix_inc_dec(target, *increment, context, scope, values)
         }
         EvalExpr::Assign { target, value } => {
             eval_assign(target, value, context, scope, values)
@@ -363,6 +415,15 @@ pub(in crate::interpreter) fn eval_expr(
             context.set_pending_throw(thrown);
             Err(EvalStatus::UncaughtThrowable)
         }
+        EvalExpr::Unary {
+            op: EvalUnaryOp::ErrorSuppress,
+            expr,
+        } => {
+            context.push_error_suppression();
+            let result = eval_expr(expr, context, scope, values);
+            context.pop_error_suppression();
+            result
+        }
         EvalExpr::Unary { op, expr } => {
             let value = eval_expr(expr, context, scope, values)?;
             match op {
@@ -379,7 +440,7 @@ pub(in crate::interpreter) fn eval_expr(
                     values.bool_value(!truthy)
                 }
                 EvalUnaryOp::BitNot => values.bit_not(value),
-                EvalUnaryOp::ErrorSuppress => Ok(value),
+                EvalUnaryOp::ErrorSuppress => unreachable!("handled before unary value evaluation"),
             }
         }
         EvalExpr::Binary { op, left, right } => {
@@ -405,6 +466,49 @@ pub(in crate::interpreter) fn eval_expr(
             let right = eval_expr(right, context, scope, values)?;
             eval_binary_result(*op, left, right, context, values)
         }
+    }
+}
+
+/// Returns whether evaluating a method receiver produces a disposable value owner.
+fn eval_method_receiver_is_temporary(expr: &EvalExpr) -> bool {
+    matches!(
+        expr,
+        EvalExpr::NewObject { .. }
+            | EvalExpr::DynamicNewObject { .. }
+            | EvalExpr::NewAnonymousClass { .. }
+            | EvalExpr::Clone(_)
+            | EvalExpr::MethodCall { .. }
+            | EvalExpr::DynamicMethodCall { .. }
+            | EvalExpr::NullsafeMethodCall { .. }
+            | EvalExpr::NullsafeDynamicMethodCall { .. }
+            | EvalExpr::StaticMethodCall { .. }
+            | EvalExpr::DynamicStaticMethodCall { .. }
+    )
+}
+
+/// Releases a temporary receiver once its method call either returns or fails.
+fn eval_method_call_with_temporary_receiver_cleanup(
+    receiver: RuntimeCellHandle,
+    receiver_is_temporary: bool,
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !receiver_is_temporary {
+        return result;
+    }
+    let result = result.and_then(|result| {
+        if result == receiver {
+            values.retain(result)
+        } else {
+            Ok(result)
+        }
+    });
+    let cleanup = eval_release_value(context, values, receiver);
+    match (result, cleanup) {
+        (Err(status), _) => Err(status),
+        (Ok(_), Err(status)) => Err(status),
+        (Ok(result), Ok(())) => Ok(result),
     }
 }
 

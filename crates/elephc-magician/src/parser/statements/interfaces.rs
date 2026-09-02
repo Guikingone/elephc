@@ -29,6 +29,10 @@ impl Parser {
         let mut properties = Vec::new();
         let mut methods = Vec::new();
         let source_end_line = loop {
+            if matches!(self.current(), TokenKind::DocComment(_)) {
+                self.advance();
+                continue;
+            }
             if matches!(self.current(), TokenKind::RBrace) {
                 let source_end_line = self.current_line();
                 self.advance();

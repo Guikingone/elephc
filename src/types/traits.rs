@@ -144,6 +144,7 @@ pub fn flatten_classes(
         match &stmt.kind {
             StmtKind::ClassDecl {
                 name,
+                doc_comment: _,
                 extends,
                 implements,
                 is_abstract,

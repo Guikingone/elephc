@@ -2,6 +2,8 @@
 #include <stddef.h>
 #include <limits.h>
 #include <stdlib.h>
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2.h>
 #include <pcre2posix.h>
 
 #define ELEPHC_PCRE2_CFLAG_ANCHORED 0x2000U
@@ -139,4 +141,80 @@ void elephc_pcre2_v1_free(void *opaque_handle) {
     }
     pcre2_regfree(&handle->regex);
     free(handle);
+}
+
+/* Reads the compiled pattern out of the POSIX wrapper without exposing PCRE2 layouts to callers. */
+static const pcre2_code *elephc_pcre2_v1_code(void *opaque_handle) {
+    const elephc_pcre2_v1_handle *handle = (const elephc_pcre2_v1_handle *)opaque_handle;
+
+    if (handle == NULL) {
+        return NULL;
+    }
+    return (const pcre2_code *)handle->regex.re_pcre2_code;
+}
+
+uint64_t elephc_pcre2_v1_name_count(void *opaque_handle) {
+    const pcre2_code *code = elephc_pcre2_v1_code(opaque_handle);
+    uint32_t count = 0;
+
+    if (code == NULL) {
+        return 0;
+    }
+    if (pcre2_pattern_info(code, PCRE2_INFO_NAMECOUNT, &count) != 0) {
+        return 0;
+    }
+    return (uint64_t)count;
+}
+
+int32_t elephc_pcre2_v1_group_name(
+    void *opaque_handle,
+    uint64_t group,
+    const char **name_out,
+    uint64_t *name_len_out
+) {
+    const pcre2_code *code = elephc_pcre2_v1_code(opaque_handle);
+    PCRE2_SPTR table = NULL;
+    uint32_t count = 0;
+    uint32_t entry_size = 0;
+    uint32_t index;
+
+    if (name_out != NULL) {
+        *name_out = NULL;
+    }
+    if (name_len_out != NULL) {
+        *name_len_out = 0;
+    }
+    if (code == NULL || name_out == NULL || name_len_out == NULL || group > 0xFFFFU) {
+        return 1;
+    }
+    if (pcre2_pattern_info(code, PCRE2_INFO_NAMECOUNT, &count) != 0
+        || pcre2_pattern_info(code, PCRE2_INFO_NAMEENTRYSIZE, &entry_size) != 0
+        || pcre2_pattern_info(code, PCRE2_INFO_NAMETABLE, &table) != 0) {
+        return 1;
+    }
+    if (count == 0 || entry_size < 3 || table == NULL) {
+        return 1;
+    }
+    for (index = 0; index < count; ++index) {
+        const unsigned char *entry = (const unsigned char *)table + (size_t)index * (size_t)entry_size;
+        uint32_t entry_group = ((uint32_t)entry[0] << 8) | (uint32_t)entry[1];
+        const char *name;
+        size_t limit;
+        size_t length;
+
+        if (entry_group != (uint32_t)group) {
+            continue;
+        }
+        /* Each entry is a 2-byte group number then a NUL-terminated name, so the name can never
+           run past the entry. The bound is measured rather than assumed: strnlen() is POSIX, and
+           this shim is compiled as strict C11. */
+        name = (const char *)(entry + 2);
+        limit = (size_t)entry_size - 2;
+        for (length = 0; length < limit && name[length] != '\0'; ++length) {
+        }
+        *name_out = name;
+        *name_len_out = (uint64_t)length;
+        return 0;
+    }
+    return 1;
 }

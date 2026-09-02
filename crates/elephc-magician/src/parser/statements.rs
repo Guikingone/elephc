@@ -76,19 +76,42 @@ pub(super) enum EvalTypePosition {
 impl Parser {
     /// Parses one source statement, expanding `unset($a, $b)` to one statement per variable.
     pub(super) fn parse_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        if let TokenKind::DocComment(doc_comment) = self.current() {
+            let doc_comment = doc_comment.clone();
+            self.advance();
+            return match self.current() {
+                TokenKind::Ident(name)
+                    if ident_eq(name, "abstract")
+                        || ident_eq(name, "final")
+                        || ident_eq(name, "readonly")
+                        || ident_eq(name, "class") =>
+                {
+                    self.parse_class_decl_stmt_with_doc_comment(Some(doc_comment))
+                }
+                _ => self.parse_stmt(),
+            };
+        }
         if matches!(self.current(), TokenKind::AttributeStart) {
             return self.parse_attributed_stmt();
         }
         match self.current() {
             TokenKind::Ident(name) if ident_eq(name, "break") => {
                 self.advance();
-                self.expect_semicolon()?;
-                Ok(vec![EvalStmt::Break])
+                Ok(vec![EvalStmt::Break(self.parse_loop_control_level()?)])
             }
             TokenKind::Ident(name) if ident_eq(name, "continue") => {
                 self.advance();
+                Ok(vec![EvalStmt::Continue(self.parse_loop_control_level()?)])
+            }
+            TokenKind::Ident(name) if ident_eq(name, "goto") => {
+                self.advance();
+                let TokenKind::Ident(label) = self.current() else {
+                    return Err(EvalParseError::UnexpectedToken);
+                };
+                let label = label.clone();
+                self.advance();
                 self.expect_semicolon()?;
-                Ok(vec![EvalStmt::Continue])
+                Ok(vec![EvalStmt::Goto(label)])
             }
             TokenKind::Ident(name) if ident_eq(name, "do") => self.parse_do_while_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "echo") => {
@@ -150,6 +173,12 @@ impl Parser {
                 Err(EvalParseError::UnsupportedConstruct)
             }
             TokenKind::Ident(name) if ident_eq(name, "while") => self.parse_while_stmt(),
+            TokenKind::Ident(name) if matches!(self.peek(), TokenKind::Colon) => {
+                let label = name.clone();
+                self.advance();
+                self.advance();
+                Ok(vec![EvalStmt::Label(label)])
+            }
             TokenKind::Ident(name) if is_unsupported_statement_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
             }
@@ -195,7 +224,7 @@ impl Parser {
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
                 self.parse_property_stmt(true)
             }
-            TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::LBracket) => {
+            TokenKind::DollarIdent(name) if self.current_starts_array_set_stmt() => {
                 self.parse_array_set_stmt(name.clone())
             }
             TokenKind::DollarIdent(name)
@@ -213,6 +242,23 @@ impl Parser {
                 self.parse_property_like_stmt_tail(expr, true)
             }
         }
+    }
+
+    /// Parses PHP's optional positive `break`/`continue` nesting level.
+    fn parse_loop_control_level(&mut self) -> Result<u32, EvalParseError> {
+        let level = match self.current() {
+            TokenKind::Int(level) => {
+                if *level <= 0 || *level > u32::MAX as i64 {
+                    return Err(EvalParseError::UnexpectedToken);
+                }
+                let level = *level as u32;
+                self.advance();
+                level
+            }
+            _ => 1,
+        };
+        self.expect_semicolon()?;
+        Ok(level)
     }
 
     /// Parses one yield statement into the closure-local generator marker representation.
@@ -437,6 +483,43 @@ impl Parser {
                 _ => {}
             }
             cursor += 1;
+        }
+    }
+
+    /// Returns whether the current variable begins an indexed or nested array write statement.
+    fn current_starts_array_set_stmt(&self) -> bool {
+        let mut cursor = self.pos + 1;
+        loop {
+            if !matches!(self.tokens.get(cursor), Some(TokenKind::LBracket)) {
+                return false;
+            }
+            let mut depth = 0usize;
+            loop {
+                match self.tokens.get(cursor) {
+                    Some(TokenKind::LBracket) => depth += 1,
+                    Some(TokenKind::RBracket) => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            cursor += 1;
+                            break;
+                        }
+                    }
+                    Some(TokenKind::Eof) | None => return false,
+                    _ => {}
+                }
+                cursor += 1;
+            }
+            if matches!(self.tokens.get(cursor), Some(TokenKind::LBracket)) {
+                continue;
+            }
+            return self
+                .tokens
+                .get(cursor)
+                .is_some_and(|token| assignment_op(token).is_some())
+                || matches!(
+                    self.tokens.get(cursor),
+                    Some(TokenKind::QuestionQuestionEqual)
+                );
         }
     }
 

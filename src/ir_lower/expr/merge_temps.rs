@@ -177,6 +177,11 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             nullsafe_method_call_expr_type_for_ir(ctx, object, method)
                 .unwrap_or_else(|| fallback_expr_type(expr))
         }
+        // A variable/expression callable can return any PHP value when its target signature is
+        // only known at runtime. The descriptor invoker materializes that result in a boxed
+        // Mixed cell, so a ternary/match temp must retain the same representation instead of
+        // falling back to the parser's scalar-biased syntactic inference.
+        ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. } => PhpType::Mixed,
         ExprKind::StaticMethodCall {
             receiver, method, ..
         } => static_method_call_expr_type_for_ir(ctx, receiver, method)
@@ -196,6 +201,18 @@ pub(super) fn coerce_value_for_temp(
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
     if source_ty == target_ty {
         return value;
+    }
+    // A nullable named object uses boxed Mixed storage, while a `??` merge strips the null
+    // arm and therefore chooses the concrete object representation for its result temporary.
+    // Reuse the ownership-aware gradual narrowing path before storing the non-null branch: a
+    // raw object slot must never receive the outer Mixed-cell pointer as its payload.
+    if matches!(target_ty, PhpType::Object(_)) {
+        return crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+            ctx,
+            value,
+            &target_ty,
+            Some(span),
+        );
     }
     match &target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),

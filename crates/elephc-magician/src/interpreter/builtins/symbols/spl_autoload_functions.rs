@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::symbols`.
 //!
 //! Key details:
-//! - Eval models an empty autoload function table.
+//! - Returned callback values preserve request-global registration order.
 
 eval_builtin! {
     contract: "spl_autoload_functions",
@@ -29,29 +29,39 @@ pub(in crate::interpreter) fn eval_spl_autoload_functions_declared_call(
 /// Evaluates materialized `spl_autoload_functions()` arguments.
 pub(in crate::interpreter) fn eval_spl_autoload_functions_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_spl_autoload_functions_result(evaluated_args, values)
+    eval_spl_autoload_functions_result(evaluated_args, context, values)
 }
 
 /// Evaluates `spl_autoload_functions()`.
 pub(in crate::interpreter) fn eval_builtin_spl_autoload_functions(
     args: &[EvalExpr],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     _scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_spl_autoload_functions_result(args, values)
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_spl_autoload_functions_result(&[], context, values)
 }
 
 /// Evaluates materialized `spl_autoload_functions()`.
-pub(in crate::interpreter) fn eval_spl_autoload_functions_result<T>(
-    evaluated_args: &[T],
+pub(in crate::interpreter) fn eval_spl_autoload_functions_result(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !evaluated_args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    values.array_new(0)
+    let callbacks = context.autoload_callbacks();
+    let mut result = values.array_new(callbacks.len())?;
+    for (index, callback) in callbacks.into_iter().enumerate() {
+        let index = values.int(index as i64)?;
+        result = values.array_set(result, index, callback)?;
+    }
+    Ok(result)
 }

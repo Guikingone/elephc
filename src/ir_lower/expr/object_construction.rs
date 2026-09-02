@@ -39,6 +39,7 @@ pub(super) fn lower_new_object(
         && !ctx.classes.contains_key(class_name.as_str())
         && plain_positional_call_args(args)
     {
+        ctx.declare_eval_context_local();
         let operands = lower_args_with_signature(ctx, None, args);
         let data = ctx.intern_class_name(class_name.as_str());
         return ctx.emit_value(
@@ -103,7 +104,16 @@ pub(super) fn emit_fixed_object_new(
     php_type: PhpType,
     span: Span,
 ) -> LoweredValue {
-    if reflection_object_new_requires_eval_context(ctx, class_name, &operands) {
+    // A fixed class name can still require runtime construction when this function is
+    // reachable from an eval barrier: codegen may need the eval-native fallback for
+    // declarations materialized by a runtime include. Reserve the context before
+    // emitting `ObjectNew`, so that fallback never reaches codegen without its slot.
+    if ctx.has_eval_barrier() {
+        ctx.declare_eval_context_local();
+    }
+    if is_reflection_owner_class_name(class_name)
+        || reflection_object_new_requires_eval_context(ctx, class_name, &operands)
+    {
         ctx.declare_eval_context_local();
     }
     let data = ctx.intern_class_name(class_name);
@@ -123,6 +133,24 @@ pub(super) fn emit_fixed_object_new(
         span,
     );
     object
+}
+
+/// Returns whether a construction targets a Reflection owner whose metadata may
+/// be supplied by a runtime include even when its constructor operands are literals.
+fn is_reflection_owner_class_name(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "reflectionclass"
+            | "reflectionobject"
+            | "reflectionfunction"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "reflectionparameter"
+            | "reflectionclassconstant"
+            | "reflectionenum"
+            | "reflectionenumunitcase"
+            | "reflectionenumbackedcase"
+    )
 }
 
 /// Returns whether a fixed Reflection construction needs runtime metadata and its persistent
@@ -483,6 +511,9 @@ fn lower_new_dynamic_generic(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if ctx.web {
+        ctx.declare_eval_context_local();
+    }
     let mut operands = vec![name_value.value];
     let uses_runtime_arg_container =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);

@@ -66,8 +66,20 @@ impl<'a> Lexer<'a> {
             return Ok(vec![Token::new(TokenKind::Eof, self.line)]);
         };
         let line = self.line;
+        if ch == '/'
+            && self.peek_next_char() == Some('*')
+            && self.peek_nth_char(2) == Some('*')
+        {
+            return self.lex_doc_comment(line);
+        }
         if ch == '"' {
             return self.lex_double_quoted(line);
+        }
+        if ch == '<'
+            && self.peek_next_char() == Some('<')
+            && self.peek_nth_char(2) == Some('<')
+        {
+            return self.lex_nowdoc(line);
         }
         let kind = match ch {
             '$' => self.lex_variable(),
@@ -487,10 +499,24 @@ impl<'a> Lexer<'a> {
                 (Some('/'), Some('/')) => self.skip_line_comment(),
                 (Some('#'), Some('[')) => return Ok(()),
                 (Some('#'), _) => self.skip_line_comment(),
+                (Some('/'), Some('*')) if self.peek_nth_char(2) == Some('*') => return Ok(()),
                 (Some('/'), Some('*')) => self.skip_block_comment()?,
                 _ => return Ok(()),
             }
         }
+    }
+
+    /// Returns one PHP doc comment as a parser-visible metadata token.
+    ///
+    /// Ordinary comments remain trivia, but `/** ... */` is retained verbatim so reflection
+    /// can report the declaration metadata that PHP exposes through `getDocComment()`.
+    fn lex_doc_comment(&mut self, line: i64) -> Result<Vec<Token>, EvalParseError> {
+        let start = self.pos;
+        self.skip_block_comment()?;
+        Ok(vec![Token::new(
+            TokenKind::DocComment(self.source[start..self.pos].to_owned()),
+            line,
+        )])
     }
 
     /// Advances past a `//` or `#` comment, including its trailing newline when present.
@@ -536,6 +562,11 @@ impl<'a> Lexer<'a> {
     /// for the three-character lookahead that `"$obj->prop"` interpolation needs.
     pub(super) fn peek_nth_char(&self, offset: usize) -> Option<char> {
         self.source[self.pos..].chars().nth(offset)
+    }
+
+    /// Returns the unconsumed fragment suffix for multi-line literal scanners.
+    pub(super) fn remaining(&self) -> &str {
+        &self.source[self.pos..]
     }
 
     /// Advances by one UTF-8 char.

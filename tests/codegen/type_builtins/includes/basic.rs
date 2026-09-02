@@ -64,6 +64,20 @@ fn test_include_top_level_code() {
     assert_eq!(out, "beforemiddleafter");
 }
 
+/// Verifies a static statement-position include resumes the caller after the
+/// included file returns, while preserving the returned expression's side effect.
+#[test]
+fn test_include_return_does_not_return_from_caller() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php include 'included.php'; echo 'caller';"),
+            ("included.php", "<?php echo 'included:'; return 7; echo 'skipped';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "included:caller");
+}
+
 /// Verifies `include_once` only executes the file the first time; subsequent calls in the same runtime are no-ops.
 #[test]
 fn test_include_once() {

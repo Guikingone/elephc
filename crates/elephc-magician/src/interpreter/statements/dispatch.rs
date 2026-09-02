@@ -19,9 +19,18 @@ pub(in crate::interpreter) fn execute_statements(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    for stmt in statements {
+    let mut position = 0;
+    while let Some(stmt) = statements.get(position) {
         match execute_stmt(stmt, context, scope, values) {
-            Ok(EvalControl::None) => {}
+            Ok(EvalControl::None) => position += 1,
+            Ok(EvalControl::Goto(label)) => {
+                let Some(target) = statements.iter().position(
+                    |statement| matches!(statement, EvalStmt::Label(candidate) if candidate == &label),
+                ) else {
+                    return Ok(EvalControl::Goto(label));
+                };
+                position = target + 1;
+            }
             Ok(control) => return Ok(control),
             Err(status) => {
                 trace_failed_statement(stmt, status, context);
@@ -63,6 +72,14 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_array_append_var_stmt(name, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::ArrayAppend { target, value } => {
+            eval_array_append(target, value, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::ArrayAppendReferenceBind { name, source } => {
+            eval_array_append_reference_bind(name, source, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::ArraySetVar { name, index, value } => {
             eval_array_set_var_stmt(name, index, value, context, scope, values)?;
             Ok(EvalControl::None)
@@ -71,8 +88,13 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_array_destructure_stmt(targets, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
-        EvalStmt::Break => Ok(EvalControl::Break),
-        EvalStmt::Continue => Ok(EvalControl::Continue),
+        EvalStmt::ArrayReferenceBind { target, source } => {
+            eval_array_reference_bind(target, source, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::Break(level) => Ok(EvalControl::Break(*level)),
+        EvalStmt::Continue(level) => Ok(EvalControl::Continue(*level)),
+        EvalStmt::Goto(label) => Ok(EvalControl::Goto(label.clone())),
         EvalStmt::DoWhile { body, condition } => {
             execute_do_while_stmt(body, condition, context, scope, values)
         }
@@ -108,6 +130,7 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_interface_decl_stmt(interface, context, scope, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::Label(_) => Ok(EvalControl::None),
         EvalStmt::TraitDecl(trait_decl) => {
             execute_trait_decl_stmt(trait_decl, context, scope, values)?;
             Ok(EvalControl::None)
@@ -116,11 +139,13 @@ pub(in crate::interpreter) fn execute_stmt(
             array,
             key_name,
             value_name,
+            value_by_ref,
             body,
         } => execute_foreach_stmt(
             array,
             key_name.as_deref(),
             value_name,
+            *value_by_ref,
             body,
             context,
             scope,
@@ -221,13 +246,27 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::StoreVar { name, value } => {
+            let copies_borrowed_variable = matches!(value, EvalExpr::LoadVar(_));
             let value = eval_expr(value, context, scope, values)?;
+            let value = if copies_borrowed_variable {
+                values.copy_value(value)?
+            } else {
+                value
+            };
+            let reference_target = scope.reference_target(name).cloned();
+            if let Some(target) = reference_target {
+                write_back_method_ref_target(&target, value, context, values)?;
+            }
             for replaced in set_scope_cell(
                 context,
                 scope,
                 name.clone(),
                 value,
-                ScopeCellOwnership::Owned,
+                if scope.reference_target(name).is_some() {
+                    ScopeCellOwnership::Borrowed
+                } else {
+                    ScopeCellOwnership::Owned
+                },
             )? {
                 eval_release_value(context, values, replaced)?;
             }
@@ -264,11 +303,14 @@ pub(in crate::interpreter) fn execute_stmt(
                 values.truthy(condition)?
             } {
                 match execute_statements(body, context, scope, values)? {
-                    EvalControl::None | EvalControl::Continue => {}
-                    EvalControl::Break => break,
+                    EvalControl::None | EvalControl::Continue(1) => {}
+                    EvalControl::Break(1) => break,
+                    EvalControl::Break(level) => return Ok(EvalControl::Break(level - 1)),
+                    EvalControl::Continue(level) => return Ok(EvalControl::Continue(level - 1)),
                     EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
                     EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
                     EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+                    EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
                 }
             }
             Ok(EvalControl::None)

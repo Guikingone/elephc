@@ -8,6 +8,7 @@
 //! - Generated code only passes this value opaquely; Rust owns every internal collection.
 
 use super::*;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 /// Process-level eval context passed opaquely across the C ABI.
 ///
@@ -17,6 +18,7 @@ use super::*;
 pub struct ElephcEvalContext {
     pub(super) abi_version: u32,
     pub(super) classes: HashMap<String, EvalClass>,
+    pub(super) class_source_files: HashMap<String, String>,
     pub(super) class_aliases: HashMap<String, EvalClassAlias>,
     pub(super) declared_class_names: Vec<String>,
     pub(super) interfaces: HashMap<String, EvalInterface>,
@@ -31,6 +33,11 @@ pub struct ElephcEvalContext {
     pub(super) functions: HashMap<String, EvalFunction>,
     pub(super) closures: HashMap<String, EvalClosure>,
     pub(super) closure_objects: HashMap<u64, EvalClosureObjectTarget>,
+    pub(super) live_closure_objects: AtomicUsize,
+    pub(super) live_dynamic_objects: AtomicUsize,
+    pub(super) live_global_functions: AtomicUsize,
+    pub(super) live_autoload_contexts: AtomicUsize,
+    pub(super) retained_context_free_requested: AtomicBool,
     pub(super) next_closure_id: usize,
     pub(super) native_functions: HashMap<String, NativeFunction>,
     pub(super) native_methods: HashMap<(String, String), NativeCallableSignature>,
@@ -57,7 +64,7 @@ pub struct ElephcEvalContext {
     pub(super) dynamic_destructed_objects: HashSet<u64>,
     pub(super) dynamic_property_values: HashMap<(u64, String), RuntimeCellHandle>,
     pub(super) dynamic_property_aliases: HashMap<(u64, String), EvalReferenceTarget>,
-    pub(super) array_element_aliases: HashMap<(usize, EvalArrayReferenceKey), EvalReferenceTarget>,
+    pub(super) array_element_aliases: HashMap<(u64, EvalArrayReferenceKey), EvalReferenceTarget>,
     pub(super) array_cursors: HashMap<usize, EvalArrayCursor>,
     pub(super) dynamic_initialized_properties: HashSet<(u64, String)>,
     pub(super) eval_reflection_attributes: HashMap<u64, EvalReflectionAttributeMetadata>,
@@ -71,6 +78,9 @@ pub struct ElephcEvalContext {
     pub(super) eval_static_callables: HashMap<usize, EvalStaticCallableMetadata>,
     pub(super) eval_object_callables: HashMap<usize, EvalObjectCallableMetadata>,
     pub(super) global_scope: Option<*mut ElephcEvalScope>,
+    pub(super) owns_global_scope: bool,
+    pub(super) autoload_callbacks: Vec<RuntimeCellHandle>,
+    pub(super) autoloading_classes: HashSet<String>,
     pub(super) function_stack: Vec<String>,
     pub(super) class_stack: Vec<String>,
     pub(super) called_class_stack: Vec<String>,
@@ -86,6 +96,7 @@ pub struct ElephcEvalContext {
     pub(super) call_dir: String,
     pub(super) call_line: i64,
     pub(super) file_magic_override: Option<String>,
+    pub(super) error_suppression_depth: usize,
 }
 
 impl ElephcEvalContext {
@@ -94,6 +105,7 @@ impl ElephcEvalContext {
         Self {
             abi_version: ABI_VERSION,
             classes: HashMap::new(),
+            class_source_files: HashMap::new(),
             class_aliases: HashMap::new(),
             declared_class_names: Vec::new(),
             interfaces: HashMap::new(),
@@ -108,6 +120,11 @@ impl ElephcEvalContext {
             functions: HashMap::new(),
             closures: HashMap::new(),
             closure_objects: HashMap::new(),
+            live_closure_objects: AtomicUsize::new(0),
+            live_dynamic_objects: AtomicUsize::new(0),
+            live_global_functions: AtomicUsize::new(0),
+            live_autoload_contexts: AtomicUsize::new(0),
+            retained_context_free_requested: AtomicBool::new(false),
             next_closure_id: 0,
             native_functions: HashMap::new(),
             native_methods: HashMap::new(),
@@ -148,6 +165,9 @@ impl ElephcEvalContext {
             eval_static_callables: HashMap::new(),
             eval_object_callables: HashMap::new(),
             global_scope: None,
+            owns_global_scope: false,
+            autoload_callbacks: Vec::new(),
+            autoloading_classes: HashSet::new(),
             function_stack: Vec::new(),
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
@@ -163,6 +183,7 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
+            error_suppression_depth: 0,
         }
     }
 
@@ -172,6 +193,7 @@ impl ElephcEvalContext {
         Self {
             abi_version,
             classes: HashMap::new(),
+            class_source_files: HashMap::new(),
             class_aliases: HashMap::new(),
             declared_class_names: Vec::new(),
             interfaces: HashMap::new(),
@@ -186,6 +208,11 @@ impl ElephcEvalContext {
             functions: HashMap::new(),
             closures: HashMap::new(),
             closure_objects: HashMap::new(),
+            live_closure_objects: AtomicUsize::new(0),
+            live_dynamic_objects: AtomicUsize::new(0),
+            live_global_functions: AtomicUsize::new(0),
+            live_autoload_contexts: AtomicUsize::new(0),
+            retained_context_free_requested: AtomicBool::new(false),
             next_closure_id: 0,
             native_functions: HashMap::new(),
             native_methods: HashMap::new(),
@@ -226,6 +253,9 @@ impl ElephcEvalContext {
             eval_static_callables: HashMap::new(),
             eval_object_callables: HashMap::new(),
             global_scope: None,
+            owns_global_scope: false,
+            autoload_callbacks: Vec::new(),
+            autoloading_classes: HashSet::new(),
             function_stack: Vec::new(),
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
@@ -241,11 +271,27 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
+            error_suppression_depth: 0,
         }
     }
 
     /// Returns the ABI version this context was created for.
     pub const fn abi_version(&self) -> u32 {
         self.abi_version
+    }
+
+    /// Enters one nested PHP error-suppression (`@`) expression scope.
+    pub fn push_error_suppression(&mut self) {
+        self.error_suppression_depth += 1;
+    }
+
+    /// Leaves one nested PHP error-suppression (`@`) expression scope.
+    pub fn pop_error_suppression(&mut self) {
+        self.error_suppression_depth = self.error_suppression_depth.saturating_sub(1);
+    }
+
+    /// Reports whether the current eval expression suppresses non-fatal diagnostics.
+    pub const fn errors_suppressed(&self) -> bool {
+        self.error_suppression_depth != 0
     }
 }

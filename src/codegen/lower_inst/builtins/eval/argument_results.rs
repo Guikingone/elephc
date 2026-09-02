@@ -92,6 +92,9 @@ fn store_eval_native_method_argument(
 ) -> Result<()> {
     let local_slot = crate::codegen::lower_inst::reference_arguments::local_slot_for_loaded_value(ctx, value);
     if let Ok(slot) = local_slot {
+        if !eval_method_argument_has_stable_ref_place(ctx, slot) {
+            return store_eval_native_method_argument_by_value(ctx, value, offset);
+        }
         let source_ty = ctx.local_php_type(slot)?.codegen_repr();
         if matches!(source_ty, PhpType::TaggedScalar) {
             return store_eval_native_method_argument_by_value(ctx, value, offset);
@@ -123,6 +126,19 @@ fn store_eval_native_method_argument(
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, offset);
     Ok(())
+}
+
+/// Returns whether a local remains an addressable PHP reference place throughout an eval call.
+///
+/// One-shot EIR merge temporaries are moved out and cleared before their `LoadLocal` is consumed.
+/// Passing their frame address to the eval bridge would therefore expose an empty cell instead of
+/// the loaded value. Ordinary PHP and function-static locals retain stable storage and may carry
+/// a reference marker when the runtime-resolved method requires one.
+fn eval_method_argument_has_stable_ref_place(ctx: &FunctionContext<'_>, slot: LocalSlotId) -> bool {
+    matches!(
+        ctx.local_kind(slot),
+        Ok(LocalKind::PhpLocal | LocalKind::StaticLocal)
+    )
 }
 
 /// Stores a dynamic method argument by value when no stable local reference slot is available.
@@ -257,6 +273,12 @@ fn emit_eval_mixed_array_as_owned_object_array_aarch64(ctx: &mut FunctionContext
     ctx.emitter.instruction("str xzr, [sp, #8]");                               // start conversion at slot zero
     let loop_label = ctx.next_label("eval_object_array_loop");
     let done_label = ctx.next_label("eval_object_array_done");
+    ctx.emitter.instruction("ldr x9, [sp]");                                    // load the cloned indexed array before inspecting its physical slots
+    ctx.emitter.instruction("ldr x10, [x9, #-8]");                              // load the cloned array's packed value-type metadata
+    ctx.emitter.instruction("lsr x10, x10, #8");                                // move the runtime value-type tag into the low bits
+    ctx.emitter.instruction("and x10, x10, #0x7f");                             // discard the persistent array flag before comparing the slot layout
+    ctx.emitter.instruction("cmp x10, #6");                                     // do the cloned slots already contain raw object pointers?
+    ctx.emitter.instruction(&format!("b.eq {}", done_label));                   // preserve object slots instead of unboxing object fields as Mixed cells
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("ldr x9, [sp]");                                    // reload the cloned indexed array
     ctx.emitter.instruction("ldr x10, [x9]");                                   // load the logical element count
@@ -300,6 +322,12 @@ fn emit_eval_mixed_array_as_owned_object_array_x86_64(ctx: &mut FunctionContext<
     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 0");                      // start conversion at slot zero
     let loop_label = ctx.next_label("eval_object_array_loop");
     let done_label = ctx.next_label("eval_object_array_done");
+    ctx.emitter.instruction("mov r9, QWORD PTR [rsp]");                         // load the cloned indexed array before inspecting its physical slots
+    ctx.emitter.instruction("mov r10, QWORD PTR [r9 - 8]");                     // load the cloned array's packed value-type metadata
+    ctx.emitter.instruction("shr r10, 8");                                      // move the runtime value-type tag into the low bits
+    ctx.emitter.instruction("and r10, 0x7f");                                   // discard the persistent array flag before comparing the slot layout
+    ctx.emitter.instruction("cmp r10, 6");                                      // do the cloned slots already contain raw object pointers?
+    ctx.emitter.instruction(&format!("je {}", done_label));                     // preserve object slots instead of unboxing object fields as Mixed cells
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp]");                         // reload the cloned indexed array
     ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                         // load the logical element count

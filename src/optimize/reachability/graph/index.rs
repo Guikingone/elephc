@@ -17,6 +17,24 @@ use super::{ClassKind, ClassNode, DeclarationIndex};
 use crate::optimize::reachability::usage::{self, CallSignatureIndex};
 
 impl DeclarationIndex {
+    /// Returns statically resolved class-alias targets declared anywhere in source callables.
+    pub(super) fn class_alias_targets(&self) -> std::collections::HashSet<String> {
+        let mut targets = std::collections::HashSet::new();
+        for usage in self.functions.values() {
+            targets.extend(usage.class_alias_targets.iter().cloned());
+        }
+        for node in self.classes.values() {
+            targets.extend(node.usage.class_alias_targets.iter().cloned());
+            for usage in node.methods.values() {
+                targets.extend(usage.class_alias_targets.iter().cloned());
+            }
+        }
+        for usage in self.checker_methods.values() {
+            targets.extend(usage.class_alias_targets.iter().cloned());
+        }
+        targets
+    }
+
     /// Builds a declaration index matching the recursive statement shapes lowered by EIR.
     pub(crate) fn build(program: &[Stmt], check_result: &CheckResult) -> Self {
         let call_signatures = CallSignatureIndex::from_check_result(check_result);

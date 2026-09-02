@@ -188,6 +188,10 @@ unsafe extern "C" {
         class_ptr: *const u8,
         class_len: u64,
     ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_reflection_class_doc_comment(
+        class_ptr: *const u8,
+        class_len: u64,
+    ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_reflection_property_flags(
         class_ptr: *const u8,
         class_len: u64,
@@ -252,6 +256,8 @@ unsafe extern "C" {
         scope_ptr: *const u8,
         scope_len: u64,
         context: *const c_void,
+        target_class_ptr: *const u8,
+        target_class_len: u64,
     ) -> u64;
     pub(super) fn __elephc_eval_value_take_pending_throwable() -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_class_exists(name_ptr: *const u8, name_len: u64) -> u64;
@@ -430,6 +436,7 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_install_ob_handler_hook(callback: usize);
     pub(super) fn __elephc_eval_value_final_object_identity(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_release(value: *mut RuntimeCell);
+    pub(super) fn __elephc_eval_value_copy(value: *mut RuntimeCell) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Installs the optional eval dynamic object destructor callback.
     pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);

@@ -83,6 +83,32 @@ fn execute_program_evaluates_array_union_compound_assignment() {
     );
 }
 
+/// Verifies array-element concatenation assignments work in statements and `for` update clauses.
+#[test]
+fn execute_program_evaluates_array_element_concat_assignment() {
+    let program = parse_fragment(
+        br#"
+$info = ["message" => "first"];
+$info["message"] .= " second";
+for ($i = 0; $i < 1; $info["message"] .= "!") {
+    $i += 1;
+}
+return $info["message"];
+"#,
+    )
+    .expect("parse array element concatenation assignment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute array element concatenation assignment");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("first second!".to_string())
+    );
+}
+
 /// Verifies coalesce and union writes reach an implicitly aliased superglobal array.
 #[test]
 fn execute_program_writes_compound_assignment_through_superglobal_alias() {
@@ -395,6 +421,29 @@ fn execute_program_constructs_named_object_with_registered_named_args() {
 
     let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("registered constructor named args should bind");
+
+    assert_eq!(values.get(result), FakeValue::Int(9));
+}
+
+/// Verifies a dynamic child binds named constructor arguments from its declaring AOT ancestor.
+#[test]
+fn execute_program_constructs_dynamic_child_with_inherited_constructor_signature() {
+    let program = parse_fragment(
+        br#"class EvalInheritedRuntimeChild extends KnownClass {}
+$box = new EvalInheritedRuntimeChild(value: 9);
+return $box->read_x();"#,
+    )
+    .expect("parse inherited runtime constructor source");
+    let mut context = ElephcEvalContext::new();
+    assert!(context.define_native_class_parent("KnownClass", "KnownConstructorOwner"));
+    let mut signature = NativeCallableSignature::new(1);
+    assert!(signature.set_param_name(0, "value"));
+    assert!(context.define_native_constructor_signature("KnownConstructorOwner", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("inherited constructor signature should bind named args");
 
     assert_eq!(values.get(result), FakeValue::Int(9));
 }

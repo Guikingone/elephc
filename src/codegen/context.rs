@@ -342,6 +342,13 @@ impl<'a> FunctionContext<'a> {
         self.current_inst_promoted_ref_cells.clear();
     }
 
+    /// Returns the active EIR instruction's PHP source span when it has one.
+    pub(super) fn current_instruction_span(&self) -> Option<crate::span::Span> {
+        self.current_inst
+            .and_then(|inst| self.function.instruction(inst))
+            .and_then(|inst| inst.span)
+    }
+
     /// Returns the frame flag that records whether this slot currently stores a cell pointer.
     pub(super) fn ref_cell_state_offset(&self, slot: LocalSlotId) -> Option<usize> {
         self.ref_cell_state_offsets.get(&slot).copied()

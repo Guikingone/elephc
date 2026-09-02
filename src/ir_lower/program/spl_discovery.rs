@@ -335,8 +335,9 @@ pub(in crate::ir_lower) fn string_data_name<'a>(
     module: &'a Module,
     inst: &crate::ir::Instruction,
 ) -> Option<&'a str> {
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return None;
+    let data = match inst.immediate {
+        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => return None,
     };
     module
         .data
@@ -349,4 +350,3 @@ pub(in crate::ir_lower) fn string_data_name<'a>(
 pub(in crate::ir_lower) fn php_method_key(method_name: &str) -> String {
     crate::names::php_symbol_key(method_name)
 }
-

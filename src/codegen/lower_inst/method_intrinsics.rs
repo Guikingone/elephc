@@ -239,6 +239,18 @@ pub(super) fn resolve_interface_call_signature(
         })?
         .clone();
     let expected_args = callee_sig.params.len() + 1;
+    let callee_sig = if operand_count == expected_args {
+        callee_sig
+    } else {
+        common_interface_implementation_signature(ctx, normalized, &method_key, operand_count)
+            .ok_or_else(|| {
+                CodegenIrError::unsupported(format!(
+                    "interface method call to {}::{} with {} operands for {} ABI params",
+                    normalized, method_name, operand_count, expected_args
+                ))
+            })?
+    };
+    let expected_args = callee_sig.params.len() + 1;
     if operand_count != expected_args {
         return Err(CodegenIrError::unsupported(format!(
             "interface method call to {}::{} with {} operands for {} ABI params",
@@ -246,6 +258,33 @@ pub(super) fn resolve_interface_call_signature(
         )));
     }
     Ok((normalized.to_string(), method_key, callee_sig))
+}
+
+/// Returns the shared concrete ABI used when an interface implementation adds optional parameters.
+fn common_interface_implementation_signature(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+    method_key: &str,
+    operand_count: usize,
+) -> Option<FunctionSig> {
+    let mut signature = None;
+    for (class_name, class_info) in &ctx.module.class_infos {
+        if !class_implements_interface(ctx, class_name, interface_name) {
+            continue;
+        }
+        let Some(candidate) = class_info.methods.get(method_key).cloned() else {
+            continue;
+        };
+        if candidate.params.len() + 1 != operand_count {
+            continue;
+        }
+        match &signature {
+            Some(existing) if existing != &candidate => return None,
+            Some(_) => {}
+            None => signature = Some(candidate),
+        }
+    }
+    signature
 }
 
 /// Lowers a method call after an earlier EIR guard has proven a nullable receiver non-null.
@@ -442,10 +481,39 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
 
 /// Emits PHP's fatal diagnostic for calling an instance method on null.
 pub(super) fn emit_method_call_on_null_fatal(ctx: &mut FunctionContext<'_>, method_name: &str) {
+    emit_aot_null_method_receiver_trace(ctx, method_name);
     exceptions::emit_error(
         ctx,
         &format!("Call to a member function {}() on null", method_name),
     );
+}
+
+/// Emits the opt-in eval-bridge trace for an AOT null method receiver.
+fn emit_aot_null_method_receiver_trace(ctx: &mut FunctionContext<'_>, method_name: &str) {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
+    let (function_label, function_len) = ctx.data.add_string(ctx.function.name.as_bytes());
+    let (method_label, method_len) = ctx.data.add_string(method_name.as_bytes());
+    let function_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_symbol_address(ctx.emitter, function_ptr_arg, &function_label);
+    let function_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, function_len_arg, function_len as i64);
+    let method_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_symbol_address(ctx.emitter, method_ptr_arg, &method_label);
+    let method_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_load_int_immediate(ctx.emitter, method_len_arg, method_len as i64);
+    let line_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    let line = ctx
+        .current_instruction_span()
+        .map(|span| span.line as i64)
+        .unwrap_or_default();
+    abi::emit_load_int_immediate(ctx.emitter, line_arg, line);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_trace_aot_null_method_receiver");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Returns the direct runtime intrinsic for built-in `Generator` instance methods.

@@ -208,6 +208,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         },
         StmtKind::ClassDecl {
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -219,6 +220,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         constants,
         } => StmtKind::ClassDecl {
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,

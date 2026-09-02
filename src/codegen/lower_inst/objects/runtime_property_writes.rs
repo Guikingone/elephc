@@ -18,7 +18,10 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
         return lower_nullable_prop_set(ctx, inst, object, value, &class_name, &property);
     }
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed) {
-        return lower_mixed_prop_set(ctx, object, value, &property, inst);
+        emit_aot_property_cell_trace(ctx, object, &property, "before")?;
+        lower_mixed_prop_set(ctx, object, value, &property, inst)?;
+        emit_aot_property_cell_trace(ctx, object, &property, "after")?;
+        return Ok(());
     }
     if matches!(
         ctx.value_php_type(object)?.codegen_repr(),
@@ -35,12 +38,84 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
+    emit_aot_raw_property_receiver_trace(ctx, object, value, &value_ty, &property)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     if is_promoted_reference_property_bind(ctx, object, value, &slot)? {
         return emit_reference_property_bind(ctx, value, &slot, base_reg);
     }
     emit_property_store(ctx, value, &slot, base_reg)
+}
+
+/// Emits an opt-in trace for a statically typed AOT property receiver before its write.
+fn emit_aot_raw_property_receiver_trace(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+    property: &str,
+) -> Result<()> {
+    if std::env::var_os("ELEPHC_CODEGEN_AOT_PROPERTY_TRACE").is_none()
+        || !ctx.module.required_runtime_features.eval_bridge
+    {
+        return Ok(());
+    }
+    let site = format!("{}|{}|typed-before", ctx.function.name, property);
+    let (site_label, site_len) = ctx.data.add_string(site.as_bytes());
+    let site_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_symbol_address(ctx.emitter, site_ptr_arg, &site_label);
+    let site_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, site_len_arg, site_len as i64);
+    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    ctx.load_value_to_reg(object, receiver_arg)?;
+    let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    ctx.load_value_to_reg(value, value_arg)?;
+    let value_is_object_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        value_is_object_arg,
+        if matches!(value_ty.codegen_repr(), PhpType::Object(_)) {
+            1
+        } else {
+            0
+        },
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_trace_aot_raw_property_receiver");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
+}
+
+/// Emits an opt-in trace of one boxed property receiver before or after a mixed `PropSet`.
+fn emit_aot_property_cell_trace(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    phase: &str,
+) -> Result<()> {
+    if std::env::var_os("ELEPHC_CODEGEN_AOT_PROPERTY_TRACE").is_none()
+        || !ctx.module.required_runtime_features.eval_bridge
+    {
+        return Ok(());
+    }
+    let site = format!("{}|{}|{}", ctx.function.name, property, phase);
+    let (site_label, site_len) = ctx.data.add_string(site.as_bytes());
+    ctx.load_value_to_result(object)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let site_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_symbol_address(ctx.emitter, site_ptr_arg, &site_label);
+    let site_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, site_len_arg, site_len as i64);
+    let cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_pop_reg(ctx.emitter, cell_arg);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_trace_aot_property_cell");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
 }
 
 /// Lowers a dynamic property write (`$object->{$name} = $value`).

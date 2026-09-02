@@ -256,7 +256,10 @@ fn constructor_param_supported(ty: &PhpType) -> bool {
     )
 }
 
-/// Emits `__elephc_eval_value_construct_object(Mixed*, MixedArray*, scope, scope_len, ctx) -> bool`.
+/// Emits `__elephc_eval_value_construct_object(Mixed*, MixedArray*, scope, scope_len, ctx, target, target_len) -> bool`.
+///
+/// A null target dispatches from the receiver class id. A non-null target selects the resolved
+/// AOT declaring class, allowing an eval-declared subclass to invoke an inherited constructor.
 fn emit_constructor_helper(
     module: &Module,
     emitter: &mut Emitter,
@@ -312,6 +315,8 @@ fn emit_constructor_aarch64(
     emitter.instruction("str x3, [sp, #8]");                                    // save the active eval class-scope length
     emitter.instruction("str x1, [sp, #24]");                                   // save the boxed eval argument array
     emitter.instruction("str x4, [sp, #64]");                                   // save the active eval context for callable descriptors
+    emitter.instruction("str x5, [sp, #40]");                                   // save an optional resolved AOT constructor target name
+    emitter.instruction("str x6, [sp, #72]");                                   // save the optional AOT constructor target name length
     emitter.instruction(&format!("cbz x0, {}", success_label));                 // a null object pointer means there is nothing to construct
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
@@ -326,6 +331,7 @@ fn emit_constructor_aarch64(
         success_label,
         callable_support,
     );
+    emit_aarch64_constructor_dispatch_target(emitter);
     emit_aarch64_constructor_dispatch(
         module,
         emitter,
@@ -335,7 +341,9 @@ fn emit_constructor_aarch64(
         success_label,
         callable_support,
     );
-    emitter.instruction(&format!("b {}", success_label));                       // no constructor metadata matched this class id
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the optional resolved AOT constructor target name
+    emitter.instruction(&format!("cbnz x9, {}", fail_label));                   // a resolved target must match one generated constructor slot
+    emitter.instruction(&format!("b {}", success_label));                       // no receiver constructor metadata means a PHP no-op
     emitter.label(fail_label);
     emitter.instruction("mov x0, #0");                                          // report constructor dispatch failure to Rust
     emitter.instruction(&format!("b {}", done_label));                          // skip the success result after a failure
@@ -366,6 +374,7 @@ fn emit_constructor_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the active eval class-scope length
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the boxed eval argument array
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the active eval context for callable descriptors
+    emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save an optional resolved AOT constructor target name
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", success_label));                      // a null object pointer means there is nothing to construct
     emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
@@ -382,6 +391,7 @@ fn emit_constructor_x86_64(
         success_label,
         callable_support,
     );
+    emit_x86_64_constructor_dispatch_target(emitter);
     emit_x86_64_constructor_dispatch(
         module,
         emitter,
@@ -391,7 +401,10 @@ fn emit_constructor_x86_64(
         success_label,
         callable_support,
     );
-    emitter.instruction(&format!("jmp {}", success_label));                     // no constructor metadata matched this class id
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the optional resolved AOT constructor target name
+    emitter.instruction("test r11, r11");                                       // did the interpreter resolve an inherited AOT constructor?
+    emitter.instruction(&format!("jne {}", fail_label));                        // a resolved target must match one generated constructor slot
+    emitter.instruction(&format!("jmp {}", success_label));                     // no receiver constructor metadata means a PHP no-op
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report constructor dispatch failure to Rust
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the success result after a failure
@@ -747,6 +760,42 @@ fn emit_x86_64_default_builtin_throwable_fields(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + 40], 0");                         // default the previous Throwable pointer to null
 }
 
+/// Selects the constructor dispatch id from either an AOT target name or the receiver on ARM64.
+fn emit_aarch64_constructor_dispatch_target(emitter: &mut Emitter) {
+    let receiver_label = "__elephc_eval_constructor_receiver_target";
+    let done_label = "__elephc_eval_constructor_target_ready";
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the optional resolved AOT constructor target name
+    emitter.instruction(&format!("cbz x9, {}", receiver_label));                // use the receiver class when no declaring target was supplied
+    emitter.instruction("mov x0, x9");                                          // pass the resolved AOT constructor target name to the class registry
+    emitter.instruction("ldr x1, [sp, #72]");                                   // pass the resolved AOT constructor target name length to the class registry
+    abi::emit_call_label(emitter, "__rt_class_id_by_name");
+    emitter.instruction("str x0, [sp, #72]");                                   // retain the selected constructor class id across dispatch tests
+    emitter.instruction(&format!("b {}", done_label));                          // skip receiver-id extraction after a named target lookup
+    emitter.label(receiver_label);
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for receiver-id dispatch
+    emitter.instruction("ldr x9, [x9]");                                        // load the receiver runtime class id
+    emitter.instruction("str x9, [sp, #72]");                                   // retain the receiver constructor class id across dispatch tests
+    emitter.label(done_label);
+}
+
+/// Selects the constructor dispatch id from either an AOT target name or the receiver on x86_64.
+fn emit_x86_64_constructor_dispatch_target(emitter: &mut Emitter) {
+    let receiver_label = "__elephc_eval_constructor_receiver_target_x";
+    let done_label = "__elephc_eval_constructor_target_ready_x";
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the optional resolved AOT constructor target name
+    emitter.instruction("test rdi, rdi");                                       // does the interpreter provide a declaring constructor target?
+    emitter.instruction(&format!("jz {}", receiver_label));                     // use the receiver class when no declaring target was supplied
+    emitter.instruction("mov rsi, QWORD PTR [rbp + 16]");                       // load the seventh C ABI argument holding the target name length
+    abi::emit_call_label(emitter, "__rt_class_id_by_name");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // retain the selected constructor class id across dispatch tests
+    emitter.instruction(&format!("jmp {}", done_label));                        // skip receiver-id extraction after a named target lookup
+    emitter.label(receiver_label);
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for receiver-id dispatch
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the receiver runtime class id
+    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // retain the receiver constructor class id across dispatch tests
+    emitter.label(done_label);
+}
+
 /// Emits ARM64 class-id dispatch for supported constructor bodies.
 fn emit_aarch64_constructor_dispatch(
     module: &Module,
@@ -759,8 +808,7 @@ fn emit_aarch64_constructor_dispatch(
 ) {
     for (class_id, class_slots) in grouped_slots(slots) {
         let next_label = format!("__elephc_eval_constructor_next_{}", class_id);
-        emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this class test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for constructor dispatch
+        emitter.instruction("ldr x9, [sp, #72]");                               // reload the selected constructor dispatch class id
         abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
         emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this constructor class
         emitter.instruction(&format!("b.ne {}", next_label));                   // try the next constructor class when ids differ
@@ -791,8 +839,7 @@ fn emit_x86_64_constructor_dispatch(
 ) {
     for (class_id, class_slots) in grouped_slots(slots) {
         let next_label = format!("__elephc_eval_constructor_next_{}_x", class_id);
-        emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this class test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for constructor dispatch
+        emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                   // reload the selected constructor dispatch class id
         abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
         emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this constructor class
         emitter.instruction(&format!("jne {}", next_label));                    // try the next constructor class when ids differ
@@ -1365,10 +1412,10 @@ fn emit_aarch64_cast_eval_arg(
             abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
         }
         PhpType::Array(_) => {
-            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 4, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label);
         }
         PhpType::AssocArray { .. } => {
-            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 5, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label);
         }
         PhpType::Iterable => {
             emit_aarch64_cast_eval_iterable_arg(module, emitter, param_ty, label_prefix, fail_label);
@@ -1400,14 +1447,17 @@ fn emit_aarch64_cast_eval_tagged_scalar_arg(emitter: &mut Emitter, label_prefix:
 fn emit_aarch64_cast_eval_array_arg(
     emitter: &mut Emitter,
     param_ty: &PhpType,
-    expected_tag: i64,
+    label_prefix: &str,
     fail_label: &str,
 ) {
+    let accepted_label = format!("{label_prefix}_array_accepted");
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the eval array payload for the constructor ABI
-    abi::emit_load_int_immediate(emitter, "x9", expected_tag);
-    emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject array payloads with an incompatible ABI shape
+    emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("b.eq {}", accepted_label));                   // indexed arrays satisfy PHP array parameters
+    emitter.instruction("cmp x0, #5");                                          // runtime tag 5 means associative array
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array payloads for PHP array parameters
+    emitter.label(&accepted_label);
     emitter.instruction("mov x0, x1");                                          // move the unboxed array payload into the result register
     abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
 }
@@ -1522,10 +1572,10 @@ fn emit_x86_64_cast_eval_arg(
             abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
         }
         PhpType::Array(_) => {
-            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 4, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label);
         }
         PhpType::AssocArray { .. } => {
-            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 5, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label);
         }
         PhpType::Iterable => {
             emit_x86_64_cast_eval_iterable_arg(module, emitter, param_ty, label_prefix, fail_label);
@@ -1555,14 +1605,17 @@ fn emit_x86_64_cast_eval_tagged_scalar_arg(emitter: &mut Emitter, label_prefix: 
 fn emit_x86_64_cast_eval_array_arg(
     emitter: &mut Emitter,
     param_ty: &PhpType,
-    expected_tag: i64,
+    label_prefix: &str,
     fail_label: &str,
 ) {
+    let accepted_label = format!("{label_prefix}_array_accepted");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // expose the eval array payload for the constructor ABI
-    abi::emit_load_int_immediate(emitter, "r10", expected_tag);
-    emitter.instruction("cmp rax, r10");                                        // compare the eval payload tag with the expected array ABI
-    emitter.instruction(&format!("jne {}", fail_label));                        // reject array payloads with an incompatible ABI shape
+    emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("je {}", accepted_label));                     // indexed arrays satisfy PHP array parameters
+    emitter.instruction("cmp rax, 5");                                          // runtime tag 5 means associative array
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array payloads for PHP array parameters
+    emitter.label(&accepted_label);
     emitter.instruction("mov rax, rdi");                                        // move the unboxed array payload into the result register
     abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
 }

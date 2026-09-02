@@ -77,7 +77,9 @@ fn emit_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> R
             Op::ArrayGet | Op::ArrayGetSilent => {
                 return emit_isset_array_offset_missing_result(ctx, &inst)
             }
-            Op::HashGet => return emit_isset_hash_offset_missing_result(ctx, &inst),
+            Op::HashGet | Op::HashGetSilent => {
+                return emit_isset_hash_offset_missing_result(ctx, &inst)
+            }
             _ => {}
         }
     }

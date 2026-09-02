@@ -65,6 +65,9 @@ impl Parser {
     /// Parses supported right-associative assignment expressions.
     pub(in crate::parser) fn parse_assignment(&mut self) -> Result<EvalExpr, EvalParseError> {
         let target = self.parse_ternary()?;
+        let array_destructure_targets = short_array_destructure_targets(&target);
+        let negated_assignment_target = negated_assignment_target(&target);
+        let nested_assignment_target = nested_assignment_target(&target);
         let null_coalescing = self.consume(TokenKind::QuestionQuestionEqual);
         let assignment = if null_coalescing {
             None
@@ -74,27 +77,54 @@ impl Parser {
         if !null_coalescing && assignment.is_none() {
             return Ok(target);
         }
-        if !matches!(
-            target,
-            EvalExpr::LoadVar(_)
-                | EvalExpr::ArrayGet { .. }
-                | EvalExpr::PropertyGet { .. }
-                | EvalExpr::DynamicPropertyGet { .. }
-                | EvalExpr::StaticPropertyGet { .. }
-                | EvalExpr::DynamicStaticPropertyGet { .. }
-                | EvalExpr::DynamicStaticPropertyNameGet { .. }
-        ) {
+        if !is_assignment_target(&target)
+            && array_destructure_targets.is_none()
+            && negated_assignment_target.is_none()
+            && !nested_assignment_target
+        {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        if array_destructure_targets.is_some() && (null_coalescing || assignment != Some(None)) {
             return Err(EvalParseError::UnexpectedToken);
         }
         if null_coalescing {
             let default = self.parse_assignment()?;
+            if nested_assignment_target {
+                return nested_assignment_expr(&target, true, assignment, default)
+                    .ok_or(EvalParseError::UnexpectedToken);
+            }
             return Ok(EvalExpr::NullCoalesceAssign {
                 target: Box::new(target),
                 default: Box::new(default),
             });
         }
+        if assignment == Some(None)
+            && matches!(self.peek(), TokenKind::Ampersand)
+            && is_property_reference_target(&target)
+        {
+            return Ok(target);
+        }
         self.advance();
         let value = self.parse_assignment()?;
+        if let Some(targets) = array_destructure_targets {
+            return Ok(EvalExpr::ArrayDestructureAssign {
+                targets,
+                value: Box::new(value),
+            });
+        }
+        if let Some(target) = negated_assignment_target {
+            return Ok(EvalExpr::Unary {
+                op: EvalUnaryOp::LogicalNot,
+                expr: Box::new(EvalExpr::Assign {
+                    target: Box::new(target),
+                    value: Box::new(value),
+                }),
+            });
+        }
+        if nested_assignment_target {
+            return nested_assignment_expr(&target, false, assignment, value)
+                .ok_or(EvalParseError::UnexpectedToken);
+        }
         Ok(match assignment.expect("assignment operator was checked") {
             Some(op) => EvalExpr::CompoundAssign {
                 target: Box::new(target),
@@ -367,6 +397,12 @@ impl Parser {
                 expr: Box::new(expr),
             });
         }
+        if self.consume(TokenKind::PlusPlus) {
+            return self.parse_prefix_inc_dec_expr(true);
+        }
+        if self.consume(TokenKind::MinusMinus) {
+            return self.parse_prefix_inc_dec_expr(false);
+        }
         if self.consume(TokenKind::Minus) {
             let expr = self.parse_unary()?;
             return Ok(EvalExpr::Unary {
@@ -398,7 +434,24 @@ impl Parser {
         self.parse_instanceof()
     }
 
-    /// Returns the scalar cast target represented by the current `(type)` token window.
+    /// Parses a prefix increment or decrement expression and returns its updated value.
+    fn parse_prefix_inc_dec_expr(&mut self, increment: bool) -> Result<EvalExpr, EvalParseError> {
+        let target = self.parse_unary()?;
+        if !is_assignment_target(&target) {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        Ok(EvalExpr::CompoundAssign {
+            target: Box::new(target),
+            op: if increment {
+                EvalBinOp::Add
+            } else {
+                EvalBinOp::Sub
+            },
+            value: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+        })
+    }
+
+    /// Returns the cast target represented by the current `(type)` token window.
     pub(super) fn peek_scalar_cast_type(&self) -> Option<EvalCastType> {
         if !matches!(self.current(), TokenKind::LParen) {
             return None;
@@ -417,9 +470,150 @@ impl Parser {
             Some(EvalCastType::String)
         } else if ident_eq(name, "bool") || ident_eq(name, "boolean") {
             Some(EvalCastType::Bool)
+        } else if ident_eq(name, "array") {
+            Some(EvalCastType::Array)
         } else {
             None
         }
     }
 
+}
+
+/// Extracts positional variable targets from a short-array destructuring assignment lhs.
+fn short_array_destructure_targets(target: &EvalExpr) -> Option<Vec<Option<String>>> {
+    let EvalExpr::Array(elements) = target else {
+        return None;
+    };
+    elements
+        .iter()
+        .map(|element| match element {
+            EvalArrayElement::Value(EvalExpr::LoadVar(name)) => Some(Some(name.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Returns whether one expression is a regular PHP assignment lvalue in the EvalIR subset.
+pub(super) fn is_assignment_target(target: &EvalExpr) -> bool {
+    matches!(
+        target,
+        EvalExpr::LoadVar(_)
+            | EvalExpr::ArrayGet { .. }
+            | EvalExpr::PropertyGet { .. }
+            | EvalExpr::DynamicPropertyGet { .. }
+            | EvalExpr::StaticPropertyGet { .. }
+            | EvalExpr::DynamicStaticPropertyGet { .. }
+            | EvalExpr::DynamicStaticPropertyNameGet { .. }
+    )
+}
+
+/// Returns whether a lvalue is handled by the statement-level property reference binder.
+fn is_property_reference_target(target: &EvalExpr) -> bool {
+    matches!(
+        target,
+        EvalExpr::PropertyGet { .. }
+            | EvalExpr::DynamicPropertyGet { .. }
+            | EvalExpr::DynamicStaticPropertyGet { .. }
+            | EvalExpr::DynamicStaticPropertyNameGet { .. }
+    )
+}
+
+/// Extracts the lvalue assigned before PHP applies a leading logical negation.
+fn negated_assignment_target(target: &EvalExpr) -> Option<EvalExpr> {
+    let EvalExpr::Unary {
+        op: EvalUnaryOp::LogicalNot,
+        expr,
+    } = target
+    else {
+        return None;
+    };
+    is_assignment_target(expr).then(|| expr.as_ref().clone())
+}
+
+/// Returns whether an assignment belongs to a nested lvalue on a binary expression's right edge.
+///
+/// PHP parses `$prefix.$suffix ??= value` as `$prefix.($suffix ??= value)`, even though the
+/// completed concatenation itself is not writable. Apply the same right-edge recovery to every
+/// binary operator so compound assignments retain PHP's lvalue association consistently.
+fn nested_assignment_target(target: &EvalExpr) -> bool {
+    if negated_assignment_target(target).is_some() {
+        return true;
+    }
+    let EvalExpr::Binary {
+        op: _,
+        left: _,
+        right,
+    } = target
+    else {
+        return false;
+    };
+    is_assignment_target(right) || nested_assignment_target(right)
+}
+
+/// Rebuilds an expression with its rightmost writable child replaced by an assignment.
+fn nested_assignment_expr(
+    target: &EvalExpr,
+    null_coalescing: bool,
+    assignment: Option<Option<EvalBinOp>>,
+    value: EvalExpr,
+) -> Option<EvalExpr> {
+    if let Some(target) = negated_assignment_target(target) {
+        return Some(EvalExpr::Unary {
+            op: EvalUnaryOp::LogicalNot,
+            expr: Box::new(nested_assignment_value(
+                target,
+                null_coalescing,
+                assignment,
+                value,
+            )),
+        });
+    }
+    let EvalExpr::Binary { op, left, right } = target else {
+        return None;
+    };
+    if is_assignment_target(right) {
+        return Some(EvalExpr::Binary {
+            op: *op,
+            left: Box::new(left.as_ref().clone()),
+            right: Box::new(nested_assignment_value(
+                right.as_ref().clone(),
+                null_coalescing,
+                assignment,
+                value,
+            )),
+        });
+    }
+    nested_assignment_expr(right, null_coalescing, assignment, value).map(|right| {
+        EvalExpr::Binary {
+            op: *op,
+            left: Box::new(left.as_ref().clone()),
+            right: Box::new(right),
+        }
+    })
+}
+
+/// Builds the value expression stored in one recovered assignment target.
+fn nested_assignment_value(
+    target: EvalExpr,
+    null_coalescing: bool,
+    assignment: Option<Option<EvalBinOp>>,
+    value: EvalExpr,
+) -> EvalExpr {
+    if null_coalescing {
+        return EvalExpr::NullCoalesceAssign {
+            target: Box::new(target),
+            default: Box::new(value),
+        };
+    }
+    match assignment.expect("assignment operator was checked") {
+        Some(op) => EvalExpr::CompoundAssign {
+            target: Box::new(target),
+            op,
+            value: Box::new(value),
+        },
+        None => EvalExpr::Assign {
+            target: Box::new(target),
+            value: Box::new(value),
+        },
+    }
 }

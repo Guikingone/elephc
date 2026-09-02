@@ -120,14 +120,9 @@ unsafe fn call_eval_function_inner(
     };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_function_outcome(
-        context,
-        &name.to_ascii_lowercase(),
-        args,
-        &mut values,
-    ) {
+    match execute_context_function_with_namespace_fallback(context, &name, args, &mut values) {
         Ok(outcome) => write_outcome(outcome, out).code(),
-        Err(status) => status.code(),
+        Err(status) => trace_dynamic_function_call_failure(context, &name, status).code(),
     }
 }
 
@@ -158,13 +153,101 @@ unsafe fn call_eval_function_array_inner(
     }
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_function_call_array_outcome(
+    match execute_context_function_array_with_namespace_fallback(
         context,
-        &name.to_ascii_lowercase(),
+        &name,
         RuntimeCellHandle::from_raw(arg_array),
         &mut values,
     ) {
         Ok(outcome) => write_outcome(outcome, out).code(),
-        Err(status) => status.code(),
+        Err(status) => trace_dynamic_function_call_failure(context, &name, status).code(),
+    }
+}
+
+/// Emits an opt-in dynamic-function failure trace without changing PHP-visible diagnostics.
+fn trace_dynamic_function_call_failure(
+    context: &ElephcEvalContext,
+    name: &str,
+    status: EvalStatus,
+) -> EvalStatus {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let fallback = name.rsplit_once('\\').map(|(_, bare)| bare);
+        eprintln!(
+            "[elephc-eval-trace] phase=dynamic_function_call name={name:?} status={status:?} namespaced_exists={} global_fallback={fallback:?} global_exists={}",
+            context.has_function(name),
+            fallback.is_some_and(|bare| context.has_function(bare)),
+        );
+    }
+    status
+}
+
+/// Calls a dynamic function by its namespace candidate and PHP's global fallback when needed.
+fn execute_context_function_with_namespace_fallback(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    args: Vec<RuntimeCellHandle>,
+    values: &mut ElephcRuntimeOps,
+) -> Result<interpreter::EvalOutcome, EvalStatus> {
+    let name = name.to_ascii_lowercase();
+    match interpreter::execute_context_function_outcome(context, &name, args.clone(), values) {
+        Err(EvalStatus::UnsupportedConstruct) => {
+            if let Some(result) = execute_global_eval_function_owner(&name, args.clone()) {
+                return result;
+            }
+            name.rsplit_once('\\')
+                .map(|(_, bare)| {
+                    interpreter::execute_context_function_outcome(context, bare, args, values)
+                })
+                .unwrap_or(Err(EvalStatus::UnsupportedConstruct))
+        }
+        result => result,
+    }
+}
+
+/// Executes a runtime-included global function through the context that owns its declaration.
+#[cfg(not(test))]
+fn execute_global_eval_function_owner(
+    name: &str,
+    args: Vec<RuntimeCellHandle>,
+) -> Option<Result<interpreter::EvalOutcome, EvalStatus>> {
+    let owner = crate::context::global_eval_function_owner_context(name)?;
+    let owner = unsafe { owner.as_mut() }?;
+    let call_name = name.rsplit_once('\\').map_or(name, |(_, bare)| bare);
+    let mut values = ElephcRuntimeOps::with_context(owner as *const ElephcEvalContext);
+    Some(interpreter::execute_context_function_outcome(
+        owner,
+        call_name,
+        args,
+        &mut values,
+    ))
+}
+
+/// Keeps unit-test builds independent from the process-global runtime registry.
+#[cfg(test)]
+fn execute_global_eval_function_owner(
+    _name: &str,
+    _args: Vec<RuntimeCellHandle>,
+) -> Option<Result<interpreter::EvalOutcome, EvalStatus>> {
+    None
+}
+
+/// Calls a dynamic function-array form with PHP's namespace-to-global fallback.
+fn execute_context_function_array_with_namespace_fallback(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    args: RuntimeCellHandle,
+    values: &mut ElephcRuntimeOps,
+) -> Result<interpreter::EvalOutcome, EvalStatus> {
+    let name = name.to_ascii_lowercase();
+    match interpreter::execute_context_function_call_array_outcome(context, &name, args, values) {
+        Err(EvalStatus::UnsupportedConstruct) => name
+            .rsplit_once('\\')
+            .map(|(_, bare)| {
+                interpreter::execute_context_function_call_array_outcome(
+                    context, bare, args, values,
+                )
+            })
+            .unwrap_or(Err(EvalStatus::UnsupportedConstruct)),
+        result => result,
     }
 }

@@ -38,6 +38,7 @@ pub(super) fn reflection_class_constant_metadata_for_name(
     {
         return Ok(ReflectionOwnerMetadata {
             reflected_name: Some(constant_name.clone()),
+            doc_comment: None,
             attr_names: case.attribute_names.clone(),
             attr_args: case.attribute_args.clone(),
             interface_names: Vec::new(),
@@ -126,6 +127,7 @@ pub(super) fn reflection_enum_case_metadata_for_name(
         resolve_reflection_enum_case(ctx, reflected_enum, &case_name)
             .map(|(enum_name, case)| ReflectionOwnerMetadata {
                 reflected_name: Some(case_name.clone()),
+                doc_comment: None,
                 attr_names: case.attribute_names.clone(),
                 attr_args: case.attribute_args.clone(),
                 interface_names: Vec::new(),
@@ -193,6 +195,7 @@ pub(super) fn reflection_class_constant_owner_metadata(
         reflection_member_flags(false, &metadata.visibility, is_final, false, false, false);
     ReflectionOwnerMetadata {
         reflected_name: Some(reflected_name),
+        doc_comment: None,
         attr_names: metadata.attr_names,
         attr_args: metadata.attr_args,
         interface_names: Vec::new(),

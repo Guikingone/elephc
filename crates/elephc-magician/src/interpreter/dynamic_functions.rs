@@ -158,6 +158,7 @@ pub(in crate::interpreter) fn eval_call_arg_value(
             if values.type_tag(array)? == EVAL_TAG_OBJECT {
                 return Ok((value, None));
             }
+            let index = eval_array_reference_key(index, values)?.ok_or(EvalStatus::RuntimeFatal)?;
             Ok((
                 value,
                 Some(EvalReferenceTarget::ArrayElement {
@@ -262,6 +263,7 @@ fn eval_nested_array_element_call_arg_value(
     let Some(array_target) = array_target else {
         return Ok((value, None));
     };
+    let index = eval_array_reference_key(index, values)?.ok_or(EvalStatus::RuntimeFatal)?;
     Ok((
         value,
         Some(EvalReferenceTarget::NestedArrayElement {
@@ -320,8 +322,9 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
     let len = values.array_len(array)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
+        let array_identity = values.raw_value_word(array)?;
         let ref_target = eval_array_reference_key(key, values)?
-            .and_then(|key| context.array_element_alias(array, &key).cloned());
+            .and_then(|key| context.array_element_alias(array_identity, &key).cloned());
         let arg = match values.type_tag(key)? {
             EVAL_TAG_INT => {
                 if *saw_named {

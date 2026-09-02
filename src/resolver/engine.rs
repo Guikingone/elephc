@@ -161,6 +161,7 @@ pub(super) fn resolve_stmts(
                     include_chain,
                     state,
                     function_variants,
+                    false,
                 )? {
                     result.extend(resolved);
                 }
@@ -472,6 +473,7 @@ pub(super) fn resolve_stmts(
             }
             StmtKind::ClassDecl {
                 name,
+                doc_comment,
                 extends,
                 implements,
                 is_abstract,
@@ -493,6 +495,7 @@ pub(super) fn resolve_stmts(
                 result.push(Stmt::with_attributes(
                     StmtKind::ClassDecl {
                         name: name.clone(),
+                        doc_comment: doc_comment.clone(),
                         extends: extends.clone(),
                         implements: implements.clone(),
                         is_abstract: *is_abstract,

@@ -25,6 +25,13 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::store_at_offset(ctx.emitter, result_reg, offset);
     let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::load_at_offset(ctx.emitter, context_arg, offset);
+    let metadata_sync = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_context_try_sync_aot_metadata");
+    abi::emit_call_label(ctx.emitter, &metadata_sync);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
+    abi::load_at_offset(ctx.emitter, context_arg, offset);
     if let Some(label) = ctx.shared.eval_registration_helper() {
         abi::emit_call_label(ctx.emitter, &label);
     } else {
@@ -38,6 +45,27 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     }
     ctx.emitter.label(&ready);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
+    Ok(())
+}
+
+/// Loads this function's eval context, or a null handle for request-global fallback lookup.
+///
+/// A statically typed function can be compiled without an eval operation of its own while a
+/// different frame owns the request's registered SPL callbacks.  The dynamic construction ABI
+/// accepts a null handle for that case and resolves the retained callback-owner contexts instead
+/// of forcing every AOT function to reserve a persistent eval frame slot.
+pub(super) fn load_eval_context_or_null(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    if ctx
+        .function
+        .locals
+        .iter()
+        .any(|local| local.kind == LocalKind::EvalContext)
+    {
+        return ensure_eval_context(ctx);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
     Ok(())
 }
@@ -56,9 +84,20 @@ fn emit_eval_registration_helper(ctx: &mut FunctionContext<'_>, label: &str) -> 
     register_eval_declared_symbols(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
     register_eval_native_functions(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET)?;
     register_eval_native_method_signatures(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
+    publish_eval_aot_metadata(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
     abi::emit_frame_restore(ctx.emitter, EVAL_CONTEXT_HELPER_FRAME_SIZE);
     abi::emit_return(ctx.emitter);
     Ok(())
+}
+
+/// Publishes the fully registered AOT metadata for bridge calls made without a generated context.
+fn publish_eval_aot_metadata(ctx: &mut FunctionContext<'_>, context_offset: usize) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_context_publish_aot_metadata");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.

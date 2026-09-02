@@ -13,6 +13,7 @@ use super::*;
 pub(super) fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
     ReflectionOwnerMetadata {
         reflected_name: None,
+        doc_comment: None,
         attr_names: Vec::new(),
         attr_args: Vec::new(),
         interface_names: Vec::new(),

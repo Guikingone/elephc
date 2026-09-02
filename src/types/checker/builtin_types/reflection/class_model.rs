@@ -27,6 +27,18 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
                 empty_string(),
             ),
             builtin_property(
+                "__doc_comment",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__has_doc_comment",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
                 "__string",
                 Visibility::Private,
                 Some(TypeExpr::Str),
@@ -279,7 +291,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
                 "__end_line",
                 int_or_bool_type(),
             ),
-            builtin_reflection_constant_false_union_method("getDocComment"),
+            builtin_reflection_class_doc_comment_method(),
             builtin_reflection_constant_false_union_method("getExtensionName"),
             builtin_reflection_constant_null_mixed_method("getExtension"),
             builtin_reflection_class_string_method("getShortName", "__short_name"),

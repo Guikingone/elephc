@@ -2297,6 +2297,77 @@ echo $invoke($b, 5) . ":" . gettype($b) . ":" . $b;');
     assert_eq!(out, "25:integer:25|29:integer:29");
 }
 
+/// Verifies eval receives a boxed concrete object from an AOT method declared with an interface return.
+#[test]
+fn test_eval_aot_method_interface_return_boxes_concrete_object() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalAotReturnContract {}
+
+class EvalAotReturnConcrete implements EvalAotReturnContract {
+    public function marker(): string {
+        return "ok";
+    }
+}
+
+class EvalAotReturnOwner {
+    public function resolve(): EvalAotReturnContract {
+        return new EvalAotReturnConcrete();
+    }
+}
+
+echo eval('$owner = new EvalAotReturnOwner();
+$value = $owner->resolve();
+echo $value instanceof EvalAotReturnContract ? $value->marker() : "bad";');
+"#,
+    );
+
+    assert_eq!(out, "ok");
+}
+
+/// Verifies eval adapts a reflected callable before an AOT interface-returning method uses it.
+#[test]
+fn test_eval_aot_reflected_callable_method_returns_interface_object() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalReflectionResolver {
+    public function resolve(): string;
+}
+
+class EvalReflectionClosureResolver implements EvalReflectionResolver {
+    public function __construct(
+        private readonly Closure $callable,
+        private readonly Closure $arguments,
+    ) {}
+
+    public function resolve(): string {
+        return ($this->callable)(...($this->arguments)());
+    }
+}
+
+class EvalReflectionRuntime {
+    public function getResolver(
+        callable $callable,
+        ?ReflectionFunction $reflector = null,
+    ): EvalReflectionResolver {
+        $callable = $callable(...);
+        $reflector ??= new ReflectionFunction($callable);
+        $parameters = [];
+        $arguments = function () use ($parameters): array { return $parameters; };
+
+        return new EvalReflectionClosureResolver($callable, $arguments);
+    }
+}
+
+echo eval('$runtime = new EvalReflectionRuntime();
+$callback = static function (): string { return "ok"; };
+echo $runtime->getResolver($callback)->resolve();');
+"#,
+    );
+
+    assert_eq!(out, "ok");
+}
+
 /// Verifies first-class eval method closures bind inherited method targets to subclasses.
 #[test]
 fn test_eval_first_class_closure_bind_accepts_inherited_eval_method_targets() {

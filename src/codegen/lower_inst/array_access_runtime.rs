@@ -491,6 +491,16 @@ fn store_nominal_object_result(
         && matches!(source_ty.codegen_repr(), PhpType::Object(_))
     {
         emit_box_current_value_as_mixed(ctx.emitter, source_ty);
+    } else if matches!(source_ty.codegen_repr(), PhpType::Object(_))
+        && matches!(inst.result_php_type.codegen_repr(), PhpType::Object(_))
+    {
+        // The nominal guard forwards a borrowed local-object payload, while its EIR result is
+        // declared owned and may be consumed by a property store, argument boundary, or return.
+        // Materialize that owner before the caller transfers or releases the result.
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+        abi::emit_pop_reg(ctx.emitter, result_reg);
     }
     store_if_result(ctx, inst)
 }
@@ -543,6 +553,17 @@ fn lower_gradual_object_nominal_guard(
     );
 
     ctx.emitter.label(&object_label);
+    if ctx.module.required_runtime_features.eval_bridge {
+        let native_fallback_label = ctx.next_label("gradual_object_boundary_native_fallback");
+        super::builtins::emit_eval_object_is_a_named_fallback(
+            ctx,
+            value,
+            target_name,
+            &accepted_label,
+            &native_fallback_label,
+        )?;
+        ctx.emitter.label(&native_fallback_label);
+    }
     if let Some((target_id, target_kind)) = target_metadata {
         match ctx.emitter.target.arch {
             Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),             // pass the unboxed object payload to the nominal matcher
@@ -571,15 +592,14 @@ fn lower_gradual_object_nominal_guard(
     ctx.load_value_to_result(value)?;                                          // reload the original boxed object-or-null source after matcher calls
     if matches!(inst.result_php_type.codegen_repr(), PhpType::Object(_)) {
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction("mov x0, x1");                          // expose the accepted object payload as the concrete result
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction("mov rax, rdi");                        // expose the accepted object payload as the concrete result
-            }
+        let payload_reg = mixed_unbox_low_payload_reg(ctx);
+        let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        if payload_reg != object_arg {
+            abi::emit_reg_move(ctx.emitter, object_arg, payload_reg);
         }
+        abi::emit_push_reg(ctx.emitter, payload_reg);
         abi::emit_call_label(ctx.emitter, "__rt_incref");
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     }
     store_if_result(ctx, inst)
 }

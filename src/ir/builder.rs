@@ -164,6 +164,11 @@ impl<'f> Builder<'f> {
         self.func.locals[slot.as_raw() as usize].php_type.clone()
     }
 
+    /// Returns whether a local slot was created for one of the function's incoming parameters.
+    pub fn local_is_parameter(&self, slot: LocalSlotId) -> bool {
+        self.func.params.get(slot.as_raw() as usize).is_some()
+    }
+
     /// Neutralizes deferred `release_local_slot` ops whose slot never widened to
     /// lifetime-tracked storage.
     ///

@@ -39,6 +39,8 @@ Options:
 const FAST_DEATH: Duration = Duration::from_millis(1000);
 /// Consecutive fast worker deaths tolerated before the master gives up.
 const MAX_FAST_DEATHS: u32 = 10;
+/// Enables opt-in worker-exit diagnostics for web runtime investigations.
+const WORKER_TRACE_ENV: &str = "ELEPHC_WEB_TRACE";
 
 /// Set by the SIGINT/SIGTERM handler so the master supervision loop can break and
 /// shut workers down cleanly. Async-signal-safe: the handler only stores to it.
@@ -217,6 +219,27 @@ fn is_planned_recycle(status: libc::c_int) -> bool {
     libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == worker::RECYCLE_EXIT_CODE
 }
 
+/// Renders the observable cause of one reaped worker status for opt-in diagnostics.
+fn worker_exit_status_description(status: libc::c_int) -> String {
+    if libc::WIFEXITED(status) {
+        return format!("exit({})", libc::WEXITSTATUS(status));
+    }
+    if libc::WIFSIGNALED(status) {
+        return format!("signal({})", libc::WTERMSIG(status));
+    }
+    format!("status({status})")
+}
+
+/// Emits one reaped-worker diagnostic without changing the server's supervision behavior.
+fn trace_worker_exit(pid: libc::pid_t, status: libc::c_int) {
+    if std::env::var_os(WORKER_TRACE_ENV).is_some() {
+        eprintln!(
+            "elephc-web: worker {pid} ended with {}",
+            worker_exit_status_description(status)
+        );
+    }
+}
+
 /// Server entry: parse args, prefork workers, supervise. Returns an exit code.
 ///
 /// # Safety
@@ -263,6 +286,7 @@ pub extern "C" fn elephc_web_run(
                 .find(|(c, _)| *c == pid)
                 .map(|(_, t)| *t);
             children.retain(|(c, _)| *c != pid);
+            trace_worker_exit(pid, status);
             if SHUTDOWN.load(Ordering::SeqCst) {
                 if children.is_empty() {
                     break;
@@ -348,5 +372,13 @@ mod tests {
         assert!(!is_planned_recycle(libc::SIGSEGV));
         assert!(!is_planned_recycle(libc::SIGKILL));
         assert!(!is_planned_recycle(libc::SIGTERM));
+    }
+
+    /// Renders normal exits and signal terminations for opt-in worker diagnostics.
+    #[test]
+    fn worker_exit_statuses_are_described() {
+        assert_eq!(worker_exit_status_description(exited_status(0)), "exit(0)");
+        assert_eq!(worker_exit_status_description(exited_status(1)), "exit(1)");
+        assert_eq!(worker_exit_status_description(libc::SIGSEGV), "signal(11)");
     }
 }

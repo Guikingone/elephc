@@ -14,7 +14,7 @@ pub(super) fn validate_declared_class_interface_members(
     class: &EvalClass,
     context: &ElephcEvalContext,
 ) -> Result<(), EvalStatus> {
-    for interface in pending_class_interface_names(class, context) {
+    for interface in pending_class_contract_interface_names(class, context) {
         if !context.has_interface(&interface) {
             continue;
         }
@@ -123,10 +123,40 @@ pub(super) fn validate_declared_class_interface_methods(
                 context,
             )
         {
+            trace_declared_eval_interface_method_mismatch(
+                class,
+                interface_name,
+                &requirement_owner,
+                &requirement,
+                &declaring_class,
+                &method,
+            );
             return Err(EvalStatus::RuntimeFatal);
         }
     }
     Ok(())
+}
+
+/// Emits an opt-in trace when an eval class method violates an eval interface contract.
+fn trace_declared_eval_interface_method_mismatch(
+    class: &EvalClass,
+    interface_name: &str,
+    requirement_owner: &str,
+    requirement: &EvalInterfaceMethod,
+    declaring_class: &str,
+    method: &EvalClassMethod,
+) {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
+        return;
+    }
+    eprintln!(
+        "[elephc-eval-trace] phase=interface_method_mismatch class={:?} interface={interface_name:?} owner={requirement_owner:?} method={:?} declaring_class={declaring_class:?} actual_visibility={:?} required_static={} actual_static={}",
+        class.name(),
+        requirement.name(),
+        method.visibility(),
+        requirement.is_static(),
+        method.is_static(),
+    );
 }
 
 /// Validates class properties present for an eval interface, even on abstract classes.

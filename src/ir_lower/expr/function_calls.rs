@@ -147,9 +147,24 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let is_builtin =
         crate::types::checker::builtins::is_supported_builtin_function(canonical);
     if !is_extern && !is_user_function && !is_builtin {
-        if let Some(value) =
-            super::late_bound_call::lower_late_bound_undefined_call(ctx, canonical, expr)
-        {
+        // A web handler can load a PHP file dynamically during request bootstrap. Such a file may
+        // declare a function that a separately lowered AOT method calls later in the same request,
+        // so preserve the call for the eval function-owner bridge instead of freezing an undefined
+        // function Error before that file has executed. Non-web programs retain the eager PHP
+        // undefined-call path unless their own frame already crossed an eval barrier.
+        if !ctx.can_resolve_runtime_dynamic_functions() && !ctx.has_eval_barrier() {
+            if let Some(value) =
+                super::late_bound_call::lower_late_bound_undefined_call(ctx, canonical, expr)
+            {
+                return value;
+            }
+        }
+    }
+    if (ctx.has_eval_barrier() || ctx.can_resolve_runtime_dynamic_functions())
+        && dynamic_function_owner_fallback_candidate(canonical)
+        && crate::builtins::registry::lookup(canonical).is_none()
+    {
+        if let Some(value) = lower_dynamic_function_owner_spread_call(ctx, canonical, args, expr) {
             return value;
         }
     }
@@ -217,9 +232,10 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         );
         return call;
     }
-    if ctx.has_eval_barrier()
+    if (ctx.has_eval_barrier() || ctx.can_resolve_runtime_dynamic_functions())
         && plain_positional_call_args(args)
-        && canonical_builtin_function_name(canonical).is_none()
+        && dynamic_function_owner_fallback_candidate(canonical)
+        && crate::builtins::registry::lookup(canonical).is_none()
     {
         let dynamic_name = php_symbol_key(canonical.trim_start_matches('\\'));
         let data = ctx.intern_function_name(&dynamic_name);
@@ -234,6 +250,72 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     }
     let eval_literal = eval_literal_fragment(canonical, args);
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
+}
+
+/// Returns whether a name can resolve through a function declared by runtime include/eval.
+///
+/// A checker-recognized PHP function is not necessarily backed by a native EIR implementation:
+/// compatibility declarations such as `trigger_deprecation()` may instead arrive from an included
+/// PHP polyfill. Keep true language constructs on their dedicated lowering paths, but let every
+/// other unresolved/registry-free name consult the request-local dynamic function owner first.
+fn dynamic_function_owner_fallback_candidate(name: &str) -> bool {
+    !matches!(
+        php_symbol_key(name.trim_start_matches('\\')).as_str(),
+        "eval"
+            | "empty"
+            | "unset"
+            | "isset"
+            | "exit"
+            | "die"
+            | "filter_var$default"
+            | "filter_var$default_nof"
+            | "filter_var$int"
+            | "filter_var$int_nof"
+            | "filter_var$int_range"
+            | "filter_var$int_range_nof"
+            | "filter_var$float"
+            | "filter_var$float_nof"
+            | "filter_var$bool"
+            | "filter_var$bool_nof"
+            | "filter_var$ip"
+            | "filter_var$ip_nof"
+            | "filter_var$ip4"
+            | "filter_var$ip4_nof"
+            | "filter_var$ip6"
+            | "filter_var$ip6_nof"
+    )
+}
+
+/// Lowers a single dynamic positional spread through Magician's function-array ABI.
+///
+/// `$function(...$args)` preserves the source array's positional/named keys, so it cannot use the
+/// fixed native argument ABI. A runtime-declared function receives the original boxed container
+/// and applies PHP's call-argument rules inside the eval owner context.
+fn lower_dynamic_function_owner_spread_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let [Expr {
+        kind: ExprKind::Spread(container),
+        ..
+    }] = args
+    else {
+        return None;
+    };
+    let dynamic_name = php_symbol_key(canonical.trim_start_matches('\\'));
+    let data = ctx.intern_function_name(&dynamic_name);
+    let container = lower_expr(ctx, container);
+    let container = super::callable_probes::coerce_eval_function_arg_array(ctx, container, expr.span);
+    Some(ctx.emit_value(
+        Op::EvalFunctionCallArray,
+        vec![container.value],
+        Some(Immediate::Data(data)),
+        PhpType::Mixed,
+        Op::EvalFunctionCallArray.default_effects(),
+        Some(expr.span),
+    ))
 }
 
 /// Promotes a boxed gradual local before descending key sort and republishes it afterwards.

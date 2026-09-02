@@ -232,6 +232,7 @@ fn execute_program_reflection_owners_report_origin_metadata_defaults() {
     public const ANSWER = 42;
     public function run() {}
 }
+
 enum EvalReflectOriginCase: string {
     case Ready = "ready";
 }
@@ -260,6 +261,28 @@ return true;"#,
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert_eq!(values.output, "C:M:P:K:U:B:E:N:X:Y");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies ReflectionClass exposes the verbatim doc comment of an eval-declared class.
+#[test]
+fn execute_program_reflection_class_reports_eval_doc_comment() {
+    let program = parse_fragment(
+        br#"/**
+ * Retained eval class metadata.
+ */
+class EvalReflectDocumentedClass {}
+$doc = (new ReflectionClass("EvalReflectDocumentedClass"))->getDocComment();
+echo $doc;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "/**\n * Retained eval class metadata.\n */");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

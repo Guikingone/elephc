@@ -302,14 +302,15 @@ pub(super) fn coerce_descriptor_invoker_mixed_value(
 
 /// Returns the result storage type for an indirect callable with no static signature.
 pub(super) fn dynamic_callable_result_type(
-    ctx: &LoweringContext<'_, '_>,
-    callable: ValueId,
-    expr: &Expr,
+    _ctx: &LoweringContext<'_, '_>,
+    _callable: ValueId,
+    _expr: &Expr,
 ) -> PhpType {
-    match ctx.builder.value_php_type(callable).codegen_repr() {
-        PhpType::Callable | PhpType::Str | PhpType::Array(_) | PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
-        _ => fallback_expr_type(expr),
-    }
+    // This helper is reached only after static callable resolution has failed. At that point
+    // the runtime descriptor can return any PHP value, even when a coarse array/property type
+    // happened to label the callee storage as scalar. Choosing a scalar fallback would coerce a
+    // valid array/object result before the next expression observes it.
+    PhpType::Mixed
 }
 
 /// Resolves an assignment-expression callee whose assigned value is a static callable.

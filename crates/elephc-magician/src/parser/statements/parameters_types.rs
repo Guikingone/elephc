@@ -24,6 +24,7 @@ impl Parser {
         let mut parameter_is_variadic = Vec::new();
         let mut promoted_properties = Vec::new();
         let mut promoted_assignments = Vec::new();
+        let mut closed_after_trailing_comma = false;
         if self.consume(TokenKind::RParen) {
             return Ok(ParsedMethodParams {
                 params,
@@ -98,14 +99,17 @@ impl Parser {
             if !self.consume(TokenKind::Comma) {
                 break;
             }
+            if self.consume(TokenKind::RParen) {
+                closed_after_trailing_comma = true;
+                break;
+            }
             if is_variadic {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            if matches!(self.current(), TokenKind::RParen) {
-                return Err(EvalParseError::ExpectedVariable);
-            }
         }
-        self.expect(TokenKind::RParen)?;
+        if !closed_after_trailing_comma {
+            self.expect(TokenKind::RParen)?;
+        }
         Ok(ParsedMethodParams {
             params,
             parameter_attributes,

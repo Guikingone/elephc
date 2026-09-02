@@ -76,6 +76,7 @@ unsafe fn reflection_new_object_inner(
         ctx
     } else {
         fallback_context = ElephcEvalContext::new();
+        crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
         &mut fallback_context
     };
     context.sync_global_eval_classes();

@@ -161,6 +161,7 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emit_x86_64_eval_reflection_source_file(emitter);
     emit_x86_64_eval_reflection_class_flags(emitter);
     emit_x86_64_eval_reflection_class_name(emitter);
+    emit_x86_64_eval_reflection_class_doc_comment(emitter);
     emit_x86_64_eval_reflection_method_flags(emitter);
     emit_x86_64_eval_reflection_method_declaring_class(emitter);
     emit_x86_64_eval_reflection_property_declaring_class(emitter);

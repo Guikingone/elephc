@@ -222,7 +222,16 @@ pub(super) fn eval_dynamic_class_new_object_with_ref_mode(
                 by_ref_mode,
                 context,
                 values,
-            )?;
+            )
+            .map_err(|status| {
+                trace_eval_class_new_error(
+                    "native_parent_constructor",
+                    class.name(),
+                    Some("__construct"),
+                    status,
+                    context,
+                )
+            })?;
         } else {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -242,7 +251,16 @@ pub(super) fn eval_dynamic_class_new_object_with_ref_mode(
                 by_ref_mode,
                 context,
                 values,
-            )?;
+            )
+            .map_err(|status| {
+                trace_eval_class_new_error(
+                    "native_parent_constructor",
+                    class.name(),
+                    Some("__construct"),
+                    status,
+                    context,
+                )
+            })?;
         }
     }
     Ok(object)
@@ -392,6 +410,31 @@ pub(super) fn eval_native_method_call_with_scope(
     result
 }
 
+/// Calls one generated/AOT method with explicit PHP scope and caller-owned result storage.
+pub(super) fn eval_native_method_call_with_scope_out(
+    scope: &str,
+    called_class_scope: Option<&str>,
+    object: RuntimeCellHandle,
+    method_name: &str,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    result: &mut RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    context.push_class_scope(scope.to_string());
+    if let Some(called_class) = called_class_scope {
+        context.push_called_class_scope(called_class.to_string());
+    }
+    let _called_class_override = called_class_scope
+        .map(|called_class| push_native_frame_called_class_override(context, scope, called_class));
+    let call_result = values.method_call_out(object, method_name, evaluated_args, result);
+    if called_class_scope.is_some() {
+        context.pop_called_class_scope();
+    }
+    context.pop_class_scope();
+    call_result
+}
+
 /// Calls one generated/AOT static method while presenting an explicit PHP class scope.
 pub(super) fn eval_native_static_method_call_with_scope(
     scope: &str,
@@ -509,9 +552,14 @@ pub(super) fn eval_dynamic_class_allocate_object(
     if class.is_abstract() || context.has_enum(class.name()) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let backing_class = context
-        .class_native_parent_name(class.name())
-        .unwrap_or_else(|| String::from("stdClass"));
+    let declared_class_name = class.name().trim_start_matches('\\');
+    let backing_class = if values.class_exists(declared_class_name)? {
+        declared_class_name.to_string()
+    } else {
+        context
+            .class_native_parent_name(class.name())
+            .unwrap_or_else(|| String::from("stdClass"))
+    };
     let object = values.new_object(&backing_class).map_err(|status| {
         trace_eval_class_new_error("backing_object", class.name(), None, status, context)
     })?;

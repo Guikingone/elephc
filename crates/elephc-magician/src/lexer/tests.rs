@@ -105,12 +105,58 @@ fn plain_double_quoted_literal_stays_one_string_token() {
     assert_eq!(kinds(r#""plain";"#), vec![string("plain"), TokenKind::Semicolon, TokenKind::Eof]);
 }
 
+/// Verifies PHP doc comments remain parser-visible while ordinary comments stay trivia.
+#[test]
+fn doc_comment_is_retained_as_metadata_token() {
+    assert_eq!(
+        kinds("/** retained */ class Documented {}"),
+        vec![
+            TokenKind::DocComment("/** retained */".to_string()),
+            TokenKind::Ident("class".to_string()),
+            TokenKind::Ident("Documented".to_string()),
+            TokenKind::LBrace,
+            TokenKind::RBrace,
+            TokenKind::Eof,
+        ]
+    );
+}
+
 /// Verifies single-quoted literals never interpolate and stay one token.
 #[test]
 fn single_quoted_literal_never_interpolates() {
     assert_eq!(
         kinds(r#"'$v and {$v}';"#),
         vec![string("$v and {$v}"), TokenKind::Semicolon, TokenKind::Eof]
+    );
+}
+
+/// Verifies a flexible nowdoc is one literal token with PHP indentation stripping.
+#[test]
+fn quoted_nowdoc_is_literal_and_strips_closing_indent() {
+    assert_eq!(
+        kinds("$text = <<<'EOT'\n    $notInterpolated\\n\n    EOT;\n"),
+        vec![
+            var("text"),
+            TokenKind::Equal,
+            string("$notInterpolated\\n"),
+            TokenKind::Semicolon,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+/// Verifies an interpolation-free heredoc shares nowdoc closing and indentation rules.
+#[test]
+fn unquoted_static_heredoc_is_a_literal_token() {
+    assert_eq!(
+        kinds("$text = <<<EOT\n    static text\n    EOT;\n"),
+        vec![
+            var("text"),
+            TokenKind::Equal,
+            string("static text"),
+            TokenKind::Semicolon,
+            TokenKind::Eof,
+        ]
     );
 }
 

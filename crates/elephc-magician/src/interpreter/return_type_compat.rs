@@ -531,7 +531,10 @@ fn eval_return_class_type_is_a(
             .iter()
             .any(|parent| parent.eq_ignore_ascii_case(&expected_resolved));
     }
-    false
+    context
+        .class_parent_names(&actual_resolved)
+        .iter()
+        .any(|parent| parent.eq_ignore_ascii_case(&expected_resolved))
 }
 
 /// Returns whether the pending class declaration satisfies one expected class-like type.

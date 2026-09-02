@@ -73,6 +73,18 @@ second($code);
         native_function_registrations >= 2,
         "both source functions must retain native registration metadata"
     );
+    let metadata_sync_calls = user_asm
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            (line.starts_with("bl ") || line.starts_with("call "))
+                && line.ends_with("__elephc_eval_context_try_sync_aot_metadata")
+        })
+        .count();
+    assert_eq!(
+        metadata_sync_calls, 2,
+        "each generated context must first attempt to import the immutable module metadata"
+    );
     let registration_helper_calls = user_asm
         .lines()
         .filter(|line| {
@@ -5762,6 +5774,89 @@ echo $items["name"];
 "#,
     );
     assert_eq!(out, "Grace");
+}
+
+/// Verifies eval splits a shared native associative array before a keyed mutation.
+#[test]
+fn test_eval_assoc_array_write_preserves_native_by_value_alias() {
+    let out = compile_and_run(
+        r#"<?php
+$items = ["name" => "Ada"];
+$snapshot = $items;
+eval('$items["name"] = "Grace";');
+echo $items["name"] . ":" . $snapshot["name"];
+"#,
+    );
+    assert_eq!(out, "Grace:Ada");
+}
+
+/// Verifies eval splits an associative array it created itself before a keyed mutation.
+#[test]
+fn test_eval_created_assoc_array_write_preserves_by_value_alias() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$items = ["name" => "Ada"]; $snapshot = $items; $items["name"] = "Grace"; echo $items["name"] . ":" . $snapshot["name"];');
+"#,
+    );
+    assert_eq!(out, "Grace:Ada");
+}
+
+/// Verifies an eval-created associative array crosses an AOT `array` parameter as raw hash storage.
+#[test]
+fn test_eval_assoc_array_typed_method_keyed_write_uses_raw_hash_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class ConfigWriter {
+    public function writeConfigEnabled(array $config): string {
+        $config["enabled"] = "changed";
+        return $config["enabled"];
+    }
+}
+$config = eval('return ["enabled" => "old"];');
+echo (new ConfigWriter())->writeConfigEnabled($config) . ":" . $config["enabled"];
+"#,
+    );
+    assert_eq!(out, "changed:old");
+}
+
+/// Verifies eval passes an associative array by reference to an AOT `array` parameter as raw hash storage.
+#[test]
+fn test_eval_assoc_array_by_ref_aot_method_keyed_write_uses_raw_hash_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalConfigWriter {
+    public function write(array &$config): void {
+        $config["enabled"] = "changed";
+    }
+}
+$writer = new EvalConfigWriter();
+eval('$config = ["enabled" => "old"]; $writer->write($config); echo $config["enabled"];');
+"#,
+    );
+    assert_eq!(out, "changed");
+}
+
+/// Verifies eval preserves raw hash representation through nested AOT array calls and by-reference writes.
+#[test]
+fn test_eval_assoc_array_nested_aot_by_ref_write_uses_raw_hash_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalConfigWriter {
+    public function load(array $config): string {
+        $this->write($config["section"]);
+
+        return $config["section"]["enabled"];
+    }
+
+    private function write(array &$config): void {
+        $config["enabled"] = "changed";
+    }
+}
+$writer = new EvalConfigWriter();
+eval('$config = ["section" => ["enabled" => "old"]]; echo $writer->load($config);');
+"#,
+    );
+    assert_eq!(out, "changed");
 }
 
 /// Verifies eval can create and read associative array literals with string keys.
@@ -19680,6 +19775,33 @@ echo get_class_methods("EvalAotOnlyReflectableContract")[0] ?? "none";');
     assert_eq!(out, "H:1:aotlabel");
 }
 
+/// Verifies eval ReflectionClass materializes only members of the selected AOT class.
+#[test]
+fn test_eval_aot_reflection_member_lists_grow_from_matching_members() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotReflectionMemberListParent {}
+
+class EvalAotReflectionMemberListTarget extends EvalAotReflectionMemberListParent {
+    public string $first = "one";
+    private int $second = 2;
+
+    public function __construct(string $value = "") {}
+    public function alpha(string $value): string { return $value; }
+    protected function beta(array $items = []): int { return count($items); }
+    private static function gamma(?object $value = null): bool { return $value === null; }
+}
+
+echo eval('$reflection = new ReflectionClass("EvalAotReflectionMemberListTarget");
+$methods = $reflection->getMethods();
+$properties = $reflection->getProperties();
+echo count($methods) . ":" . $methods[1]->getName() . ":" . count($properties) . ":" . $properties[1]->getName() . ":";
+echo $reflection->getConstructor()->getName() . ":" . $reflection->getParentClass()->getName();');
+"#,
+    );
+    assert_eq!(out, "4:alpha:2:second:__construct:EvalAotReflectionMemberListParent");
+}
+
 /// Verifies eval interface `#[Override]` can target a generated/AOT parent interface.
 #[test]
 fn test_eval_declared_interface_override_attribute_accepts_aot_parent() {
@@ -26535,6 +26657,7 @@ $box = eval('class EvalDestructEscapedBox {
     public function __construct($name) { $this->name = $name; }
     public function __destruct() { echo "drop:" . $this->name . ":"; }
 }
+
 return new EvalDestructEscapedBox("A");');
 echo "before:";
 unset($box);
@@ -26542,6 +26665,136 @@ echo "after";
 "#,
     );
     assert_eq!(out, "before:drop:A:after");
+}
+
+/// Verifies an eval expression statement releases the final fluent AOT object result.
+#[test]
+fn test_eval_discarded_native_fluent_result_runs_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNativeFluentDestructor {
+    public function finish(): static { return $this; }
+    public function __destruct() { echo "drop:"; }
+}
+eval('(static function () { $value = new EvalNativeFluentDestructor(); $value->finish(); })();');
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
+}
+
+/// Verifies an explicit unset releases an AOT object stored in an eval closure scope.
+#[test]
+fn test_eval_closure_unset_native_object_runs_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNativeUnsetDestructor {
+    public function __destruct() { echo "drop:"; }
+}
+eval('(static function () { $value = new EvalNativeUnsetDestructor(); unset($value); })();');
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
+}
+
+/// Verifies an ignored fresh fluent object returned by an AOT factory is finalized in eval.
+#[test]
+fn test_eval_discarded_native_factory_fluent_result_runs_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNativeFactoryFluent {
+    public function finish(): static { return $this; }
+    public function __destruct() { echo "drop:"; }
+}
+class EvalNativeFactory {
+    public function create(): EvalNativeFactoryFluent {
+        $configurator = new EvalNativeFactoryFluent();
+        return $configurator->finish();
+    }
+}
+eval('(static function () { (new EvalNativeFactory())->create(); })();');
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
+}
+
+/// Verifies each temporary receiver in an eval fluent chain is released after its next call.
+#[test]
+fn test_eval_discarded_native_factory_fluent_chain_runs_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNativeFluentChain {
+    public function set(): static { return $this; }
+    public function args(): static { return $this; }
+    public function __destruct() { echo "drop:"; }
+}
+class EvalNativeFluentChainFactory {
+    public function create(): EvalNativeFluentChain {
+        return new EvalNativeFluentChain();
+    }
+}
+eval('(static function () { (new EvalNativeFluentChainFactory())->create()->set()->args(); })();');
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
+}
+
+/// Verifies a dynamic fluent method can transfer its own receiver to the next call safely.
+#[test]
+fn test_eval_discarded_dynamic_fluent_chain_runs_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalDynamicFluentChain {
+    public function set() { return $this; }
+    public function args() { return $this; }
+    public function __destruct() { echo "drop:"; }
+}
+(new EvalDynamicFluentChain())->set()->args();');
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
+}
+
+/// Verifies eval executes a negated assignment on the right side of a logical disjunction.
+#[test]
+fn test_eval_logical_disjunction_negated_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalLogicalAssignmentReceiver {
+    public function isAnonymous(): bool { return false; }
+    public function getClosureCalledClass(): string { return "Named"; }
+}
+eval('$receiver = new EvalLogicalAssignmentReceiver(); if ($receiver->isAnonymous() || !$class = $receiver->getClosureCalledClass()) { echo "unexpected:"; } echo $class;');
+"#,
+    );
+    assert_eq!(out, "Named");
+}
+
+/// Verifies a closure returned by eval finalizes an ignored native fluent result when invoked later.
+#[test]
+fn test_returned_eval_closure_releases_native_fluent_result() {
+    let out = compile_and_run(
+        r#"<?php
+class ReturnedEvalFluent {
+    public function finish(): static { return $this; }
+    public function __destruct() { echo "drop:"; }
+}
+class ReturnedEvalFactory {
+    public function create(): ReturnedEvalFluent {
+        $value = new ReturnedEvalFluent();
+        return $value->finish();
+    }
+}
+$callback = eval('return static function () { (new ReturnedEvalFactory())->create(); };');
+$callback();
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
 }
 
 /// Verifies eval-declared object destructors run when cycle collection releases them.
@@ -27961,6 +28214,23 @@ fn test_eval_barrier_keeps_native_class_exists_for_aot_classes() {
 class EvalNativeClassExistsAot {}
 eval('');
 echo class_exists("evalnativeclassexistsaot") ? "Y" : "N";
+"#,
+    );
+    assert_eq!(out, "Y");
+}
+
+/// Verifies a dynamically sourced eval barrier still sees declared AOT classes without autoloading.
+#[test]
+fn test_dynamic_eval_barrier_keeps_nonliteral_aot_class_exists_without_autoload() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicAotClassExists {}
+function has_aot_class_after_dynamic_eval(mixed $name): bool {
+    return class_exists($name, false);
+}
+$source = '$marker = 1;';
+eval($source);
+echo has_aot_class_after_dynamic_eval(EvalDynamicAotClassExists::class) ? "Y" : "N";
 "#,
     );
     assert_eq!(out, "Y");

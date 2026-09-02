@@ -274,6 +274,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         },
         StmtKind::ClassDecl {
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -285,6 +286,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         constants,
         } => StmtKind::ClassDecl {
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,

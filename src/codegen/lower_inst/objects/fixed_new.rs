@@ -40,6 +40,20 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         && !ctx.module.extern_class_infos.contains_key(&class_name)
         && !ctx.module.packed_class_infos.contains_key(&class_name)
     {
+        if ctx.module.required_runtime_features.eval_bridge {
+            let native_miss_label = ctx.next_label("eval_native_new_miss");
+            let native_done_label = ctx.next_label("eval_native_new_done");
+            builtins::lower_eval_native_object_new_fallback(
+                ctx,
+                inst,
+                &native_miss_label,
+            )?;
+            abi::emit_jump(ctx.emitter, &native_done_label);
+            ctx.emitter.label(&native_miss_label);
+            exceptions::emit_error(ctx, &format!("Class \"{}\" not found", class_name));
+            ctx.emitter.label(&native_done_label);
+            return Ok(());
+        }
         exceptions::emit_error(ctx, &format!("Class \"{}\" not found", class_name));
         return Ok(());
     }

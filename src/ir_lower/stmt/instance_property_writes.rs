@@ -17,6 +17,11 @@ pub(super) fn lower_property_assign(
     value: &Expr,
     span: Span,
 ) {
+    if let Some(default) = property_null_coalesce_assignment_default(value, object, property, span)
+    {
+        lower_statement_property_null_coalesce_assignment(ctx, object, property, default, span);
+        return;
+    }
     // A statically-decided readonly-property write outside the declaring
     // constructor raises a catchable `Error` in PHP rather than a compile-time
     // error, but the object and RHS expressions must still be evaluated first.
@@ -87,6 +92,118 @@ pub(super) fn lower_property_assign(
     if let Some(property_ty) = object_property_type(ctx, object.value, property) {
         release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
     }
+}
+
+/// Returns the lazy default when this statement originated from `property ??= default`.
+///
+/// Statement parsing lowers compound assignments into ordinary expressions, so the shared source
+/// span is the stable marker that distinguishes `??=` from a user-written
+/// `property = property ?? default`. The latter must keep its ordinary assignment semantics.
+fn property_null_coalesce_assignment_default<'a>(
+    value: &'a Expr,
+    object: &Expr,
+    property: &str,
+    span: Span,
+) -> Option<&'a Expr> {
+    if value.span != span {
+        return None;
+    }
+    let ExprKind::NullCoalesce {
+        value: current,
+        default,
+    } = &value.kind
+    else {
+        return None;
+    };
+    let ExprKind::PropertyAccess {
+        object: current_object,
+        property: current_property,
+    } = &current.kind
+    else {
+        return None;
+    };
+    (current_property == property && current_object.as_ref() == object).then_some(default)
+}
+
+/// Lowers a statement-level property `??=` while evaluating its receiver exactly once.
+///
+/// The statement AST historically represents `??=` as a `PropertyAssign` containing a regular
+/// `NullCoalesce` expression. Reusing the expression-level conditional lowering keeps the RHS
+/// lazy and gives the merge the property's concrete storage type; the synthetic local prevents
+/// the read branch and default write from re-evaluating an effectful receiver.
+fn lower_statement_property_null_coalesce_assignment(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    default: &Expr,
+    span: Span,
+) {
+    let object_value = lower_expr(ctx, object);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let object_type = ctx.builder.value_php_type(object_value.value).clone();
+    let property_type = object_property_type(ctx, object_value.value, property);
+    let object_temp = ctx.declare_synthetic_php_local(object_type.clone());
+    ctx.store_local(&object_temp, object_value, object_type, Some(span));
+    let object_expr = Expr::new(ExprKind::Variable(object_temp), span);
+    if property_type
+        .as_ref()
+        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Object(_)))
+    {
+        let object_value = lower_expr(ctx, &object_expr);
+        let property_data = ctx.intern_string(property);
+        let initialized = ctx.emit_value(
+            Op::PropInitialized,
+            vec![object_value.value],
+            Some(Immediate::Data(property_data)),
+            PhpType::Bool,
+            Op::PropInitialized.default_effects(),
+            Some(span),
+        );
+        let assign_block = ctx
+            .builder
+            .create_named_block("coalesce_assign.property_default", Vec::new());
+        let done_block = ctx
+            .builder
+            .create_named_block("coalesce_assign.property_done", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: initialized.value,
+            then_target: done_block,
+            then_args: Vec::new(),
+            else_target: assign_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(assign_block);
+        lower_property_assign(ctx, &object_expr, property, default, span);
+        if !ctx.builder.insertion_block_is_terminated() {
+            branch_to(ctx, done_block);
+        }
+        ctx.builder.position_at_end(done_block);
+        return;
+    }
+    let target = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(object_expr),
+            property: property.to_string(),
+        },
+        span,
+    );
+    let value = Expr::new(
+        ExprKind::NullCoalesce {
+            value: Box::new(target.clone()),
+            default: Box::new(default.clone()),
+        },
+        span,
+    );
+    let _ = crate::ir_lower::expr::lower_conditional_non_local_null_coalesce_assignment(
+        ctx,
+        None,
+        &target,
+        &value,
+        None,
+        &value,
+    );
 }
 
 /// Lowers a direct backing-slot write without invoking magic methods or property set hooks.

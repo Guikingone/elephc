@@ -409,6 +409,97 @@ fn test_eval_keeps_user_function_observable() {
     assert_eq!(out, "eval");
 }
 
+/// Verifies an eval bridge does not eagerly lower unrelated Reflection implementations.
+#[test]
+fn test_eval_bridge_keeps_only_aot_referenced_reflection_methods() {
+    let dir = make_cli_test_dir("elephc_decl_reach_eval_reflection");
+    let (user_asm, _, _) = compile_source_to_asm_with_options(
+        "<?php
+        class ReflectionEvalTarget {}
+        eval('function reflection_eval_bridge_target(): void {}');
+        echo (new ReflectionClass(ReflectionEvalTarget::class))->getName();
+        ",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(
+        user_asm.contains(&elephc::names::method_symbol("ReflectionClass", "getname")),
+        "the directly called ReflectionClass method must remain"
+    );
+    assert!(
+        !user_asm.contains(&elephc::names::method_symbol("ReflectionParameter", "getdefaultvalue")),
+        "an eval bridge must not eagerly lower unrelated Reflection methods"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an AOT Reflection query remains executable when an eval bridge is present.
+#[test]
+fn test_eval_bridge_keeps_aot_reflection_query_runnable() {
+    let out = compile_and_run(
+        "<?php
+        class ReflectionEvalRuntimeTarget {}
+        eval('function reflection_eval_runtime_target(): void {}');
+        echo (new ReflectionClass(ReflectionEvalRuntimeTarget::class))->getName();
+        ",
+    );
+    assert_eq!(out, "ReflectionEvalRuntimeTarget");
+}
+
+/// Verifies Reflection first-class callables retain their selected AOT method under eval.
+#[test]
+fn test_eval_bridge_keeps_reflection_first_class_callable_target() {
+    let dir = make_cli_test_dir("elephc_decl_reach_eval_reflection_callable");
+    let (user_asm, _, _) = compile_source_to_asm_with_options(
+        "<?php
+        class ReflectionCallableTarget {
+            public function render(string $value): string { return 'value:' . $value; }
+        }
+        eval('function reflection_eval_callable_target(): void {}');
+        $method = new ReflectionMethod(ReflectionCallableTarget::class, 'render');
+        $callable = $method->invoke(...);
+        ",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(
+        user_asm.contains(&elephc::names::method_symbol("ReflectionMethod", "invoke")),
+        "the first-class callable target must retain ReflectionMethod::invoke"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies Mixed string contexts retain reachable Reflection string-conversion methods.
+#[test]
+fn test_eval_bridge_keeps_reflection_mixed_string_methods() {
+    let dir = make_cli_test_dir("elephc_decl_reach_eval_reflection_string");
+    let (user_asm, _, _) = compile_source_to_asm_with_options(
+        "<?php
+        function reflection_mixed_string_target(int $value): void {}
+        eval('function reflection_eval_string_target(): void {}');
+        if ($argc > 0) {
+            $value = new ReflectionParameter('reflection_mixed_string_target', 'value');
+        } else {
+            $value = 'fallback';
+        }
+        echo $value;
+        ",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(
+        user_asm.contains(&elephc::names::method_symbol("ReflectionParameter", "__tostring")),
+        "a Mixed string context must retain ReflectionParameter::__toString"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies unserialize retains class metadata and the class's implicit wakeup hook.
 #[test]
 fn test_unserialize_keeps_user_class_and_magic_method() {

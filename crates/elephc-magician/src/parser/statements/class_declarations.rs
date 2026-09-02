@@ -12,13 +12,30 @@ use super::*;
 impl Parser {
     /// Parses `[abstract|final|readonly] class Name [extends Parent] [implements Iface, ...] { ... }`.
     pub(in crate::parser) fn parse_class_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
-        self.parse_class_decl_stmt_with_attributes(Vec::new())
+        self.parse_class_decl_stmt_with_attributes_and_doc_comment(Vec::new(), None)
+    }
+
+    /// Parses a class declaration preceded by a retained PHP doc comment.
+    pub(in crate::parser) fn parse_class_decl_stmt_with_doc_comment(
+        &mut self,
+        doc_comment: Option<String>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_class_decl_stmt_with_attributes_and_doc_comment(Vec::new(), doc_comment)
     }
 
     /// Parses a class declaration and attaches already parsed class attributes.
     pub(in crate::parser) fn parse_class_decl_stmt_with_attributes(
         &mut self,
         attributes: Vec<EvalAttribute>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_class_decl_stmt_with_attributes_and_doc_comment(attributes, None)
+    }
+
+    /// Parses a class declaration and attaches already parsed attributes and doc-comment metadata.
+    fn parse_class_decl_stmt_with_attributes_and_doc_comment(
+        &mut self,
+        attributes: Vec<EvalAttribute>,
+        doc_comment: Option<String>,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let (is_abstract, is_final, is_readonly_class) = self.parse_class_decl_modifiers()?;
         if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "class")) {
@@ -47,7 +64,8 @@ impl Parser {
                 body.methods,
             )
             .with_source_location(source_location)
-            .with_attributes(attributes),
+            .with_attributes(attributes)
+            .with_doc_comment_option(doc_comment),
         )])
     }
 
@@ -114,6 +132,10 @@ impl Parser {
         let mut traits = Vec::new();
         let mut trait_adaptations = Vec::new();
         loop {
+            if matches!(self.current(), TokenKind::DocComment(_)) {
+                self.advance();
+                continue;
+            }
             if matches!(self.current(), TokenKind::RBrace) {
                 let source_end_line = self.current_line();
                 self.advance();

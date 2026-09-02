@@ -466,6 +466,49 @@ fn execute_program_include_uses_call_site_and_returns_file_result() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Verifies ReflectionClass sees an inherited method after runtime includes declare each class.
+#[test]
+fn execute_program_reflection_has_method_follows_runtime_include_parent() {
+    let dir = std::env::temp_dir().join(format!(
+        "elephc-magician-reflection-inherited-include-{}",
+        std::process::id()
+    ));
+    let parent_path = dir.join("parent.php");
+    let child_path = dir.join("child.php");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create inherited include fixture directory");
+    std::fs::write(
+        &parent_path,
+        r#"<?php class EvalIncludedParent { public function inherited(): void {} }"#,
+    )
+    .expect("write dynamic parent fixture");
+    std::fs::write(
+        &child_path,
+        r#"<?php include "parent.php"; class EvalIncludedChild extends EvalIncludedParent {}"#,
+    )
+    .expect("write dynamic child fixture");
+    let program = parse_fragment(
+        br#"include "child.php"; $ref = new ReflectionClass("EvalIncludedChild"); echo $ref->hasMethod("inherited") ? "yes" : "no"; return true;"#,
+    )
+    .expect("parse inherited reflection include fragment");
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site(
+        dir.join("main.php").to_string_lossy().into_owned(),
+        dir.to_string_lossy().into_owned(),
+        1,
+    );
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute inherited reflection include fragment");
+
+    assert_eq!(values.output, "yes");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Verifies regular include marks a file so later include_once skips it and returns true.
 #[test]
 fn execute_program_include_once_skips_regularly_included_file() {

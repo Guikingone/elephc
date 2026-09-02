@@ -255,9 +255,29 @@ impl ElephcEvalScope {
         owned_cells_except([previous_source, previous_target], cell)
     }
 
+    /// Rebinds one reference variable to fresh storage without changing prior aliases.
+    pub fn rebind_reference(
+        &mut self,
+        name: impl Into<String>,
+        cell: RuntimeCellHandle,
+        ownership: ScopeCellOwnership,
+    ) -> Option<RuntimeCellHandle> {
+        self.bump_generation();
+        let previous = self.entries.insert(
+            name.into(),
+            ScopeEntry::reference(cell, ownership, self.generation),
+        );
+        owned_cell_except(previous, cell)
+    }
+
     /// Records the caller-side storage target for one by-reference local variable.
     pub fn set_reference_target(&mut self, name: impl Into<String>, target: EvalReferenceTarget) {
         self.reference_targets.insert(name.into(), target);
+    }
+
+    /// Removes the persistent caller-side target associated with one local reference.
+    pub fn remove_reference_target(&mut self, name: &str) -> Option<EvalReferenceTarget> {
+        self.reference_targets.remove(name)
     }
 
     /// Returns the caller-side storage target associated with one by-reference local.

@@ -17,6 +17,9 @@ pub(super) fn lower_reflection_class_new_instance(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if ctx.web {
+        ctx.declare_eval_context_local();
+    }
     let args = reflection_class_new_instance_args(args);
     let constructor_sig =
         reflection_class_new_instance_constructor_signature(ctx, object_expr, &args).cloned();

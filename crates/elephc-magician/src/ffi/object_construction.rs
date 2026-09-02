@@ -7,6 +7,7 @@
 //! - Generated EIR backend assembly through `__elephc_eval_new_object`.
 //! - Generated EIR backend assembly through `__elephc_eval_try_new_object`.
 //! - Generated EIR backend assembly through `__elephc_eval_method_call`.
+//! - Generated EIR backend assembly through `__elephc_eval_property_get`.
 //! - Generated EIR backend assembly through `__elephc_eval_static_method_call`.
 //!
 //! Key details:
@@ -48,10 +49,10 @@ pub unsafe extern "C" fn __elephc_eval_new_object(
 /// Attempts to construct an eval-declared class with positional cells.
 ///
 /// # Safety
-/// `ctx` must be a valid eval context handle. `name_ptr` must be readable for
-/// `name_len` bytes when `name_len > 0`. `args` must be readable for
-/// `arg_count` runtime-cell pointers when `arg_count > 0`, and `out` may be null.
-/// Returns -1 when the class name is not declared in the eval context.
+/// `ctx` may be null to query request-global registered autoload contexts. `name_ptr` must be
+/// readable for `name_len` bytes when `name_len > 0`. `args` must be readable for `arg_count`
+/// runtime-cell pointers when `arg_count > 0`, and `out` may be null. Returns -1 when no
+/// context can materialize the class name.
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_try_new_object(
@@ -89,6 +90,26 @@ pub unsafe extern "C" fn __elephc_eval_method_call(
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe {
         eval_method_call_inner(ctx, object, method_ptr, method_len, arg_pack, out)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Reads a property from an object that is owned by the active eval context.
+///
+/// # Safety
+/// `ctx` must be a live eval context. `object` must point at a boxed runtime cell,
+/// `property_ptr` must be readable for `property_len` bytes, and `out` may be null.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_property_get(
+    ctx: *mut ElephcEvalContext,
+    object: *mut RuntimeCell,
+    property_ptr: *const u8,
+    property_len: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_property_get_inner(ctx, object, property_ptr, property_len, out)
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
@@ -184,16 +205,99 @@ unsafe fn eval_new_object_inner(
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_new_object_outcome(context, &name, args, &mut values) {
-        Ok(outcome) => write_outcome(outcome, out).code(),
-        Err(status) => status.code(),
+        Ok(outcome) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!("[elephc-eval-trace] phase=new_object_ok class={name:?}");
+            }
+            write_outcome(outcome, out).code()
+        }
+        Err(status) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=new_object_error class={name:?} status={status:?}",
+                );
+            }
+            status.code()
+        }
+    }
+}
+
+/// Tries retained request-global callback owners, then published AOT metadata, for null-context construction.
+///
+/// A dynamically constructed object stores its owning context for later method calls and
+/// destruction, so dynamic classes must execute in the callback owner's context rather than a
+/// temporary context. AOT classes have no dynamic owner and can safely use a metadata-only
+/// fallback context after every retained owner declines the name.
+#[cfg(not(test))]
+unsafe fn eval_try_new_object_from_global_autoload_contexts(
+    name: &str,
+    args: &[RuntimeCellHandle],
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    for owner in crate::context::global_eval_autoload_contexts_snapshot() {
+        let Some(context) = owner.as_mut() else {
+            continue;
+        };
+        if context.abi_version() != ABI_VERSION {
+            continue;
+        }
+        let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+        match interpreter::execute_context_try_new_object_outcome(
+            context,
+            name,
+            args.to_vec(),
+            &mut values,
+        ) {
+            Ok(Some(outcome)) => {
+                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                    eprintln!("[elephc-eval-trace] phase=try_new_object_ok class={name:?}");
+                }
+                return write_outcome(outcome, out).code();
+            }
+            Ok(None) => {}
+            Err(status) => {
+                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=try_new_object_error class={name:?} status={status:?}",
+                    );
+                }
+                return status.code();
+            }
+        }
+    }
+
+    let mut fallback_context = ElephcEvalContext::new();
+    crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
+    let mut values = ElephcRuntimeOps::with_context(&fallback_context);
+    match interpreter::execute_context_try_new_object_outcome(
+        &mut fallback_context,
+        name,
+        args.to_vec(),
+        &mut values,
+    ) {
+        Ok(Some(outcome)) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!("[elephc-eval-trace] phase=try_new_object_ok class={name:?}");
+            }
+            write_outcome(outcome, out).code()
+        }
+        Ok(None) => -1,
+        Err(status) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=try_new_object_error class={name:?} status={status:?}",
+                );
+            }
+            status.code()
+        }
     }
 }
 
 /// Runs the dynamic object-construction probe ABI body after installing a panic boundary.
 ///
 /// # Safety
-/// Mirrors `__elephc_eval_try_new_object`; callers must provide a valid context,
-/// readable class-name bytes, and readable argument pointer storage.
+/// Mirrors `__elephc_eval_try_new_object`; the context may be null for request-global
+/// autoload lookup, while class-name bytes and argument pointer storage must remain readable.
 #[cfg(not(test))]
 unsafe fn eval_try_new_object_inner(
     ctx: *mut ElephcEvalContext,
@@ -203,12 +307,6 @@ unsafe fn eval_try_new_object_inner(
     arg_count: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
-    let Some(context) = ctx.as_mut() else {
-        return EvalStatus::RuntimeFatal.code();
-    };
-    if context.abi_version() != ABI_VERSION {
-        return EvalStatus::AbiMismatch.code();
-    }
     let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return EvalStatus::RuntimeFatal.code();
     };
@@ -227,11 +325,29 @@ unsafe fn eval_try_new_object_inner(
             .collect()
     };
     clear_result(out);
+    let Some(context) = ctx.as_mut() else {
+        return eval_try_new_object_from_global_autoload_contexts(&name, &args, out);
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_try_new_object_outcome(context, &name, args, &mut values) {
-        Ok(Some(outcome)) => write_outcome(outcome, out).code(),
+        Ok(Some(outcome)) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!("[elephc-eval-trace] phase=try_new_object_ok class={name:?}");
+            }
+            write_outcome(outcome, out).code()
+        }
         Ok(None) => -1,
-        Err(status) => status.code(),
+        Err(status) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=try_new_object_error class={name:?} status={status:?}",
+                );
+            }
+            status.code()
+        }
     }
 }
 
@@ -362,24 +478,40 @@ unsafe fn eval_method_call_inner(
     let Ok(method) = abi_name_to_string(method_ptr, method_len) else {
         return EvalStatus::RuntimeFatal.code();
     };
-    let context = if let Some(context) = ctx.as_mut() {
-        context
-    } else {
+    let caller_context = (!ctx.is_null()).then_some(ctx);
+    let dynamic_owner = {
         let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
-        let Ok(identity) = values.object_identity(object) else {
-            return -1;
-        };
-        let owner = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity);
-        let Some(owner) = owner else {
-            return -1;
-        };
-        let Some(context) = owner.as_mut() else {
-            return -1;
-        };
-        context
+        values
+            .object_identity(object)
+            .ok()
+            .and_then(crate::ffi::dynamic_destructors::dynamic_object_owner_context)
+    };
+    let context = dynamic_owner.or(caller_context);
+    let Some(context) = context else {
+        return -1;
+    };
+    let Some(context) = context.as_mut() else {
+        return -1;
     };
     if context.abi_version() != ABI_VERSION {
         return EvalStatus::AbiMismatch.code();
+    }
+    let forwarded_scopes = caller_context
+        .filter(|caller| !std::ptr::eq(*caller, context))
+        .and_then(|caller| unsafe { caller.as_ref() })
+        .map(|caller| {
+            (
+                caller.current_class_scope().map(str::to_string),
+                caller.current_called_class_scope().map(str::to_string),
+            )
+        });
+    if let Some((class_scope, called_class_scope)) = &forwarded_scopes {
+        if let Some(class_scope) = class_scope {
+            context.push_class_scope(class_scope.clone());
+        }
+        if let Some(called_class_scope) = called_class_scope {
+            context.push_called_class_scope(called_class_scope.clone());
+        }
     }
     let arg_count = *arg_pack;
     let arg_ptrs = arg_pack.add(1) as *const *mut RuntimeCell;
@@ -403,13 +535,22 @@ unsafe fn eval_method_call_inner(
             call_site.2,
         );
     }
-    match interpreter::execute_context_method_call_outcome(
+    let outcome = interpreter::execute_context_method_call_outcome(
         context,
         object,
         &method,
         args,
         &mut values,
-    ) {
+    );
+    if let Some((class_scope, called_class_scope)) = forwarded_scopes {
+        if called_class_scope.is_some() {
+            context.pop_called_class_scope();
+        }
+        if class_scope.is_some() {
+            context.pop_class_scope();
+        }
+    }
+    match outcome {
         Ok(outcome) => write_outcome(outcome, out).code(),
         Err(status) => {
             if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
@@ -424,5 +565,43 @@ unsafe fn eval_method_call_inner(
             }
             status.code()
         }
+    }
+}
+
+/// Runs the eval property-read ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_property_get`; callers must provide a live context,
+/// a boxed object cell, readable property-name bytes, and optional result storage.
+#[cfg(not(test))]
+unsafe fn eval_property_get_inner(
+    ctx: *mut ElephcEvalContext,
+    object: *mut RuntimeCell,
+    property_ptr: *const u8,
+    property_len: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    if object.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    let Ok(property) = abi_name_to_string(property_ptr, property_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    clear_result(out);
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    match interpreter::execute_context_property_get_outcome(
+        context,
+        RuntimeCellHandle::from_raw(object),
+        &property,
+        &mut values,
+    ) {
+        Ok(outcome) => write_outcome(outcome, out).code(),
+        Err(status) => status.code(),
     }
 }

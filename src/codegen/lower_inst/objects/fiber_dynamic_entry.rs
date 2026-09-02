@@ -9,6 +9,9 @@
 
 use super::*;
 
+/// Keeps the direct AOT fast path bounded when the eval bridge can materialize class strings.
+const EVAL_DYNAMIC_NEW_AOT_CANDIDATE_LIMIT: usize = 24;
+
 /// Lowers `new Fiber($callable)` through the runtime-managed Fiber constructor.
 pub(super) fn lower_fiber_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let class_id = ctx
@@ -170,11 +173,22 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
     let fallback_label = ctx.next_label("dynamic_new_mixed_fallback");
-    let candidates = dynamic_new_mixed_candidates(
-        ctx,
-        (!uses_runtime_arg_container).then_some(constructor_args.len()),
-        inst,
-    )?;
+    let eval_bridge_available = builtins::has_eval_context(ctx)
+        || ctx.module.required_runtime_features.eval_bridge;
+    let defer_aot_candidates_to_eval = !uses_runtime_arg_container
+        && eval_bridge_available
+        && dynamic_new_mixed_aot_candidate_count(ctx) > EVAL_DYNAMIC_NEW_AOT_CANDIDATE_LIMIT;
+    let candidates = if defer_aot_candidates_to_eval {
+        // The eval bridge preserves positional constructor arguments without emitting one
+        // compare-and-constructor block per unrelated AOT class in the module.
+        Vec::new()
+    } else {
+        dynamic_new_mixed_candidates(
+            ctx,
+            (!uses_runtime_arg_container).then_some(constructor_args.len()),
+            inst,
+        )?
+    };
     let case_labels = candidates
         .iter()
         .map(|candidate| {
@@ -200,7 +214,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     }
 
     ctx.emitter.label(&fallback_label);
-    if builtins::has_eval_context(ctx) {
+    if eval_bridge_available {
         let eval_miss_label = ctx.next_label("dynamic_new_mixed_eval_miss");
         builtins::lower_eval_object_new_dynamic_fallback(ctx, inst, &eval_miss_label)?;
         ctx.store_result_value(result)?;

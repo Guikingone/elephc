@@ -118,9 +118,11 @@ fn eval_array_walk_ref_result_from_scope(
         let current_array = eval_reference_target_value(&array_target, context, values)?;
         let key = values.array_iter_key(current_array, position)?;
         let value = values.array_get(current_array, key)?;
+        let reference_key =
+            eval_array_reference_key(key, values)?.ok_or(EvalStatus::RuntimeFatal)?;
         let ref_target = EvalReferenceTarget::NestedArrayElement {
             array_target: Box::new(array_target.clone()),
-            index: key,
+            index: reference_key,
         };
         let args = vec![
             EvaluatedCallArg {

@@ -122,6 +122,7 @@ struct EvalReflectionClassMetadata {
     resolved_name: String,
     source_location: Option<EvalSourceLocation>,
     attributes: Vec<EvalAttribute>,
+    doc_comment: Option<String>,
     flags: u64,
     modifiers: u64,
     interface_names: Vec<String>,

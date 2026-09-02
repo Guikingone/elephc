@@ -56,8 +56,9 @@ pub(in crate::interpreter) fn release_overridden_control(
         EvalControl::Return(value) | EvalControl::Throw(value) => values.release(value),
         EvalControl::None
         | EvalControl::ReturnVoid
-        | EvalControl::Break
-        | EvalControl::Continue => Ok(()),
+        | EvalControl::Break(_)
+        | EvalControl::Continue(_)
+        | EvalControl::Goto(_) => Ok(()),
     }
 }
 

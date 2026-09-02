@@ -44,6 +44,7 @@ pub(super) enum IncludeValueCapture {
 /// - `declared_once`: tracks files already processed; updated on return
 /// - `include_chain`: current include path for cycle detection; must not contain `canonical`
 /// - State (`namespace`, `const_imports`) is saved before recursion and restored after
+/// - `preserve_return`: retains a top-level included-file return only when its value is consumed
 /// - Returns `None` if the file does not exist and `required` is false, or if a once file was already included
 /// - For `once`: wraps body in `IncludeOnceGuard` with the file's label
 /// - For non-once: emits `IncludeOnceMark` before the body for later once/require_once checks
@@ -57,6 +58,7 @@ pub(super) fn resolve_include_stmt(
     include_chain: &mut Vec<PathBuf>,
     state: &mut ResolveState,
     function_variants: &FunctionVariantRegistry,
+    preserve_return: bool,
 ) -> Result<Option<Vec<Stmt>>, CompileError> {
     let path_str =
         fold_include_path(path, state).map_err(|msg| CompileError::new(stmt.span, &msg))?;
@@ -108,8 +110,11 @@ pub(super) fn resolve_include_stmt(
     include_chain.pop();
 
     let include_label = include_once_label(&canonical);
-    let executable =
+    let mut executable =
         strip_discoverable_declarations(resolved_stmts, Some(&canonical), function_variants);
+    if !preserve_return {
+        discard_statement_include_return(&mut executable);
+    }
     if once {
         // Declaration discovery already hoisted compile-time declarations;
         // executable include body statements are guarded so runtime order matches PHP.
@@ -195,6 +200,7 @@ pub(super) fn expand_value_include(
         include_chain,
         state,
         function_variants,
+        true,
     )?;
 
     let mut out = Vec::new();
@@ -233,6 +239,28 @@ pub(super) fn expand_value_include(
         }
     }
     Ok(out)
+}
+
+/// Converts a top-level included-file return into its side-effecting expression.
+///
+/// A statement-position include discards its value: `return E` stops the included
+/// file after evaluating `E`, but must not return from the caller that contains the
+/// include. The resolver inlines static includes, so it must restore that boundary
+/// before lowerings see the caller's statements.
+fn discard_statement_include_return(body: &mut Vec<Stmt>) {
+    for index in 0..body.len() {
+        if !matches!(body[index].kind, StmtKind::Return(_)) {
+            continue;
+        }
+        let span = body[index].span;
+        let placeholder = Stmt::new(StmtKind::Synthetic(Vec::new()), span);
+        let original = std::mem::replace(&mut body[index], placeholder);
+        if let StmtKind::Return(Some(value)) = original.kind {
+            body[index] = Stmt::new(StmtKind::ExprStmt(value), span);
+        }
+        body.truncate(index + 1);
+        return;
+    }
 }
 
 /// Builds a `<temp> = <value>;` assignment statement for the hidden include temporary.

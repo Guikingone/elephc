@@ -11,16 +11,21 @@ use super::*;
 
 /// Lowers a `break` terminator.
 pub(super) fn lower_break(ctx: &mut LoweringContext<'_, '_>, level: usize) {
-    let Some(frame) = loop_target(ctx, level) else {
+    let Some((target_loop_index, frame)) = loop_target(ctx, level) else {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
-    terminate_branch(ctx, frame.break_block, loop_cleanup_count_for_branch(level));
+    terminate_branch(
+        ctx,
+        frame.break_block,
+        loop_cleanup_count_for_branch(level),
+        target_loop_index,
+    );
 }
 
 /// Lowers a `continue` terminator.
 pub(super) fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
-    let Some(frame) = loop_target(ctx, level) else {
+    let Some((target_loop_index, frame)) = loop_target(ctx, level) else {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
@@ -28,6 +33,7 @@ pub(super) fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         ctx,
         frame.continue_block,
         loop_cleanup_count_for_branch(level),
+        target_loop_index,
     );
 }
 
@@ -76,8 +82,10 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
         return;
     }
     let value = coerce_to_return_type(ctx, value, Some(span));
-    let value = acquire_borrowed_return_value(ctx, value, span);
     let value = acquire_returned_this(ctx, value_expr, value, span);
+    // `return $this` has already acquired the borrowed receiver above. Other borrowed
+    // loads still need the general retain before their frame storage is cleaned up.
+    let value = acquire_borrowed_return_value(ctx, value, span);
     let value = persist_scratch_return_string(ctx, value, span);
     terminate_return(ctx, Some(value.value));
 }
@@ -162,6 +170,7 @@ pub(super) fn acquire_borrowed_return_value(
             Op::ArrayGet
                 | Op::HashGet
                 | Op::HashGetSilent
+                | Op::LoadLocal
                 | Op::PropGet
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
@@ -181,19 +190,26 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
         }
         return;
     }
+    emit_try_handler_pops_for_return(ctx);
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
     ctx.emit_eval_scope_finalizer(None);
     ctx.builder.terminate(Terminator::Return { value });
 }
 
 /// Terminates with a branch after running active finally bodies from inner to outer.
-pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cleanup_count: usize) {
+pub(super) fn terminate_branch(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: BlockId,
+    loop_cleanup_count: usize,
+    target_loop_index: usize,
+) {
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_branch(ctx, target, loop_cleanup_count);
+            terminate_branch(ctx, target, loop_cleanup_count, target_loop_index);
         }
         return;
     }
+    emit_try_handler_pops_for_branch(ctx, target_loop_index);
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
     ctx.builder.terminate(Terminator::Br {
         target,

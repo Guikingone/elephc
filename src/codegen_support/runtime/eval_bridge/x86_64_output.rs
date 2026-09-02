@@ -214,6 +214,10 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move the C boxed value argument into mixed truthiness input
     emitter.instruction("jmp __rt_mixed_cast_bool");                            // cast one boxed mixed value to PHP truthiness for eval
 
+    label_c_global(emitter, "__elephc_eval_value_copy");
+    emitter.instruction("mov rax, rdi");                                        // move the C boxed value argument into the internal Mixed clone register
+    emitter.instruction("jmp __rt_mixed_clone");                                // detach a PHP by-value assignment cell while retaining its payload ownership
+
     label_c_global(emitter, "__elephc_eval_value_retain");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal retain register
     emitter.instruction("jmp __rt_incref");                                     // retain one eval-owned boxed Mixed cell

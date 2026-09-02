@@ -44,6 +44,9 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
         if let Some(value) = context.static_property(&declaring_class, property.name()) {
             return Ok(value);
         }
+        if property.property_type().is_none() {
+            return values.null();
+        }
         return eval_throw_uninitialized_static_property_error(
             &declaring_class,
             property.name(),

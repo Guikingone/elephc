@@ -10,16 +10,19 @@
 use super::*;
 
 impl ElephcEvalContext {
-    /// Defines generated AOT parent metadata for eval `parent::` resolution.
+    /// Registers generated AOT parent metadata without replacing an existing hierarchy edge.
     pub fn define_native_class_parent(&mut self, class_name: &str, parent_name: &str) -> bool {
         let class_key = normalize_class_name(class_name);
         let parent_name = parent_name.trim_start_matches('\\');
         if class_key.is_empty() || parent_name.is_empty() {
             return false;
         }
+        if let Some(existing_parent) = self.native_class_parents.get(&class_key) {
+            return existing_parent.eq_ignore_ascii_case(parent_name);
+        }
         self.native_class_parents
-            .insert(class_key, parent_name.to_string())
-            .is_none()
+            .insert(class_key, parent_name.to_string());
+        true
     }
 
     /// Returns generated AOT parent metadata by PHP class name.

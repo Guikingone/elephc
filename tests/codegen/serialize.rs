@@ -262,6 +262,102 @@ echo serialize(["k" => new Point()]), "\n";
     );
 }
 
+/// Verifies object ownership survives storage in an array property returned by a method before serialization.
+#[test]
+fn test_serialize_object_from_array_property_method_result() {
+    let out = compile_and_run(
+        r#"<?php
+class StoredEntry { public int $id = 7; }
+
+class ObjectRegistry {
+    private array $entries = [];
+
+    public function put(string $name, StoredEntry $entry): StoredEntry {
+        return $this->entries[$name] = $entry;
+    }
+
+    public function all(): array {
+        return $this->entries;
+    }
+}
+
+$registry = new ObjectRegistry();
+$entry = new StoredEntry();
+$registry->put("entry", $entry);
+unset($entry);
+echo serialize($registry->all());
+"#,
+    );
+    assert_eq!(out, "a:1:{s:5:\"entry\";O:11:\"StoredEntry\":1:{s:2:\"id\";i:7;}}");
+}
+
+/// Verifies a direct function retains its returned object parameter for the caller.
+#[test]
+fn test_serialize_returned_object_function_parameter_survives_caller_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class ReturnEntry { public int $id = 7; }
+
+function relay_function(ReturnEntry $entry): ReturnEntry {
+    return $entry;
+}
+
+$functionEntry = new ReturnEntry();
+$functionResult = relay_function($functionEntry);
+unset($functionEntry);
+echo serialize($functionResult), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "O:11:\"ReturnEntry\":1:{s:2:\"id\";i:7;}\n",
+    );
+}
+
+/// Verifies a static method retains its returned object parameter for the caller.
+#[test]
+fn test_serialize_returned_object_static_method_parameter_survives_caller_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticReturnEntry { public int $id = 7; }
+
+class StaticRelay {
+    public static function relay(StaticReturnEntry $entry): StaticReturnEntry {
+        return $entry;
+    }
+}
+
+$entry = new StaticReturnEntry();
+$result = StaticRelay::relay($entry);
+unset($entry);
+echo serialize($result);
+"#,
+    );
+    assert_eq!(out, "O:17:\"StaticReturnEntry\":1:{s:2:\"id\";i:7;}");
+}
+
+/// Verifies an instance method retains its returned object parameter for the caller.
+#[test]
+fn test_serialize_returned_object_method_parameter_survives_caller_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class MethodReturnEntry { public int $id = 7; }
+
+class InstanceRelay {
+    public function relay(MethodReturnEntry $entry): MethodReturnEntry {
+        return $entry;
+    }
+}
+
+$entry = new MethodReturnEntry();
+$result = (new InstanceRelay())->relay($entry);
+unset($entry);
+echo serialize($result);
+"#,
+    );
+    assert_eq!(out, "O:17:\"MethodReturnEntry\":1:{s:2:\"id\";i:7;}");
+}
+
 /// Verifies `unserialize()` reconstructs objects: a `Point` round-trips with a
 /// readable public property and byte-identical re-serialization (proving the
 /// protected/private slots survived), mixed-typed and inherited properties

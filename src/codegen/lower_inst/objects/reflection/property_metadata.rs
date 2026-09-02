@@ -46,6 +46,7 @@ pub(super) fn reflection_property_metadata_for_name(
             );
             Some(ReflectionOwnerMetadata {
                 reflected_name: Some(property_name.clone()),
+                doc_comment: None,
                 attr_names: info
                     .property_attribute_names
                     .get(&property_name)

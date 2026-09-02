@@ -17,6 +17,11 @@ pub(crate) fn lower_class_like_exists(
 ) -> Result<()> {
     ensure_arg_count_between(inst, name, 1, 2)?;
     let value = expect_operand(inst, 0)?;
+    if matches!(name, "class_exists" | "interface_exists" | "trait_exists" | "enum_exists")
+        && ctx.module.required_runtime_features.eval_bridge
+    {
+        return lower_bridge_class_like_exists(ctx, inst, value, name);
+    }
     if let Some(symbol_name) = maybe_const_string_operand(ctx, value)? {
         let exists = match name {
             "class_exists" => contains_folded(
@@ -35,6 +40,50 @@ pub(crate) fn lower_class_like_exists(
     } else {
         lower_dynamic_class_like_exists(ctx, name, value)?;
     }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers class-like existence through the eval bridge when AOT code can register SPL loaders.
+///
+/// A function compiled before an `eval` call does not own an eval-context local, yet PHP still
+/// requires its later `class_exists()` call to invoke request-global SPL callbacks. Passing a null
+/// context selects the bridge's temporary lookup context, which checks generated metadata and
+/// then dispatches those callbacks without depending on any framework-specific loader.
+fn lower_bridge_class_like_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    name: &str,
+) -> Result<()> {
+    const BRIDGE_STACK_BYTES: usize = 16;
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_reserve_temporary_stack(ctx.emitter, BRIDGE_STACK_BYTES);
+    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+    let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let name_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let autoload_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_load_int_immediate(ctx.emitter, context_arg, 0);
+    if name_arg != ptr_reg {
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", name_arg, ptr_reg));
+    }
+    if name_len_arg != len_reg {
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", name_len_arg, len_reg));
+    }
+    if let Some(&autoload) = inst.operands.get(1) {
+        ctx.load_value_to_reg(autoload, autoload_arg)?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, autoload_arg, 1);
+    }
+    let symbol = ctx.emitter.target.extern_symbol(&format!(
+        "__elephc_eval_dynamic_{}",
+        name
+    ));
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, BRIDGE_STACK_BYTES);
     store_if_result(ctx, inst)
 }
 
@@ -187,6 +236,10 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
             emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_object");
         }
         PhpType::Mixed | PhpType::Union(_) => {
+            if ctx.module.required_runtime_features.eval_bridge {
+                emit_eval_owned_is_callable_or_runtime(ctx, value)?;
+                return store_if_result(ctx, inst);
+            }
             ctx.load_value_to_result(value)?;
             emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_mixed");
         }
@@ -209,6 +262,53 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Tests a boxed Mixed callback through its retained eval Closure owner before native fallback.
+///
+/// A Closure returned by runtime include/eval can outlive the AOT frame that created its context.
+/// The native mixed predicate cannot inspect Magician's closure registry, so recover the owning
+/// context by object identity first; ordinary runtime values retain the existing native path.
+fn emit_eval_owned_is_callable_or_runtime(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    const CONTEXT_OFFSET: usize = 0;
+    const CALLBACK_OFFSET: usize = 16;
+    const SCRATCH_BYTES: usize = 32;
+
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    let owner_missing = ctx.next_label("eval_owned_is_callable_runtime");
+    let done = ctx.next_label("eval_owned_is_callable_done");
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    ctx.load_value_to_result(value)?;
+    abi::emit_store_to_sp(ctx.emitter, &result_reg, CALLBACK_OFFSET);
+    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, CALLBACK_OFFSET);
+    let owner_symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_callable_owner_context");
+    abi::emit_call_label(ctx.emitter, &owner_symbol);
+    abi::emit_store_to_sp(ctx.emitter, &result_reg, CONTEXT_OFFSET);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &owner_missing);
+
+    let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, context_arg, CONTEXT_OFFSET);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, CALLBACK_OFFSET);
+    let is_callable_symbol = ctx.emitter.target.extern_symbol("__elephc_eval_is_callable");
+    abi::emit_call_label(ctx.emitter, &is_callable_symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&owner_missing);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, CALLBACK_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_mixed");
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Calls the runtime `is_callable` helper for pointer-shaped values already in result regs.

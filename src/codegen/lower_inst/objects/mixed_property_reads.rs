@@ -238,6 +238,9 @@ pub(super) fn lower_mixed_prop_get(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
+    if builtins::has_eval_context(ctx) {
+        return builtins::lower_eval_property_get(ctx, inst, object, property);
+    }
     let candidates = declared_mixed_property_candidates(ctx, property, inst)?;
     if !candidates.is_empty() {
         return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates);

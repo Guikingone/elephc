@@ -44,7 +44,7 @@ enum BuiltInRecipe {
 /// Resolves a package and immutable recipe revision to its built-in executor.
 fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
     match (package, revision) {
-        ("pcre2", 3) => Some(BuiltInRecipe::Pcre2),
+        ("pcre2", 4) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         _ => None,
     }
@@ -86,9 +86,14 @@ mod tests {
         }
     }
 
-    /// Verifies the revised PCRE2 shim is not reused under its previous recipe identity.
+    /// Verifies the revised PCRE2 shim is not reused under any previous recipe identity.
+    ///
+    /// Revision 4 added the name-table accessors the named-capture matches array is built from.
+    /// A cached revision-3 archive lacks those symbols, so reusing that identity would link an
+    /// object whose `elephc_pcre2_v1_group_name` is simply absent.
     #[test]
-    fn previous_pcre2_recipe_revision_is_not_dispatched() {
+    fn previous_pcre2_recipe_revisions_are_not_dispatched() {
         assert!(built_in_recipe("pcre2", 2).is_none());
+        assert!(built_in_recipe("pcre2", 3).is_none());
     }
 }

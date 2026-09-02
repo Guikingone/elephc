@@ -124,8 +124,14 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
             values,
         ),
     };
+    let cleanup_result = release_activation_scope(
+        &mut function_scope,
+        return_result.as_ref().ok().copied(),
+        context,
+        values,
+    );
     context.pop_function();
-    return_result
+    merge_activation_result(return_result, cleanup_result)
 }
 
 /// Evaluates one runtime eval closure after callback arguments preserve names and ref targets.
@@ -436,12 +442,45 @@ fn eval_closure_with_optional_binding(
             values,
         ),
     };
+    let cleanup_result = release_activation_scope(
+        &mut function_scope,
+        return_result.as_ref().ok().copied(),
+        context,
+        values,
+    );
     if bound_class_pushed {
         context.pop_called_class_scope();
         context.pop_class_scope();
     }
     context.pop_function();
-    return_result
+    merge_activation_result(return_result, cleanup_result)
+}
+
+/// Releases owned activation locals while transferring an explicitly returned cell to the caller.
+fn release_activation_scope(
+    scope: &mut ElephcEvalScope,
+    returned: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for value in scope.drain_owned_cells() {
+        if Some(value) != returned {
+            eval_release_value(context, values, value)?;
+        }
+    }
+    Ok(())
+}
+
+/// Preserves the execution failure while surfacing cleanup failure after an otherwise valid return.
+fn merge_activation_result<T>(
+    result: Result<T, EvalStatus>,
+    cleanup: Result<(), EvalStatus>,
+) -> Result<T, EvalStatus> {
+    match (result, cleanup) {
+        (Err(status), _) => Err(status),
+        (Ok(_), Err(status)) => Err(status),
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }
 
 /// Returns the PHP class name used as the bound scope for `Closure::call()`.
@@ -602,16 +641,21 @@ fn visit_static_var_declarations(
                 visit_static_var_declarations(finally_body, seen, visitor);
             }
             EvalStmt::ArrayAppendVar { .. }
+            | EvalStmt::ArrayAppend { .. }
+            | EvalStmt::ArrayAppendReferenceBind { .. }
             | EvalStmt::ArrayDestructure { .. }
+            | EvalStmt::ArrayReferenceBind { .. }
             | EvalStmt::ArraySetVar { .. }
-            | EvalStmt::Break
+            | EvalStmt::Break(_)
             | EvalStmt::ClassDecl(_)
-            | EvalStmt::Continue
+            | EvalStmt::Continue(_)
             | EvalStmt::Echo(_)
             | EvalStmt::EnumDecl(_)
             | EvalStmt::Expr(_)
             | EvalStmt::Global { .. }
+            | EvalStmt::Goto(_)
             | EvalStmt::InterfaceDecl(_)
+            | EvalStmt::Label(_)
             | EvalStmt::DynamicPropertyArrayAppend { .. }
             | EvalStmt::DynamicPropertyArraySet { .. }
             | EvalStmt::DynamicPropertyCompoundAssign { .. }

@@ -39,6 +39,9 @@ pub fn emit_hash_new(emitter: &mut Emitter) {
     emitter.comment("--- runtime: hash_new ---");
     emitter.label_global("__rt_hash_new");
 
+    abi::emit_symbol_address(emitter, "x9", "_heap_stats_hash_origin");
+    emitter.instruction("str x30, [x9]");                                       // retain the immediate hash-construction caller for terminal allocation diagnostics
+
     // -- validate the requested allocation size before touching the heap --
     emitter.instruction("cmp x0, #0");                                          // is the requested capacity negative?
     emitter.instruction("csel x10, x0, xzr, ge");                               // clamp negative capacities to an empty entries region
@@ -119,6 +122,9 @@ fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: hash_new ---");
     emitter.label_global("__rt_hash_new");
 
+    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // capture the hash-construction call-site return address before creating the local frame
+    abi::emit_symbol_address(emitter, "r11", "_heap_stats_hash_origin");
+    emitter.instruction("mov QWORD PTR [r11], r10");                            // retain the immediate hash-construction caller for terminal allocation diagnostics
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-construction spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved capacity and value-type metadata
     emitter.instruction("sub rsp, 16");                                         // reserve local slots for capacity and value_type across the malloc call
@@ -169,4 +175,31 @@ fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");                                          // exit code 1 for an unrepresentable hash size
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // terminate the process after reporting the hash-size failure
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies every target retains the hash-construction call site before nested allocation calls.
+    #[test]
+    fn hash_new_captures_call_origin_for_heap_exhaustion_diagnostics() {
+        for (target, expected_capture) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "str x30, [x9]",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "mov r10, QWORD PTR [rsp]",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_hash_new(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("_heap_stats_hash_origin"), "{target:?}: origin slot missing");
+            assert!(asm.contains(expected_capture), "{target:?}: origin capture missing");
+        }
+    }
 }

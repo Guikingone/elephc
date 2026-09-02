@@ -40,7 +40,7 @@ mod is_subclass_of;
 mod isset;
 mod method_exists;
 mod property_exists;
-mod spl_autoload;
+pub(crate) mod spl_autoload;
 mod spl_autoload_call;
 mod spl_autoload_extensions;
 mod spl_autoload_functions;
@@ -68,3 +68,6 @@ pub(in crate::interpreter) use is_callable::{
     eval_is_callable_value,
 };
 pub(in crate::interpreter) use method_exists::eval_member_exists_result;
+pub(crate) use spl_autoload::eval_spl_autoload_class;
+pub(crate) use spl_autoload::eval_spl_autoload_classlike_definition;
+pub(crate) use spl_autoload_register::register_spl_autoload_callback_unchecked;

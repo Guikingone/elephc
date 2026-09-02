@@ -11,6 +11,7 @@
 //! - Control-flow joins can reload locals from slots, so Phase 03 does not need
 //!   to synthesize block-parameter phis for every PHP variable yet.
 
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::{
@@ -61,6 +62,15 @@ pub(crate) struct FinallyFrame {
     pub handler_cleanup: Option<(i64, Span)>,
 }
 
+/// Active `try` handler that must be unlinked when control leaves its protected body.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TryHandlerFrame {
+    pub handler_token: i64,
+    pub span: Span,
+    /// Number of surrounding loop targets when the protected body began.
+    pub loop_depth: usize,
+}
+
 /// Compile-time callable target tracked for straight-line local FCC calls.
 #[derive(Debug, Clone)]
 pub(crate) enum StaticCallableBinding {
@@ -106,6 +116,7 @@ pub(crate) struct LoweringSnapshot {
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
     finally_stack: Vec<FinallyFrame>,
+    try_handler_stack: Vec<TryHandlerFrame>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     reflection_class_locals: HashMap<String, String>,
     reflection_function_locals: HashMap<String, String>,
@@ -174,6 +185,38 @@ const EVAL_GLOBAL_SCOPE_LOCAL_NAME: &str = "__eir_eval_global_scope";
 const EVAL_ARGC_LOCAL_NAME: &str = "argc";
 const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 
+thread_local! {
+    static RUNTIME_DYNAMIC_FUNCTION_RESOLUTION: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Scoped lowering setting for programs that preserve runtime include/eval execution.
+///
+/// A checked program can contain an AOT method whose function call is declared only after a
+/// dynamic include runs in another frame. The setting is thread-local because lowering runs in
+/// parallel test threads; its guard restores the previous nested-lowering value on drop.
+pub(crate) struct RuntimeDynamicFunctionResolutionGuard {
+    previous: bool,
+}
+
+impl Drop for RuntimeDynamicFunctionResolutionGuard {
+    /// Restores the enclosing lowering invocation's dynamic-function policy.
+    fn drop(&mut self) {
+        RUNTIME_DYNAMIC_FUNCTION_RESOLUTION.with(|enabled| enabled.set(self.previous));
+    }
+}
+
+/// Enables dynamic function-owner fallback for one complete program-lowering invocation.
+pub(crate) fn enable_runtime_dynamic_function_resolution(
+    enabled: bool,
+) -> RuntimeDynamicFunctionResolutionGuard {
+    let previous = RUNTIME_DYNAMIC_FUNCTION_RESOLUTION.with(|current| {
+        let previous = current.get();
+        current.set(enabled);
+        previous
+    });
+    RuntimeDynamicFunctionResolutionGuard { previous }
+}
+
 /// Mutable state for one function body while it is lowered.
 pub(crate) struct LoweringContext<'m, 'f> {
     pub builder: Builder<'f>,
@@ -224,6 +267,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
     pub finally_stack: Vec<FinallyFrame>,
+    pub try_handler_stack: Vec<TryHandlerFrame>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     reflection_class_locals: HashMap<String, String>,
     reflection_function_locals: HashMap<String, String>,
@@ -341,6 +385,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             current_class,
             loop_stack: Vec::new(),
             finally_stack: Vec::new(),
+            try_handler_stack: Vec::new(),
             static_callable_locals: HashMap::new(),
             reflection_class_locals: HashMap::new(),
             reflection_function_locals: HashMap::new(),
@@ -388,6 +433,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
             finally_stack: self.finally_stack.clone(),
+            try_handler_stack: self.try_handler_stack.clone(),
             static_callable_locals: self.static_callable_locals.clone(),
             reflection_class_locals: self.reflection_class_locals.clone(),
             reflection_function_locals: self.reflection_function_locals.clone(),
@@ -426,6 +472,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
         self.finally_stack = snapshot.finally_stack;
+        self.try_handler_stack = snapshot.try_handler_stack;
         self.static_callable_locals = snapshot.static_callable_locals;
         self.reflection_class_locals = snapshot.reflection_class_locals;
         self.reflection_function_locals = snapshot.reflection_function_locals;
@@ -991,7 +1038,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     .get(name)
                     .copied()
                     .unwrap_or(LocalKind::PhpLocal);
-                (kind == LocalKind::PhpLocal).then_some((name.clone(), *slot))
+                (kind == LocalKind::PhpLocal && name != "this").then_some((name.clone(), *slot))
             })
             .collect::<Vec<_>>();
         for (name, slot) in local_names {
@@ -1005,7 +1052,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .get(&name)
                 .copied()
                 .unwrap_or(LocalKind::PhpLocal);
-            if kind == LocalKind::PhpLocal && eval_barrier_can_widen(&ty) {
+            if kind == LocalKind::PhpLocal && name != "this" && eval_barrier_can_widen(&ty) {
                 self.local_types.insert(name, PhpType::Mixed);
             }
         }
@@ -1089,6 +1136,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns true after this function has lowered an `eval()` call.
     pub(crate) const fn has_eval_barrier(&self) -> bool {
         self.eval_barrier_active
+    }
+
+    /// Returns whether another dynamic include/eval frame may declare a callable function.
+    pub(crate) fn can_resolve_runtime_dynamic_functions(&self) -> bool {
+        RUNTIME_DYNAMIC_FUNCTION_RESOLUTION.with(Cell::get)
     }
 
     /// Records that an `eval()` call was lowered, even when its fragment
@@ -2300,6 +2352,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owned_index_read_temp(value) {
             return true;
         }
+        if self.value_is_borrowed_gradual_nominal_guard(value.value) {
+            return false;
+        }
         if self.value_is_borrowed_user_call_result(value.value) {
             return false;
         }
@@ -2634,6 +2689,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
             return false;
         };
+        // Parameters borrow their caller's refcounted payload. Returning one must therefore
+        // pass through `acquire_borrowed_return_value()` instead of treating the load as a
+        // movable local owner. Mutable array parameters first rebind to a non-parameter COW
+        // shadow slot, so that independent owner remains eligible below.
+        if self.builder.local_is_parameter(slot) {
+            return false;
+        }
         if !matches!(
             self.builder.local_kind(slot),
             LocalKind::PhpLocal | LocalKind::StaticLocal
@@ -2653,6 +2715,32 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
             && matches!(result_type, PhpType::Callable)
+    }
+
+    /// Returns whether a nullable nominal guard forwards its input Mixed cell unchanged.
+    ///
+    /// A gradual object-or-null parameter guard validates the tag and class, then returns the
+    /// original boxed cell when the declared ABI remains Mixed. That result borrows the caller's
+    /// local; only a guard that narrows to a concrete object acquires an independent payload
+    /// reference. Treating this forwarding `RuntimeCall` as owned makes parent-constructor calls
+    /// release the callee parameter's backing cell while a typed property still stores it.
+    fn value_is_borrowed_gradual_nominal_guard(&self, value: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(value) else {
+            return false;
+        };
+        if inst.op != Op::RuntimeCall
+            || !matches!(inst.immediate, Some(Immediate::NominalObject { .. }))
+            || !matches!(self.builder.value_php_type(value).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        {
+            return false;
+        }
+        let Some(source) = inst.operands.first().copied() else {
+            return false;
+        };
+        matches!(
+            self.builder.value_php_type(source).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
     }
 
     /// Returns whether a generic cast owns a detached string copy of a Mixed operand.

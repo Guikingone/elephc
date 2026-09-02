@@ -175,14 +175,17 @@ fn lower_array_unshift_args(
         return operands;
     };
     let element = element.codegen_repr();
-    if element == PhpType::Mixed
-        || operands.iter().skip(1).all(|value| {
+    let values_already_fit = operands.iter().skip(1).all(|value| {
             let value = ctx.builder.value_php_type(*value).codegen_repr();
             value == element
                 || (matches!(element, PhpType::Void | PhpType::Never)
                     && matches!(value, PhpType::Int | PhpType::Bool))
-        })
-    {
+        });
+    // `array<mixed>` is a semantic label, not proof that an empty property/default array has
+    // already been stamped with boxed-Mixed slots at runtime. Normalize it before prepending so a
+    // gradual value cannot be stored as a raw pointer in the empty array's scalar layout. The
+    // runtime helper checks tag 7 and is a no-op for arrays that are already normalized.
+    if element != PhpType::Mixed && values_already_fit {
         return operands;
     }
     let target = PhpType::Array(Box::new(PhpType::Mixed));

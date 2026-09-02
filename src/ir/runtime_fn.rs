@@ -469,6 +469,7 @@ pub enum RuntimeFnId {
     Strpos,
     Strripos,
     Strrpos,
+    Strpbrk,
     Strspn,
     Strtr,
     Strstr,
@@ -978,6 +979,7 @@ impl RuntimeFnId {
             | RuntimeFnId::Strpos
             | RuntimeFnId::Strripos
             | RuntimeFnId::Strrpos
+            | RuntimeFnId::Strpbrk
             | RuntimeFnId::SubstrCount
             | RuntimeFnId::BaseConvert
             | RuntimeFnId::ChunkSplit
@@ -1506,6 +1508,7 @@ impl RuntimeFnId {
                 // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
                 | RuntimeFnId::Strstr
                 | RuntimeFnId::Strrchr
+                | RuntimeFnId::Strpbrk
                 // `tempnam(directory, prefix)` returns the generated path that `mkstemp()`
                 // wrote into a buffer `__rt_tempnam` allocated itself, then copied out with
                 // `__rt_str_persist` — it is neither of its two argument strings. This was the
@@ -1971,6 +1974,7 @@ impl RuntimeFnId {
             RuntimeFnId::Strpos => "strpos",
             RuntimeFnId::Strripos => "strripos",
             RuntimeFnId::Strrpos => "strrpos",
+            RuntimeFnId::Strpbrk => "strpbrk",
             RuntimeFnId::Strspn => "strspn",
             RuntimeFnId::Strtr => "strtr",
             RuntimeFnId::Strstr => "strstr",

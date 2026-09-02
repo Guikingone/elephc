@@ -34,10 +34,39 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let tag = values.type_tag(object).ok();
+        if !matches!(tag, Some(EVAL_TAG_OBJECT)) {
+            let call_site = context.call_site();
+            eprintln!(
+                "[elephc-eval-trace] phase=method_call_non_object method={method_name:?} tag={tag:?} file={:?} line={}",
+                call_site.0,
+                call_site.2,
+            );
+        }
+    }
     let Ok(identity) = values.object_identity(object) else {
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            let call_site = context.call_site();
+            eprintln!(
+                "[elephc-eval-trace] phase=method_call_non_object method={method_name:?} tag={:?} file={:?} line={}",
+                values.type_tag(object).ok(),
+                call_site.0,
+                call_site.2,
+            );
+        }
         let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
         return values.method_call(object, method_name, evaluated_args);
     };
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let dynamic_class = context
+            .dynamic_object_class(identity)
+            .map(|class| class.name().to_string());
+        let runtime_class = runtime_object_class_name(object, values).ok();
+        eprintln!(
+            "[elephc-eval-trace] phase=method_dispatch method={method_name:?} identity={identity} dynamic_class={dynamic_class:?} runtime_class={runtime_class:?}",
+        );
+    }
     if let Some(target) = context.closure_object_target(identity).cloned() {
         if let Some(result) =
             eval_closure_object_method_result(target, method_name, evaluated_args.clone(), context, values)?
@@ -136,6 +165,24 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         return Ok(result);
     }
     if let Some(result) = eval_reflection_class_source_location_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_class_lazy_relation_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_class_name_result(
         identity,
         method_name,
         evaluated_args.clone(),
@@ -282,6 +329,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         return Ok(result);
     }
     if let Some(result) = eval_reflection_function_method_metadata_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_property_name_result(
         identity,
         method_name,
         evaluated_args.clone(),

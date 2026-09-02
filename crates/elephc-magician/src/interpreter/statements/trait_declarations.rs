@@ -26,6 +26,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
+    ensure_eval_interface_parents_available(interface.parents(), context, values)?;
     for parent in interface.parents() {
         if context
             .interface_parent_names(parent)
@@ -56,6 +57,30 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
     }
 }
 
+/// Loads missing parent interfaces before registering an eval interface declaration.
+///
+/// PHP resolves every `extends` target through the normal SPL autoload chain at declaration
+/// time. The callback can execute in another request-global eval context, so synchronize the
+/// local declaration registry before requiring that the resolved symbol is an interface.
+fn ensure_eval_interface_parents_available(
+    parents: &[String],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for parent in parents {
+        if context.has_interface(parent) || eval_runtime_interface_exists(parent, values)? {
+            continue;
+        }
+        crate::interpreter::eval_spl_autoload_classlike_definition(parent, context, values)?;
+        #[cfg(not(test))]
+        context.sync_global_eval_classes();
+        if !context.has_interface(parent) && !eval_runtime_interface_exists(parent, values)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
 /// Registers an eval-declared trait in the dynamic trait table.
 pub(in crate::interpreter) fn execute_trait_decl_stmt(
     trait_decl: &EvalTrait,
@@ -68,14 +93,14 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
         || context.has_class(name)
         || context.has_interface(name)
         || context.has_enum(name)
-        || values.trait_exists(name)?
+        || (values.trait_exists(name)? && !context.executing_include())
         || values.class_exists(name)?
         || eval_runtime_interface_exists(name, values)?
         || values.enum_exists(name)?
     {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let trait_decl = expand_eval_trait_traits(trait_decl, context)?;
+    let trait_decl = expand_eval_trait_traits(trait_decl, context, values)?;
     validate_eval_trait_attribute_targets(&trait_decl)?;
     validate_eval_declared_constants(trait_decl.constants())?;
     validate_eval_magic_methods(trait_decl.methods())?;
@@ -95,11 +120,13 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
 /// Expands nested eval trait uses into the trait metadata registered by eval.
 pub(super) fn expand_eval_trait_traits(
     trait_decl: &EvalTrait,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<EvalTrait, EvalStatus> {
     if trait_decl.traits().is_empty() {
         return Ok(trait_decl.clone());
     }
+    ensure_eval_traits_available(trait_decl.traits(), context, values)?;
     validate_eval_trait_decl_adaptations(trait_decl, context)?;
     let trait_method_names = trait_method_name_set(trait_decl);
     let mut imported_method_names = std::collections::HashSet::new();
@@ -235,11 +262,13 @@ pub(super) fn eval_trait_used_trait_decl<'a>(
 /// Expands eval trait uses into the class metadata used by dynamic dispatch.
 pub(super) fn expand_eval_class_traits(
     class: &EvalClass,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<EvalClass, EvalStatus> {
     if class.traits().is_empty() {
         return Ok(class.clone());
     }
+    ensure_eval_traits_available(class.traits(), context, values)?;
     validate_eval_trait_adaptations(class, context)?;
     let class_method_names = class_method_name_set(class);
     let mut trait_method_names = std::collections::HashSet::new();
@@ -293,6 +322,34 @@ pub(super) fn expand_eval_class_traits(
         expanded = expanded.with_anonymous();
     }
     Ok(expanded)
+}
+
+/// Loads every trait required by a pending dynamic declaration before composition.
+///
+/// Trait declarations execute at class-declaration time in PHP, so a missing trait first runs the
+/// regular SPL callback chain. The context is then synchronized because a foreign callback owner
+/// can have included the trait.
+fn ensure_eval_traits_available(
+    traits: &[String],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for trait_name in traits {
+        if context.trait_decl(trait_name).is_some() {
+            continue;
+        }
+        crate::interpreter::eval_spl_autoload_classlike_definition(
+            trait_name,
+            context,
+            values,
+        )?;
+        #[cfg(not(test))]
+        context.sync_global_eval_classes();
+        if context.trait_decl(trait_name).is_none() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
 }
 
 /// Validates that trait adaptations reference used traits and existing methods.

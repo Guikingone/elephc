@@ -9,6 +9,82 @@
 
 use crate::support::*;
 
+/// Verifies every heap allocation starts on a 16-byte boundary on each supported target.
+#[test]
+fn test_gc_heap_alloc_aligns_odd_sized_payloads() {
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _heap_free_list@PAGE
+    add x9, x9, _heap_free_list@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _heap_small_bins@PAGE
+    add x9, x9, _heap_small_bins@PAGEOFF
+    stp xzr, xzr, [x9]
+    stp xzr, xzr, [x9, #16]
+    mov x0, #9
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #9
+    bl __rt_heap_alloc
+    ldr x9, [sp]
+    and x10, x9, #15
+    and x11, x0, #15
+    orr x10, x10, x11
+    sub x11, x0, x9
+    cmp x11, #32
+    cset x11, eq
+    cmp x10, #0
+    cset x10, eq
+    and x0, x10, x11
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#
+        }
+        Arch::X86_64 => {
+            r#"    lea r9, [rip + _heap_off]
+    mov QWORD PTR [r9], 0
+    lea r9, [rip + _heap_free_list]
+    mov QWORD PTR [r9], 0
+    lea r9, [rip + _heap_small_bins]
+    mov QWORD PTR [r9], 0
+    mov QWORD PTR [r9 + 8], 0
+    mov QWORD PTR [r9 + 16], 0
+    mov QWORD PTR [r9 + 24], 0
+    mov eax, 9
+    call __rt_heap_alloc
+    push rax
+    mov eax, 9
+    call __rt_heap_alloc
+    mov r9, QWORD PTR [rsp]
+    mov r10, r9
+    and r10, 15
+    mov r11, rax
+    and r11, 15
+    or r10, r11
+    sub rax, r9
+    cmp rax, 32
+    sete al
+    movzx eax, al
+    cmp r10, 0
+    sete r10b
+    movzx r10, r10b
+    and rax, r10
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall"#
+        }
+    };
+
+    let out = compile_harness_and_run("<?php", 256, harness);
+    assert_eq!(out, "1");
+}
+
 /// Verifies GC heap free coalesces adjacent freed blocks into a single larger block.
 /// Allocates two 2000-element arrays, frees them with unset, then allocates a 3000-element array
 /// to confirm the freed adjacent blocks are merged and reused.

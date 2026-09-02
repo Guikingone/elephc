@@ -17,6 +17,10 @@ pub enum EvalExpr {
         array: Box<EvalExpr>,
         index: Box<EvalExpr>,
     },
+    ArrayDestructureAssign {
+        targets: Vec<Option<String>>,
+        value: Box<EvalExpr>,
+    },
     Call {
         name: String,
         args: Vec<EvalCallArg>,
@@ -170,6 +174,10 @@ pub enum EvalExpr {
         op: EvalBinOp,
         value: Box<EvalExpr>,
     },
+    PostfixIncDec {
+        target: Box<EvalExpr>,
+        increment: bool,
+    },
     Assign {
         target: Box<EvalExpr>,
         value: Box<EvalExpr>,
@@ -294,6 +302,7 @@ pub enum EvalConst {
     Int(i64),
     Float(f64),
     String(String),
+    Bytes(Vec<u8>),
 }
 
 /// PHP magic constants supported by runtime eval fragments.
@@ -338,13 +347,14 @@ pub enum EvalBinOp {
     Spaceship,
 }
 
-/// Scalar cast targets supported by runtime eval expressions.
+/// Cast targets supported by runtime eval expressions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalCastType {
     Int,
     Float,
     String,
     Bool,
+    Array,
 }
 
 /// Unary operations supported by the initial EvalIR parser.

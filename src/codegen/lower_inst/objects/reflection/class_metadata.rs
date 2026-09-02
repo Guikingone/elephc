@@ -105,6 +105,7 @@ pub(super) fn reflection_class_metadata_for_name(
         let is_iterable = reflection_class_is_iterable(info, is_enum);
         return Ok(ReflectionOwnerMetadata {
             reflected_name: Some(class_name.to_string()),
+            doc_comment: info.doc_comment.clone(),
             attr_names: info.attribute_names.clone(),
             attr_args: info.attribute_args.clone(),
             interface_names: info.interfaces.clone(),
@@ -174,6 +175,7 @@ pub(super) fn reflection_class_metadata_for_name(
         let constructor_member = reflection_constructor_member(&method_members);
         return Ok(ReflectionOwnerMetadata {
             reflected_name: Some(interface_name.to_string()),
+            doc_comment: None,
             attr_names: Vec::new(),
             attr_args: Vec::new(),
             interface_names: reflection_interface_parent_names(ctx, interface_name),
@@ -248,6 +250,7 @@ pub(super) fn reflection_class_metadata_for_name(
         let constructor_member = reflection_constructor_member(&method_members);
         return Ok(ReflectionOwnerMetadata {
             reflected_name: Some(trait_name.to_string()),
+            doc_comment: None,
             attr_names: Vec::new(),
             attr_args: Vec::new(),
             interface_names: Vec::new(),
@@ -326,6 +329,11 @@ pub(super) fn reflection_source_file_class_metadata_for_name(
     };
     let mut metadata = empty_reflection_metadata();
     metadata.reflected_name = Some(class_name.to_string());
+    metadata.doc_comment = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .and_then(|class| class.doc_comment.clone());
     Ok(metadata)
 }
 
@@ -399,6 +407,7 @@ fn reflection_direct_shallow_class_metadata_for_name(
         )?;
         let mut metadata = empty_reflection_metadata();
         metadata.reflected_name = Some(class_name.to_string());
+        metadata.doc_comment = info.doc_comment.clone();
         metadata.attr_names = info.attribute_names.clone();
         metadata.attr_args = info.attribute_args.clone();
         metadata.interface_names = info.interfaces.clone();

@@ -77,6 +77,7 @@ pub(in crate::interpreter) fn set_reference_alias(
     source: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let source_reference_target = scope.reference_target(source).cloned();
     if let Some(global_name) = scope.global_alias_target(source).map(str::to_string) {
         scope.mark_global_alias_to(target.to_string(), global_name);
         return Ok(Vec::new());
@@ -87,7 +88,13 @@ pub(in crate::interpreter) fn set_reference_alias(
             || values.null().map(|cell| (cell, ScopeCellOwnership::Owned)),
             |entry| Ok((entry.cell(), entry.flags().ownership)),
         )?;
-    Ok(scope.set_reference(target.to_string(), source.to_string(), cell, ownership))
+    let replaced = scope.set_reference(target.to_string(), source.to_string(), cell, ownership);
+    if let Some(source_reference_target) = source_reference_target {
+        scope.set_reference_target(target.to_string(), source_reference_target);
+    } else {
+        scope.remove_reference_target(target);
+    }
+    Ok(replaced)
 }
 
 /// Unsets a variable, removing only the local alias when the name is global.

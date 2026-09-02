@@ -164,6 +164,8 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
         Arch::AArch64 => {
             let already_hash = ctx.next_label("array_to_hash_already_hash");
             let convert = ctx.next_label("array_to_hash_convert");
+            let boxed_mixed = (result_value_ty == PhpType::Mixed)
+                .then(|| ctx.next_label("array_to_hash_boxed_mixed"));
             let done = ctx.next_label("array_to_hash_done");
             ctx.load_value_to_reg(array, "x0")?;
             abi::emit_push_reg(ctx.emitter, "x0");
@@ -172,6 +174,10 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             ctx.emitter.instruction(&format!("b.eq {}", already_hash));         // reuse already-promoted hashes without reinterpreting them as indexed arrays
             ctx.emitter.instruction("cmp x0, #2");                              // check whether the source is still indexed-array storage
             ctx.emitter.instruction(&format!("b.eq {}", convert));              // convert indexed arrays to hash storage
+            if let Some(boxed_mixed) = &boxed_mixed {
+                ctx.emitter.instruction("cmp x0, #5");                          // boxed Mixed cells need value-level conversion before hash normalization
+                ctx.emitter.instruction(&format!("b.eq {}", boxed_mixed));      // avoid passing the Mixed wrapper where a raw hash payload is required
+            }
             ctx.emitter.label(&already_hash);
             abi::emit_pop_reg(ctx.emitter, "x0");
             if result_value_ty == PhpType::Mixed {
@@ -228,11 +234,20 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             if result_value_ty == PhpType::Mixed {
                 abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
             }
+            if let Some(boxed_mixed) = &boxed_mixed {
+                ctx.emitter.instruction(&format!("b {}", done));                // keep ordinary indexed-array promotion out of the boxed-Mixed conversion arm
+                ctx.emitter.label(boxed_mixed);
+                abi::emit_pop_reg(ctx.emitter, "x0");
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash"); // detach a raw Mixed-entry hash from the boxed dynamic array value
+                ctx.emitter.instruction(&format!("b {}", done));                // the owned hash already has the requested Mixed entry representation
+            }
             ctx.emitter.label(&done);
         }
         Arch::X86_64 => {
             let already_hash = ctx.next_label("array_to_hash_already_hash");
             let convert = ctx.next_label("array_to_hash_convert");
+            let boxed_mixed = (result_value_ty == PhpType::Mixed)
+                .then(|| ctx.next_label("array_to_hash_boxed_mixed"));
             let done = ctx.next_label("array_to_hash_done");
             ctx.load_value_to_reg(array, "rax")?;
             abi::emit_push_reg(ctx.emitter, "rax");
@@ -241,6 +256,10 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             ctx.emitter.instruction(&format!("je {}", already_hash));           // reuse already-promoted hashes without reinterpreting them as indexed arrays
             ctx.emitter.instruction("cmp rax, 2");                              // check whether the source is still indexed-array storage
             ctx.emitter.instruction(&format!("je {}", convert));                // convert indexed arrays to hash storage
+            if let Some(boxed_mixed) = &boxed_mixed {
+                ctx.emitter.instruction("cmp rax, 5");                          // boxed Mixed cells need value-level conversion before hash normalization
+                ctx.emitter.instruction(&format!("je {}", boxed_mixed));        // avoid passing the Mixed wrapper where a raw hash payload is required
+            }
             ctx.emitter.label(&already_hash);
             abi::emit_pop_reg(ctx.emitter, "rax");
             if result_value_ty == PhpType::Mixed {
@@ -298,6 +317,13 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             if result_value_ty == PhpType::Mixed {
                 ctx.emitter.instruction("mov rdi, rax");                        // pass the promoted hash to the Mixed-entry conversion helper
                 abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            }
+            if let Some(boxed_mixed) = &boxed_mixed {
+                ctx.emitter.instruction(&format!("jmp {}", done));              // keep ordinary indexed-array promotion out of the boxed-Mixed conversion arm
+                ctx.emitter.label(boxed_mixed);
+                abi::emit_pop_reg(ctx.emitter, "rdi");
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash"); // detach a raw Mixed-entry hash from the boxed dynamic array value
+                ctx.emitter.instruction(&format!("jmp {}", done));              // the owned hash already has the requested Mixed entry representation
             }
             ctx.emitter.label(&done);
         }

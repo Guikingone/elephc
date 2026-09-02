@@ -193,6 +193,9 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_truthy");
     emitter.instruction("b __rt_mixed_cast_bool");                              // cast one boxed mixed value to PHP truthiness for eval
 
+    label_c_global(emitter, "__elephc_eval_value_copy");
+    emitter.instruction("b __rt_mixed_clone");                                  // detach a PHP by-value assignment cell while retaining its payload ownership
+
     label_c_global(emitter, "__elephc_eval_value_retain");
     emitter.instruction("b __rt_incref");                                       // retain one eval-owned boxed Mixed cell
 

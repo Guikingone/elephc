@@ -153,6 +153,7 @@ unsafe fn execute_parsed_eval(
         ctx
     } else {
         fallback_context = ElephcEvalContext::new();
+        crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
         &mut fallback_context
     };
     let mut fallback_scope;

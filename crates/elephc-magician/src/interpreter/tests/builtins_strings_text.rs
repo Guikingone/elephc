@@ -172,6 +172,31 @@ return function_exists("strrchr");"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `strpbrk()` returns a first-member suffix, `false`, and a catchable error.
+#[test]
+fn execute_program_dispatches_strpbrk_builtin() {
+    let program = parse_fragment(
+        br#"echo strpbrk("abc123", "32"); echo ":";
+echo strpbrk(string: "abc", characters: "z") === false ? "F" : "bad"; echo ":";
+echo strpbrk("a".chr(0)."b", chr(0)); echo ":";
+echo call_user_func("strpbrk", "abcabc", "bc"); echo ":";
+echo call_user_func_array("strpbrk", ["string" => "abc", "characters" => "b"]); echo ":";
+try { strpbrk("abc", ""); } catch (ValueError $error) { echo get_class($error), ":", $error->getMessage(); }
+return function_exists("strpbrk");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "23:F:\0b:bcabc:bc:ValueError:strpbrk(): Argument #2 ($characters) must be a non-empty string"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval prefix/suffix string search builtins use byte-string semantics.
 #[test]
 fn execute_program_dispatches_string_boundary_builtins() {

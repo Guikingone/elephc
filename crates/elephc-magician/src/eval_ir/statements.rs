@@ -16,6 +16,10 @@ pub enum EvalStmt {
         name: String,
         value: EvalExpr,
     },
+    ArrayAppend {
+        target: EvalExpr,
+        value: EvalExpr,
+    },
     ArraySetVar {
         name: String,
         index: EvalExpr,
@@ -25,8 +29,16 @@ pub enum EvalStmt {
         targets: Vec<Option<String>>,
         value: EvalExpr,
     },
-    Break,
-    Continue,
+    ArrayAppendReferenceBind {
+        name: String,
+        source: EvalExpr,
+    },
+    ArrayReferenceBind {
+        target: EvalExpr,
+        source: EvalExpr,
+    },
+    Break(u32),
+    Continue(u32),
     DoWhile {
         body: Vec<EvalStmt>,
         condition: EvalExpr,
@@ -41,11 +53,13 @@ pub enum EvalStmt {
     ClassDecl(EvalClass),
     EnumDecl(EvalEnum),
     InterfaceDecl(EvalInterface),
+    Label(String),
     TraitDecl(EvalTrait),
     Foreach {
         array: EvalExpr,
         key_name: Option<String>,
         value_name: String,
+        value_by_ref: bool,
         body: Vec<EvalStmt>,
     },
     FunctionDecl {
@@ -61,6 +75,7 @@ pub enum EvalStmt {
         return_type: Option<EvalParameterType>,
         body: Vec<EvalStmt>,
     },
+    Goto(String),
     Global {
         vars: Vec<String>,
     },

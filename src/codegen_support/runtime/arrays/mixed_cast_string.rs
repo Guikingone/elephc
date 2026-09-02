@@ -54,6 +54,14 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #32");                                     // allocate the same helper frame for an inline tag/payload triple
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish the inline-value helper stack frame
+    emitter.label("__rt_value_cast_string_unwrap");
+    emitter.instruction("cmp x0, #7");                                          // does this cell wrap another boxed Mixed value?
+    emitter.instruction("b.ne __rt_value_cast_string_dispatch");               // dispatch after reaching a concrete payload tag
+    emitter.instruction("cbz x1, __rt_mixed_cast_string_false");               // a null nested cell casts to the empty string
+    emitter.instruction("mov x0, x1");                                          // pass the nested Mixed cell to the unbox helper
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the nested tag and payload in the standard registers
+    emitter.instruction("b __rt_value_cast_string_unwrap");                     // peel arbitrarily nested Mixed wrappers
+    emitter.label("__rt_value_cast_string_dispatch");
     emitter.instruction("cmp x0, #0");                                          // does the mixed payload hold an int?
     emitter.instruction("b.eq __rt_mixed_cast_string_from_int");                // ints cast through itoa
     emitter.instruction("cmp x0, #1");                                          // does the mixed payload already hold a string?
@@ -122,6 +130,14 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_value_cast_string");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer for inline tag/payload coercion
     emitter.instruction("mov rbp, rsp");                                        // establish the inline-value helper frame
+    emitter.label("__rt_value_cast_string_unwrap");
+    emitter.instruction("cmp rax, 7");                                          // does this cell wrap another boxed Mixed value?
+    emitter.instruction("jne __rt_value_cast_string_dispatch");                // dispatch after reaching a concrete payload tag
+    emitter.instruction("test rdi, rdi");                                       // is the nested Mixed cell null?
+    emitter.instruction("je __rt_mixed_cast_string_false");                    // a null nested cell casts to the empty string
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the nested tag and payload in the standard registers
+    emitter.instruction("jmp __rt_value_cast_string_unwrap");                  // peel arbitrarily nested Mixed wrappers
+    emitter.label("__rt_value_cast_string_dispatch");
     emitter.instruction("cmp rax, 0");                                          // does the mixed payload hold an int?
     emitter.instruction("je __rt_mixed_cast_string_from_int");                  // ints cast through itoa
     emitter.instruction("cmp rax, 1");                                          // does the mixed payload already hold a string?
@@ -233,6 +249,34 @@ mod tests {
         assert!(!asm.contains("__rt_value_cast_string_dispatch"), "{asm}");
         assert_eq!(asm.matches("push rbp").count(), 2, "{asm}");
         assert_eq!(asm.matches("pop rbp").count(), 2, "{asm}");
+    }
+
+    /// Verifies both target helpers peel nested Mixed wrappers before dispatching the payload tag.
+    #[test]
+    fn test_mixed_cast_string_peels_nested_mixed_wrappers_on_all_targets() {
+        let arm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(
+            arm.contains(
+                "__rt_value_cast_string_unwrap:\n    cmp x0, #7\n    b.ne __rt_value_cast_string_dispatch\n"
+            ),
+            "{arm}"
+        );
+        assert!(
+            arm.contains("mov x0, x1\n    bl __rt_mixed_unbox\n    b __rt_value_cast_string_unwrap"),
+            "{arm}"
+        );
+
+        let x86 = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(
+            x86.contains(
+                "__rt_value_cast_string_unwrap:\n    cmp rax, 7\n    jne __rt_value_cast_string_dispatch\n"
+            ),
+            "{x86}"
+        );
+        assert!(
+            x86.contains("call __rt_mixed_unbox\n    jmp __rt_value_cast_string_unwrap"),
+            "{x86}"
+        );
     }
 
     /// Pins the OWNERSHIP contract of the resource arm on both targets: it must return

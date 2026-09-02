@@ -456,6 +456,7 @@ pub(super) fn resolve_stmt_exprs(
         },
         StmtKind::ClassDecl {
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -467,6 +468,7 @@ pub(super) fn resolve_stmt_exprs(
         constants,
         } => StmtKind::ClassDecl {
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,

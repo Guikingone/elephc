@@ -69,6 +69,8 @@ use reflection::*;
 use return_type_compat::*;
 use return_values::*;
 pub use runtime_ops::RuntimeValueOps;
+pub(crate) use builtins::eval_spl_autoload_class as eval_spl_autoload_class_bridge;
+pub(crate) use builtins::eval_spl_autoload_classlike_definition;
 use runtime_ops::*;
 use scope_cells::*;
 #[cfg(not(test))]
@@ -83,6 +85,16 @@ use std::net::ToSocketAddrs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Registers one AOT-provided SPL callback through the interpreter's shared callback semantics.
+pub(crate) fn register_runtime_spl_autoload_callback(
+    callback: RuntimeCellHandle,
+    prepend: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    register_spl_autoload_callback_unchecked(callback, prepend, context, values)
+}
 
 /// Executes an EvalIR program and returns the eval result cell.
 pub fn execute_program(
@@ -121,7 +133,9 @@ pub fn execute_program_outcome_with_context(
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => Ok(EvalOutcome::Value(result)),
         Ok(EvalControl::Throw(result)) => Ok(EvalOutcome::Throwable(result)),
-        Ok(EvalControl::Break | EvalControl::Continue) => Err(EvalStatus::UnsupportedConstruct),
+        Ok(EvalControl::Break(_) | EvalControl::Continue(_) | EvalControl::Goto(_)) => {
+            Err(EvalStatus::UnsupportedConstruct)
+        }
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()
             .map(EvalOutcome::Throwable)
@@ -322,9 +336,52 @@ pub fn execute_context_try_new_object_outcome(
                 .map(Some)
                 .ok_or(EvalStatus::UncaughtThrowable);
         }
-        Err(status) => return Err(status),
+        Err(status) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=try_new_object_error stage=reflection class={name:?} status={status:?}",
+                );
+            }
+            return Err(status);
+        }
     }
-    let Some(class) = context.class(name).cloned() else {
+    let class_name = name.trim_start_matches('\\');
+    if values.class_exists(class_name)? {
+        let mut scope = ElephcEvalScope::new();
+        return match eval_new_object_result(
+            class_name,
+            evaluated_args,
+            context,
+            &mut scope,
+            values,
+        ) {
+            Ok(result) => Ok(Some(EvalOutcome::Value(result))),
+            Err(EvalStatus::UncaughtThrowable) => context
+                .take_pending_throw()
+                .map(EvalOutcome::Throwable)
+                .map(Some)
+                .ok_or(EvalStatus::UncaughtThrowable),
+            Err(status) => {
+                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=try_new_object_error stage=aot_class class={class_name:?} status={status:?}",
+                    );
+                }
+                Err(status)
+            }
+        };
+    }
+    if !context.has_class(class_name) {
+        if let Err(status) = eval_spl_autoload_classlike_definition(class_name, context, values) {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=try_new_object_error stage=autoload class={class_name:?} status={status:?}",
+                );
+            }
+            return Err(status);
+        }
+    }
+    let Some(class) = context.class(class_name).cloned() else {
         return Ok(None);
     };
     let mut scope = ElephcEvalScope::new();
@@ -335,7 +392,14 @@ pub fn execute_context_try_new_object_outcome(
             .map(EvalOutcome::Throwable)
             .map(Some)
             .ok_or(EvalStatus::UncaughtThrowable),
-        Err(status) => Err(status),
+        Err(status) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=try_new_object_error stage=dynamic_class class={class_name:?} status={status:?}",
+                );
+            }
+            Err(status)
+        }
     }
 }
 
@@ -349,6 +413,23 @@ pub fn execute_context_method_call_outcome(
 ) -> Result<EvalOutcome, EvalStatus> {
     let evaluated_args = eval_bridge_positional_args(args, values)?;
     match eval_method_call_result_with_evaluated_args(object, method, evaluated_args, context, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
+/// Reads an instance property through the active eval context.
+pub fn execute_context_property_get_outcome(
+    context: &mut ElephcEvalContext,
+    object: RuntimeCellHandle,
+    property: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    match eval_property_get_result(object, property, context, values) {
         Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()

@@ -51,6 +51,7 @@ const BOOL_VALUE_TAG: u8 = 3;
 
 enum IteratorSourceKind {
     Indexed { elem: PhpType },
+    #[allow(dead_code)]
     Hash,
     DynamicIterable,
     DynamicMixed,
@@ -1900,7 +1901,11 @@ fn iterator_source_kind_from_type(
                 Ok(IteratorSourceKind::Indexed { elem: elem_repr })
             }
         }
-        PhpType::AssocArray { .. } => Ok(IteratorSourceKind::Hash),
+        // Array-producing APIs can preserve an associative checker shape while returning a
+        // compact indexed array at runtime (for example `array_unique()` followed by `sort()`).
+        // Dispatch on the actual heap kind so a stale shape never treats an indexed data pointer
+        // as a hash insertion-order slot.
+        PhpType::AssocArray { .. } => Ok(IteratorSourceKind::DynamicIterable),
         PhpType::Iterable => Ok(IteratorSourceKind::DynamicIterable),
         PhpType::Mixed | PhpType::Union(_) => Ok(IteratorSourceKind::DynamicMixed),
         PhpType::Object(class_name) => {

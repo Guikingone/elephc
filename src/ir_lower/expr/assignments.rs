@@ -46,7 +46,7 @@ pub(super) fn lower_assignment_expr(
     if let Some(temp_name) = conditional_value_temp {
         if let Some(result) = lower_conditional_non_local_null_coalesce_assignment(
             ctx,
-            temp_name,
+            Some(temp_name),
             target,
             value,
             result_target,
@@ -144,9 +144,9 @@ pub(super) fn lower_assignment_expr(
 }
 
 /// Lowers a non-local `??=` assignment expression with lazy RHS evaluation.
-pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
+pub(in crate::ir_lower) fn lower_conditional_non_local_null_coalesce_assignment(
     ctx: &mut LoweringContext<'_, '_>,
-    temp_name: &str,
+    temp_name: Option<&str>,
     target: &Expr,
     value: &Expr,
     _result_target: Option<&Expr>,
@@ -168,13 +168,16 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
         Op::IsNull.default_effects(),
         Some(expr.span),
     );
-    let result_type = null_coalesce_result_type(ctx, current.value, default);
+    let result_type = non_local_null_coalesce_result_type(ctx, target, current.value, default);
     // The result must remain live independently of the target write. In particular, boxing a
     // refcounted result for a gradual property consumes its source reference, so a one-shot owned
     // temp would leave the later assignment-expression result dangling. An ordinary retaining
     // local gives the target store and the expression result distinct references.
+    let temp_name = temp_name
+        .map(str::to_owned)
+        .unwrap_or_else(|| ctx.declare_synthetic_php_local(result_type.clone()));
     ctx.declare_local_with_kind(
-        temp_name,
+        &temp_name,
         result_type.clone(),
         crate::ir::LocalKind::PhpLocal,
     );
@@ -190,17 +193,44 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     });
 
     ctx.builder.position_at_end(assign_block);
-    store_expr_into_temp(ctx, temp_name, result_type.clone(), default, expr.span);
-    let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), expr.span);
+    store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
+    let temp_value = Expr::new(ExprKind::Variable(temp_name.clone()), expr.span);
     lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(keep_block);
-    store_value_into_temp(ctx, temp_name, result_type, current, expr.span);
+    store_value_into_temp(ctx, &temp_name, result_type, current, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    Some(ctx.load_local(temp_name, Some(expr.span)))
+    Some(ctx.load_local(&temp_name, Some(expr.span)))
+}
+
+/// Chooses storage for a non-local `??=` expression while preserving a concrete property ABI.
+///
+/// An uninitialized typed property first materializes as boxed null so its lazy read can avoid a
+/// typed-property error. When the assignment target itself has concrete object storage, keeping
+/// the merge in that storage lets both branches cross the same property and fluent-call boundary
+/// without reinterpreting a Mixed cell as an object pointer.
+fn non_local_null_coalesce_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    target: &Expr,
+    current: crate::ir::ValueId,
+    default: &Expr,
+) -> PhpType {
+    let merged = null_coalesce_result_type(ctx, current, default);
+    let ExprKind::PropertyAccess { object, property } = &target.kind else {
+        return merged;
+    };
+    let Some(property_type) = property_access_expr_type_for_ir(ctx, object, property) else {
+        return merged;
+    };
+    let property_type = property_type.codegen_repr();
+    if matches!(property_type, PhpType::Object(_)) {
+        property_type
+    } else {
+        merged
+    }
 }
 
 /// Emits the write side of an assignment expression whose target is not a local variable.

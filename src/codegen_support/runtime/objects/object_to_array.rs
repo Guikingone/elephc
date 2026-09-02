@@ -27,10 +27,10 @@ fn emit_object_to_array_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: object_to_array ---");
     emitter.label_global("__rt_object_to_array");
     emitter.instruction("mov x1, xzr");                                         // select visibility-mangled keys for an explicit array cast
-    emitter.instruction("b __rt_object_to_array_common");                      // share the property walk with foreach conversion
+    emitter.instruction("b __rt_object_to_array_common");                       // share the property walk with foreach conversion
     emitter.label_global("__rt_object_to_foreach_array");
     emitter.instruction("mov x1, #1");                                          // select bare visible names for in-scope foreach iteration
-    emitter.label("__rt_object_to_array_common");
+    emitter.label_global("__rt_object_to_array_common");
 
     // [0]=object [8]=result [16]=index [24]=count [32]=key ptr [40]=key len
     // [48]=pre-union result [80]=saved fp/lr
@@ -113,10 +113,10 @@ fn emit_object_to_array_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: object_to_array ---");
     emitter.label_global("__rt_object_to_array");
     emitter.instruction("xor esi, esi");                                        // select visibility-mangled keys for an explicit array cast
-    emitter.instruction("jmp __rt_object_to_array_common_x86");                // share the property walk with foreach conversion
+    emitter.instruction("jmp __rt_object_to_array_common_x86");                 // share the property walk with foreach conversion
     emitter.label_global("__rt_object_to_foreach_array");
     emitter.instruction("mov esi, 1");                                          // select bare visible names for in-scope foreach iteration
-    emitter.label("__rt_object_to_array_common_x86");
+    emitter.label_global("__rt_object_to_array_common_x86");
 
     // [rbp-8]=object [16]=result [24]=index [32]=count [40]=key ptr [48]=key len
     // [56]=pre-union result
@@ -194,4 +194,28 @@ fn emit_object_to_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the property-walk frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to generated code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Keeps the shared property walk as a global target so macOS dead stripping retains it.
+    #[test]
+    fn object_to_array_common_body_is_global_for_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_object_to_array(&mut emitter);
+            let asm = emitter.output();
+            let label = match target.arch {
+                Arch::AArch64 => ".globl __rt_object_to_array_common",
+                Arch::X86_64 => ".globl __rt_object_to_array_common_x86",
+            };
+            assert!(asm.contains(label), "{target:?}: missing {label}");
+        }
+    }
 }

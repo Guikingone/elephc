@@ -246,6 +246,8 @@ pub enum StmtKind {
     },
     ClassDecl {
         name: String,
+        /// Verbatim PHP doc comment attached to this class declaration.
+        doc_comment: Option<String>,
         extends: Option<Name>,
         implements: Vec<Name>,
         is_abstract: bool,

@@ -105,6 +105,50 @@ try {
     assert_eq!(out, "ok:type");
 }
 
+/// Verifies a nominal property guard retains the borrowed interface parameter it forwards.
+///
+/// The source variable is released before the property is read, so heap debug catches a
+/// guard that labels its result owned without materializing the matching object reference.
+#[test]
+fn test_nominal_property_guard_retains_borrowed_object_parameter() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+interface RetainedPropertyService {}
+
+final class RetainedPropertyServiceImplementation implements RetainedPropertyService {
+    public function label(): string {
+        return 'retained';
+    }
+}
+
+final class RetainedPropertyHolder {
+    private RetainedPropertyServiceImplementation $service;
+
+    public function set(RetainedPropertyService $service): void {
+        $this->service = $service;
+    }
+
+    public function label(): string {
+        return $this->service->label();
+    }
+}
+
+$service = new RetainedPropertyServiceImplementation();
+$holder = new RetainedPropertyHolder();
+$holder->set($service);
+unset($service);
+echo $holder->label();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "retained");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies null coalescing probes a statically undeclared property without a
 /// compile error or runtime read, while still evaluating the receiver once.
 #[test]
@@ -149,6 +193,63 @@ echo get_class($box->resolve()), ':', get_class($box->resolve());
 "#,
     );
     assert_eq!(out, "NULL\nstdClass:stdClass");
+}
+
+/// Verifies an uninitialized named property keeps its concrete object representation through a
+/// fluent `??=` result, rather than exposing the temporary boxed-null merge cell to the call.
+#[test]
+fn test_null_coalesce_initializes_named_property_for_fluent_call() {
+    let out = compile_and_run(
+        r#"<?php
+interface LazyBuilderParent {}
+
+final class LazyBuilder {
+    private array $mapping;
+
+    public function __construct() {
+        $this->mapping = ['builder' => self::class];
+    }
+
+    public function attach(LazyBuilderParent $parent): self {
+        return $this;
+    }
+
+    public function label(): string {
+        return 'ready';
+    }
+}
+
+final class LazyBuilderHolder implements LazyBuilderParent {
+    private LazyBuilder $builder;
+    private LazyBuilder $statementBuilder;
+    private LazyBuilder $initializedStatementBuilder;
+
+    public function __construct() {
+        $this->initializedStatementBuilder = clone new LazyBuilder();
+    }
+
+    public function resolve(): string {
+        return ($this->builder ??= new LazyBuilder())->attach($this)->label();
+    }
+
+    public function resolveStatement(): string {
+        $this->statementBuilder ??= new LazyBuilder();
+
+        return $this->statementBuilder->attach($this)->label();
+    }
+
+    public function resolveInitializedStatement(): string {
+        $this->initializedStatementBuilder ??= new LazyBuilder();
+
+        return $this->initializedStatementBuilder->attach($this)->label();
+    }
+}
+
+$holder = new LazyBuilderHolder();
+echo $holder->resolve(), ':', $holder->resolveStatement(), ':', $holder->resolveInitializedStatement();
+"#,
+    );
+    assert_eq!(out, "ready:ready:ready");
 }
 
 /// Verifies null-coalescing element assignment autovivifies an uninitialized typed array property.
@@ -1195,6 +1296,173 @@ echo count($registry->items), ':', $registry->items['next'];
 "#,
     );
     assert_eq!(out, "1:2");
+}
+
+/// Verifies resetting a private array property clears prior child-resolution state between calls.
+#[test]
+fn test_private_array_property_reset_clears_prior_search_path() {
+    let out = compile_and_run(
+        r#"<?php
+class ChildPathResolver {
+    private array $currentPath;
+
+    public function resolve(string $parent): string {
+        $this->currentPath = [];
+        $searchKey = array_search($parent, $this->currentPath);
+        $this->currentPath[] = $parent;
+
+        return false !== $searchKey ? 'circular' : 'ok';
+    }
+}
+
+echo eval('$resolver = new ChildPathResolver(); return $resolver->resolve("cache.system") . $resolver->resolve("cache.adapter.system");');
+"#,
+    );
+    assert_eq!(out, "okok");
+}
+
+/// Verifies nested associative writes preserve dynamic keys and sibling adapter values.
+#[test]
+fn test_nested_associative_pool_configuration_preserves_each_adapter() {
+    let out = compile_and_run(
+        r#"<?php
+$config = ['app' => 'cache.adapter.filesystem', 'system' => 'cache.adapter.system', 'pools' => []];
+foreach (['app', 'system'] as $name) {
+    $config['pools']['cache.'.$name] = ['adapters' => [$config[$name]], 'public' => true];
+}
+echo $config['pools']['cache.app']['adapters'][0], ':';
+echo $config['pools']['cache.system']['adapters'][0], ':';
+echo count($config['pools']);
+"#,
+    );
+    assert_eq!(out, "cache.adapter.filesystem:cache.adapter.system:2");
+}
+
+/// Verifies an inherited-definition path does not confuse distinct service ids with a common prefix.
+#[test]
+fn test_array_search_distinguishes_child_definition_parent_service_ids() {
+    let out = compile_and_run(
+        r#"<?php
+$currentPath = [];
+$currentPath[] = 'cache.system';
+$searchKey = array_search('cache.adapter.system', $currentPath);
+$currentPath[] = 'cache.adapter.system';
+echo false !== $searchKey ? 'circular' : implode(' -> ', $currentPath);
+"#,
+    );
+    assert_eq!(out, "cache.system -> cache.adapter.system");
+}
+
+/// Verifies a private string property returned by a getter retains exact array-search semantics.
+#[test]
+fn test_private_string_getter_preserves_child_definition_parent_search() {
+    let out = compile_and_run(
+        r#"<?php
+class ChildDefinitionLike {
+    public function __construct(private string $parent) {}
+
+    public function getParent(): string {
+        return $this->parent;
+    }
+}
+
+$currentPath = ['cache.system'];
+$parent = (new ChildDefinitionLike('cache.adapter.system'))->getParent();
+$searchKey = array_search($parent, $currentPath);
+echo false !== $searchKey ? 'circular' : $parent;
+"#,
+    );
+    assert_eq!(out, "cache.adapter.system");
+}
+
+/// Verifies an eval-created child keeps its private string slot after a broad inherited layout.
+#[test]
+fn test_eval_child_private_string_after_broad_inherited_layout() {
+    let out = compile_and_run(
+        r#"<?php
+class DefinitionLayoutLike {
+    private ?string $class = null;
+    private ?string $file = null;
+    private string|array|null $factory = null;
+    private bool $shared = true;
+    private array $deprecation = [];
+    private array $properties = [];
+    private array $calls = [];
+    private array $instanceof = [];
+    private bool $autoconfigured = false;
+    private string|array|null $configurator = null;
+    private array $tags = [];
+    private bool $public = false;
+    private bool $synthetic = false;
+    private bool $abstract = false;
+    private bool $lazy = false;
+    private ?array $decoratedService = null;
+    private bool $autowired = false;
+    private array $changes = [];
+    private array $bindings = [];
+    private array $errors = [];
+    protected array $arguments = [];
+    public ?string $innerServiceId = null;
+    public ?int $decorationOnInvalid = null;
+    public ?int $decorationPriority = null;
+}
+class ChildDefinitionLayoutLike extends DefinitionLayoutLike {
+    public function __construct(private string $parent) {}
+    public function getParent(): string { return $this->parent; }
+}
+echo eval('$definition = new ChildDefinitionLayoutLike("cache.adapter.system"); return array_search($definition->getParent(), ["cache.system"]) === false ? $definition->getParent() : "circular";');
+"#,
+    );
+    assert_eq!(out, "cache.adapter.system");
+}
+
+/// Verifies nested pool iteration forwards each adapter to its child-definition constructor.
+#[test]
+fn test_nested_pool_iteration_preserves_child_definition_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class ChildDefinitionLike {
+    public function __construct(private string $parent) {}
+    public function getParent(): string { return $this->parent; }
+}
+$config = [
+    'app' => 'cache.adapter.filesystem',
+    'system' => 'cache.adapter.system',
+    'pools' => [],
+];
+foreach (['app', 'system'] as $name) {
+    $config['pools']['cache.'.$name] = ['adapters' => [$config[$name]], 'public' => true];
+}
+$definitions = [];
+foreach ($config['pools'] as $name => $pool) {
+    foreach ($pool['adapters'] as $provider => $adapter) {
+    }
+    $definitions[$name] = new ChildDefinitionLike($adapter);
+}
+echo $definitions['cache.app']->getParent(), ':';
+echo $definitions['cache.system']->getParent();
+"#,
+    );
+    assert_eq!(out, "cache.adapter.filesystem:cache.adapter.system");
+}
+
+/// Verifies a populated service-definition hash distinguishes prefix-sharing service ids.
+#[test]
+fn test_large_service_definition_hash_distinguishes_prefixed_ids() {
+    let out = compile_and_run(
+        r#"<?php
+$definitions = [];
+for ($i = 0; $i < 128; ++$i) {
+    $definitions['service.'.$i] = $i;
+}
+$definitions['cache.adapter.system'] = 'parent';
+$definitions['cache.system'] = 'child';
+echo $definitions['cache.system'], ':';
+echo $definitions['cache.adapter.system'], ':';
+echo count($definitions);
+"#,
+    );
+    assert_eq!(out, "child:parent:130");
 }
 
 /// Verifies that indexed values assigned to an associative property are promoted to hash storage.

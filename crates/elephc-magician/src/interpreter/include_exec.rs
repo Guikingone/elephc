@@ -126,7 +126,7 @@ fn eval_execute_include_bytes(
     let mut cursor = 0;
     while let Some((tag_start, code_start)) = eval_find_php_open_tag(bytes, cursor) {
         eval_echo_include_bytes(&bytes[cursor..tag_start], values)?;
-        let close = eval_find_php_close_tag(bytes, code_start);
+        let close = crate::lexer::find_php_close_tag(bytes, code_start);
         let code_end = close.unwrap_or(bytes.len());
         match eval_execute_include_code(&bytes[code_start..code_end], path, context, scope, values)?
         {
@@ -137,7 +137,7 @@ fn eval_execute_include_bytes(
                 context.set_pending_throw(value);
                 return Err(EvalStatus::UncaughtThrowable);
             }
-            EvalControl::Break | EvalControl::Continue => {
+            EvalControl::Break(_) | EvalControl::Continue(_) | EvalControl::Goto(_) => {
                 return Err(EvalStatus::UnsupportedConstruct);
             }
         }
@@ -173,6 +173,13 @@ fn eval_execute_include_code(
     context.set_file_magic_override(Some(file));
     context.push_include_execution(true);
     let result = execute_statements(program.statements(), context, scope, values);
+    if let Err(ref status) = result {
+        if std::env::var_os(EVAL_TRACE_ENV).is_some() {
+            eprintln!(
+                "[elephc-eval-trace] kind=include phase=execute_error path={path:?} status={status:?}"
+            );
+        }
+    }
     context.pop_include_execution();
     context.set_call_site(previous.0, previous.1, previous.2);
     context.set_file_magic_override(previous.3);
@@ -247,13 +254,4 @@ fn eval_is_php_open_tag(window: &[u8]) -> bool {
         && window[2].eq_ignore_ascii_case(&b'p')
         && window[3].eq_ignore_ascii_case(&b'h')
         && window[4].eq_ignore_ascii_case(&b'p')
-}
-
-/// Finds the next PHP closing tag after a code block start.
-fn eval_find_php_close_tag(bytes: &[u8], start: usize) -> Option<usize> {
-    bytes
-        .get(start..)?
-        .windows(2)
-        .position(|window| window == b"?>")
-        .map(|offset| start + offset)
 }

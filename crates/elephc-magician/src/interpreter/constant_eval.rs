@@ -21,6 +21,7 @@ pub(super) fn eval_const(
         EvalConst::Int(value) => values.int(*value),
         EvalConst::Float(value) => values.float(*value),
         EvalConst::String(value) => values.string(value),
+        EvalConst::Bytes(value) => values.string_bytes_value(value),
     }
 }
 
@@ -147,6 +148,22 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "JSON_ERROR_INVALID_PROPERTY_NAME" => Some(EvalPredefinedConstant::Int(
             EVAL_JSON_ERROR_INVALID_PROPERTY_NAME,
         )),
+        "E_ERROR" => Some(EvalPredefinedConstant::Int(1)),
+        "E_WARNING" => Some(EvalPredefinedConstant::Int(2)),
+        "E_PARSE" => Some(EvalPredefinedConstant::Int(4)),
+        "E_NOTICE" => Some(EvalPredefinedConstant::Int(8)),
+        "E_CORE_ERROR" => Some(EvalPredefinedConstant::Int(16)),
+        "E_CORE_WARNING" => Some(EvalPredefinedConstant::Int(32)),
+        "E_COMPILE_ERROR" => Some(EvalPredefinedConstant::Int(64)),
+        "E_COMPILE_WARNING" => Some(EvalPredefinedConstant::Int(128)),
+        "E_USER_ERROR" => Some(EvalPredefinedConstant::Int(256)),
+        "E_USER_WARNING" => Some(EvalPredefinedConstant::Int(512)),
+        "E_USER_NOTICE" => Some(EvalPredefinedConstant::Int(1024)),
+        "E_STRICT" => Some(EvalPredefinedConstant::Int(2048)),
+        "E_RECOVERABLE_ERROR" => Some(EvalPredefinedConstant::Int(4096)),
+        "E_DEPRECATED" => Some(EvalPredefinedConstant::Int(8192)),
+        "E_USER_DEPRECATED" => Some(EvalPredefinedConstant::Int(16384)),
+        "E_ALL" => Some(EvalPredefinedConstant::Int(32767)),
         "JSON_ERROR_UTF16" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UTF16)),
         "JSON_HEX_TAG" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_TAG)),
         "JSON_HEX_AMP" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_AMP)),

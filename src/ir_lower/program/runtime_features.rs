@@ -49,7 +49,11 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     if let Some(target) = typed_builtin_target(inst) {
                         features.regex |= target.uses_regex_runtime();
                         features.mb_strlen |= target.uses_mb_strlen_runtime();
-                        features.eval_bridge |= target == crate::ir::RuntimeFnId::Extract;
+                        features.eval_bridge |= matches!(
+                            target,
+                            crate::ir::RuntimeFnId::Extract
+                                | crate::ir::RuntimeFnId::SplAutoloadRegister
+                        );
                         features.phar_archive |= target.publishes_phar_symbols()
                             && function_belongs_to_phar_archive_helper_class(function);
                         features.descriptor_invoker |=

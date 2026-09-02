@@ -101,6 +101,7 @@ pub(super) fn emit_instance_method_descriptor_entry_wrapper_body(
     let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
     let (actual_stack_offsets, actual_overflow_bytes) =
         descriptor_entry_stack_offsets(&actual_assignments);
+    let actual_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, actual_overflow_bytes);
     let frame_size = descriptor_entry_frame_size(incoming_types.len());
 
     abi::emit_frame_prologue(ctx.emitter, frame_size);
@@ -138,7 +139,13 @@ pub(super) fn emit_instance_method_descriptor_entry_wrapper_body(
             actual_stack_offsets[idx],
         );
     }
+    if actual_stack_pad_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, actual_stack_pad_bytes);
+    }
     abi::emit_call_label(ctx.emitter, &method_symbol(class_name, method_key));
+    if actual_stack_pad_bytes > 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, actual_stack_pad_bytes);
+    }
     if actual_overflow_bytes > 0 {
         abi::emit_release_temporary_stack(ctx.emitter, actual_overflow_bytes);
     }
@@ -167,6 +174,7 @@ pub(super) fn emit_static_method_descriptor_entry_wrapper_body(
     let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
     let (actual_stack_offsets, actual_overflow_bytes) =
         descriptor_entry_stack_offsets(&actual_assignments);
+    let actual_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, actual_overflow_bytes);
     let frame_size = descriptor_entry_frame_size(visible_arg_types.len());
 
     abi::emit_frame_prologue(ctx.emitter, frame_size);
@@ -208,7 +216,13 @@ pub(super) fn emit_static_method_descriptor_entry_wrapper_body(
             );
         }
     }
+    if actual_stack_pad_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, actual_stack_pad_bytes);
+    }
     abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, method_key));
+    if actual_stack_pad_bytes > 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, actual_stack_pad_bytes);
+    }
     if actual_overflow_bytes > 0 {
         abi::emit_release_temporary_stack(ctx.emitter, actual_overflow_bytes);
     }
@@ -234,6 +248,7 @@ pub(super) fn emit_static_late_bound_descriptor_entry_wrapper_body(
     let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
     let (actual_stack_offsets, actual_overflow_bytes) =
         descriptor_entry_stack_offsets(&actual_assignments);
+    let actual_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, actual_overflow_bytes);
     let frame_size = descriptor_entry_frame_size(incoming_types.len());
 
     abi::emit_frame_prologue(ctx.emitter, frame_size);
@@ -271,10 +286,16 @@ pub(super) fn emit_static_late_bound_descriptor_entry_wrapper_body(
             actual_stack_offsets[idx],
         );
     }
+    if actual_stack_pad_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, actual_stack_pad_bytes);
+    }
     if let Some(slot) = dynamic_slot {
         emit_dynamic_static_method_call(ctx, slot);
     } else {
         abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, method_key));
+    }
+    if actual_stack_pad_bytes > 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, actual_stack_pad_bytes);
     }
     if actual_overflow_bytes > 0 {
         abi::emit_release_temporary_stack(ctx.emitter, actual_overflow_bytes);
@@ -360,4 +381,3 @@ pub(super) fn descriptor_entry_stack_offsets(
     }
     (offsets, next_offset)
 }
-

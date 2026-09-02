@@ -9,6 +9,9 @@
 
 use super::*;
 
+const STRPBRK_EMPTY_CHARACTERS_MESSAGE: &str =
+    "strpbrk(): Argument #2 ($characters) must be a non-empty string";
+
 /// Lowers `str_contains()` through `strpos()` and converts found positions to bool.
 pub(crate) fn lower_str_contains(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_binary_string_args(ctx, inst, "str_contains")?;
@@ -811,6 +814,105 @@ pub(crate) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     }
     ctx.emitter.label(&labels.end);
     store_if_result(ctx, inst)
+}
+
+/// Lowers `strpbrk()` through the existing byte-membership span scanner.
+///
+/// The scanner reports how many leading bytes are absent from `$characters`. A count equal to
+/// the haystack length is PHP `false`; otherwise the remaining suffix begins at the first member.
+pub(crate) fn lower_strpbrk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "strpbrk expected 2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    if inst.result.is_some() && inst.result_php_type.codegen_repr() != PhpType::Mixed {
+        return Err(CodegenIrError::invalid_module(format!(
+            "strpbrk result must be Mixed (string|false), got {:?}",
+            inst.result_php_type
+        )));
+    }
+    let miss = ctx.next_label("strpbrk_miss");
+    let box_match = ctx.next_label("strpbrk_box_match");
+    let end = ctx.next_label("strpbrk_end");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_strpbrk_aarch64(ctx, inst, &miss, &box_match, &end)?,
+        Arch::X86_64 => lower_strpbrk_x86_64(ctx, inst, &miss, &box_match, &end)?,
+    }
+    ctx.emitter.label(&end);
+    store_if_result(ctx, inst)
+}
+
+/// Emits AArch64 `strpbrk()` argument setup, span search, and boxed result selection.
+fn lower_strpbrk_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    miss: &str,
+    box_match: &str,
+    end: &str,
+) -> Result<()> {
+    load_string_arg_to_regs(ctx, inst, 1, "strpbrk", "x1", "x2")?;
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::NotEqualToImmediate("x2", 0),
+        STRPBRK_EMPTY_CHARACTERS_MESSAGE,
+    );
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                       // preserve the validated byte mask while materializing the haystack
+    load_string_arg_to_regs(ctx, inst, 0, "strpbrk", "x1", "x2")?;
+    ctx.emitter.instruction("ldp x3, x4, [sp], #16");                         // restore the mask into the span scanner argument pair
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                       // keep the haystack for suffix construction after the scan
+    abi::emit_call_label(ctx.emitter, "__rt_strcspn");
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                         // restore the haystack pointer and byte length after the scan
+    ctx.emitter.instruction("cmp x0, x2");                                    // a complete non-member span means no character matched
+    ctx.emitter.instruction(&format!("b.ge {miss}"));                          // PHP returns false when the character set never appears
+    ctx.emitter.instruction("add x1, x1, x0");                                // advance the result pointer to the first matching byte
+    ctx.emitter.instruction("sub x2, x2, x0");                                // retain the matching byte and every trailing byte in the suffix
+    ctx.emitter.label(box_match);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    ctx.emitter.instruction(&format!("b {end}"));                              // bypass the false arm after boxing the suffix
+    ctx.emitter.label(miss);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    Ok(())
+}
+
+/// Emits x86_64 `strpbrk()` argument setup, span search, and boxed result selection.
+fn lower_strpbrk_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    miss: &str,
+    box_match: &str,
+    end: &str,
+) -> Result<()> {
+    load_string_arg_to_regs(ctx, inst, 1, "strpbrk", "rax", "rdx")?;
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::NotEqualToImmediate("rdx", 0),
+        STRPBRK_EMPTY_CHARACTERS_MESSAGE,
+    );
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    load_string_arg_to_regs(ctx, inst, 0, "strpbrk", "rax", "rdx")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "r8", "r9");
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    ctx.emitter.instruction("mov rdi, rax");                                  // pass the haystack pointer to the byte-span scanner
+    ctx.emitter.instruction("mov rsi, rdx");                                  // pass the haystack byte length to the byte-span scanner
+    ctx.emitter.instruction("mov rdx, r8");                                   // pass the validated character mask pointer to the scanner
+    ctx.emitter.instruction("mov rcx, r9");                                   // pass the validated character mask byte length to the scanner
+    abi::emit_call_label(ctx.emitter, "__rt_strcspn");
+    ctx.emitter.instruction("mov r8, rax");                                   // preserve the leading non-member byte count across haystack restoration
+    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    ctx.emitter.instruction("cmp r8, rdx");                                   // a complete non-member span means no character matched
+    ctx.emitter.instruction(&format!("jge {miss}"));                          // PHP returns false when the character set never appears
+    ctx.emitter.instruction("add rax, r8");                                   // advance the result pointer to the first matching byte
+    ctx.emitter.instruction("sub rdx, r8");                                   // retain the matching byte and every trailing byte in the suffix
+    ctx.emitter.label(box_match);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    ctx.emitter.instruction(&format!("jmp {end}"));                            // bypass the false arm after boxing the suffix
+    ctx.emitter.label(miss);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    Ok(())
 }
 
 /// Lowers `strrchr()` using `strrpos()` on PHP's first-needle-byte semantics.

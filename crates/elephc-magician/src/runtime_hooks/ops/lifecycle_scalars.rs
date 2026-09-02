@@ -48,6 +48,11 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(())
     }
 
+    /// Copies one boxed Mixed PHP value through the generated runtime wrapper.
+    fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_copy(value.as_ptr()) })
+    }
+
     /// Retains one boxed Mixed cell through the generated runtime wrapper.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(RuntimeCellHandle::from_raw(unsafe {

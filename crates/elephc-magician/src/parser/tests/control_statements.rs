@@ -125,7 +125,7 @@ fn parse_fragment_accepts_switch_source() {
                     condition: Some(EvalExpr::Const(EvalConst::Int(1))),
                     body: vec![
                         EvalStmt::Echo(EvalExpr::Const(EvalConst::String("one".to_string()))),
-                        EvalStmt::Break,
+                        EvalStmt::Break(1),
                     ],
                 },
                 EvalSwitchCase {
@@ -148,6 +148,7 @@ fn parse_fragment_accepts_foreach_source() {
             array: EvalExpr::LoadVar("items".to_string()),
             key_name: None,
             value_name: "item".to_string(),
+            value_by_ref: false,
             body: vec![EvalStmt::Echo(EvalExpr::LoadVar("item".to_string()))],
         }]
     );
@@ -163,12 +164,75 @@ fn parse_fragment_accepts_foreach_key_value_source() {
             array: EvalExpr::LoadVar("items".to_string()),
             key_name: Some("key".to_string()),
             value_name: "item".to_string(),
+            value_by_ref: false,
             body: vec![EvalStmt::Echo(EvalExpr::Binary {
                 op: EvalBinOp::Concat,
                 left: Box::new(EvalExpr::LoadVar("key".to_string())),
                 right: Box::new(EvalExpr::LoadVar("item".to_string())),
             })],
         }]
+    );
+}
+
+/// Verifies foreach short-array targets lower through the existing destructuring statement.
+#[test]
+fn parse_fragment_accepts_foreach_array_destructure_target() {
+    let program = parse_fragment(br#"foreach ($items as [$id, $class]) { echo $id . $class; }"#)
+        .expect("parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Foreach {
+            array: EvalExpr::LoadVar("items".to_string()),
+            key_name: None,
+            value_name: "\0elephc_foreach_destructure".to_string(),
+            value_by_ref: false,
+            body: vec![
+                EvalStmt::ArrayDestructure {
+                    targets: vec![Some("id".to_string()), Some("class".to_string())],
+                    value: EvalExpr::LoadVar("\0elephc_foreach_destructure".to_string()),
+                },
+                EvalStmt::Echo(EvalExpr::Binary {
+                    op: EvalBinOp::Concat,
+                    left: Box::new(EvalExpr::LoadVar("id".to_string())),
+                    right: Box::new(EvalExpr::LoadVar("class".to_string())),
+                }),
+            ],
+        }]
+    );
+}
+
+/// Verifies foreach key-value loops preserve an explicit by-reference value target.
+#[test]
+fn parse_fragment_accepts_foreach_by_reference_value_target() {
+    let program = parse_fragment(br#"foreach ($items as $key => &$item) { $item = $key; }"#)
+        .expect("parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Foreach {
+            array: EvalExpr::LoadVar("items".to_string()),
+            key_name: Some("key".to_string()),
+            value_name: "item".to_string(),
+            value_by_ref: true,
+            body: vec![EvalStmt::StoreVar {
+                name: "item".to_string(),
+                value: EvalExpr::LoadVar("key".to_string()),
+            }],
+        }]
+    );
+}
+
+/// Verifies goto statements and labels lower to explicit EvalIR control nodes.
+#[test]
+fn parse_fragment_accepts_goto_and_label_source() {
+    let program = parse_fragment(br#"goto done; echo "skip"; done: echo "ok";"#).expect("parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::Goto("done".to_string()),
+            EvalStmt::Echo(EvalExpr::Const(EvalConst::String("skip".to_string()))),
+            EvalStmt::Label("done".to_string()),
+            EvalStmt::Echo(EvalExpr::Const(EvalConst::String("ok".to_string()))),
+        ]
     );
 }
 

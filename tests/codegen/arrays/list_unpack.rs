@@ -157,6 +157,29 @@ foreach ($nested as [$x, [$y, $z]]) { echo $x, $y, $z, ";"; }
     assert_eq!(out, "ann=30;bob=40;2;5;123;456;");
 }
 
+/// Verifies that a heterogeneous tuple yielded after a callback sort stays boxed while a
+/// `foreach` destructuring pattern reads its later positional elements.
+///
+/// The iterator cannot expose the tuple's raw array representation to the synthetic
+/// destructuring local: that local is gradual because array elements are refcounted.  Each
+/// generated `$row[$offset]` therefore must receive a boxed `Mixed` cell, exactly as a direct
+/// gradual list-unpack read does.
+#[test]
+fn test_foreach_destructuring_after_uasort_of_heterogeneous_tuples() {
+    let out = compile_and_run(
+        r#"<?php
+$services = [];
+$services[] = [0, 0, null, "first", null];
+$services[] = [1, 1, "named", "second", "ServiceClass"];
+uasort($services, static fn ($a, $b) => $b[0] <=> $a[0] ?: $a[1] <=> $b[1]);
+foreach ($services as [, , $index, $serviceId, $class]) {
+    echo ($index ?? "none"), ":", $serviceId, ":", ($class ?? "none"), ";";
+}
+"#,
+    );
+    assert_eq!(out, "named:second:ServiceClass;none:first:none;");
+}
+
 /// Verifies destructuring `foreach` loops nest, and that the pattern also works with a
 /// single-statement body and inside a function over an `array`-hinted parameter.
 #[test]

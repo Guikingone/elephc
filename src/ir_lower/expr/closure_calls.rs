@@ -180,6 +180,14 @@ pub(super) fn lower_desugared_dynamic_method_call(
     let [object, method] = items.as_slice() else {
         return None;
     };
+    if let ExprKind::StringLiteral(method_name) = &method.kind {
+        if let Some(receiver) = object_static_method_receiver_for_expr(ctx, object, method_name) {
+            let object_value = lower_expr(ctx, object);
+            let call = lower_static_method_call(ctx, &receiver, method_name, &args[1..], expr);
+            release_owning_receiver_temporary(ctx, object_value, expr.span);
+            return Some(call);
+        }
+    }
     Some(lower_dynamic_method_expr_call(
         ctx,
         object,

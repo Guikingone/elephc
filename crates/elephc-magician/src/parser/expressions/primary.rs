@@ -28,7 +28,7 @@ impl Parser {
             TokenKind::String(value) => {
                 let value = value.clone();
                 self.advance();
-                Ok(EvalExpr::Const(EvalConst::String(value)))
+                Ok(EvalExpr::Const(eval_string_constant(value)))
             }
             TokenKind::DollarIdent(name) => {
                 let name = name.clone();
@@ -232,4 +232,25 @@ impl Parser {
         Ok(EvalExpr::ConstFetch(name))
     }
 
+}
+
+/// Restores binary-string marker characters emitted before lexing to their original bytes.
+fn eval_string_constant(value: String) -> EvalConst {
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut has_binary_marker = false;
+    for ch in value.chars() {
+        if (0xF0000..=0xF00FF).contains(&(ch as u32)) {
+            let byte = (ch as u32 - 0xF0000) as u8;
+            bytes.push(byte);
+            has_binary_marker = true;
+        } else {
+            let mut encoded = [0; 4];
+            bytes.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
+        }
+    }
+    if has_binary_marker {
+        EvalConst::Bytes(bytes)
+    } else {
+        EvalConst::String(value)
+    }
 }

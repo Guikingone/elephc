@@ -32,7 +32,8 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     };
     guard_static_method_receiver(ctx, object, &method_name)?;
     if builtins::has_eval_context(ctx)
-        && reflection_function_callable_metadata_method(&class_name, &method_name)
+        && (reflection_function_callable_metadata_method(&class_name, &method_name)
+            || reflection_class_runtime_metadata_method(&class_name))
     {
         return builtins::lower_eval_method_call(ctx, inst, object, &method_name);
     }
@@ -93,7 +94,7 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
             &method_name,
         );
     }
-    let owned_dynamic_done_label = if ctx.module.required_runtime_features.eval_bridge {
+    let owned_dynamic_done_label = if builtins::has_eval_context(ctx) {
         let native_label = ctx.next_label("typed_method_native_dispatch");
         let done_label = ctx.next_label("typed_method_dynamic_dispatch_done");
         builtins::lower_eval_owned_method_call(
@@ -160,6 +161,14 @@ fn reflection_function_callable_metadata_method(class_name: &str, method_name: &
         )
 }
 
+/// Returns true when runtime evaluation must own a reflection metadata method call.
+fn reflection_class_runtime_metadata_method(class_name: &str) -> bool {
+    matches!(
+        class_name.trim_start_matches('\\'),
+        "ReflectionAttribute" | "ReflectionClass" | "ReflectionObject" | "ReflectionEnum"
+    )
+}
+
 /// Rejects the raw null-container representation before a static object method dispatch.
 pub(super) fn guard_static_method_receiver(
     ctx: &mut FunctionContext<'_>,
@@ -179,8 +188,48 @@ pub(super) fn guard_static_method_receiver(
     );
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
+    emit_aot_raw_null_method_receiver_trace(ctx, object, method_name)?;
     emit_method_call_on_null_fatal(ctx, method_name);
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits the raw receiver word for a statically dispatched null-method fatal.
+///
+/// The value is only observed on the error path and is passed after the ordinary
+/// diagnostic fields, so it cannot affect ABI argument materialization or a
+/// successful method call.
+fn emit_aot_raw_null_method_receiver_trace(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    method_name: &str,
+) -> Result<()> {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return Ok(());
+    }
+    let (function_label, function_len) = ctx.data.add_string(ctx.function.name.as_bytes());
+    let (method_label, method_len) = ctx.data.add_string(method_name.as_bytes());
+    let function_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_symbol_address(ctx.emitter, function_ptr_arg, &function_label);
+    let function_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, function_len_arg, function_len as i64);
+    let method_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_symbol_address(ctx.emitter, method_ptr_arg, &method_label);
+    let method_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_load_int_immediate(ctx.emitter, method_len_arg, method_len as i64);
+    let line_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    let line = ctx
+        .current_instruction_span()
+        .map(|span| span.line as i64)
+        .unwrap_or_default();
+    abi::emit_load_int_immediate(ctx.emitter, line_arg, line);
+    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    ctx.load_value_to_reg(object, receiver_arg)?;
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_trace_aot_raw_null_method_receiver");
+    abi::emit_call_label(ctx.emitter, &symbol);
     Ok(())
 }
 

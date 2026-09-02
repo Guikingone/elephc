@@ -106,6 +106,22 @@ pub(super) fn eval_compound_assign(
     Ok(assigned)
 }
 
+/// Evaluates a postfix increment or decrement and returns the value observed before mutation.
+pub(super) fn eval_postfix_inc_dec(
+    target: &EvalExpr,
+    increment: bool,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let location = evaluate_location(target, context, scope, values)?;
+    let current = location.current();
+    let result = values.retain(current)?;
+    let updated = eval_inc_dec_value(current, increment, values)?;
+    write_location(location, updated, false, context, scope, values)?;
+    Ok(result)
+}
+
 /// Evaluates a plain assignment expression and returns the stored value.
 pub(super) fn eval_assign(
     target: &EvalExpr,
@@ -116,8 +132,80 @@ pub(super) fn eval_assign(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let location = evaluate_plain_assignment_location(target, context, scope, values)?;
     let assigned = eval_expr(value, context, scope, values)?;
+    let assigned = if matches!(value, EvalExpr::LoadVar(_)) {
+        values.copy_value(assigned)?
+    } else {
+        assigned
+    };
     write_location(location, assigned, true, context, scope, values)?;
     Ok(assigned)
+}
+
+/// Binds an array element lvalue to a persistent PHP reference source expression.
+pub(in crate::interpreter) fn eval_array_reference_bind(
+    target: &EvalExpr,
+    source: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let (source_target, source_value) = eval_reference_source(source, context, scope, values)?;
+    let location = evaluate_plain_assignment_location(target, context, scope, values)?;
+    write_reference_location(location, source_target, source_value, context, scope, values)
+}
+
+/// Appends one persistent PHP reference source expression to an array variable.
+pub(in crate::interpreter) fn eval_array_append_reference_bind(
+    name: &str,
+    source: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let (source_target, source_value) = eval_reference_source(source, context, scope, values)?;
+    let parent = evaluate_location(&EvalExpr::LoadVar(name.to_string()), context, scope, values)?;
+    let array = if values.is_null(parent.current())? {
+        values.array_new(1)?
+    } else {
+        parent.current()
+    };
+    let index = eval_array_append_key(array, values)?;
+    let location = EvaluatedLocation::ArrayElement {
+        parent: Box::new(parent),
+        index,
+        current: values.null()?,
+    };
+    write_reference_location(location, source_target, source_value, context, scope, values)
+}
+
+/// Appends a value through any writable array lvalue while preserving PHP evaluation order.
+pub(in crate::interpreter) fn eval_array_append(
+    target: &EvalExpr,
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let location = evaluate_location(target, context, scope, values)?;
+    let current = location.current();
+    if values.type_tag(current)? == EVAL_TAG_OBJECT {
+        if !eval_array_access_object_matches(current, context, values)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let offset = values.null()?;
+        let value = eval_expr(value, context, scope, values)?;
+        let result = eval_method_call_result(current, "offsetSet", vec![offset, value], context, values)?;
+        return eval_release_value(context, values, result);
+    }
+    let array = if values.is_null(current)? {
+        values.array_new(1)?
+    } else {
+        current
+    };
+    let index = eval_array_append_key(array, values)?;
+    let value = eval_expr(value, context, scope, values)?;
+    let updated = values.array_set(array, index, value)?;
+    write_location(location, updated, false, context, scope, values)
 }
 
 /// Evaluates a plain-assignment target without reading an existing property value first.
@@ -304,6 +392,9 @@ fn write_location(
         EvaluatedLocation::Variable {
             name, ownership, ..
         } => {
+            if let Some(target) = scope.reference_target(&name).cloned() {
+                write_back_method_ref_target(&target, value, context, values)?;
+            }
             let stored = if preserve_value_for_result {
                 values.retain(value)?
             } else {
@@ -328,6 +419,13 @@ fn write_location(
             } else {
                 parent.current()
             };
+            let container = eval_array_set_target_for_index(container, index, values)?;
+            let container_identity = values.raw_value_word(container)?;
+            if let Some(target) = eval_array_reference_key(index, values)?
+                .and_then(|key| context.array_element_alias(container_identity, &key).cloned())
+            {
+                return write_back_method_ref_target(&target, value, context, values);
+            }
             let updated = values.array_set(container, index, value)?;
             write_location(*parent, updated, false, context, scope, values)
         }
@@ -337,4 +435,56 @@ fn write_location(
             eval_release_value(context, values, result)
         }
     }
+}
+
+/// Resolves an lvalue expression's current value and persistent PHP reference target.
+fn eval_reference_source(
+    source: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(EvalReferenceTarget, RuntimeCellHandle), EvalStatus> {
+    if let EvalExpr::LoadVar(source) = source {
+        if let Some(target) = scope.reference_target(source).cloned() {
+            let value = visible_scope_cell(context, scope, source).map_or_else(
+                || values.null(),
+                Ok,
+            )?;
+            return Ok((target, value));
+        }
+    }
+    let (value, target) = eval_call_arg_value(source, context, scope, values)?;
+    target
+        .map(|target| (target, value))
+        .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Writes one by-reference assignment through an already evaluated array-element location.
+fn write_reference_location(
+    location: EvaluatedLocation,
+    source_target: EvalReferenceTarget,
+    source_value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let EvaluatedLocation::ArrayElement { parent, index, .. } = location else {
+        return Err(EvalStatus::UnsupportedConstruct);
+    };
+    let container = if values.is_null(parent.current())? {
+        values.array_new(1)?
+    } else {
+        parent.current()
+    };
+    let container = eval_array_set_target_for_index(container, index, values)?;
+    let updated = values.array_set(container, index, source_value)?;
+    let key = eval_array_reference_key(index, values)?.ok_or(EvalStatus::RuntimeFatal)?;
+    let updated_identity = values.raw_value_word(updated)?;
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=array_reference_bind identity={updated_identity:#x} key={key:?}",
+        );
+    }
+    context.bind_array_element_alias(updated_identity, key, source_target);
+    write_location(*parent, updated, false, context, scope, values)
 }

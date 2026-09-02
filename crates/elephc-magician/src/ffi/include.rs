@@ -29,7 +29,11 @@ use std::ffi::c_void;
 /// lasts for the single PHP request represented by the process lifetime.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_include_request_reset() {
-    let _ = std::panic::catch_unwind(crate::context::reset_global_eval_included_files);
+    let _ = std::panic::catch_unwind(|| {
+        crate::context::reset_global_eval_included_files();
+        crate::context::reset_global_eval_function_contexts();
+        crate::context::reset_global_eval_autoload_contexts();
+    });
 }
 
 /// Executes one runtime include/require against a materialized caller scope.
@@ -49,7 +53,12 @@ pub unsafe extern "C" fn __elephc_eval_include(
     std::panic::catch_unwind(|| unsafe {
         execute_include_inner(ctx, scope, path, required != 0, once != 0, out)
     })
-    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+    .unwrap_or_else(|_| {
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            eprintln!("[elephc-eval-trace] phase=include_panic status=RuntimeFatal");
+        }
+        EvalStatus::RuntimeFatal.code()
+    })
 }
 
 /// Runs the include ABI body after the exported wrapper installs a panic boundary.
@@ -92,6 +101,7 @@ unsafe fn execute_materialized_include(
         ctx
     } else {
         fallback_context = ElephcEvalContext::new();
+        crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
         &mut fallback_context
     };
     let mut fallback_scope;
@@ -111,8 +121,27 @@ unsafe fn execute_materialized_include(
         once,
         &mut values,
     ) {
-        Ok(outcome) => write_outcome(outcome, out).code(),
-        Err(status) => status.code(),
+        Ok(outcome) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                let call_site = context.call_site();
+                eprintln!(
+                    "[elephc-eval-trace] phase=include_ok file={:?} line={}",
+                    call_site.0, call_site.2,
+                );
+            }
+            write_outcome(outcome, out).code()
+        }
+        Err(status) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                let call_site = context.call_site();
+                eprintln!(
+                    "[elephc-eval-trace] phase=include_error status={status:?} file={:?} line={}",
+                    call_site.0,
+                    call_site.2,
+                );
+            }
+            status.code()
+        }
     }
 }
 

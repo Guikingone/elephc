@@ -89,6 +89,7 @@ fn lower_if_chain(
     let cond_value = ctx.truthy_consuming(cond_value, Some(condition.span));
     let split_initialized = ctx.initialized_slots_snapshot();
     let split_types = ctx.local_types_snapshot();
+    let split_try_handler_stack = ctx.try_handler_stack.clone();
     let then_block = ctx.builder.create_named_block("if.then", Vec::new());
     let else_block = ctx.builder.create_named_block("if.else", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -102,6 +103,7 @@ fn lower_if_chain(
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types.clone());
+    ctx.try_handler_stack = split_try_handler_stack.clone();
     apply_instanceof_branch_narrowing(ctx, condition, true);
     lower_block(ctx, then_body);
     let then_initialized = ctx.initialized_slots_snapshot();
@@ -116,6 +118,7 @@ fn lower_if_chain(
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types);
+    ctx.try_handler_stack = split_try_handler_stack.clone();
     apply_instanceof_branch_narrowing(ctx, condition, false);
     let else_reachable =
         if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
@@ -155,6 +158,7 @@ fn lower_if_chain(
         else_initialized,
         else_reachable,
     ));
+    ctx.try_handler_stack = split_try_handler_stack;
     merge_reachable
 }
 

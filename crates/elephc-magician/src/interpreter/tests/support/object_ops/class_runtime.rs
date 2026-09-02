@@ -92,6 +92,11 @@ impl FakeOps {
         class_name: &str,
         method_name: &str,
     ) -> Result<Option<u64>, EvalStatus> {
+        if class_name.eq_ignore_ascii_case("KnownConstructorOwner")
+            && method_name.eq_ignore_ascii_case("__construct")
+        {
+            return Ok(Some(EVAL_REFLECTION_MEMBER_FLAG_PUBLIC));
+        }
         if !class_name.eq_ignore_ascii_case("KnownClass") {
             return Ok(None);
         }

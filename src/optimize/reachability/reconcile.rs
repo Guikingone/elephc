@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Synthetic checker-only classes are preserved unless backed by a pruned source declaration.
-//! - Vtable survivor order is stable and slots are compacted from zero.
+//! - Vtable slot layout stays ABI-stable across abstract parents and concrete descendants.
 
 use std::collections::{HashMap, HashSet};
 
@@ -124,7 +124,7 @@ fn retain_class_metadata(
     });
 }
 
-/// Filters every instance/static method map and rebuilds stable compact vtable slots.
+/// Filters every instance/static method map while preserving inherited vtable slot layout.
 fn prune_class_methods(
     class_key: &str,
     info: &mut ClassInfo,
@@ -195,11 +195,11 @@ fn prune_class_methods(
     info.method_attribute_args
         .retain(|key, _| keep_any.contains(key));
 
-    info.vtable_methods.retain(|key| keep_instance.contains(key));
-    info.vtable_slots = compact_slots(&info.vtable_methods);
-    info.static_vtable_methods
-        .retain(|key| keep_static.contains(key));
-    info.static_vtable_slots = compact_slots(&info.static_vtable_methods);
+    // A class vtable is an ABI shared by every descendant. In particular, an abstract parent can
+    // expose an interface method with no local body while a concrete child supplies it. Dropping
+    // an otherwise unreachable abstract slot from only the parent renumbers a method call lowered
+    // in that parent, but leaves the child's physical table unchanged. Keep the declared slot
+    // vectors and their maps intact; codegen emits a null pointer for any pruned implementation.
 }
 
 /// Returns whether a method is reachable through its visible, implementing, or declaring class.
@@ -235,15 +235,6 @@ fn method_is_live(
 /// Retains string-keyed map entries selected by one canonical method keep-set.
 fn retain_keys<T>(map: &mut HashMap<String, T>, keep: &HashSet<String>) {
     map.retain(|key, _| keep.contains(key));
-}
-
-/// Rebuilds vtable slots from survivor order without sorting or leaving gaps.
-fn compact_slots(methods: &[String]) -> HashMap<String, usize> {
-    methods
-        .iter()
-        .enumerate()
-        .map(|(slot, method)| (method.clone(), slot))
-        .collect()
 }
 
 /// Removes pruned FFI function/class schemas while leaving globals conservative.

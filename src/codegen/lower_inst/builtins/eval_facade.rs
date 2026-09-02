@@ -84,6 +84,15 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new(
     eval::lower_eval_native_object_new(ctx, inst)
 }
 
+/// Probes a nominal class through the eval bridge before native missing-class handling.
+pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new_fallback(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    miss_label: &str,
+) -> Result<()> {
+    eval::lower_eval_native_object_new_fallback(ctx, inst, miss_label)
+}
+
 /// Lowers fallback construction of a runtime class name through eval dynamic metadata.
 pub(in crate::codegen::lower_inst) fn lower_eval_object_new_dynamic_fallback(
     ctx: &mut FunctionContext<'_>,
@@ -101,6 +110,16 @@ pub(in crate::codegen::lower_inst) fn lower_eval_method_call(
     method_name: &str,
 ) -> Result<()> {
     eval::lower_eval_method_call(ctx, inst, object, method_name)
+}
+
+/// Reads an instance property through the active eval context.
+pub(in crate::codegen::lower_inst) fn lower_eval_property_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
+    eval::lower_eval_property_get(ctx, inst, object, property)
 }
 
 /// Probes a typed receiver for an eval-owned dynamic override before native dispatch.
@@ -243,6 +262,23 @@ pub(in crate::codegen::lower_inst) fn lower_eval_object_is_a(
     exclude_self: bool,
 ) -> Result<()> {
     eval::lower_eval_object_is_a(ctx, inst, object, target_class, exclude_self)
+}
+
+/// Emits a null-context eval ownership probe before native nominal matching.
+pub(in crate::codegen::lower_inst) fn emit_eval_object_is_a_named_fallback(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    target_class: &str,
+    matched_label: &str,
+    native_fallback_label: &str,
+) -> Result<()> {
+    eval::emit_eval_object_is_a_named_fallback(
+        ctx,
+        object,
+        target_class,
+        matched_label,
+        native_fallback_label,
+    )
 }
 
 /// Lowers post-eval object/class relation predicates with runtime target cells.

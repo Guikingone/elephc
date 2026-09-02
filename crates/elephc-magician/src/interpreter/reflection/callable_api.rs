@@ -110,6 +110,15 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
     };
     let method_key = method_name.to_ascii_lowercase();
     match method_key.as_str() {
+        "getname" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            match &target {
+                EvalReflectionFunctionMethodTarget::Function { name, .. }
+                | EvalReflectionFunctionMethodTarget::Method { name, .. } => {
+                    values.string(name).map(Some)
+                }
+            }
+        }
         "getshortname" => {
             eval_reflection_bind_no_args(evaluated_args)?;
             values

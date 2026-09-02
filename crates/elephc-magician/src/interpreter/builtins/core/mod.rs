@@ -33,6 +33,7 @@ mod ob_implicit_flush;
 mod ob_list_handlers;
 mod ob_start;
 mod print_r;
+mod trigger_error;
 mod var_dump;
 
 pub(in crate::interpreter) use call_user_func::*;
@@ -50,6 +51,7 @@ pub(in crate::interpreter) use ob_implicit_flush::*;
 pub(in crate::interpreter) use ob_list_handlers::*;
 pub(in crate::interpreter) use ob_start::*;
 pub(in crate::interpreter) use print_r::*;
+pub(in crate::interpreter) use trigger_error::*;
 pub(in crate::interpreter) use var_dump::*;
 
 /// Dispatches direct expression-level calls for core builtins.

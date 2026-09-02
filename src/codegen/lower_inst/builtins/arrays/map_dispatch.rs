@@ -43,7 +43,15 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let array = expect_operand(inst, 1)?;
     let source_ty = ctx.value_php_type(array)?.codegen_repr();
     let gradual_source = matches!(source_ty, PhpType::Mixed | PhpType::Union(_));
-    let (elem_ty, target) = if gradual_source {
+    // `array<mixed>` can be promoted to hash storage by a runtime string key even when the
+    // checker cannot prove that key. `array_map()` with one source preserves keys, so normalize
+    // that ambiguous storage to an owned Mixed-valued hash before invoking the callback.
+    let runtime_promotable_mixed_array = matches!(
+        source_ty,
+        PhpType::Array(ref value) if value.codegen_repr() == PhpType::Mixed
+    );
+    let normalize_source_to_hash = gradual_source || runtime_promotable_mixed_array;
+    let (elem_ty, target) = if gradual_source || runtime_promotable_mixed_array {
         (PhpType::Mixed, ArrayMapTarget::Hash)
     } else if matches!(source_ty, PhpType::AssocArray { .. }) {
         (
@@ -56,7 +64,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             ArrayMapTarget::Indexed,
         )
     };
-    let source = prepare_array_map_source(ctx, array, gradual_source)?;
+    let source = prepare_array_map_source(ctx, array, normalize_source_to_hash)?;
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {
             let callback_elem_ty = array_map_descriptor_callback_result_element_type(inst)?;
@@ -165,13 +173,13 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
-/// Normalizes a gradual source to an owned Mixed-valued hash and records it on the stack.
+/// Normalizes a gradual or runtime-promotable source to an owned Mixed-valued hash on the stack.
 fn prepare_array_map_source(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
-    gradual: bool,
+    normalize_to_hash: bool,
 ) -> Result<ArrayMapSource> {
-    if !gradual {
+    if !normalize_to_hash {
         return Ok(ArrayMapSource::Static(array));
     }
     super::misc_dispatch::materialize_owned_mixed_hash_operand(ctx, array, "array_map")?;

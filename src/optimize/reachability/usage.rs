@@ -35,6 +35,7 @@ pub struct Usage {
     pub(crate) instantiated_classes: HashSet<String>,
     pub(crate) instantiated_subclass_roots: HashSet<String>,
     pub(crate) required_libraries: HashSet<String>,
+    pub(crate) class_alias_targets: HashSet<String>,
     pub(crate) global_aliases: HashSet<String>,
     pub(crate) dynamic_global_alias: bool,
     pub(crate) variable_methods: HashMap<String, HashSet<(String, bool)>>,
@@ -61,6 +62,7 @@ impl Usage {
         self.instantiated_subclass_roots
             .extend(other.instantiated_subclass_roots);
         self.required_libraries.extend(other.required_libraries);
+        self.class_alias_targets.extend(other.class_alias_targets);
         self.global_aliases.extend(other.global_aliases);
         self.dynamic_global_alias |= other.dynamic_global_alias;
         for (variable, methods) in other.variable_methods {
@@ -342,8 +344,16 @@ impl Scanner<'_> {
         }
         match &stmt.kind {
             StmtKind::Echo(e) | StmtKind::Throw(e) | StmtKind::ExprStmt(e)
-            | StmtKind::ConstDecl { value: e, .. } | StmtKind::Return(Some(e))
-            | StmtKind::Include { path: e, .. } => self.scan_expr(e),
+            | StmtKind::ConstDecl { value: e, .. } | StmtKind::Return(Some(e)) => self.scan_expr(e),
+            // Static includes have been expanded by the resolver. A remaining include/require
+            // therefore runs opaque source through the eval bridge, which can invoke every AOT
+            // declaration exactly like `eval()` can.
+            StmtKind::Include { path, .. } => {
+                self.usage.hazards.dynamic_function = true;
+                self.usage.hazards.dynamic_method = true;
+                self.usage.hazards.dynamic_class = true;
+                self.scan_expr(path);
+            }
             StmtKind::Assign { name, value } => {
                 self.scan_expr(value);
                 self.remember_assignment(name, value);

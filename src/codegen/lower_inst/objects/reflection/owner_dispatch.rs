@@ -41,7 +41,10 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
         && lower_reflection_object_by_runtime_class(ctx, inst)?
     {
         // Runtime-class dispatch leaves the fresh ReflectionObject in the result register.
-    } else if reflection_owner_requires_runtime_metadata(ctx, inst)? {
+    } else if crate::codegen::lower_inst::builtins::has_eval_context(ctx)
+        || reflection_class_literal_requires_runtime_metadata(ctx, class_name, inst)?
+        || reflection_owner_requires_runtime_metadata(ctx, inst)?
+    {
         return crate::codegen::lower_inst::builtins::lower_eval_native_object_new(ctx, inst);
     } else {
         let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
@@ -51,6 +54,48 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
     ctx.store_result_value(result)
+}
+
+/// Returns whether a literal `ReflectionClass` target needs runtime declaration metadata.
+///
+/// A class string can be lexically constant while its declaration is intentionally supplied by a
+/// dynamic include. A missing AOT doc comment is ambiguous: it can mean either an undocumented
+/// static class or a class loaded at runtime. The bridge resolves that ambiguity after loading,
+/// returning the actual comment or PHP's `false` result.
+fn reflection_class_literal_requires_runtime_metadata(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    inst: &Instruction,
+) -> Result<bool> {
+    if class_name != "ReflectionClass" {
+        return Ok(false);
+    }
+    let Some(operand) = inst.operands.first().copied() else {
+        return Ok(false);
+    };
+    let literal_source = reflection_literal_source(ctx, operand)?;
+    let Some(value) = ctx.function.value(literal_source) else {
+        return Err(CodegenIrError::missing_entry("value", literal_source.as_raw()));
+    };
+    let ValueDef::Instruction {
+        inst: source_inst, ..
+    } = value.def
+    else {
+        return Ok(false);
+    };
+    let Some(source_inst) = ctx.function.instruction(source_inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", source_inst.as_raw()));
+    };
+    if !matches!(source_inst.op, Op::ConstStr | Op::ConstClassName) {
+        return Ok(false);
+    }
+    let reflected_class = const_string_or_class_operand(ctx, operand, "ReflectionClass")?;
+    if let Some((_, class_info)) = resolve_reflection_class(ctx, &reflected_class) {
+        return Ok(class_info.doc_comment.is_none());
+    }
+    Ok(resolve_reflection_interface(ctx, &reflected_class).is_none()
+        && resolve_reflection_trait(ctx, &reflected_class).is_none()
+        && !is_reflection_enum(ctx, &reflected_class))
 }
 
 /// Materializes `ReflectionObject` metadata from the concrete runtime class of an object operand.

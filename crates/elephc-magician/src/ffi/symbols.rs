@@ -21,7 +21,18 @@ use crate::errors::EvalStatus;
 #[cfg(not(test))]
 use crate::interpreter::RuntimeValueOps;
 #[cfg(not(test))]
+use crate::interpreter::eval_spl_autoload_class_bridge;
+#[cfg(not(test))]
 use crate::runtime_hooks::ElephcRuntimeOps;
+
+/// Identifies the PHP class-like symbol table queried through the eval bridge.
+#[derive(Clone, Copy)]
+enum DynamicClassLikeKind {
+    Class,
+    Interface,
+    Trait,
+    Enum,
+}
 
 /// Checks whether a function was previously declared through `eval()`.
 ///
@@ -53,19 +64,104 @@ pub unsafe extern "C" fn __elephc_eval_constant_exists(
         .unwrap_or(0)
 }
 
-/// Checks whether a class was previously declared through `eval()`.
+/// Checks whether an eval-created or generated class exists, optionally autoloading it.
 ///
 /// # Safety
-/// `ctx` must be null or a valid eval context handle. `name_ptr` must be
-/// readable for `name_len` bytes when `name_len > 0`.
+/// `ctx` must be null or a valid mutable eval context handle. `name_ptr` must
+/// be readable for `name_len` bytes when `name_len > 0`; nonzero `autoload`
+/// invokes registered SPL callbacks after the direct lookup misses.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_dynamic_class_exists(
-    ctx: *const ElephcEvalContext,
+    ctx: *mut ElephcEvalContext,
     name_ptr: *const u8,
     name_len: u64,
+    autoload: i32,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe { eval_dynamic_class_exists_inner(ctx, name_ptr, name_len) })
-        .unwrap_or(0)
+    std::panic::catch_unwind(|| unsafe {
+        eval_dynamic_class_like_exists_inner(
+            ctx,
+            name_ptr,
+            name_len,
+            autoload,
+            DynamicClassLikeKind::Class,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Checks whether an eval-created or generated interface exists, optionally autoloading it.
+///
+/// # Safety
+/// `ctx` must be null or a valid mutable eval context handle. `name_ptr` must
+/// be readable for `name_len` bytes when `name_len > 0`; nonzero `autoload`
+/// invokes registered SPL callbacks after the direct lookup misses.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_dynamic_interface_exists(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    autoload: i32,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_dynamic_class_like_exists_inner(
+            ctx,
+            name_ptr,
+            name_len,
+            autoload,
+            DynamicClassLikeKind::Interface,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Checks whether an eval-created or generated trait exists, optionally autoloading it.
+///
+/// # Safety
+/// `ctx` must be null or a valid mutable eval context handle. `name_ptr` must
+/// be readable for `name_len` bytes when `name_len > 0`; nonzero `autoload`
+/// invokes registered SPL callbacks after the direct lookup misses.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_dynamic_trait_exists(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    autoload: i32,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_dynamic_class_like_exists_inner(
+            ctx,
+            name_ptr,
+            name_len,
+            autoload,
+            DynamicClassLikeKind::Trait,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Checks whether an eval-created or generated enum exists, optionally autoloading it.
+///
+/// # Safety
+/// `ctx` must be null or a valid mutable eval context handle. `name_ptr` must
+/// be readable for `name_len` bytes when `name_len > 0`; nonzero `autoload`
+/// invokes registered SPL callbacks after the direct lookup misses.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_dynamic_enum_exists(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    autoload: i32,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_dynamic_class_like_exists_inner(
+            ctx,
+            name_ptr,
+            name_len,
+            autoload,
+            DynamicClassLikeKind::Enum,
+        )
+    })
+    .unwrap_or(0)
 }
 
 /// Fetches a constant previously defined through `eval()`.
@@ -129,15 +225,95 @@ unsafe fn eval_constant_exists_inner(
     i32::from(context.has_constant(&name))
 }
 
-/// Runs the eval dynamic-class-exists ABI body after installing a panic boundary.
+/// Returns whether one eval context owns a class-like declaration of the requested kind.
+fn eval_context_has_class_like(
+    context: &ElephcEvalContext,
+    name: &str,
+    kind: DynamicClassLikeKind,
+) -> bool {
+    match kind {
+        DynamicClassLikeKind::Class => context.has_class(name),
+        DynamicClassLikeKind::Interface => context.has_interface(name),
+        DynamicClassLikeKind::Trait => context.has_trait(name),
+        DynamicClassLikeKind::Enum => context.has_enum(name),
+    }
+}
+
+/// Returns whether generated runtime metadata owns a class-like declaration of the requested kind.
+#[cfg(not(test))]
+fn eval_runtime_has_class_like(
+    values: &mut ElephcRuntimeOps,
+    name: &str,
+    kind: DynamicClassLikeKind,
+) -> bool {
+    match kind {
+        DynamicClassLikeKind::Class => values.class_exists(name),
+        DynamicClassLikeKind::Interface => values.interface_exists(name),
+        DynamicClassLikeKind::Trait => values.trait_exists(name),
+        DynamicClassLikeKind::Enum => values.enum_exists(name),
+    }
+    .unwrap_or(false)
+}
+
+/// Runs the eval dynamic-class-like-exists ABI body after installing a panic boundary.
 ///
 /// # Safety
-/// Mirrors `__elephc_eval_dynamic_class_exists`; invalid handles or unreadable
-/// name storage fail closed as `false`.
-unsafe fn eval_dynamic_class_exists_inner(
-    ctx: *const ElephcEvalContext,
+/// Mirrors the `__elephc_eval_dynamic_*_exists` exports; invalid handles or
+/// unreadable name storage fail closed as `false`. When autoload is enabled,
+/// this mutates the context by running registered callbacks exactly as PHP
+/// class-like probes do.
+#[cfg(not(test))]
+unsafe fn eval_dynamic_class_like_exists_inner(
+    ctx: *mut ElephcEvalContext,
     name_ptr: *const u8,
     name_len: u64,
+    autoload: i32,
+    kind: DynamicClassLikeKind,
+) -> i32 {
+    let mut fallback_context;
+    let context = if let Some(context) = ctx.as_mut() {
+        context
+    } else {
+        fallback_context = ElephcEvalContext::new();
+        crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
+        &mut fallback_context
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+        return 0;
+    };
+    context.sync_global_eval_classes();
+    if eval_context_has_class_like(context, &name, kind) {
+        return 1;
+    }
+    let mut values = ElephcRuntimeOps::with_context(context as *const _);
+    if eval_runtime_has_class_like(&mut values, &name, kind) {
+        return 1;
+    }
+    if autoload == 0 {
+        return 0;
+    }
+    let _ = eval_spl_autoload_class_bridge(&name, context, &mut values);
+    context.sync_global_eval_classes();
+    i32::from(
+        eval_context_has_class_like(context, &name, kind)
+            || eval_runtime_has_class_like(&mut values, &name, kind),
+    )
+}
+
+/// Checks an eval declaration table in unit tests without native runtime callbacks.
+///
+/// The unit-test runtime has no generated callback ABI, so this branch verifies
+/// lookup normalization while integration tests cover autoload through the real bridge.
+#[cfg(test)]
+unsafe fn eval_dynamic_class_like_exists_inner(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    _autoload: i32,
+    kind: DynamicClassLikeKind,
 ) -> i32 {
     let Some(context) = ctx.as_ref() else {
         return 0;
@@ -148,7 +324,7 @@ unsafe fn eval_dynamic_class_exists_inner(
     let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return 0;
     };
-    i32::from(context.has_class(&name))
+    i32::from(eval_context_has_class_like(context, &name, kind))
 }
 
 /// Runs the eval constant-fetch ABI body after installing a panic boundary.

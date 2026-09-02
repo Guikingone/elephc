@@ -891,7 +891,10 @@ fn emit_php_runtime_compare(
     Ok(())
 }
 
-/// Returns true for scalar values that can participate in the current loose integer path.
+/// Returns true for scalar values whose loose comparison can use integer slots.
+///
+/// `Mixed` is deliberately excluded: it can hold a string, array, object, or float, each of
+/// which requires PHP's runtime loose-comparison table rather than integer coercion.
 fn intish_or_null(ty: &PhpType) -> bool {
     matches!(
         ty,
@@ -899,18 +902,13 @@ fn intish_or_null(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Void
             | PhpType::Never
-            | PhpType::Mixed
             | PhpType::TaggedScalar
     )
 }
 
-/// Returns true for the scalar loose-equality subset that can normalize through integer slots.
+/// Returns true when both loose-equality operands have statically int-like representations.
 fn loose_intish_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
-    if intish_or_null(lhs_ty) && intish_or_null(rhs_ty) {
-        return true;
-    }
-    matches!(lhs_ty, PhpType::Mixed) && intish_or_null(rhs_ty)
-        || matches!(rhs_ty, PhpType::Mixed) && intish_or_null(lhs_ty)
+    intish_or_null(lhs_ty) && intish_or_null(rhs_ty)
 }
 
 /// Emits the target compare instruction for integer-like spaceship operands.

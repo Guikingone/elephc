@@ -17,14 +17,13 @@ use crate::types::PhpType;
 
 use super::super::Checker;
 
-/// Returns a synthetic `ClassProperty` AST node for the `message` property of builtin Exception classes.
-/// The property is public, typed `string`, with an empty string default value.
+/// Returns a synthetic `ClassProperty` AST node for PHP's protected Exception `$message` field.
 pub(super) fn builtin_exception_message_property() -> ClassProperty {
     ClassProperty {
         name: "message".to_string(),
-        visibility: Visibility::Public,
+        visibility: Visibility::Protected,
         set_visibility: None,
-        type_expr: Some(TypeExpr::Str),
+        type_expr: None,
         hooks: PropertyHooks::none(),
         readonly: false,
         is_final: false,
@@ -124,14 +123,13 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
     }
 }
 
-/// Returns a synthetic `ClassProperty` AST node for the `code` property of builtin Exception classes.
-/// The property is protected, typed `int`, with a `0` default value.
+/// Returns a synthetic `ClassProperty` AST node for PHP's protected Exception `$code` field.
 pub(super) fn builtin_exception_code_property() -> ClassProperty {
     ClassProperty {
         name: "code".to_string(),
         visibility: Visibility::Protected,
         set_visibility: None,
-        type_expr: Some(TypeExpr::Int),
+        type_expr: None,
         hooks: PropertyHooks::none(),
         readonly: false,
         is_final: false,
@@ -148,14 +146,102 @@ pub(super) fn builtin_exception_code_property() -> ClassProperty {
     }
 }
 
+/// Returns PHP's private cached Exception string representation field.
+pub(super) fn builtin_exception_string_property() -> ClassProperty {
+    ClassProperty {
+        name: "string".to_string(),
+        visibility: Visibility::Private,
+        set_visibility: None,
+        type_expr: Some(TypeExpr::Str),
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        is_promoted: false,
+        default: Some(Expr::new(
+            ExprKind::StringLiteral(String::new()),
+            crate::span::Span::dummy(),
+        )),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns PHP's protected Exception source-file field.
+pub(super) fn builtin_exception_file_property() -> ClassProperty {
+    ClassProperty {
+        name: "file".to_string(),
+        visibility: Visibility::Protected,
+        set_visibility: None,
+        type_expr: Some(TypeExpr::Str),
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        is_promoted: false,
+        default: Some(Expr::new(
+            ExprKind::StringLiteral(String::new()),
+            crate::span::Span::dummy(),
+        )),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns PHP's protected Exception source-line field.
+pub(super) fn builtin_exception_line_property() -> ClassProperty {
+    ClassProperty {
+        name: "line".to_string(),
+        visibility: Visibility::Protected,
+        set_visibility: None,
+        type_expr: Some(TypeExpr::Int),
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        is_promoted: false,
+        default: Some(Expr::new(ExprKind::IntLiteral(0), crate::span::Span::dummy())),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns PHP's private Exception backtrace field.
+pub(super) fn builtin_exception_trace_property() -> ClassProperty {
+    ClassProperty {
+        name: "trace".to_string(),
+        visibility: Visibility::Private,
+        set_visibility: None,
+        type_expr: Some(array_type()),
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        is_promoted: false,
+        default: Some(Expr::new(
+            ExprKind::ArrayLiteral(Vec::new()),
+            crate::span::Span::dummy(),
+        )),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a synthetic `ClassProperty` for PHP's `$previous` chain on builtin Exception classes.
 ///
-/// Typed `?Throwable` and stored at compact-payload offset 40 so `getPrevious()` round-trips
-/// wrap-and-rethrow chains. Default is `null`.
+/// Typed `?Throwable`, private, and defaulted to `null`.
 pub(super) fn builtin_exception_previous_property() -> ClassProperty {
     ClassProperty {
         name: "previous".to_string(),
-        visibility: Visibility::Protected,
+        visibility: Visibility::Private,
         set_visibility: None,
         type_expr: Some(nullable_throwable_type()),
         hooks: PropertyHooks::none(),

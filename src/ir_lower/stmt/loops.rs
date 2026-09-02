@@ -42,6 +42,7 @@ pub(super) fn lower_while(
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
+    let surrounding_try_handler_stack = ctx.try_handler_stack.clone();
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: header,
@@ -50,6 +51,7 @@ pub(super) fn lower_while(
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
+    ctx.try_handler_stack = surrounding_try_handler_stack;
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.restore_local_types(condition_exit_types);
@@ -71,6 +73,7 @@ pub(super) fn lower_do_while(
     branch_to(ctx, body_block);
 
     ctx.builder.position_at_end(body_block);
+    let surrounding_try_handler_stack = ctx.try_handler_stack.clone();
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: cond_block,
@@ -79,6 +82,7 @@ pub(super) fn lower_do_while(
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
+    ctx.try_handler_stack = surrounding_try_handler_stack;
     branch_to(ctx, cond_block);
 
     ctx.builder.position_at_end(cond_block);
@@ -160,6 +164,7 @@ fn lower_for_once(
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
+    let surrounding_try_handler_stack = ctx.try_handler_stack.clone();
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: update_block,
@@ -168,6 +173,7 @@ fn lower_for_once(
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
+    ctx.try_handler_stack = surrounding_try_handler_stack;
     branch_to(ctx, update_block);
 
     ctx.builder.position_at_end(update_block);

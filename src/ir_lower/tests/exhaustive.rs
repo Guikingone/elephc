@@ -169,6 +169,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
     ClassInfo {
         class_id: 1,
         declaration_span: crate::span::Span::dummy(),
+        doc_comment: None,
         parent: None,
         is_abstract: false,
         is_final: false,
@@ -475,6 +476,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::StaticVar { name: "sv".to_string(), init: int(1) }),
         stmt(StmtKind::ClassDecl {
             name: "C".to_string(),
+            doc_comment: None,
             extends: None,
             implements: Vec::new(),
             is_abstract: false,

@@ -292,9 +292,13 @@ pub(crate) fn lower_preg_match_all(
         inst.operands.get(3).copied(),
         inst.operands.get(4).copied(),
     )?;
-    abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
+    if matches_slot.is_some() {
+        abi::emit_call_label(ctx.emitter, "__rt_preg_match_all_capture");
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
+    }
     if let Some(slot) = matches_slot {
-        store_empty_preg_match_all_matches(ctx, slot)?;
+        store_matches_array(ctx, slot)?;
     }
     super::store_if_result(ctx, inst)
 }
@@ -912,75 +916,41 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resu
     ctx.release_local_before_refcounted_writeback(slot)?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
     if box_result {
+        // A pattern that declares a capture name makes the runtime return hash storage rather
+        // than a list, and only the runtime knows which it built. Stamping the box with the
+        // indexed tag reads that hash back as a dense list: the values survive, the string keys
+        // do not, and every read silently renumbers. Classify the storage instead.
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("mov x1, x0");                          // transfer the matches array payload into a Mixed box
-                ctx.emitter.instruction("mov x0, #4");                          // runtime value tag 4 = indexed array
-                ctx.emitter.instruction("mov x2, xzr");                         // indexed-array payload has no high word
+                ctx.emitter.instruction("str x0, [sp, #-16]!");                 // hold the matches array across the storage classification
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("mov rdi, rax");                        // transfer the matches array payload into a Mixed box
+                ctx.emitter.instruction("sub rsp, 16");                         // reserve one temporary slot for the matches array pointer
+                ctx.emitter.instruction("mov QWORD PTR [rsp], rax");            // hold the matches array across the storage classification
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #3");                          // is the matches array hash storage?
+                ctx.emitter.instruction("mov x0, #4");                          // runtime value tag 4 = indexed array
+                ctx.emitter.instruction("mov x9, #5");                          // runtime value tag 5 = associative array
+                ctx.emitter.instruction("csel x0, x9, x0, eq");                 // box a hash under its own tag, a list under the indexed one
+                ctx.emitter.instruction("ldr x1, [sp], #16");                   // reload the matches array as the Mixed payload
+                ctx.emitter.instruction("mov x2, xzr");                         // an array payload has no high word
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp rax, 3");                          // is the matches array hash storage?
                 ctx.emitter.instruction("mov eax, 4");                          // runtime value tag 4 = indexed array
-                ctx.emitter.instruction("xor esi, esi");                        // indexed-array payload has no high word
+                ctx.emitter.instruction("mov r8d, 5");                          // runtime value tag 5 = associative array
+                ctx.emitter.instruction("cmove rax, r8");                       // box a hash under its own tag, a list under the indexed one
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");            // reload the matches array as the Mixed payload
+                ctx.emitter.instruction("add rsp, 16");                         // release the classification temporary slot
+                ctx.emitter.instruction("xor esi, esi");                        // an array payload has no high word
             }
         }
         abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
     }
-    ctx.store_current_result_to_local(slot)?;
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
-    Ok(())
-}
-
-/// Initializes the capture destination while the full capture-matrix runtime is constructed.
-fn store_empty_preg_match_all_matches(
-    ctx: &mut FunctionContext<'_>,
-    slot: LocalSlotId,
-) -> Result<()> {
-    let local_ty = ctx.local_php_type(slot)?.codegen_repr();
-    let (element_size, box_result) = match &local_ty {
-        PhpType::Array(element_ty) => (
-            if matches!(element_ty.codegen_repr(), PhpType::Str) {
-                16
-            } else {
-                8
-            },
-            false,
-        ),
-        PhpType::Mixed | PhpType::Union(_) => (8, true),
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "preg_match_all matches destination PHP type {:?}",
-                other
-            )));
-        }
-    };
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
-    abi::emit_store_to_sp(ctx.emitter, result_reg, 0);
-    let capacity_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let element_size_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_load_int_immediate(ctx.emitter, capacity_reg, 0);
-    abi::emit_load_int_immediate(ctx.emitter, element_size_reg, element_size);
-    abi::emit_call_label(ctx.emitter, "__rt_array_new");
-    if box_result {
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction("mov x1, x0");                          // transfer the empty capture array payload into a Mixed box
-                ctx.emitter.instruction("mov x0, #4");                          // runtime value tag 4 = indexed array
-                ctx.emitter.instruction("mov x2, xzr");                         // indexed-array payload has no high word
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction("mov rdi, rax");                        // transfer the empty capture array payload into a Mixed box
-                ctx.emitter.instruction("mov eax, 4");                          // runtime value tag 4 = indexed array
-                ctx.emitter.instruction("xor esi, esi");                        // indexed-array payload has no high word
-            }
-        }
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-    }
-    abi::emit_store_to_sp(ctx.emitter, result_reg, 8);
-    ctx.release_local_before_refcounted_writeback(slot)?;
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
     ctx.store_current_result_to_local(slot)?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);

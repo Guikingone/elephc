@@ -24,17 +24,16 @@ use crate::types::PhpType;
 /// whose displacement is encoded pre-shifted by 3 — so anything less than 8-byte alignment cannot
 /// be represented and the link fails.
 const COMM_ALIGN_BYTES: usize = 8;
-const COMM_ALIGN_LOG2: usize = 3;
 
-/// Renders `.comm`'s third operand for `target`'s object format.
+/// Renders `.comm`'s third operand for one requested byte alignment and target format.
 ///
 /// Mach-O's assembler documents the operand as `log2(alignment)`; GNU as on ELF documents it as
-/// the alignment in bytes. The same intended 8-byte alignment is therefore spelled `3` on Mach-O
-/// and `8` on ELF.
-fn comm_alignment_operand(target: Target) -> usize {
+/// the alignment in bytes. `alignment_bytes` must be a non-zero power of two.
+fn comm_alignment_operand(target: Target, alignment_bytes: usize) -> usize {
+    debug_assert!(alignment_bytes.is_power_of_two() && alignment_bytes > 0);
     match target.platform {
-        Platform::MacOS => COMM_ALIGN_LOG2,
-        Platform::Linux | Platform::Windows => COMM_ALIGN_BYTES,
+        Platform::MacOS => alignment_bytes.ilog2() as usize,
+        Platform::Linux | Platform::Windows => alignment_bytes,
     }
 }
 
@@ -44,11 +43,24 @@ fn comm_alignment_operand(target: Target) -> usize {
 /// inline: the alignment operand is the one part of it that is not portable, and a hardcoded
 /// spelling is accepted by both assemblers while only being right for one of them.
 pub(crate) fn comm_directive(label: &str, size: usize, target: Target) -> String {
+    comm_directive_aligned(label, size, target, COMM_ALIGN_BYTES)
+}
+
+/// Renders a `.comm` directive with an explicit power-of-two byte alignment.
+///
+/// Runtime allocations whose payload is addressed through 128-bit-safe cells use this to
+/// preserve their own stronger alignment without weakening ordinary common symbols.
+pub(crate) fn comm_directive_aligned(
+    label: &str,
+    size: usize,
+    target: Target,
+    alignment_bytes: usize,
+) -> String {
     format!(
         ".comm {}, {}, {}\n",
         label,
         size,
-        comm_alignment_operand(target)
+        comm_alignment_operand(target, alignment_bytes)
     )
 }
 
@@ -204,12 +216,12 @@ impl DataSection {
         }
 
         let mut out = String::from(".data\n");
-        let comm_align = comm_alignment_operand(target);
+        let comm_align = comm_alignment_operand(target, COMM_ALIGN_BYTES);
         for (label, size) in &self.comm_entries {
             out.push_str(&format!(".comm {}, {}, {}\n", label, size, comm_align));
         }
         for (label, bytes) in &self.entries {
-            out.push_str(&format!(".globl {}\n{}:\n", label, label));
+            out.push_str(&format!("{}:\n", label));
             out.push_str("    .ascii \"");
             for &b in bytes {
                 match b {
@@ -224,10 +236,10 @@ impl DataSection {
             out.push_str("\"\n");
         }
         for (label, bits) in &self.float_entries {
-            out.push_str(&format!(".p2align 3\n.globl {}\n{}:\n    .quad 0x{:016x}\n", label, label, bits));
+            out.push_str(&format!(".p2align 3\n{}:\n    .quad 0x{:016x}\n", label, bits));
         }
         for (label, words) in &self.word_entries {
-            out.push_str(&format!(".p2align 3\n.globl {}\n{}:\n", label, label));
+            out.push_str(&format!(".p2align 3\n{}:\n", label));
             for word in words {
                 match word {
                     DataWord::U64(value) => {
@@ -245,7 +257,7 @@ impl DataSection {
 
 #[cfg(test)]
 mod tests {
-    use super::DataSection;
+    use super::{comm_directive_aligned, DataSection};
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
     /// A Mach-O target, whose assembler reads `.comm`'s alignment operand as `log2(bytes)`.
@@ -299,7 +311,8 @@ mod tests {
 
         let asm = data.emit(macos());
 
-        assert!(asm.contains(&format!(".globl {}\n{}:\n", label, label)));
+        assert!(asm.contains(&format!("{}:\n", label)));
+        assert!(!asm.contains(&format!(".globl {}\n", label)));
         assert!(asm.contains("    .quad 0x0000000000000001\n"));
         assert!(asm.contains("    .quad _fn_demo\n"));
     }
@@ -324,5 +337,16 @@ mod tests {
         assert!(data
             .emit(linux(Arch::X86_64))
             .contains(".comm _stack_limit, 8, 8\n"));
+    }
+
+    /// Verifies callers can request the 16-byte storage alignment required by runtime heap cells.
+    #[test]
+    fn test_explicit_common_alignment_follows_the_object_format() {
+        assert!(comm_directive_aligned("_heap_buf", 1024, macos(), 16)
+            .contains(".comm _heap_buf, 1024, 4\n"));
+        assert!(comm_directive_aligned("_heap_buf", 1024, linux(Arch::AArch64), 16)
+            .contains(".comm _heap_buf, 1024, 16\n"));
+        assert!(comm_directive_aligned("_heap_buf", 1024, linux(Arch::X86_64), 16)
+            .contains(".comm _heap_buf, 1024, 16\n"));
     }
 }

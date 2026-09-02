@@ -209,3 +209,97 @@ echo "|fin";
     );
     assert_eq!(out, "count:3|fin");
 }
+
+/// A dynamically required temporary runs its destructor and can publish into an AOT receiver.
+#[test]
+fn test_dynamic_required_temporary_destructor_mutates_aot_receiver() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+class PublicationLog {
+    public string $value = '';
+
+    public function publish(string $value): void {
+        $this->value = $value;
+    }
+}
+
+$log = new PublicationLog();
+$path = __DIR__ . '/dynamic.php';
+require $path;
+stage_publication($log);
+echo $log->value;
+"#,
+            ),
+            (
+                "dynamic.php",
+                r#"<?php
+class DeferredPublication {
+    private PublicationLog $log;
+
+    public function __construct(PublicationLog $log) {
+        $this->log = $log;
+    }
+
+    public function __destruct() {
+        $this->log->publish('released');
+    }
+}
+
+function stage_publication(PublicationLog $log): void {
+    new DeferredPublication($log);
+}
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "released");
+}
+
+/// A dynamic include releases an AOT temporary and runs its AOT destructor before returning.
+#[test]
+fn test_dynamic_required_aot_temporary_runs_aot_destructor() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+class AotPublicationLog {
+    public string $value = '';
+}
+
+class AotDeferredPublication {
+    private AotPublicationLog $log;
+
+    public function __construct(AotPublicationLog $log) {
+        $this->log = $log;
+    }
+
+    public function __destruct() {
+        $this->log->value = 'released';
+    }
+}
+
+$log = new AotPublicationLog();
+$path = __DIR__ . '/dynamic.php';
+require $path;
+stage_aot_publication($log);
+echo $log->value;
+"#,
+            ),
+            (
+                "dynamic.php",
+                r#"<?php
+function stage_aot_publication(AotPublicationLog $log): void {
+    new AotDeferredPublication($log);
+}
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "released");
+}

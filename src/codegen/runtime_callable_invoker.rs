@@ -409,6 +409,7 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
         Arch::AArch64 => {
             abi::load_at_offset(emitter, "x10", handler_base);
             abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+            emit_native_handler_pop_trace(emitter, "x10");
             abi::load_at_offset(
                 emitter,
                 "x10",
@@ -419,6 +420,7 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
         Arch::X86_64 => {
             emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler_base)); // reload the previous native exception-handler head
             abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+            emit_native_handler_pop_trace(emitter, "r10");
             emitter.instruction(&format!(
                 "mov r10, QWORD PTR [rbp - {}]",
                 handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
@@ -426,6 +428,25 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
             abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
         }
     }
+}
+
+/// Emits an opt-in callable-invoker boundary-pop trace without consuming its result.
+fn emit_native_handler_pop_trace(emitter: &mut Emitter, top_reg: &str) {
+    if std::env::var_os("ELEPHC_CODEGEN_HANDLER_TRACE").is_none() {
+        return;
+    }
+    let result_reg = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result_reg);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 3);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), 2);
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 2), top_reg);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 3), 0);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 4), 0);
+    let symbol = emitter
+        .target
+        .extern_symbol("__elephc_eval_trace_aot_handler_top");
+    abi::emit_call_label(emitter, &symbol);
+    abi::emit_pop_reg(emitter, result_reg);
 }
 
 /// Leaves a null boxed-Mixed result for Rust to translate into a pending throwable.

@@ -402,11 +402,7 @@ pub(super) fn materialize_owned_mixed_hash_operand(
             abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
         }
         PhpType::Array(_) => {
-            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
-            if ctx.emitter.target.arch == Arch::X86_64 {
-                ctx.emitter.instruction("mov rdi, rax");                        // pass the owned converted hash to the Mixed-value normalizer
-            }
-            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            materialize_runtime_array_storage_to_owned_mixed_hash(ctx, value)?;
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -415,6 +411,49 @@ pub(super) fn materialize_owned_mixed_hash_operand(
             )));
         }
     }
+    Ok(())
+}
+
+/// Converts indexed or runtime-promoted array storage to an owned Mixed-valued hash.
+///
+/// A static `array<T>` may carry hash storage after a runtime string-keyed write. Array
+/// consumers that need a hash must inspect that storage kind before deciding whether to convert
+/// indexed entries or clone an existing hash; both branches normalize destination entries to
+/// boxed Mixed cells for the shared gradual-container ABI.
+fn materialize_runtime_array_storage_to_owned_mixed_hash(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let hash = ctx.next_label("array_storage_to_mixed_hash_hash");
+    let done = ctx.next_label("array_storage_to_mixed_hash_done");
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(value, arg_reg)?;
+    abi::emit_push_reg(ctx.emitter, arg_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                             // runtime kind 3 is promoted hash storage
+            ctx.emitter.instruction(&format!("b.eq {}", hash));
+            abi::emit_pop_reg(ctx.emitter, arg_reg);
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            ctx.emitter.instruction(&format!("b {}", done));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                             // runtime kind 3 is promoted hash storage
+            ctx.emitter.instruction(&format!("je {}", hash));
+            abi::emit_pop_reg(ctx.emitter, arg_reg);
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+        }
+    }
+    ctx.emitter.label(&hash);
+    abi::emit_pop_reg(ctx.emitter, arg_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
+    ctx.emitter.label(&done);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the owned hash to the Mixed-entry normalizer
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
     Ok(())
 }
 

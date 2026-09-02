@@ -59,31 +59,118 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if let Some(message) = eval_native_constructor_access_error(class_name, context, values)? {
+    let constructor_metadata = eval_aot_method_dispatch_metadata_in_hierarchy(
+        class_name,
+        "__construct",
+        context,
+        values,
+    )?;
+    let constructor_class = constructor_metadata
+        .as_ref()
+        .map(|(declaring_class, _, _, _)| declaring_class.clone())
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    let constructor_target_is_known = constructor_metadata.is_some();
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=native_constructor stage=resolved requested={class_name:?} declaring={constructor_class:?} args={}",
+            evaluated_args.len(),
+        );
+    }
+    let access_error = eval_native_constructor_access_error(&constructor_class, context, values)
+        .map_err(|status| trace_native_constructor_error("access_metadata", &constructor_class, status))?;
+    if let Some(message) = access_error {
         return eval_throw_error(&message, context, values);
     }
-    let bridge_scope =
-        eval_native_constructor_bridge_scope(class_name, context, values)?;
-    let signature = context.native_constructor_signature(class_name);
+    let bridge_scope = eval_native_constructor_bridge_scope(&constructor_class, context, values)
+        .map_err(|status| trace_native_constructor_error("bridge_scope", &constructor_class, status))?;
+    let mut signature = context.native_constructor_signature(&constructor_class);
+    #[cfg(not(test))]
+    if constructor_target_is_known && signature.is_none() {
+        crate::context::sync_global_eval_aot_metadata(context);
+        signature = context.native_constructor_signature(&constructor_class);
+    }
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let signature_details = signature.as_ref().map(|signature| {
+            (
+                signature.param_count(),
+                signature.param_names().len(),
+                signature.required_param_count(),
+                signature.bridge_supported(),
+            )
+        });
+        eprintln!(
+            "[elephc-eval-trace] phase=native_constructor stage=signature class={constructor_class:?} details={signature_details:?}",
+        );
+    }
     let bound_args = bind_native_callable_bound_args_with_mode(
         signature,
         evaluated_args,
         by_ref_mode,
         context,
         values,
-    )?;
+    )
+    .map_err(|status| trace_native_constructor_error("bind", &constructor_class, status))?;
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=native_constructor stage=bound class={constructor_class:?} args={}",
+            bound_args.len(),
+        );
+    }
     let result = if let Some(scope) = bridge_scope.as_deref() {
         eval_with_native_bridge_scope(scope, context, || {
-            values.construct_object(object, native_bound_arg_values(&bound_args))
+            if constructor_target_is_known {
+                values.construct_object_for_class(
+                    &constructor_class,
+                    object,
+                    native_bound_arg_values(&bound_args),
+                )
+            } else {
+                values.construct_object(object, native_bound_arg_values(&bound_args))
+            }
         })
     } else {
-        values.construct_object(object, native_bound_arg_values(&bound_args))
+        if constructor_target_is_known {
+            values.construct_object_for_class(
+                &constructor_class,
+                object,
+                native_bound_arg_values(&bound_args),
+            )
+        } else {
+            values.construct_object(object, native_bound_arg_values(&bound_args))
+        }
     };
-    let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+    let writeback = if native_bound_args_require_writeback(&bound_args) {
+        write_back_native_callable_ref_args(&bound_args, context, values)
+    } else {
+        Ok(())
+    };
     match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Err(status), _) => Err(trace_native_constructor_error(
+            "construct",
+            &constructor_class,
+            status,
+        )),
+        (_, Err(status)) => Err(trace_native_constructor_error(
+            "writeback",
+            &constructor_class,
+            status,
+        )),
         (Ok(()), Ok(())) => Ok(()),
     }
+}
+
+/// Emits the failed native-constructor phase under opt-in eval tracing.
+fn trace_native_constructor_error(
+    stage: &str,
+    constructor_class: &str,
+    status: EvalStatus,
+) -> EvalStatus {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=native_constructor_error stage={stage} class={constructor_class:?} status={status:?}",
+        );
+    }
+    status
 }
 
 /// Returns the generated/AOT constructor scope that the runtime bridge can recognize.

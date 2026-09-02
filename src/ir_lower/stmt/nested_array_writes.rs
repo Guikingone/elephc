@@ -394,6 +394,39 @@ pub(super) fn lower_local_parent_fetch_for_write(
                     );
                     Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span))
                 }
+                PhpType::Mixed | PhpType::Union(_) => {
+                    // A foreach key from a generic `array` is boxed even when the live
+                    // container has already promoted to hash storage. Fetch through the same
+                    // runtime-dispatched write path as static keys, publish a possibly moved
+                    // container back to the local, then re-read the stored child cell so the
+                    // leaf assignment remains observable through the parent.
+                    let array_value = ctx.load_local(name, Some(span));
+                    let key = lower_expr(ctx, index);
+                    let ensured_ty = PhpType::Array(Box::new(PhpType::Mixed));
+                    ctx.prepare_mutated_local_owner(
+                        name,
+                        array_value,
+                        ensured_ty.clone(),
+                        Some(span),
+                    );
+                    let ensured = ctx.emit_value(
+                        Op::RuntimeCall,
+                        vec![array_value.value, key.value],
+                        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+                        ensured_ty.clone(),
+                        effects_lookup::runtime_effects(),
+                        Some(span),
+                    );
+                    ctx.store_prepared_mutated_local(name, ensured, ensured_ty, Some(span));
+                    Some(ctx.emit_value(
+                        Op::ArrayGetMixedKeyForWrite,
+                        vec![ensured.value, key.value],
+                        None,
+                        PhpType::Mixed,
+                        Op::ArrayGetMixedKeyForWrite.default_effects(),
+                        Some(span),
+                    ))
+                }
                 _ => None,
             }
         }

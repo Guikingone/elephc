@@ -122,6 +122,21 @@ fn execute_program_for_continue_runs_update_clause() {
     assert_eq!(values.output, "done");
     assert_eq!(values.get(i), FakeValue::Int(0));
 }
+
+/// Verifies `continue 2` skips the rest of the outer loop body and runs its update clause.
+#[test]
+fn execute_program_multilevel_continue_propagates_to_outer_loop() {
+    let program = parse_fragment(
+        br#"for ($outer = 2; $outer; $outer = $outer - 1) { for ($inner = 2; $inner; $inner = $inner - 1) { echo $outer . $inner; continue 2; } echo "unreachable"; }"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "2212");
+}
 /// Verifies comparison operators return boolean cells usable by echo and branches.
 #[test]
 fn execute_program_comparisons_return_bool_cells() {
@@ -388,6 +403,63 @@ fn execute_program_foreach_iterates_assoc_values_only() {
 
     assert_eq!(values.output, "12");
 }
+/// Verifies foreach references write through source array elements and nested alias targets.
+#[test]
+fn execute_program_foreach_references_preserve_array_element_aliases() {
+    let program = parse_fragment(
+        br#"$items = [1, 2];
+foreach ($items as $key => &$item) {
+    $item = $item + $key + 10;
+}
+$aliases = [];
+foreach ($items as $key => &$item) {
+    $aliases["nested"][$key] =& $item;
+}
+$aliases["nested"][0] = 99;
+echo $items[0] . ":" . $items[1] . ":" . $item;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "99:13:13");
+}
+
+/// Verifies a short-array destructuring condition returns its RHS and assigns null on misses.
+#[test]
+fn execute_program_array_destructure_assignment_condition_handles_null() {
+    let program = parse_fragment(
+        br#"$scopes = ["property" => ["declaring", "real"]];
+if ([$scope, $name] = $scopes["property"] ?? null) { echo $scope . ":" . $name; }
+if ([$scope, $name] = $scopes["missing"] ?? null) { echo "unexpected"; }
+echo ":" . (is_null($scope) ? "null" : $scope);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "declaring:real:null");
+}
+
+/// Verifies goto propagates through a loop and resumes at an outer function-local label.
+#[test]
+fn execute_program_goto_exits_nested_loop_to_outer_label() {
+    let program = parse_fragment(
+        br#"foreach ([1, 2] as $item) { if ($item) { goto done; } } echo "skip"; done: echo "ok";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "ok");
+}
+
 /// Verifies break and continue control foreach execution inside eval.
 #[test]
 fn execute_program_foreach_honors_break_and_continue() {

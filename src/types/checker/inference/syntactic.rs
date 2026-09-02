@@ -372,7 +372,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::MethodCall { .. }
         | ExprKind::NullsafeMethodCall { .. }
         | ExprKind::NullsafeDynamicMethodCall { .. }
-        | ExprKind::StaticMethodCall { .. } => PhpType::Mixed,
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. } => PhpType::Mixed,
         ExprKind::Assignment { value, .. } => infer_expr_type_syntactic(value),
         ExprKind::NullCoalesce { value, default } => {
             let left_ty = infer_expr_type_syntactic(value);
@@ -708,6 +710,28 @@ mod tests {
         );
 
         assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+    }
+
+    /// Verifies indirect callable syntax has no fabricated scalar return contract.
+    #[test]
+    fn test_syntactic_indirect_callable_calls_are_mixed() {
+        let expr_call = Expr::new(
+            ExprKind::ExprCall {
+                callee: Box::new(Expr::new(ExprKind::Variable("callback".to_string()), Span::dummy())),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+        let closure_call = Expr::new(
+            ExprKind::ClosureCall {
+                var: "callback".to_string(),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+
+        assert_eq!(infer_expr_type_syntactic(&expr_call), PhpType::Mixed);
+        assert_eq!(infer_expr_type_syntactic(&closure_call), PhpType::Mixed);
     }
 
     /// Verifies an assignment expression has the assigned value's syntactic result type.

@@ -532,3 +532,49 @@ $c(...["b" => 2, "a" => 1]);
     );
     assert_eq!(out, "1|2");
 }
+
+/// Verifies an interface-typed receiver can dispatch a concrete-only method
+/// after one leading argument and a gradual positional spread.
+#[test]
+fn test_interface_method_with_leading_argument_and_gradual_spread() {
+    let out = compile_and_run(
+        r#"<?php
+interface DeprecationCarrier {}
+
+class DeprecationBag implements DeprecationCarrier {
+    public function deprecate(string $name, string $package, string $version, string $message): void {
+        echo "$name|$package|$version|$message";
+    }
+}
+
+function emitDeprecation(DeprecationCarrier $bag, mixed $details): void {
+    $bag->deprecate("setting", ...$details);
+}
+
+emitDeprecation(new DeprecationBag(), ["vendor/package", "1.0", "use another setting"]);
+"#,
+    );
+    assert_eq!(out, "setting|vendor/package|1.0|use another setting");
+}
+
+/// Verifies a static descriptor wrapper preserves a fourth string argument
+/// materialized from a gradual positional spread.
+#[test]
+fn test_static_method_with_leading_argument_and_gradual_spread() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticDeprecationBag {
+    public static function deprecate(string $name, string $package, string $version, string $message): void {
+        echo "$name|$package|$version|$message";
+    }
+}
+
+function emitDeprecation(mixed $details): void {
+    call_user_func([StaticDeprecationBag::class, 'deprecate'], "setting", ...$details);
+}
+
+emitDeprecation(["vendor/package", "1.0", "use another setting"]);
+"#,
+    );
+    assert_eq!(out, "setting|vendor/package|1.0|use another setting");
+}

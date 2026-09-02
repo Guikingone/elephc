@@ -197,6 +197,27 @@ echo strrchr('abc', 'z') === false ? 'F' : 'bad';
     assert_eq!(out, "\\C|bc|F");
 }
 
+/// Verifies `strpbrk()` selects the first byte from its character set and preserves `false`.
+#[test]
+fn test_strpbrk_suffix_miss_binary_bytes_and_empty_characters_error() {
+    let out = compile_and_run(
+        r#"<?php
+echo strpbrk("abc123", "32"), "|";
+echo \STRPBRK(string: "abc", characters: "z") === false ? "F" : "bad", "|";
+echo strpbrk("a".chr(0)."b", chr(0)), "|";
+try {
+    strpbrk("abc", "");
+} catch (ValueError $error) {
+    echo get_class($error), ":", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "23|F|\0b|ValueError:strpbrk(): Argument #2 ($characters) must be a non-empty string"
+    );
+}
+
 /// Verifies php-src byte-span semantics, bounds, naming, and namespace fallback.
 #[test]
 fn test_strcspn_and_strspn_php_src_semantics() {

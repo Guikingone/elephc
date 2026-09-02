@@ -136,6 +136,39 @@ fn label_c_global(emitter: &mut Emitter, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen_support::emit::Emitter;
+
+    /// Verifies reflection-name scans allocate incrementally instead of reserving every table row.
+    #[test]
+    fn reflection_name_scans_start_from_small_dynamic_arrays() {
+        let mut aarch64 = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        aarch64_reflection_names::emit_aarch64_eval_reflection_member_names(
+            &mut aarch64,
+            "test_reflection_member_names",
+            "_test_reflection_member_count",
+            "_test_reflection_members",
+            "test_reflection_member_names",
+            "member",
+            56,
+        );
+        let aarch64_asm = aarch64.output();
+        assert!(aarch64_asm.contains("mov x0, #4"));
+        assert!(!aarch64_asm.contains("mov x0, x9"));
+
+        let mut x86_64 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        x86_64_reflection_names::emit_x86_64_eval_reflection_member_names(
+            &mut x86_64,
+            "test_reflection_member_names_x86_64",
+            "_test_reflection_member_count_x86_64",
+            "_test_reflection_members_x86_64",
+            "test_reflection_member_names_x86_64",
+            "member",
+            56,
+        );
+        let x86_64_asm = x86_64.output();
+        assert!(x86_64_asm.contains("mov rdi, 4"));
+        assert!(!x86_64_asm.contains("mov rdi, r10"));
+    }
     use crate::codegen_support::platform::{Platform, Target};
 
     /// Emits the whole eval bridge for one target and returns the assembly text.
@@ -207,6 +240,30 @@ mod tests {
                 !arm.contains("__rt_heap_free"),
                 "the eval resource arm must not free borrowed scratch ({target:?}):\n{arm}"
             );
+        }
+    }
+
+    /// Verifies the eval bridge exposes an owning by-value copy on every target.
+    #[test]
+    fn eval_value_copy_uses_mixed_clone_on_both_targets() {
+        for (target, label, transfer) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "__elephc_eval_value_copy:\n",
+                "b __rt_mixed_clone",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "__elephc_eval_value_copy:\n",
+                "jmp __rt_mixed_clone",
+            ),
+        ] {
+            let asm = emit_for(target);
+            let arm = asm
+                .split(label)
+                .nth(1)
+                .unwrap_or_else(|| panic!("missing eval value copy wrapper for {target:?}:\n{asm}"));
+            assert!(arm.starts_with(transfer) || arm.contains(transfer), "{target:?}: {arm}");
         }
     }
 

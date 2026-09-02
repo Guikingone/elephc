@@ -306,6 +306,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         }
         StmtKind::ClassDecl {
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -332,6 +333,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             pass.leave_class();
             StmtKind::ClassDecl {
                 name,
+                doc_comment,
                 extends,
                 implements,
                 is_abstract,

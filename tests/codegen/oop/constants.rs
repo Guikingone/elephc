@@ -62,6 +62,30 @@ echo Greet::HELLO;
     assert_eq!(out, "hi");
 }
 
+/// Verifies `isset()` distinguishes present and missing keys in a class constant hash.
+#[test]
+fn test_isset_class_constant_hash_key_presence() {
+    let out = compile_and_run(
+        r#"<?php
+class ClassConstantIssetRegistry {
+    private const INTERNAL_TYPES = [
+        "int" => true,
+        "string" => true,
+    ];
+
+    public static function has(string $name): bool {
+        return isset(self::INTERNAL_TYPES[$name]);
+    }
+}
+
+echo ClassConstantIssetRegistry::has("int") ? "hit" : "miss";
+echo ":";
+echo ClassConstantIssetRegistry::has("Symfony\\Component\\HttpFoundation\\Request") ? "hit" : "miss";
+"#,
+    );
+    assert_eq!(out, "hit:miss");
+}
+
 /// Verifies class constant inherited from parent.
 #[test]
 fn test_class_constant_inherited_from_parent() {

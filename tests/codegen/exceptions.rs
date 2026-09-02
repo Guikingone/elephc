@@ -26,6 +26,35 @@ try {
     assert_eq!(out, "Error|dynamic:payload");
 }
 
+/// Verifies PHP's internal Exception fields remain constructible through ReflectionProperty.
+#[test]
+fn test_exception_reflection_declares_internal_properties() {
+    let out = compile_and_run(
+        r#"<?php
+$trace = new ReflectionProperty(Exception::class, 'trace');
+$previous = new ReflectionProperty(Exception::class, 'previous');
+$message = new ReflectionProperty(Exception::class, 'message');
+echo $trace->getName(), '|', $previous->getName(), '|', $message->getName();
+"#,
+    );
+    assert_eq!(out, "trace|previous|message");
+}
+
+/// Verifies a compact builtin Throwable still exposes an array through `getTrace()`.
+#[test]
+fn test_exception_get_trace_returns_array_after_internal_property_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    throw new Exception('trace probe');
+} catch (Exception $exception) {
+    echo gettype($exception->getTrace());
+}
+"#,
+    );
+    assert_eq!(out, "array");
+}
+
 /// Verifies exception try catch same function.
 #[test]
 fn test_exception_try_catch_same_function() {
@@ -437,6 +466,96 @@ fn test_exception_try_catch_cross_function() {
         "<?php class MyException extends Exception {} function boom() { throw new MyException(); } try { boom(); } catch (MyException $e) { echo 7; }",
     );
     assert_eq!(out, "7");
+}
+
+/// Verifies protected returns and loop exits unlink their handler before a later outer throw.
+///
+/// A handler record lives in its owner's native frame. Returning, breaking, or continuing out of
+/// a protected block must therefore restore the previous record; otherwise a subsequent throw
+/// can longjmp into a frame that has already been reused.
+#[test]
+fn test_try_handler_unlinks_on_return_break_and_continue_exits() {
+    let out = compile_and_run(
+        r#"<?php
+function leaveByReturn(): string {
+    try {
+        return 'return';
+    } catch (RuntimeException $exception) {
+        return 'wrong-return-catch';
+    }
+}
+
+function leaveConditionalTry(bool $early): string {
+    try {
+        if ($early) {
+            return 'if-return';
+        }
+        return 'else-return';
+    } catch (RuntimeException $exception) {
+        return 'wrong-conditional-catch';
+    }
+}
+
+function leaveLoopTry(bool $run): string {
+    try {
+        while ($run) {
+            return 'loop-return';
+        }
+        return 'after-loop';
+    } catch (RuntimeException $exception) {
+        return 'wrong-loop-catch';
+    }
+}
+
+function leaveByBreak(): void {
+    while (true) {
+        try {
+            break;
+        } catch (RuntimeException $exception) {
+            echo 'wrong-break-catch';
+        }
+    }
+}
+
+function leaveByContinue(): void {
+    $iteration = 0;
+    while ($iteration++ === 0) {
+        try {
+            continue;
+        } catch (RuntimeException $exception) {
+            echo 'wrong-continue-catch';
+        }
+    }
+}
+
+function breakInnerLoopInsideTry(): string {
+    try {
+        while (true) {
+            break;
+        }
+        throw new RuntimeException('inside');
+    } catch (RuntimeException $exception) {
+        return 'inner-break-kept-handler:' . $exception->getMessage();
+    }
+}
+
+echo leaveByReturn(), '|';
+echo leaveConditionalTry(true), ':', leaveConditionalTry(false), '|';
+echo leaveLoopTry(true), ':', leaveLoopTry(false), '|';
+leaveByBreak();
+leaveByContinue();
+echo breakInnerLoopInsideTry(), '|';
+try {
+    throw new RuntimeException('outer');
+} catch (RuntimeException $exception) {
+    echo 'outer-catch:', $exception->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "return|if-return:else-return|loop-return:after-loop|inner-break-kept-handler:inside|outer-catch:outer"
+    );
 }
 
 /// Verifies nested try-catch where the inner catch handles InnerException and

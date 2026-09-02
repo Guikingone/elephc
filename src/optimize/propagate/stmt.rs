@@ -356,6 +356,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         }
         StmtKind::ClassDecl {
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -369,6 +370,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             Stmt::new(
                 StmtKind::ClassDecl {
                     name,
+                    doc_comment,
                     extends,
                     implements,
                     is_abstract,

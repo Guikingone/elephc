@@ -84,8 +84,10 @@ pub(super) fn lower_include_once_guard(
     });
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
+    let surrounding_try_handler_stack = ctx.try_handler_stack.clone();
     lower_block(ctx, body);
     branch_to(ctx, after_block);
     ctx.builder.position_at_end(after_block);
+    ctx.try_handler_stack = surrounding_try_handler_stack;
     ctx.clear_static_callable_locals();
 }

@@ -57,6 +57,44 @@ fn parse_fragment_keeps_null_coalesce_assignment_right_associative() {
     );
 }
 
+/// Verifies `??=` binds to the rightmost lvalue of a concatenation expression.
+#[test]
+fn parse_fragment_accepts_null_coalesce_assignment_after_concat() {
+    let program = parse_fragment(
+        br#"return $directory.$tmpSuffix ??= str_replace('/', '-', 'x/y');"#,
+    )
+    .expect("concatenation RHS null-coalesce assignment should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::Binary {
+            op: EvalBinOp::Concat,
+            right,
+            ..
+        }))]
+            if matches!(right.as_ref(), EvalExpr::NullCoalesceAssign { target, .. }
+                if matches!(target.as_ref(), EvalExpr::LoadVar(name) if name == "tmpSuffix"))
+    ));
+}
+
+/// Verifies a negated static property keeps `??=` bound to that property target.
+#[test]
+fn parse_fragment_accepts_negated_static_property_null_coalesce_assignment() {
+    let program = parse_fragment(
+        br#"return !self::$ready ??= StaticAssignmentProbe::resolve();"#,
+    )
+    .expect("negated static-property null-coalesce assignment should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::Unary {
+            op: EvalUnaryOp::LogicalNot,
+            expr,
+        }))]
+            if matches!(expr.as_ref(), EvalExpr::NullCoalesceAssign { target, .. }
+                if matches!(target.as_ref(), EvalExpr::StaticPropertyGet { class_name, property }
+                    if class_name == "self" && property == "ready"))
+    ));
+}
+
 /// Verifies a statement-level nested array target remains one writable `??=` expression.
 #[test]
 fn parse_fragment_accepts_nested_array_null_coalesce_assignment() {
@@ -82,6 +120,163 @@ fn parse_fragment_accepts_chained_assignment_expression() {
             ..
         }] if matches!(target.as_ref(), EvalExpr::LoadVar(name) if name == "loader")
     ));
+}
+
+/// Verifies short-array destructuring assignments remain expressions in conditions.
+#[test]
+fn parse_fragment_accepts_array_destructure_assignment_expression() {
+    let program = parse_fragment(
+        br#"if ([$scope, $name] = $propertyScopes[$property] ?? null) { echo $scope . $name; }"#,
+    )
+    .expect("destructuring condition should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::If { condition: EvalExpr::ArrayDestructureAssign { targets, value }, .. }]
+            if targets == &vec![Some("scope".to_string()), Some("name".to_string())]
+                && matches!(value.as_ref(), EvalExpr::NullCoalesce { .. })
+    ));
+}
+
+/// Verifies a leading logical negation applies after its nested assignment expression.
+#[test]
+fn parse_fragment_accepts_negated_assignment_expression() {
+    let program = parse_fragment(br#"return !$valueIsStatic = $values[0] !== $sentinel;"#)
+        .expect("negated assignment should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::Unary {
+            op: EvalUnaryOp::LogicalNot,
+            expr,
+        }))] if matches!(expr.as_ref(), EvalExpr::Assign { target, value }
+            if matches!(target.as_ref(), EvalExpr::LoadVar(name) if name == "valueIsStatic")
+                && matches!(value.as_ref(), EvalExpr::Binary { op: EvalBinOp::StrictNotEq, .. }))
+    ));
+}
+
+/// Verifies a comparison assigns its right operand at PHP assignment precedence.
+#[test]
+fn parse_fragment_accepts_comparison_right_hand_assignment() {
+    let program = parse_fragment(br#"return null !== $ref = 1;"#)
+        .expect("comparison assignment should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::Binary {
+            op: EvalBinOp::StrictNotEq,
+            right,
+            ..
+        }))] if matches!(right.as_ref(), EvalExpr::Assign { target, value }
+            if matches!(target.as_ref(), EvalExpr::LoadVar(name) if name == "ref")
+                && matches!(value.as_ref(), EvalExpr::Const(EvalConst::Int(1))))
+    ));
+}
+
+/// Verifies a logical branch preserves a terminal comparison assignment on its right side.
+#[test]
+fn parse_fragment_accepts_logical_comparison_right_hand_assignment() {
+    let program = parse_fragment(br#"return $enabled && null !== $ref = 1;"#)
+        .expect("logical comparison assignment should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::Binary {
+            op: EvalBinOp::LogicalAnd,
+            right,
+            ..
+        }))] if matches!(right.as_ref(), EvalExpr::Binary {
+            op: EvalBinOp::StrictNotEq,
+            right,
+            ..
+        } if matches!(right.as_ref(), EvalExpr::Assign { target, .. }
+            if matches!(target.as_ref(), EvalExpr::LoadVar(name) if name == "ref")))
+    ));
+}
+
+/// Verifies a logical branch preserves a terminal negated assignment on its right side.
+#[test]
+fn parse_fragment_accepts_logical_negated_right_hand_assignment() {
+    let program = parse_fragment(
+        br#"return $receiver->isAnonymous() || !$class = $receiver->getClosureCalledClass();"#,
+    )
+    .expect("logical negated assignment should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::Binary {
+            op: EvalBinOp::LogicalOr,
+            right,
+            ..
+        }))] if matches!(right.as_ref(), EvalExpr::Unary {
+            op: EvalUnaryOp::LogicalNot,
+            expr,
+        } if matches!(expr.as_ref(), EvalExpr::Assign { target, value }
+            if matches!(target.as_ref(), EvalExpr::LoadVar(name) if name == "class")
+                && matches!(value.as_ref(), EvalExpr::MethodCall { object, method, args }
+                    if method == "getClosureCalledClass" && args.is_empty()
+                        && matches!(object.as_ref(), EvalExpr::LoadVar(name) if name == "receiver"))))
+    ));
+}
+
+/// Verifies a variable array read can continue into an instance-method postfix expression.
+#[test]
+fn parse_fragment_accepts_array_element_method_call_statement() {
+    let program = parse_fragment(br#"$objects[$state]->__wakeup();"#)
+        .expect("array element method call should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Expr(EvalExpr::MethodCall { object, method, args })]
+            if method == "__wakeup" && args.is_empty()
+                && matches!(object.as_ref(), EvalExpr::ArrayGet { array, index }
+                    if matches!(array.as_ref(), EvalExpr::LoadVar(name) if name == "objects")
+                        && matches!(index.as_ref(), EvalExpr::LoadVar(name) if name == "state"))
+    ));
+}
+
+/// Verifies a prefix increment can supply an array index expression.
+#[test]
+fn parse_fragment_accepts_prefix_increment_array_index_expression() {
+    let program = parse_fragment(br#"return $tokens[++$i];"#).expect("prefix index should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::ArrayGet { index, .. }))]
+            if matches!(index.as_ref(), EvalExpr::CompoundAssign {
+                target,
+                op: EvalBinOp::Add,
+                value,
+            } if matches!(target.as_ref(), EvalExpr::LoadVar(name) if name == "i")
+                && matches!(value.as_ref(), EvalExpr::Const(EvalConst::Int(1))))
+    ));
+}
+
+/// Verifies a postfix increment remains an expression while returning an array element index.
+#[test]
+fn parse_fragment_accepts_postfix_increment_expression() {
+    let program = parse_fragment(br#"return $i++;"#).expect("postfix increment should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::PostfixIncDec { target, increment: true }))]
+            if matches!(target.as_ref(), EvalExpr::LoadVar(name) if name == "i")
+    ));
+}
+
+/// Verifies a nested array append lowers to a generic writable array target.
+#[test]
+fn parse_fragment_accepts_nested_array_append_statement() {
+    let program = parse_fragment(br#"$index[$key][] = $value;"#)
+        .expect("nested append should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::ArrayAppend {
+            target: EvalExpr::ArrayGet { array, index },
+            value: EvalExpr::LoadVar(value),
+        }] if value == "value"
+            && matches!(array.as_ref(), EvalExpr::LoadVar(name) if name == "index")
+            && matches!(index.as_ref(), EvalExpr::LoadVar(name) if name == "key")
+    ));
+}
+
+/// Verifies callable signatures accept PHP's trailing comma after the final parameter.
+#[test]
+fn parse_fragment_accepts_trailing_parameter_comma() {
+    parse_fragment(br#"function collectValues(int $first, string $second,) {}"#)
+        .expect("trailing parameter comma should parse");
 }
 
 /// Verifies a generated runtime bootstrap shape parses as one complete fragment.
@@ -166,6 +361,39 @@ fn parse_fragment_accepts_reference_assignment_source() {
             source: "right".to_string(),
         }]
     );
+}
+
+/// Verifies nested array elements can bind to an existing variable reference.
+#[test]
+fn parse_fragment_accepts_array_reference_assignment_source() {
+    let program = parse_fragment(b"$refs[$group][$name] =& $value;").expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ArrayReferenceBind {
+            target: EvalExpr::ArrayGet {
+                array: Box::new(EvalExpr::ArrayGet {
+                    array: Box::new(EvalExpr::LoadVar("refs".to_string())),
+                    index: Box::new(EvalExpr::LoadVar("group".to_string())),
+                }),
+                index: Box::new(EvalExpr::LoadVar("name".to_string())),
+            },
+            source: EvalExpr::LoadVar("value".to_string()),
+        }]
+    );
+}
+
+/// Verifies an array reference assignment accepts a nested array element source lvalue.
+#[test]
+fn parse_fragment_accepts_nested_array_reference_assignment_source() {
+    let program = parse_fragment(b"$value[$key] =& $refs[$rid];").expect("fragment should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::ArrayReferenceBind {
+            target: EvalExpr::ArrayGet { .. },
+            source: EvalExpr::ArrayGet { array, index },
+        }] if matches!(array.as_ref(), EvalExpr::LoadVar(name) if name == "refs")
+            && matches!(index.as_ref(), EvalExpr::LoadVar(name) if name == "rid")
+    ));
 }
 /// Verifies multiplicative operators preserve PHP precedence and associativity.
 #[test]

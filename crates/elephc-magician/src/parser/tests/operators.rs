@@ -220,6 +220,19 @@ fn parse_fragment_accepts_scalar_cast_source() {
     );
 }
 
+/// Verifies `(array)` casts lower through the dynamic cast expression node.
+#[test]
+fn parse_fragment_accepts_array_cast_source() {
+    let program = parse_fragment(br#"return (array) $value;"#).expect("array cast should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::Cast {
+            target: EvalCastType::Array,
+            expr,
+        }))] if matches!(expr.as_ref(), EvalExpr::LoadVar(name) if name == "value")
+    ));
+}
+
 /// Verifies logical operators parse with `&&` binding tighter than `||`.
 #[test]
 fn parse_fragment_accepts_short_circuit_logical_source() {

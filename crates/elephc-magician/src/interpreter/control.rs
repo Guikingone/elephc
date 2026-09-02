@@ -17,8 +17,9 @@ pub(super) enum EvalControl {
     ReturnVoid,
     Return(RuntimeCellHandle),
     Throw(RuntimeCellHandle),
-    Break,
-    Continue,
+    Break(u32),
+    Continue(u32),
+    Goto(String),
 }
 
 /// Final result of executing a parsed eval program.

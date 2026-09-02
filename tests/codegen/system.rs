@@ -1744,6 +1744,54 @@ fn test_json_decode_unicode_surrogate_pair() {
 
 // --- Regex functions ---
 
+/// Verifies a named capture group reaches `$matches` under both its name and its number.
+///
+/// PCRE2 numbers capture groups; PHP then writes each declared name immediately BEFORE the
+/// numeric key it aliases, which makes `$matches` an ordered hash rather than a list. Building
+/// that array as an indexed list dropped every string key SILENTLY — `preg_match()` still
+/// returned 1 and the numbered groups still read back — so Symfony's YAML parser saw
+/// `$values['key']` as null and reported every parsed file as empty.
+///
+/// The last two cases pin what must NOT change: a pattern with no declared name still produces a
+/// plain list, and a failed match still produces an empty array.
+#[test]
+fn test_preg_match_populates_named_capture_groups() {
+    let out = compile_and_run(
+        r##"<?php
+preg_match('#^(?P<k>\w+): (?P<v>\d+)$#', 'a: 1', $m);
+echo implode(',', array_keys($m)), '|', $m['k'], $m['v'], $m[1], $m[2], '|', count($m), "\n";
+
+preg_match('#(\w)(?P<mid>\w)(\w)#', 'abc', $m2);
+echo implode(',', array_keys($m2)), '|', $m2['mid'], $m2[1], $m2[3], '|', count($m2), "\n";
+
+preg_match("#(?<q>a)(?'r'b)#", 'ab', $m3);
+echo implode(',', array_keys($m3)), '|', $m3['q'], $m3['r'], "\n";
+
+preg_match('#^(?P<a>x)?(?P<b>y)$#', 'y', $m4);
+echo implode(',', array_keys($m4)), '|[', $m4['a'], ']', $m4['b'], "\n";
+
+preg_match('#^a: (\d+)$#', 'a: 1', $m5);
+echo implode(',', array_keys($m5)), '|', $m5[1], '|', count($m5), "\n";
+
+echo preg_match('#^(?P<k>\w+)$#', '!!', $m6), '|', count($m6), "\n";
+
+foreach ($m as $key => $value) {
+    echo $key, '=', $value, ';';
+}
+"##,
+    );
+    assert_eq!(
+        out,
+        "0,k,1,v,2|a1a1|5\n\
+         0,1,mid,2,3|bac|5\n\
+         0,q,1,r,2|ab\n\
+         0,a,1,b,2|[]y\n\
+         0,1|1|2\n\
+         0|0\n\
+         0=a: 1;k=a;1=a;v=1;2=1;"
+    );
+}
+
 /// Verifies every PHP regex delimiter is honoured, not just `/`.
 ///
 /// PHP accepts any non-alphanumeric, non-backslash, non-whitespace delimiter, and the bracket
@@ -1780,6 +1828,18 @@ fn test_preg_match_leaves_an_undelimited_pattern_alone() {
 fn test_preg_match_simple() {
     let out = compile_and_run(r#"<?php echo preg_match("/hello/", "hello world");"#);
     assert_eq!(out, "1");
+}
+
+/// Verifies regex subjects beyond the fixed C-string scratch capacity remain intact.
+#[test]
+fn test_preg_match_accepts_subject_larger_than_cstr_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$subject = str_repeat("a", 8192) . "z";
+echo preg_match("/z$/", $subject) . ":" . preg_match_all("/a+/", $subject);
+"#,
+    );
+    assert_eq!(out, "1:1");
 }
 
 /// Verifies regex string arguments accept gradual values while preserving every converted pair.
@@ -2061,13 +2121,16 @@ fn test_preg_match_all_count() {
     assert_eq!(out, "3");
 }
 
-/// Verifies the full `preg_match_all()` call shape preserves the integer match count.
+/// Verifies `preg_match_all()` writes its pattern-order full-match list by reference.
 #[test]
-fn test_preg_match_all_with_capture_destination_count() {
+fn test_preg_match_all_with_capture_destination() {
     let out = compile_and_run(
-        r#"<?php echo preg_match_all('/[0-9]+/', 'a1b2c3', $matches, PREG_PATTERN_ORDER);"#,
+        r#"<?php
+$count = preg_match_all('/[0-9]+/', 'a1b22c333', $matches, PREG_PATTERN_ORDER);
+echo $count . ':' . count($matches) . ':' . implode(',', $matches[0]);
+"#,
     );
-    assert_eq!(out, "3");
+    assert_eq!(out, "3:1:1,22,333");
 }
 
 /// Verifies `preg_match_all` returns 0 when the pattern has no matches in the subject.
@@ -2216,6 +2279,153 @@ echo $result;
 "#,
     );
     assert_eq!(out, "price: [123] and [456]");
+}
+
+/// Verifies regex callback matches remain an array when the closure captures arrays and strings.
+#[test]
+fn test_preg_replace_callback_match_array_with_captures() {
+    let out = compile_and_run(
+        r#"<?php
+$resolving = ["known" => true];
+$prefix = "value:";
+$result = preg_replace_callback(
+    "/%([^%]+)%/",
+    function (array $match) use ($resolving, $prefix): string {
+        $key = $match[1];
+        return $resolving[$key] ? $prefix . $key : "missing";
+    },
+    "%known%"
+);
+echo $result;
+"#,
+    );
+    assert_eq!(out, "value:known");
+}
+
+/// Verifies regex callbacks preserve their match array when they capture lexical state and `$this`.
+#[test]
+fn test_preg_replace_callback_match_array_with_this_and_captures() {
+    let out = compile_and_run(
+        r#"<?php
+class RegexCallbackState {
+    private array $resolving = ["known" => true];
+    private string $prefix = "value:";
+
+    public function resolve(string $value, array $resolving = []): string {
+        preg_match("/^%([^%\\s]+)%$/", $value, $match);
+
+        return preg_replace_callback(
+            "/%%|%([^%\\s]+)%/",
+            function ($match) use ($resolving, $value) {
+                $key = $match[1];
+                return $resolving[$key] ? $this->prefix . $key : $value;
+            },
+            $value
+        );
+    }
+}
+eval('$state = new RegexCallbackState(); $resolving = []; $resolving["known"] = true; echo $state->resolve("%known%", $resolving);');
+"#,
+    );
+    assert_eq!(out, "value:known");
+}
+
+/// Verifies nested regex replacement callbacks preserve each invocation's match array.
+#[test]
+fn test_preg_replace_callback_nested_match_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+class NestedRegexCallbackState {
+    private array $parameters = ["outer" => "%inner%", "inner" => "done"];
+
+    public function resolve(string $value, array $resolving = []): string {
+        preg_match("/^%([^%\\s]+)%$/", $value, $match);
+
+        return preg_replace_callback(
+            "/%%|%([^%\\s]+)%/",
+            function ($match) use ($resolving, $value) {
+                if (!isset($match[1])) {
+                    return "%%";
+                }
+
+                $key = $match[1];
+                if (isset($resolving[$key])) {
+                    return "circular";
+                }
+
+                $resolving[$key] = true;
+
+                return $this->resolve($this->parameters[$key], $resolving);
+            },
+            $value
+        );
+    }
+}
+eval('$state = new NestedRegexCallbackState(); echo $state->resolve("%outer%", []);');
+"#,
+    );
+    assert_eq!(out, "done");
+}
+
+/// Verifies repeated regex callbacks keep their capture-array pointer across many replacements.
+#[test]
+fn test_preg_replace_callback_many_match_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$resolving = ["known" => true];
+$prefix = "value:";
+$subject = str_repeat("%known%", 64);
+echo preg_replace_callback(
+    "/%%|%([^%\\s]+)%/",
+    function ($match) use ($resolving, $prefix) {
+        $key = $match[1];
+
+        return $resolving[$key] ? $prefix . $key : "missing";
+    },
+    $subject
+);
+"#,
+    );
+    assert_eq!(out, "value:known".repeat(64));
+}
+
+/// Verifies an instance call preserves an array argument that follows a string argument.
+#[test]
+fn test_interface_method_materializes_omitted_array_after_mixed_argument() {
+    let out = compile_and_run(
+        r#"<?php
+interface ArrayAfterStringForwarderContract {
+    public function outer(mixed $value): string;
+}
+
+class ArrayAfterStringForwarder implements ArrayAfterStringForwarderContract {
+    private array $values = ["value"];
+
+    public function inner(string $value, array $context): string {
+        return $value . ":" . $context["answer"];
+    }
+
+    public function outer(mixed $value, array $context = ["answer" => "done"]): string {
+        return $this->inner($value, $context);
+    }
+
+    public function run(): string {
+        foreach ($this->values as $value) {
+            return $this->outer($value);
+        }
+
+        return "";
+    }
+}
+
+function invokeArrayAfterStringForwarder(ArrayAfterStringForwarderContract $forwarder, mixed $value): string {
+    return $forwarder->outer($value);
+}
+
+echo invokeArrayAfterStringForwarder(new ArrayAfterStringForwarder(), "value");
+"#,
+    );
+    assert_eq!(out, "value:done");
 }
 
 /// Verifies literal pattern arrays apply each callback replacement in source order.

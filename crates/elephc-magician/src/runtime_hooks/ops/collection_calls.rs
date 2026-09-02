@@ -276,10 +276,58 @@ macro_rules! impl_collection_call_ops {
                 self.context.cast(),
             )
         };
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() && !result.is_null() {
+            let words = unsafe { std::slice::from_raw_parts(result.cast::<u64>(), 3) };
+            eprintln!(
+                "[elephc-eval-trace] phase=native_method_bridge_raw method={method:?} result={result:p} arg_array={:p} result_words=[{:#x}, {:#x}, {:#x}]",
+                arg_array.as_ptr(), words[0], words[1], words[2],
+            );
+        }
         unsafe {
             __elephc_eval_value_release(arg_array.as_ptr());
         }
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() && !result.is_null() {
+            let words = unsafe { std::slice::from_raw_parts(result.cast::<u64>(), 3) };
+            let tag = unsafe { __elephc_eval_value_type_tag(result) };
+            eprintln!(
+                "[elephc-eval-trace] phase=native_method_bridge_post_args_release method={method:?} result={result:p} result_words=[{:#x}, {:#x}, {:#x}] tag={tag:#x}",
+                words[0], words[1], words[2],
+            );
+        }
         self.handle_native_call_result(result)
+    }
+
+    /// Calls a boxed Mixed object method and writes its generated result to caller-owned storage.
+    fn method_call_out(
+        &mut self,
+        object: RuntimeCellHandle,
+        method: &str,
+        args: Vec<RuntimeCellHandle>,
+        result_out: &mut RuntimeCellHandle,
+    ) -> Result<(), EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let arg_array = Self::arg_array(args)?;
+        let result = unsafe {
+            __elephc_eval_value_method_call(
+                object.as_ptr(),
+                method.as_ptr(),
+                method.len() as u64,
+                arg_array.as_ptr(),
+                scope_ptr,
+                scope_len,
+                self.context.cast(),
+            )
+        };
+        unsafe {
+            __elephc_eval_value_release(arg_array.as_ptr());
+        }
+        if result.is_null() {
+            return self.handle_native_call_result(result).map(|result| {
+                *result_out = result;
+            });
+        }
+        *result_out = RuntimeCellHandle::from_raw(result);
+        Ok(())
     }
 
     /// Calls an AOT static method through the generated user helper.

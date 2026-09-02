@@ -1334,6 +1334,578 @@ echo $ref->inNamespace() ? "Y" : "N";
     assert_eq!(out, "Plain:Plain::N");
 }
 
+/// Verifies ReflectionClass preserves the exact PHP doc comment on an AOT class declaration.
+#[test]
+fn test_reflection_class_get_doc_comment_preserves_aot_class_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+/**
+ * AOT reflection doc comment.
+ */
+class ReflectDocumentedAotClass {}
+echo (new ReflectionClass(ReflectDocumentedAotClass::class))->getDocComment();
+"#,
+    );
+    assert_eq!(out, "/**\n * AOT reflection doc comment.\n */");
+}
+
+/// Verifies ReflectionClass keeps PHP's false result for a class without a doc comment.
+#[test]
+fn test_reflection_class_get_doc_comment_returns_false_when_absent() {
+    let out = compile_and_run(
+        r#"<?php
+class UndocumentedAotClass {}
+echo (new ReflectionClass(UndocumentedAotClass::class))->getDocComment() === false ? "false" : "value";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies eval-backed reflection reads the doc comment of an AOT class through runtime metadata.
+#[test]
+fn test_eval_reflection_class_get_doc_comment_reads_aot_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+/**
+ * Eval bridge reflection doc comment.
+ */
+class EvalBridgeDocumentedAotClass {}
+eval('echo (new ReflectionClass("EvalBridgeDocumentedAotClass"))->getDocComment();');
+"#,
+    );
+    assert_eq!(out, "/**\n * Eval bridge reflection doc comment.\n */");
+}
+
+/// Verifies included namespaced classes retain AOT doc comments for eval reflection.
+#[test]
+fn test_eval_reflection_class_get_doc_comment_reads_included_namespace_metadata() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require "documented.php";
+eval('echo (new ReflectionClass("Bridge\\Docs\\IncludedDocumentedAotClass"))->getDocComment();');
+"#,
+            ),
+            (
+                "documented.php",
+                r#"<?php
+namespace Bridge\Docs;
+
+/**
+ * Included namespace reflection doc comment.
+ */
+class IncludedDocumentedAotClass {}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "/**\n * Included namespace reflection doc comment.\n */");
+}
+
+/// Verifies PSR-4-loaded classes retain AOT doc comments for eval reflection.
+#[test]
+fn test_eval_reflection_class_get_doc_comment_reads_autoloaded_metadata() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Bridge\\Autoload\\":"src/"}}}"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+new Bridge\Autoload\AutoloadedDocumentedAotClass();
+eval('echo (new ReflectionClass("Bridge\\Autoload\\AutoloadedDocumentedAotClass"))->getDocComment();');
+"#,
+            ),
+            (
+                "src/AutoloadedDocumentedAotClass.php",
+                r#"<?php
+namespace Bridge\Autoload;
+
+/**
+ * Autoloaded reflection doc comment.
+ */
+class AutoloadedDocumentedAotClass {}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "/**\n * Autoloaded reflection doc comment.\n */");
+}
+
+/// Verifies eval class-constant arguments preserve autoloaded AOT doc comments.
+#[test]
+fn test_eval_reflection_class_constant_get_doc_comment_reads_aot_metadata() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Bridge\\ClassConst\\":"src/"}}}"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+new Bridge\ClassConst\ClassConstantDocumentedAotClass();
+eval('echo (new ReflectionClass(\\Bridge\\ClassConst\\ClassConstantDocumentedAotClass::class))->getDocComment();');
+"#,
+            ),
+            (
+                "src/ClassConstantDocumentedAotClass.php",
+                r#"<?php
+namespace Bridge\ClassConst;
+
+/**
+ * Class constant reflection doc comment.
+ */
+class ClassConstantDocumentedAotClass {}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "/**\n * Class constant reflection doc comment.\n */");
+}
+
+/// Verifies dynamically included classes retain doc comments for eval reflection.
+#[test]
+fn test_eval_reflection_class_get_doc_comment_reads_dynamic_include_metadata() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function load_configured_class($path) {
+    include $path;
+}
+load_configured_class("documented.php");
+eval('echo (new ReflectionClass("Bridge\\Dynamic\\DynamicallyIncludedDocumentedClass"))->getDocComment();');
+"#,
+            ),
+            (
+                "documented.php",
+                r#"<?php
+namespace Bridge\Dynamic;
+
+/**
+ * Dynamic include reflection doc comment.
+ */
+class DynamicallyIncludedDocumentedClass {}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "/**\n * Dynamic include reflection doc comment.\n */");
+}
+
+/// Verifies native reflection triggers SPL autoload before reading a class doc comment.
+#[test]
+fn test_reflection_class_get_doc_comment_reads_dynamic_include_metadata() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function load_runtime_bootstrap($path) {
+    include $path;
+}
+load_runtime_bootstrap("bootstrap.php");
+function read_runtime_doc_comment() {
+    return (new ReflectionClass(\Bridge\Runtime\DynamicallyIncludedDocumentedClass::class))->getDocComment();
+}
+echo read_runtime_doc_comment();
+"#,
+            ),
+            (
+                "bootstrap.php",
+                r#"<?php
+spl_autoload_register(static function (string $class): void {
+    if ($class === "Bridge\\Runtime\\DynamicallyIncludedDocumentedClass") {
+        $path = "documented.php";
+        include $path;
+    }
+});
+"#,
+            ),
+            (
+                "documented.php",
+                r#"<?php
+namespace Bridge\Runtime;
+
+/**
+ * Runtime dynamic include reflection doc comment.
+ */
+class DynamicallyIncludedDocumentedClass {}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "/**\n * Runtime dynamic include reflection doc comment.\n */");
+}
+
+/// Verifies a reflection class created after a dynamic include reads its runtime constants.
+///
+/// The reflected class is unavailable to AOT metadata collection, so the method call must use
+/// the active eval context rather than the static reflection metadata table.
+#[test]
+fn test_reflection_class_get_constants_reads_dynamic_include_metadata() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function read_runtime_constants(string $path): array {
+    include $path;
+    return (new ReflectionClass(\Bridge\Runtime\DynamicallyIncludedConstantClass::class))
+        ->getConstants();
+}
+$constants = read_runtime_constants("constants.php");
+echo $constants["MESSAGE"] . ":" . $constants["COUNT"];
+"#,
+            ),
+            (
+                "constants.php",
+                r#"<?php
+namespace Bridge\Runtime;
+
+class DynamicallyIncludedConstantClass {
+    public const MESSAGE = "runtime";
+    public const COUNT = 7;
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "runtime:7");
+}
+
+/// Verifies a dynamic reflection attribute remains callable after crossing into AOT code.
+///
+/// `ReflectionClass::getAttributes()` materializes `ReflectionAttribute` objects at runtime;
+/// invoking `newInstance()` must keep using that same runtime metadata context.
+#[test]
+fn test_reflection_attribute_new_instance_reads_dynamic_include_metadata() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function read_runtime_attribute(string $path): string {
+    include $path;
+    foreach ((new ReflectionClass(\Bridge\Runtime\DynamicallyIncludedAttributeClass::class))
+        ->getAttributes(\Bridge\Runtime\RuntimeLabel::class) as $attribute) {
+        return $attribute->newInstance()->message;
+    }
+
+    return "missing";
+}
+echo read_runtime_attribute("attributes.php");
+"#,
+            ),
+            (
+                "attributes.php",
+                r#"<?php
+namespace Bridge\Runtime;
+
+#[\Attribute]
+class RuntimeLabel {
+    public function __construct(public string $message) {}
+}
+
+#[RuntimeLabel("runtime")]
+class DynamicallyIncludedAttributeClass {}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "runtime");
+}
+
+/// Verifies foreach dispatches on the runtime layout of an associative array.
+#[test]
+fn test_foreach_associative_array_uses_runtime_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$envs = ['prod' => 'dev', 'test' => 'stage'];
+foreach ($envs as $env) {
+    echo $env;
+}
+"#,
+    );
+    assert_eq!(out, "devstage");
+}
+
+/// Verifies eval-aware instanceof keeps same-short-name interfaces distinct by namespace.
+#[test]
+fn test_eval_instanceof_distinguishes_namespaced_interfaces() {
+    let out = compile_and_run(
+        r#"<?php
+namespace DependencyKernel {
+    interface BundleInterface {}
+}
+namespace HttpKernel {
+    interface BundleInterface {}
+}
+namespace App {
+    class ConsoleBundle implements \DependencyKernel\BundleInterface {}
+    eval('return true;');
+    $bundle = new ConsoleBundle();
+    echo $bundle instanceof \HttpKernel\BundleInterface ? 'wrong' : 'ok';
+}
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies eval-aware instanceof preserves an imported interface's full namespace.
+#[test]
+fn test_eval_instanceof_preserves_imported_interface_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+namespace DependencyKernel {
+    interface BundleInterface {}
+}
+namespace HttpKernel {
+    interface BundleInterface {}
+}
+namespace App {
+    use HttpKernel\BundleInterface;
+    class ConsoleBundle implements \DependencyKernel\BundleInterface {}
+    eval('return true;');
+    $bundle = new ConsoleBundle();
+    echo $bundle instanceof BundleInterface ? 'wrong' : 'ok';
+}
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies foreach can replace an object stored in an array property by its keyed slot.
+#[test]
+fn test_foreach_replaces_array_property_object_by_key() {
+    let out = compile_and_run(
+        r#"<?php
+interface LegacyBundle {}
+class ModernBundle {}
+class BundleAdapter implements LegacyBundle {
+    public function __construct(public object $inner) {}
+}
+class KernelLike {
+    public array $bundles;
+    public function __construct() { $this->bundles = ['modern' => new ModernBundle()]; }
+    public function initialize(): void {
+        foreach ($this->bundles as $name => $bundle) {
+            $this->bundles[$name] = !$bundle instanceof LegacyBundle ? new BundleAdapter($bundle) : $bundle;
+        }
+    }
+}
+$kernel = new KernelLike();
+eval('return true;');
+$kernel->initialize();
+echo $kernel->bundles['modern'] instanceof BundleAdapter ? 'adapter' : 'original';
+"#,
+    );
+    assert_eq!(out, "adapter");
+}
+
+/// Verifies a child can replace an inherited array property's object with a subtype adapter.
+#[test]
+fn test_foreach_replaces_inherited_array_property_object_by_key() {
+    let out = compile_and_run(
+        r#"<?php
+interface BaseBundle {}
+interface LegacyBundle extends BaseBundle {}
+class ModernBundle implements BaseBundle {}
+class BundleAdapter implements LegacyBundle {
+    public function __construct(public object $inner) {}
+}
+abstract class AbstractKernelLike {
+    /** @var array<string, BaseBundle> */
+    protected array $bundles = [];
+}
+class KernelLike extends AbstractKernelLike {
+    public function __construct() { $this->bundles = ['modern' => new ModernBundle()]; }
+    public function initialize(): void {
+        foreach ($this->bundles as $name => $bundle) {
+            $this->bundles[$name] = !$bundle instanceof LegacyBundle ? new BundleAdapter($bundle) : $bundle;
+        }
+    }
+    public function bundle(): object { return $this->bundles['modern']; }
+}
+$kernel = new KernelLike();
+eval('return true;');
+$kernel->initialize();
+echo $kernel->bundle() instanceof BundleAdapter ? 'adapter' : 'original';
+"#,
+    );
+    assert_eq!(out, "adapter");
+}
+
+/// Verifies a trait's same-short-name interface does not leak into its consuming class scope.
+#[test]
+fn test_trait_interface_scope_does_not_override_consuming_class_import() {
+    let out = compile_and_run(
+        r#"<?php
+namespace BaseKernel {
+    interface BundleInterface {}
+    trait KernelTrait {
+        public function acceptsBase(object $bundle): bool { return $bundle instanceof BundleInterface; }
+    }
+}
+namespace HttpKernel {
+    interface BundleInterface extends \BaseKernel\BundleInterface {}
+}
+namespace App {
+    use BaseKernel\KernelTrait;
+    use HttpKernel\BundleInterface;
+    class KernelLike {
+        use KernelTrait { acceptsBase as private doAcceptsBase; }
+        public function acceptsHttp(object $bundle): bool { return $bundle instanceof BundleInterface; }
+    }
+    class ConsoleBundle implements \BaseKernel\BundleInterface {}
+    $kernel = new KernelLike();
+    $bundle = new ConsoleBundle();
+    echo ($kernel->acceptsBase($bundle) ? 'B' : 'b');
+    echo ($kernel->acceptsHttp($bundle) ? 'wrong' : 'ok');
+}
+"#,
+    );
+    assert_eq!(out, "Bok");
+}
+
+/// Verifies eval-created native objects retain inherited array-property mutations from native methods.
+#[test]
+fn test_eval_created_native_object_replaces_inherited_array_property_element() {
+    let out = compile_and_run(
+        r#"<?php
+interface BaseBundle {}
+interface LegacyBundle extends BaseBundle {}
+class ModernBundle implements BaseBundle {}
+class BundleAdapter implements LegacyBundle {
+    public function __construct(public object $inner) {}
+}
+abstract class AbstractKernelLike {
+    /** @var array<string, BaseBundle> */
+    protected array $bundles = [];
+}
+class KernelLike extends AbstractKernelLike {
+    public function __construct() { $this->bundles = ['modern' => new ModernBundle()]; }
+    public function initialize(): void {
+        foreach ($this->bundles as $name => $bundle) {
+            $this->bundles[$name] = !$bundle instanceof LegacyBundle ? new BundleAdapter($bundle) : $bundle;
+        }
+    }
+    public function bundle(): object { return $this->bundles['modern']; }
+}
+echo eval('$kernel = new KernelLike(); $kernel->initialize(); return $kernel->bundle() instanceof BundleAdapter;') ? 'adapter' : 'original';
+"#,
+    );
+    assert_eq!(out, "adapter");
+}
+
+/// Verifies trait aliases do not bypass a parent method that adds an array-element adapter.
+#[test]
+fn test_eval_dispatches_trait_override_through_parent_adapter_method() {
+    let out = compile_and_run(
+        r#"<?php
+interface BaseBundle {}
+interface LegacyBundle extends BaseBundle {}
+class ModernBundle implements BaseBundle {}
+class BundleAdapter implements LegacyBundle {
+    public function __construct(public object $inner) {}
+}
+abstract class AbstractKernelLike {
+    /** @var array<string, BaseBundle> */
+    protected array $bundles = [];
+    public function __construct(public string $environment, public bool $debug) {}
+}
+trait BaseKernelTrait {
+    protected function initializeBundles(): void {
+        $this->bundles = ['modern' => new ModernBundle()];
+    }
+}
+class ParentKernelLike extends AbstractKernelLike {
+    use BaseKernelTrait { initializeBundles as protected doInitializeBundles; }
+    protected function initializeBundles(): void {
+        $this->doInitializeBundles();
+        foreach ($this->bundles as $name => $bundle) {
+            $this->bundles[$name] = !$bundle instanceof LegacyBundle ? new BundleAdapter($bundle) : $bundle;
+        }
+    }
+}
+trait ChildKernelTrait {
+    protected function initializeBundles(): void { parent::initializeBundles(); }
+}
+class KernelLike extends ParentKernelLike {
+    use ChildKernelTrait;
+    public function initialize(): void { $this->initializeBundles(); }
+    public function bundle(): object { return $this->bundles['modern']; }
+}
+echo eval('$kernel = new KernelLike("test", true); $kernel->initialize(); return $kernel->bundle() instanceof BundleAdapter;') ? 'adapter' : 'original';
+"#,
+    );
+    assert_eq!(out, "adapter");
+}
+
+/// Verifies inherited implementation of a parent interface does not satisfy its child interface.
+#[test]
+fn test_mixed_instanceof_rejects_child_interface_for_inherited_parent_interface() {
+    let out = compile_and_run(
+        r#"<?php
+interface BaseBundle {}
+interface LegacyBundle extends BaseBundle {}
+abstract class AbstractBundle implements BaseBundle {}
+class ModernBundle extends AbstractBundle {}
+function implementsLegacy(mixed $bundle): bool {
+    return $bundle instanceof LegacyBundle;
+}
+echo eval('return implementsLegacy(new ModernBundle());') ? 'wrong' : 'ok';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies replacing one hash element during foreach does not skip later elements.
+#[test]
+fn test_foreach_hash_replacement_visits_every_element() {
+    let out = compile_and_run(
+        r#"<?php
+class ModernBundle {}
+class BundleAdapter {
+    public function __construct(public object $inner) {}
+}
+abstract class AbstractKernelLike {
+    /** @var array<string, object> */
+    protected array $bundles = [];
+}
+class KernelLike extends AbstractKernelLike {
+    public function __construct() {
+        $this->bundles = ['first' => new ModernBundle(), 'second' => new ModernBundle()];
+    }
+    public function initialize(): void {
+        foreach ($this->bundles as $name => $bundle) {
+            $this->bundles[$name] = new BundleAdapter($bundle);
+        }
+    }
+    public function status(): string {
+        return ($this->bundles['first'] instanceof BundleAdapter ? 'A' : 'a')
+            .($this->bundles['second'] instanceof BundleAdapter ? 'B' : 'b');
+    }
+}
+echo eval('$kernel = new KernelLike(); $kernel->initialize(); return $kernel->status();');
+"#,
+    );
+    assert_eq!(out, "AB");
+}
+
 /// Verifies that `ReflectionClass` reports final and abstract flags for static metadata.
 #[test]
 fn test_reflection_class_reports_modifier_flags() {

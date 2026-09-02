@@ -554,9 +554,9 @@ function __elephc_file_put_contents_array(string $filename, array $data, int $fl
 }
 "#;
 
-/// Stable callback sorts for gradual arrays, with PHP's key-preservation distinctions.
+/// Stable callback sorts for arrays with gradual element layouts, preserving PHP's key rules.
 const CALLBACK_SORT_MIXED_SRC: &str = r#"<?php
-function __elephc_uasort_mixed(mixed &$values, callable $callback): bool {
+function __elephc_uasort_mixed(array &$values, callable $callback): bool {
     $keys = [];
     foreach ($values as $key => $value) {
         $keys[] = $key;
@@ -585,7 +585,7 @@ function __elephc_uasort_mixed(mixed &$values, callable $callback): bool {
     return true;
 }
 
-function __elephc_usort_mixed(mixed &$values, callable $callback): bool {
+function __elephc_usort_mixed(array &$values, callable $callback): bool {
     $values = array_values($values);
     $count = count($values);
     $outer = $count;
@@ -605,7 +605,7 @@ function __elephc_usort_mixed(mixed &$values, callable $callback): bool {
     return true;
 }
 
-function __elephc_uksort_mixed(mixed &$values, callable $callback): bool {
+function __elephc_uksort_mixed(array &$values, callable $callback): bool {
     $keys = [];
     foreach ($values as $key => $value) {
         $keys[] = $key;
@@ -634,7 +634,7 @@ function __elephc_uksort_mixed(mixed &$values, callable $callback): bool {
     return true;
 }
 
-function __elephc_asort_mixed(mixed &$values): bool {
+function __elephc_asort_mixed(array &$values): bool {
     return __elephc_uasort_mixed($values, static fn(mixed $left, mixed $right): int => $left <=> $right);
 }
 "#;

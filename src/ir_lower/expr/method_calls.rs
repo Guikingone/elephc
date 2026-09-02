@@ -148,18 +148,19 @@ pub(super) fn lower_method_call(
         (method, args)
     };
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
+    let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     if let Some(call) = lower_runtime_spread_method_call(
         ctx,
         object,
         dispatch_method,
         args,
+        sig.as_ref(),
         result_type.clone(),
         expr,
     ) {
         return call;
     }
     let mut operands = vec![object.value];
-    let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_eval_bridge_method_argument_locals(ctx, object.value, sig.as_ref(), args);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     let prepared = sig
@@ -203,9 +204,18 @@ pub(super) fn promote_eval_bridge_method_argument_locals(
     signature: Option<&FunctionSig>,
     args: &[Expr],
 ) {
-    if !dynamic_method_receiver_needs_mixed_fallback(&ctx.builder.value_php_type(object))
-        || !plain_positional_call_args(args)
-    {
+    if !dynamic_method_receiver_needs_mixed_fallback(&ctx.builder.value_php_type(object)) {
+        return;
+    }
+    // A no-argument call still needs the per-request eval context: its receiver can be an
+    // eval-owned object or an AOT class outside the statically emitted candidate set. Without
+    // it, codegen has no generic fallback and turns a live object into a misleading null-method
+    // fatal. Web handlers retain one context for the request, so this remains generic and does
+    // not depend on any framework or package layout.
+    if ctx.web {
+        ctx.declare_eval_context_local();
+    }
+    if !plain_positional_call_args(args) {
         return;
     }
     let bridge_args = match signature {
@@ -229,29 +239,27 @@ pub(super) fn promote_eval_bridge_method_argument_locals(
     }
 }
 
-/// Routes a single runtime-shaped spread through the callable descriptor ABI.
+/// Routes a method call with a spread that cannot use a fixed ABI through the
+/// callable descriptor ABI.
 ///
-/// Statically indexed sources stay on the direct fixed-ABI path. Associative or gradual sources
-/// must keep their runtime keys so the shared invoker can apply PHP positional/named argument
-/// rules before selecting the method wrapper.
+/// A known signature with one trailing indexed spread can materialize its visible
+/// parameters directly. Every other spread, including a concrete method that is
+/// absent from an interface's static signature, must preserve its runtime keys so
+/// the shared invoker can apply PHP positional/named argument rules before
+/// selecting the method wrapper.
 fn lower_runtime_spread_method_call(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
     method: &str,
     args: &[Expr],
+    signature: Option<&FunctionSig>,
     result_type: PhpType,
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let [Expr {
-        kind: ExprKind::Spread(inner),
-        ..
-    }] = args
-    else {
+    if !args.iter().any(is_spread_arg) {
         return None;
-    };
-    if indexed_spread_source_type(ctx, inner)
-        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Array(_)))
-    {
+    }
+    if signature.is_some() && has_statically_indexed_trailing_method_spread(ctx, args) {
         return None;
     }
     let data = ctx.intern_string(&format!("object::{}", method));
@@ -266,7 +274,7 @@ fn lower_runtime_spread_method_call(
         Op::FirstClassCallableNew.default_effects(),
         Some(expr.span),
     );
-    let arg_container = lower_expr(ctx, inner);
+    let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
     let call = emit_callable_descriptor_invoke(
         ctx,
         descriptor,
@@ -275,6 +283,24 @@ fn lower_runtime_spread_method_call(
         expr.span,
     );
     Some(call)
+}
+
+/// Returns whether a fixed method signature can materialize one trailing
+/// spread directly without discarding runtime named-argument keys.
+fn has_statically_indexed_trailing_method_spread(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> bool {
+    let Some(spread_idx) = single_trailing_indexed_spread_arg(ctx, args) else {
+        return false;
+    };
+    let ExprKind::Spread(inner) = &args[spread_idx].kind else {
+        return false;
+    };
+    matches!(
+        indexed_spread_source_type(ctx, inner),
+        Some(PhpType::Array(_))
+    )
 }
 
 /// Resolves a static-only method invoked through an object receiver.
@@ -289,6 +315,28 @@ pub(super) fn object_static_method_receiver(
 ) -> Option<StaticReceiver> {
     let object_ty = ctx.builder.value_php_type(object);
     let (class_name, _) = singular_object_class(&object_ty)?;
+    static_only_object_method_receiver(ctx, class_name, method)
+}
+
+/// Resolves static-syntax object calls whose receiver type names one concrete class.
+///
+/// The parser represents `$object::method()` as an internal callable-array invocation, so this
+/// helper recovers the known static target before that dynamic path discards static methods.
+pub(super) fn object_static_method_receiver_for_expr(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    method: &str,
+) -> Option<StaticReceiver> {
+    let class_name = instance_callable_object_class(ctx, object)?;
+    static_only_object_method_receiver(ctx, &class_name, method)
+}
+
+/// Resolves a static-only method without shadowing a same-named instance method.
+fn static_only_object_method_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    method: &str,
+) -> Option<StaticReceiver> {
     let normalized = class_name.trim_start_matches('\\');
     let method_key = php_symbol_key(method);
     let class_info = ctx.classes.get(normalized)?;

@@ -380,6 +380,7 @@ mod tests {
         ClassInfo {
             class_id: 0,
             declaration_span: crate::span::Span::dummy(),
+            doc_comment: None,
             parent: parent.map(str::to_string),
             is_abstract: false,
             is_final: false,

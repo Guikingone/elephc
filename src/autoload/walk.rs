@@ -833,6 +833,9 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
     match &expr.kind {
         ExprKind::NewObject { class_name, args } => {
             push_name(class_name, out);
+            if reflection_constructor_autoloads_class_target(class_name) {
+                collect_class_like_name_argument(args.first(), out);
+            }
             for a in args {
                 collect_refs_expr(a, out);
             }
@@ -971,6 +974,9 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
                             );
                         }
                     }
+                }
+                "class_alias" if class_alias_autoloads_target(args) => {
+                    collect_class_like_name_argument(args.first(), out);
                 }
                 _ => {}
             }
@@ -1114,5 +1120,54 @@ fn push_literal_fqn(arg: Option<&crate::parser::ast::Expr>, out: &mut ReferenceS
     let cleaned = name.trim_start_matches('\\').to_string();
     if !cleaned.is_empty() {
         out.insert(cleaned);
+    }
+}
+
+/// Returns whether `class_alias()` is allowed to autoload its original class argument.
+fn class_alias_autoloads_target(args: &[Expr]) -> bool {
+    match args.get(2).map(|arg| &arg.kind) {
+        None => true,
+        Some(ExprKind::BoolLiteral(value)) => *value,
+        Some(ExprKind::IntLiteral(value)) => *value != 0,
+        Some(_) => false,
+    }
+}
+
+/// Returns whether a reflection constructor autoloads a class-like first argument in PHP.
+fn reflection_constructor_autoloads_class_target(class_name: &crate::names::Name) -> bool {
+    let class_name = class_name
+        .as_canonical()
+        .trim_start_matches('\\')
+        .to_ascii_lowercase();
+    matches!(
+        class_name.as_str(),
+        "reflectionclass"
+            | "reflectionenum"
+            | "reflectionclassconstant"
+            | "reflectionmethod"
+            | "reflectionproperty"
+    )
+}
+
+/// Records a statically named class-like argument when a PHP API autoloads it.
+fn collect_class_like_name_argument(arg: Option<&Expr>, out: &mut ReferenceSet) {
+    let Some(arg) = arg else {
+        return;
+    };
+    let arg = match &arg.kind {
+        ExprKind::NamedArg { value, .. } => value.as_ref(),
+        _ => arg,
+    };
+    match &arg.kind {
+        ExprKind::StringLiteral(name) => {
+            let name = name.trim_start_matches('\\');
+            if !name.is_empty() {
+                out.insert(name.to_string());
+            }
+        }
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Named(name),
+        } => push_name(name, out),
+        _ => {}
     }
 }

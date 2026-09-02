@@ -1414,6 +1414,232 @@ echo class_exists($classes[0]) ? 'exists' : 'missing';
     assert_eq!(out, "exists");
 }
 
+/// Verifies a literal class probe after eval invokes registered autoload callbacks.
+///
+/// The class name is intentionally absent from the AOT declaration set: the callback creates it
+/// through `eval`, so this exercises the post-eval `class_exists()` bridge rather than static
+/// project discovery or any framework-specific loader convention.
+#[test]
+fn test_class_exists_after_eval_triggers_registered_autoload() {
+    let out = compile_and_run(
+        r#"<?php
+class DeferredProbeLoader {
+    public function load(string $class): void {
+        if ($class === 'Fixture\AbsentProbe') {
+            echo 'called';
+        }
+    }
+}
+
+function classExistsFromAotFunction(bool $autoload): bool {
+    return class_exists('Fixture\\AbsentProbe', $autoload);
+}
+
+$loader = new DeferredProbeLoader();
+spl_autoload_register([$loader, 'load']);
+eval('$barrier = true;');
+echo classExistsFromAotFunction(false) ? 'unexpected' : 'missing';
+echo classExistsFromAotFunction(true) ? 'loaded' : 'missing';
+"#,
+    );
+    assert_eq!(out, "missingcalledmissing");
+}
+
+/// Verifies nominal construction invokes registered autoload after an eval barrier.
+///
+/// The source names the class directly, while the callback creates its declaration only at
+/// runtime.  This prevents the test from relying on a project layout or a framework-specific
+/// autoloader and exercises the bridge's normal `new ClassName` resolution semantics.
+#[test]
+fn test_nominal_new_after_eval_triggers_registered_autoload() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "library/RuntimeConstructed.php",
+                "<?php\nclass RuntimeConstructed { public function label(): void { echo 'loaded'; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    if ($class === 'RuntimeConstructed') {
+        require_once __DIR__ . '/library/RuntimeConstructed.php';
+    }
+});
+
+eval('$barrier = true;');
+$instance = new RuntimeConstructed();
+$instance->label();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "loaded");
+}
+
+/// Verifies autoloaded nominal construction materializes a separately loaded trait.
+///
+/// The class body is intentionally unavailable to AOT lowering.  Its trait is resolved only
+/// while the runtime include executes, matching ordinary library autoload without assuming a
+/// loader implementation or a framework directory layout.
+#[test]
+fn test_nominal_new_after_eval_autoloads_class_trait_dependencies() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "library/RuntimeConstructedContract.php",
+                "<?php\ninterface RuntimeConstructedContract {}\n",
+            ),
+            (
+                "library/RuntimeConstructionTrait.php",
+                "<?php\ntrait RuntimeConstructionTrait { public function label(): void { echo 'trait-loaded'; } }\n",
+            ),
+            (
+                "library/RuntimeConstructed.php",
+                "<?php\nfinal class RuntimeConstructed implements RuntimeConstructedContract { use RuntimeConstructionTrait; }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    if ($class === 'RuntimeConstructed') {
+        require_once __DIR__ . '/library/RuntimeConstructed.php';
+    }
+    if ($class === 'RuntimeConstructedContract') {
+        require_once __DIR__ . '/library/RuntimeConstructedContract.php';
+    }
+    if ($class === 'RuntimeConstructionTrait') {
+        require_once __DIR__ . '/library/RuntimeConstructionTrait.php';
+    }
+});
+
+eval('$barrier = true;');
+$instance = new RuntimeConstructed();
+$instance->label();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "trait-loaded");
+}
+
+/// Verifies an AOT function resolves `new $class` through request-global autoload state.
+///
+/// The function itself contains no eval expression and therefore has no persistent eval local.
+/// Its dynamic class probe and construction must still use the callback-owning context registered
+/// by an earlier frame, as PHP's process-wide SPL table requires.
+#[test]
+fn test_aot_dynamic_new_after_eval_uses_global_autoload_context() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "library/RuntimeConstructed.php",
+                "<?php\nclass RuntimeConstructed implements RuntimeConstructedContract { use RuntimeConstructedTrait; }\n",
+            ),
+            (
+                "library/RuntimeConstructedTrait.php",
+                "<?php\ntrait RuntimeConstructedTrait { public function label(): void { echo 'global-loaded'; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+function createLoadedClass(string $class): mixed {
+    return class_exists($class) ? new $class() : null;
+}
+
+interface RuntimeConstructedContract {
+    public function label(): void;
+}
+
+function useLoadedClass(RuntimeConstructedContract $instance): void {
+    echo 'global-loaded';
+}
+
+class RuntimeAutoloadLoader {
+    public function load(string $class): void {
+        if ($class === 'RuntimeConstructed') {
+            $path = str_replace('/library/', '/library/', __DIR__ . '/library/' . $class . '.php');
+            require_once $path;
+        }
+        if ($class === 'RuntimeConstructedTrait') {
+            $path = str_replace('/library/', '/library/', __DIR__ . '/library/' . $class . '.php');
+            require_once $path;
+        }
+    }
+}
+
+$loader = new RuntimeAutoloadLoader();
+spl_autoload_register([$loader, 'load']);
+eval('$barrier = true;');
+$instance = createLoadedClass('RuntimeConstructed');
+useLoadedClass($instance);
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "global-loaded");
+}
+
+/// Verifies a dynamic child can pass an inline native-parent result by value and a PHP local by reference.
+///
+/// The child is loaded only at runtime, so both calls cross the eval bridge. The first argument is
+/// a one-shot EIR merge temporary and must not be represented as a writable local cell after its
+/// source slot has been moved. The second remains a user variable and must preserve PHP by-reference
+/// mutation through the same bridge.
+#[test]
+fn test_dynamic_child_bridge_preserves_inline_values_and_php_references() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "library/NativeParent.php",
+                r#"<?php
+class NativeParent {
+    public function all(): array {
+        return ['answer' => 42];
+    }
+
+    public function resolveValue(mixed $value): mixed {
+        return $value;
+    }
+}
+"#,
+            ),
+            (
+                "library/RuntimeChild.php",
+                r#"<?php
+class RuntimeChild extends NativeParent {
+    public function overwrite(mixed &$value): void {
+        $value = 'updated';
+    }
+}
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+require __DIR__ . '/library/NativeParent.php';
+
+$path = str_replace('/library/', '/library/', __DIR__ . '/library/RuntimeChild.php');
+require_once $path;
+$class = 'RuntimeChild';
+$child = new $class();
+
+$resolved = $child->resolveValue($child->all());
+echo $resolved['answer'] . ':';
+$value = 'before';
+$child->overwrite($value);
+echo $value;
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "42:updated");
+}
+
 /// Verifies interface exists literal triggers autoload.
 #[test]
 fn test_interface_exists_literal_triggers_autoload() {
@@ -1939,6 +2165,187 @@ echo ($a instanceof Alias) ? "yes" : "no";
 "#,
     );
     assert_eq!(out, "orig:yes:yes");
+}
+
+/// Verifies an eval static call resolves an AOT method through a runtime class alias.
+#[test]
+fn test_eval_static_method_call_through_class_alias() {
+    let out = compile_and_run(
+        r#"<?php
+class OriginalReference {
+    public static function config(array $config): array { return $config; }
+}
+class_alias(OriginalReference::class, AliasReference::class);
+echo eval('return AliasReference::config(["result" => "ok"])["result"];');
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a runtime-included alias keeps an otherwise unreachable AOT static method callable.
+#[test]
+fn test_dynamic_include_static_method_call_through_class_alias() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+class OriginalReference {
+    public static function config(array $config): array { return $config; }
+}
+function loadRuntimeFile(string $path): void { include $path; }
+loadRuntimeFile("runtime.php");
+"#,
+            ),
+            (
+                "runtime.php",
+                r#"<?php
+class_alias(OriginalReference::class, AliasReference::class);
+echo AliasReference::config(["result" => "ok"])["result"];
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a runtime-included class keeps static methods visible through its class alias.
+#[test]
+fn test_dynamic_include_declared_class_static_method_call_through_class_alias() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function loadRuntimeFile(string $path): void { include $path; }
+loadRuntimeFile("runtime.php");
+"#,
+            ),
+            (
+                "runtime.php",
+                r#"<?php
+class OriginalReference {
+    public static function config(array $config): array { return $config; }
+}
+class_alias(OriginalReference::class, AliasReference::class);
+echo AliasReference::config(["result" => "ok"])["result"];
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies class_alias autoloads a PSR-4 target named only through `::class`.
+#[test]
+fn test_class_alias_autoloads_psr4_target_static_method() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Bridge\\Alias\\":"src/"}}}"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+class_alias(\Bridge\Alias\OriginalReference::class, \Bridge\Alias\AliasReference::class);
+echo \Bridge\Alias\AliasReference::config(["result" => "ok"])["result"];
+"#,
+            ),
+            (
+                "src/OriginalReference.php",
+                r#"<?php
+namespace Bridge\Alias;
+
+class OriginalReference
+{
+    public static function config(array $config): array { return $config; }
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a conditional method-local class alias autoloads its PSR-4 target.
+#[test]
+fn test_method_local_class_alias_autoloads_psr4_target_static_method() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Bridge\\Alias\\":"src/"}}}"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+use Bridge\Alias\OriginalReference;
+
+class RuntimeLoader {
+    public function load(): void {
+        if (!class_exists(\Bridge\Alias\AliasReference::class)) {
+            class_alias(OriginalReference::class, \Bridge\Alias\AliasReference::class);
+        }
+    }
+}
+
+(new RuntimeLoader())->load();
+echo \Bridge\Alias\AliasReference::config(["result" => "ok"])["result"];
+"#,
+            ),
+            (
+                "src/OriginalReference.php",
+                r#"<?php
+namespace Bridge\Alias;
+
+class OriginalReference
+{
+    public static function config(array $config): array { return $config; }
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies ReflectionClass autoloads a PSR-4 class named only by a class constant.
+#[test]
+fn test_reflection_class_autoloads_psr4_class_constant_target() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Bridge\\Reflect\\":"src/"}}}"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+$reflection = new ReflectionClass(\Bridge\Reflect\OriginalReference::class);
+echo $reflection->getMethod("config")->getName();
+"#,
+            ),
+            (
+                "src/OriginalReference.php",
+                r#"<?php
+namespace Bridge\Reflect;
+
+/** Reflection metadata must retain static methods. */
+class OriginalReference
+{
+    public static function config(array $config): array { return $config; }
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "config");
 }
 
 /// Verifies class alias with namespace.

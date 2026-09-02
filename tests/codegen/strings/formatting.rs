@@ -391,15 +391,29 @@ fn test_sprintf_overlong_width_reports_runtime_error() {
     );
 }
 
-/// A width that fits in `INT_MAX` but not in the 64 KiB result arena must be a controlled
-/// error too; `sprintf("%2000000000s", "x")` used to segfault.
+/// Formatted results must move beyond the shared 64 KiB scratch arena without truncation or
+/// corruption. This covers a large `%s` operand, a dynamically-built literal-only format,
+/// and width padding, which exercise the conversion and literal append paths independently.
 #[test]
-fn test_sprintf_result_larger_than_buffer_reports_runtime_error() {
-    let err = compile_and_run_expect_failure(r#"<?php echo sprintf("%2000000000s", "x");"#);
-    assert!(
-        err.contains("formatted result exceeds the 65536-byte string buffer"),
-        "{err}"
+fn test_sprintf_result_larger_than_scratch_grows_without_truncation() {
+    let out = compile_and_run(
+        r#"<?php
+$subject = str_repeat("a", 70000);
+$conversion = sprintf("%s", $subject);
+$literal = sprintf(str_repeat(".", 66000));
+$padded = sprintf("%70000s", "x");
+echo strlen($conversion), "|", strlen($literal), "|", strlen($padded), "|", $padded[69999];
+"#,
     );
+    assert_eq!(out, "70000|66000|70000|x");
+}
+
+/// A representable width that exceeds the configured heap ceiling must still fail through the
+/// shared allocation-overflow path rather than attempting a wrapped or out-of-bounds write.
+#[test]
+fn test_sprintf_result_larger_than_heap_reports_runtime_error() {
+    let err = compile_and_run_expect_failure(r#"<?php echo sprintf("%2000000000s", "x");"#);
+    assert!(err.contains("Possible integer overflow in memory allocation"), "{err}");
 }
 
 /// A format string that consumes more arguments than were supplied must stop instead of

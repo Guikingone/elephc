@@ -215,6 +215,27 @@ echo runtimeStaticLabel(new RuntimeStaticA()), "|", runtimeStaticLabel(new Runti
     assert_eq!(out, "A?|B?");
 }
 
+/// Verifies static-syntax calls through an object invoke a static-only method.
+///
+/// PHP accepts `$object::method()` as well as `Class::method()`. The lowering
+/// must not send this shape through the instance-only runtime callable-array
+/// lookup when the receiver's class and its static method are known.
+#[test]
+fn test_static_method_dispatch_through_object_static_syntax() {
+    let out = compile_and_run(
+        r#"<?php
+final class ObjectStaticSyntax {
+    public static function label(string $suffix): string { return "static" . $suffix; }
+}
+function objectStaticSyntax(ObjectStaticSyntax $value): string {
+    return $value::label("!");
+}
+echo objectStaticSyntax(new ObjectStaticSyntax());
+"#,
+    );
+    assert_eq!(out, "static!");
+}
+
 /// Verifies an abstract class may defer a static interface method to a concrete child.
 ///
 /// Fixture: `AbstractStaticLabel` implements `StaticLabel` but leaves the

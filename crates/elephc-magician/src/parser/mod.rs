@@ -22,7 +22,7 @@ mod tests;
 
 use crate::errors::EvalParseError;
 use crate::eval_ir::EvalProgram;
-use crate::lexer::tokenize;
+use crate::lexer::{contains_php_open_tag, tokenize};
 use state::Parser;
 
 /// Parses an eval fragment into by-name EvalIR statements.
@@ -30,12 +30,45 @@ pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseError> {
     if contains_php_open_tag(code) {
         return Err(EvalParseError::PhpOpenTag);
     }
-    let source = std::str::from_utf8(code).map_err(|_| EvalParseError::InvalidUtf8)?;
-    let tokens = tokenize(source)?;
+    let source = normalize_binary_string_literals(code)?;
+    let tokens = tokenize(&source)?;
     Parser::new(tokens, code.len()).parse_program()
 }
 
-/// Returns true when a fragment contains a PHP opening tag sequence.
-fn contains_php_open_tag(code: &[u8]) -> bool {
-    code.windows(2).any(|window| window == b"<?")
+/// Rewrites non-UTF-8 bytes inside quoted PHP literals to private markers before lexing.
+///
+/// PHP strings are byte sequences, while the lexer consumes UTF-8 Rust text. Markers preserve
+/// the exact original byte so `Parser::parse_primary()` can emit `EvalConst::Bytes`; invalid bytes
+/// outside a literal remain a source error.
+fn normalize_binary_string_literals(code: &[u8]) -> Result<String, EvalParseError> {
+    if let Ok(source) = std::str::from_utf8(code) {
+        return Ok(source.to_owned());
+    }
+    let mut output = String::with_capacity(code.len());
+    let mut quote = None;
+    let mut escaped = false;
+    for &byte in code {
+        if byte >= 0x80 {
+            let Some(_) = quote else {
+                return Err(EvalParseError::InvalidUtf8);
+            };
+            output.push(char::from_u32(0xF0000 + byte as u32).expect("binary marker is valid"));
+            escaped = false;
+            continue;
+        }
+        let ch = byte as char;
+        output.push(ch);
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == active_quote {
+                quote = None;
+            }
+        } else if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        }
+    }
+    Ok(output)
 }

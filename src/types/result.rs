@@ -143,6 +143,26 @@ mod tests {
         assert_eq!(mac.required_libraries, vec!["elephc_crypto"]);
     }
 
+    /// Verifies class declaration doc comments survive parsing and resolved schema construction.
+    #[test]
+    fn test_class_info_retains_declared_doc_comment() {
+        let program = parse_program(
+            "<?php /**\n * Schema metadata.\n */ class TypeCheckedDocumentedClass {}",
+        );
+        let checked = check_with_target(
+            &program,
+            Target::new(Platform::MacOS, Arch::AArch64),
+        )
+        .expect("type check failed");
+        assert_eq!(
+            checked
+                .classes
+                .get("TypeCheckedDocumentedClass")
+                .and_then(|class| class.doc_comment.as_deref()),
+            Some("/**\n * Schema metadata.\n */"),
+        );
+    }
+
     /// Verifies enum class metadata preserves flattened trait relation data for runtime reflection.
     #[test]
     fn test_enum_class_info_preserves_trait_metadata() {

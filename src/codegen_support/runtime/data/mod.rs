@@ -136,12 +136,6 @@ pub(crate) const STR_REPEAT_TIMES_MSG: &str =
 /// as a controlled fatal instead of writing past the conversion buffer.
 pub(crate) const SPRINTF_WIDTH_MSG: &str =
     "Fatal error: Uncaught ValueError: Width must be between 0 and 2147483647\n";
-/// Fatal error message when a `printf`-family conversion would write past the shared
-/// 64 KiB `_concat_buf` result arena. PHP grows its result buffer on the heap; elephc's
-/// formatted results live in the fixed concat arena, so an oversized result is reported
-/// instead of overrunning the arena.
-pub(crate) const SPRINTF_OVERFLOW_MSG: &str =
-    "Fatal error: sprintf(): formatted result exceeds the 65536-byte string buffer\n";
 /// Fatal error message when a `printf`-family format string consumes more arguments than
 /// were supplied. PHP raises `ArgumentCountError`; elephc reports the same class of error
 /// as a controlled fatal because the alternative is reading past the pushed argument records.

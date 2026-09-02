@@ -18,7 +18,7 @@
 use super::util::{abi_name_to_string, clear_result, write_outcome};
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
 use crate::errors::EvalStatus;
-use crate::interpreter::{self, EvalOutcome};
+use crate::interpreter::{self, EvalOutcome, RuntimeValueOps};
 use crate::runtime_hooks::ElephcRuntimeOps;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
@@ -53,9 +53,9 @@ pub unsafe extern "C" fn __elephc_eval_object_class_name(
 /// Tests whether an object satisfies a class/interface relation in the eval context.
 ///
 /// # Safety
-/// `ctx` must be a valid eval context handle. `object` must point at a boxed
-/// runtime cell. `target_ptr` must be readable for `target_len` bytes when
-/// `target_len > 0`.
+/// `ctx` may be null for an eval-owned object, in which case its registered
+/// owner context is used. `object` must point at a boxed runtime cell.
+/// `target_ptr` must be readable for `target_len` bytes when `target_len > 0`.
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_object_is_a(
@@ -222,23 +222,76 @@ unsafe fn eval_object_is_a_inner(
     target_len: u64,
     exclude_self: u64,
 ) -> i32 {
-    let Some(context) = ctx.as_mut() else {
-        return 0;
-    };
-    if context.abi_version() != ABI_VERSION || object.is_null() {
+    if object.is_null() {
         return 0;
     }
+    let object = RuntimeCellHandle::from_raw(object);
+    let trace = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
     let Ok(target) = abi_name_to_string(target_ptr, target_len) else {
         return 0;
     };
+    let context = if let Some(context) = ctx.as_mut() {
+        context
+    } else {
+        let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
+        let Ok(identity) = values.object_identity(object) else {
+            if trace {
+                eprintln!("[elephc-eval-trace] phase=object_is_a owner_lookup=invalid_object");
+            }
+            return 0;
+        };
+        let Some(owner) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+        else {
+            if trace {
+                let class_name = values
+                    .object_class_name(object)
+                    .ok()
+                    .and_then(|class_name| {
+                        let bytes = values.string_bytes(class_name).ok();
+                        let _ = values.release(class_name);
+                        bytes.and_then(|bytes| String::from_utf8(bytes).ok())
+                    });
+                eprintln!(
+                    "[elephc-eval-trace] phase=object_is_a owner_lookup=missing \
+                     identity={identity} class={class_name:?} target={target:?} \
+                     exclude_self={}",
+                    exclude_self != 0,
+                );
+            }
+            return i32::from(
+                values
+                    .object_is_a(object, &target, exclude_self != 0)
+                    .unwrap_or(false),
+            );
+        };
+        let Some(context) = owner.as_mut() else {
+            if trace {
+                eprintln!("[elephc-eval-trace] phase=object_is_a owner_lookup=dangling identity={identity}");
+            }
+            return 0;
+        };
+        if trace {
+            eprintln!("[elephc-eval-trace] phase=object_is_a owner_lookup=found identity={identity} context={context:p}");
+        }
+        context
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_object_is_a(
+    let result = interpreter::execute_context_object_is_a(
         context,
-        RuntimeCellHandle::from_raw(object),
+        object,
         &target,
         exclude_self != 0,
         &mut values,
-    ) {
+    );
+    if trace {
+        eprintln!(
+            "[elephc-eval-trace] phase=object_is_a target={target:?} context={context:p} result={result:?}"
+        );
+    }
+    match result {
         Ok(result) => i32::from(result),
         Err(_) => 0,
     }

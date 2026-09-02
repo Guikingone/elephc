@@ -642,14 +642,20 @@ pub(in crate::interpreter) fn eval_reference_target_value(
             };
             let array =
                 visible_scope_cell(context, scope, array_name).map_or_else(|| values.null(), Ok)?;
-            values.array_get(array, *index)
+            let index = eval_array_reference_key_value(index, values)?;
+            let result = values.array_get(array, index);
+            values.release(index)?;
+            result
         }
         EvalReferenceTarget::NestedArrayElement {
             array_target,
             index,
         } => {
             let array = eval_reference_target_value(array_target, context, values)?;
-            values.array_get(array, *index)
+            let index = eval_array_reference_key_value(index, values)?;
+            let result = values.array_get(array, index);
+            values.release(index)?;
+            result
         }
         EvalReferenceTarget::ObjectProperty {
             object,

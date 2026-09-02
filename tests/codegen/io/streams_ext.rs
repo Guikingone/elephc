@@ -258,6 +258,35 @@ fclose($first);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a dynamic include does not leave `flock`'s by-reference boolean
+/// output as an unboxed scalar in a widened local.
+#[test]
+fn test_flock_would_block_output_after_dynamic_include() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+$include = str_replace('entry.php', 'barrier.php', __FILE__);
+require $include;
+file_put_contents("block.txt", "x");
+$first = fopen("block.txt", "r+");
+$second = fopen("block.txt", "r+");
+flock($first, LOCK_EX);
+$ok = flock($second, LOCK_EX | LOCK_NB, $would);
+echo ($ok ? "locked" : "blocked") . "|" . gettype($would) . ":" . $would;
+flock($first, LOCK_UN);
+fclose($second);
+fclose($first);
+"#,
+            ),
+            ("barrier.php", "<?php\n"),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "blocked|integer:1");
+}
+
 /// Verifies `flock` with named arguments (`stream:`, `operation:`, `would_block:`)
 /// works correctly and the `would_block` output is set to `0` on success.
 #[test]

@@ -51,6 +51,7 @@ pub(crate) enum TokenKind {
     Int(i64),
     Float(f64),
     String(String),
+    DocComment(String),
     Plus,
     PlusPlus,
     PlusEqual,

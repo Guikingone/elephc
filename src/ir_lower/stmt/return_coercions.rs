@@ -343,6 +343,22 @@ pub(super) fn coerce_to_string(
     value: LoweredValue,
     span: Option<Span>,
 ) -> LoweredValue {
+    // Mixed uses one integer-sized boxed-cell register regardless of the PHP payload. Preserve
+    // the semantic representation at a declared string return boundary instead of rendering the
+    // cell pointer as an integer string.
+    if matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return ctx.emit_value(
+            Op::Cast,
+            vec![value.value],
+            Some(Immediate::CastTarget(IrType::Str)),
+            PhpType::Str,
+            Op::Cast.default_effects(),
+            span,
+        );
+    }
     match value.ir_type {
         IrType::Str => value,
         IrType::I64 | IrType::TaggedScalar => ctx.emit_value(

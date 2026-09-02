@@ -179,6 +179,7 @@ pub(super) fn reflection_method_owner_metadata(
 ) -> ReflectionOwnerMetadata {
     ReflectionOwnerMetadata {
         reflected_name: Some(method_name.to_string()),
+        doc_comment: None,
         attr_names: member.attr_names,
         attr_args: member.attr_args,
         interface_names: Vec::new(),

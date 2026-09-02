@@ -39,6 +39,23 @@ pub(super) fn emit_reflection_owner_object(
     emit_reflection_source_properties(ctx, class_name, metadata)?;
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
+        if is_reflection_class_owner {
+            if let Some(doc_comment) = metadata.doc_comment.as_deref()
+            {
+                emit_reflection_owner_string_property_by_name(
+                    ctx,
+                    class_name,
+                    "__doc_comment",
+                    doc_comment,
+                )?;
+                emit_reflection_owner_bool_property(
+                    ctx,
+                    class_name,
+                    "__has_doc_comment",
+                    true,
+                )?;
+            }
+        }
         if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
         }

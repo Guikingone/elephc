@@ -298,6 +298,7 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             is_abstract: _,
             is_final: _,
             is_readonly_class: _,
+            doc_comment: _,
             trait_uses: _,
             properties,
             methods,

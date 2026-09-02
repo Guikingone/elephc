@@ -208,7 +208,7 @@ fn collect_class_method_slots(
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
             params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-            return_ty: sig.return_type.codegen_repr(),
+            return_ty: emitted_method_return_type(module, impl_class, method, false, sig),
             is_hidden_shadow: false,
             runtime_helper,
         });
@@ -254,7 +254,7 @@ fn collect_hidden_private_ancestor_method_slots(
                 allowed_scopes: visibility_scope_names(module, impl_class, visibility),
                 params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
                 ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-                return_ty: sig.return_type.codegen_repr(),
+                return_ty: emitted_method_return_type(module, impl_class, method, false, sig),
                 is_hidden_shadow: true,
                 runtime_helper: None,
             });
@@ -311,9 +311,34 @@ fn collect_class_static_method_slots(
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
             params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-            return_ty: sig.return_type.codegen_repr(),
+            return_ty: emitted_method_return_type(module, impl_class, method, true, sig),
         });
     }
+}
+
+/// Returns the actual ABI return representation of an emitted method symbol.
+///
+/// Class metadata may retain a checker-facing interface or union contract while
+/// the emitted EIR function returns a concrete object or scalar representation.
+/// The eval bridge must box the latter, because it receives the raw ABI result.
+fn emitted_method_return_type(
+    module: &Module,
+    impl_class: &str,
+    method: &str,
+    is_static: bool,
+    signature: &crate::types::FunctionSig,
+) -> PhpType {
+    let symbol = if is_static {
+        static_method_symbol(impl_class, method)
+    } else {
+        method_symbol(impl_class, method)
+    };
+    module
+        .class_methods
+        .iter()
+        .find(|function| function.name == symbol)
+        .map(|function| function.return_php_type.codegen_repr())
+        .unwrap_or_else(|| signature.return_type.codegen_repr())
 }
 
 /// Returns the declared instance-method visibility, defaulting to public metadata.
@@ -695,6 +720,7 @@ fn emit_aarch64_method_exception_boundary_pop(emitter: &mut Emitter, handler_off
     emitter.comment("pop eval method exception boundary");
     emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));       // reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emit_native_handler_pop_trace(emitter, 1, "x10");
     emitter.instruction(&format!(
         "ldr x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
@@ -734,11 +760,31 @@ fn emit_x86_64_method_exception_boundary_pop(emitter: &mut Emitter, handler_base
     emitter.comment("pop eval method exception boundary");
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler_base)); // reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emit_native_handler_pop_trace(emitter, 1, "r10");
     emitter.instruction(&format!(
         "mov r10, QWORD PTR [rbp - {}]",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
     ));                                                                          // reload the saved diagnostic suppression depth
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+}
+
+/// Emits an opt-in native boundary-pop trace while preserving the boxed result.
+fn emit_native_handler_pop_trace(emitter: &mut Emitter, site: i64, top_reg: &str) {
+    if std::env::var_os("ELEPHC_CODEGEN_HANDLER_TRACE").is_none() {
+        return;
+    }
+    let result_reg = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result_reg);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 3);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), site);
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 2), top_reg);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 3), 0);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 4), 0);
+    let symbol = emitter
+        .target
+        .extern_symbol("__elephc_eval_trace_aot_handler_top");
+    abi::emit_call_label(emitter, &symbol);
+    abi::emit_pop_reg(emitter, result_reg);
 }
 
 /// Emits ARM64 class-id and method-name dispatch for helper method bodies.
@@ -2283,7 +2329,46 @@ fn emit_box_method_result(module: &Module, emitter: &mut Emitter, return_ty: &Ph
         let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
         abi::emit_call_label(emitter, &null_symbol);
     } else {
-        emit_box_current_value_as_mixed(emitter, return_ty);
+        if method_result_is_object_only(return_ty) {
+            emit_box_owned_object_method_result(emitter);
+        } else {
+            emit_box_current_value_as_mixed(emitter, return_ty);
+        }
+    }
+}
+
+/// Returns whether a method bridge result is represented only by object alternatives.
+fn method_result_is_object_only(return_ty: &PhpType) -> bool {
+    match return_ty.codegen_repr() {
+        PhpType::Object(_) => true,
+        PhpType::Union(members) => members
+            .iter()
+            .all(|member| matches!(member.codegen_repr(), PhpType::Object(_))),
+        _ => false,
+    }
+}
+
+/// Boxes an owned native object return while transferring its call-result ownership to eval.
+fn emit_box_owned_object_method_result(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(emitter, "x0");
+            emit_box_current_value_as_mixed(emitter, &PhpType::Object(String::new()));
+            abi::emit_push_reg(emitter, "x0");
+            abi::emit_load_temporary_stack_slot(emitter, "x0", 16);
+            abi::emit_call_label(emitter, "__rt_decref_object");
+            abi::emit_pop_reg(emitter, "x0");
+            abi::emit_release_temporary_stack(emitter, 16);
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(emitter, "rax");
+            emit_box_current_value_as_mixed(emitter, &PhpType::Object(String::new()));
+            abi::emit_push_reg(emitter, "rax");
+            abi::emit_load_temporary_stack_slot(emitter, "rax", 16);
+            abi::emit_call_label(emitter, "__rt_decref_object");
+            abi::emit_pop_reg(emitter, "rax");
+            abi::emit_release_temporary_stack(emitter, 16);
+        }
     }
 }
 
@@ -2435,6 +2520,8 @@ fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
 mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
+    use crate::ir::{Function, IrType};
+    use crate::types::FunctionSig;
 
     /// Verifies far zero checks invert `cbz` locally before the wider unconditional branch.
     #[test]
@@ -2457,6 +2544,42 @@ mod tests {
         assert_eq!(
             emitter.output(),
             concat!("    b.eq 1f\n", "    b _far_fail\n", "1:\n")
+        );
+    }
+
+    /// Verifies eval bridge slots box the physical EIR object return despite a Mixed signature.
+    #[test]
+    fn emitted_method_return_type_uses_eir_abi_representation() {
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let mut module = Module::new(target);
+        module.class_methods.push(Function::new(
+            method_symbol("ConcreteResolver", "resolve"),
+            IrType::I64,
+            PhpType::Object("ConcreteResolver".to_string()),
+        ));
+        let signature = FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Mixed,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        };
+
+        assert_eq!(
+            emitted_method_return_type(
+                &module,
+                "ConcreteResolver",
+                "resolve",
+                false,
+                &signature,
+            ),
+            PhpType::Object("ConcreteResolver".to_string()),
         );
     }
 }

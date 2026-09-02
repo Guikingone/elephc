@@ -9,6 +9,24 @@
 
 use super::*;
 
+/// Handles eval-backed `ReflectionProperty::getName()` calls from registered metadata.
+pub(in crate::interpreter) fn eval_reflection_property_name_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getName") {
+        return Ok(None);
+    }
+    let Some((_, property_name)) = context.eval_reflection_property(identity) else {
+        return Ok(None);
+    };
+    eval_reflection_bind_no_args(evaluated_args)?;
+    values.string(property_name).map(Some)
+}
+
 /// Handles eval-backed `ReflectionProperty` hook-inspection calls.
 pub(in crate::interpreter) fn eval_reflection_property_hooks_result(
     identity: u64,

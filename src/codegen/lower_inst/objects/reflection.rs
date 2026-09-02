@@ -93,6 +93,7 @@ pub(super) use owner_dispatch::{
 #[derive(Debug, PartialEq)]
 struct ReflectionOwnerMetadata {
     reflected_name: Option<String>,
+    doc_comment: Option<String>,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgEntry>>>,
     interface_names: Vec<String>,

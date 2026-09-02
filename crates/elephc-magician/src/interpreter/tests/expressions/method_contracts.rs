@@ -170,6 +170,27 @@ return $child->id();"#,
     assert_eq!(values.get(result), FakeValue::Int(2));
 }
 
+/// Verifies native parent metadata makes return-type covariance available to eval declarations.
+#[test]
+fn execute_program_accepts_covariant_return_type_through_native_parent_metadata() {
+    let program = parse_fragment(
+        br#"class EvalNativeReturnBase {
+    protected function make(): EvalNativeParent { throw new \Exception(); }
+}
+class EvalNativeReturnChild extends EvalNativeReturnBase {
+    protected function make(): EvalNativeChild { throw new \Exception(); }
+}"#,
+    )
+    .expect("parse native metadata covariance declarations");
+    let mut context = ElephcEvalContext::new();
+    assert!(context.define_native_class_parent("EvalNativeChild", "EvalNativeParent"));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("native metadata should prove covariant return compatibility");
+}
+
 /// Verifies eval rejects method overrides that widen declared return types.
 #[test]
 fn execute_program_rejects_incompatible_method_return_type_overrides() {

@@ -214,21 +214,32 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
         }
         status
     })?;
-    let result = if let Some(scope) = bridge_scope {
-        eval_native_method_call_with_scope(
+    let mut result = RuntimeCellHandle::from_raw(std::ptr::null_mut());
+    let call_result = if let Some(scope) = bridge_scope {
+        eval_native_method_call_with_scope_out(
             scope,
             called_class_scope,
             object,
             method_name,
             native_bound_arg_values(&bound_args),
+            &mut result,
             context,
             values,
         )
     } else {
-        values.method_call(object, method_name, native_bound_arg_values(&bound_args))
+        values.method_call_out(
+            object,
+            method_name,
+            native_bound_arg_values(&bound_args),
+            &mut result,
+        )
     };
-    let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
-    match (result, writeback) {
+    let writeback = if native_bound_args_require_writeback(&bound_args) {
+        write_back_native_callable_ref_args(&bound_args, context, values)
+    } else {
+        Ok(())
+    };
+    match (call_result, writeback) {
         (Err(status), _) => {
             if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
                 eprintln!(
@@ -247,14 +258,30 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
             }
             Err(status)
         }
-        (Ok(result), Ok(())) => eval_declared_native_return_value(
-            return_type.as_ref(),
-            Some(signature_owner),
-            called_class_scope.or(Some(class_name)),
-            result,
-            context,
-            values,
-        )
+        (Ok(()), Ok(())) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                let result_ptr = result.as_ptr();
+                let words = unsafe { std::slice::from_raw_parts(result_ptr.cast::<u64>(), 3) };
+                let tag = values.type_tag(result);
+                let object_refs = matches!(tag, Ok(EVAL_TAG_OBJECT)).then(|| {
+                    let object_ptr = words[1] as *const u8;
+                    (!object_ptr.is_null())
+                        .then(|| unsafe { object_ptr.sub(12).cast::<u32>().read() } & 0x7fff_ffff)
+                });
+                eprintln!(
+                    "[elephc-eval-trace] phase=native_method_return_contract owner={signature_owner:?} class={class_name:?} method={method_name:?} result={result_ptr:p} words=[{:#x}, {:#x}, {:#x}] return_type={return_type:?} tag={tag:?} object_refs={object_refs:?}",
+                    words[0], words[1], words[2],
+                );
+            }
+            eval_declared_native_return_value(
+                return_type.as_ref(),
+                Some(signature_owner),
+                called_class_scope.or(Some(class_name)),
+                result,
+                context,
+                values,
+            )
+        }
         .map_err(|status| {
             if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
                 eprintln!(
@@ -440,7 +467,11 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     } else {
         values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
     };
-    let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+    let writeback = if native_bound_args_require_writeback(&bound_args) {
+        write_back_native_callable_ref_args(&bound_args, context, values)
+    } else {
+        Ok(())
+    };
     match (result, writeback) {
         (Err(status), _) | (_, Err(status)) => Err(status),
         (Ok(result), Ok(())) => eval_declared_native_return_value(

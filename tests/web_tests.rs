@@ -657,6 +657,565 @@ fn web_dynamic_eval_sees_request_superglobals() {
     assert!(resp.ends_with("app.php"), "body: {:?}", resp);
 }
 
+/// Verifies a web eval call can reflect a callable, return an interface object with two closures, and invoke it.
+#[test]
+fn web_eval_reflected_callable_method_returns_closure_pair() {
+    let dir = make_test_dir("web_eval_reflected_callable");
+    let src = r#"<?php
+interface WebEvalResolver {
+    public function resolve(): string;
+}
+
+class WebEvalClosureResolver implements WebEvalResolver {
+    public function __construct(
+        private readonly Closure $callable,
+        private readonly Closure $arguments,
+    ) {}
+
+    public function resolve(): string {
+        return ($this->callable)(...($this->arguments)());
+    }
+}
+
+class WebEvalRuntime {
+    public function getResolver(
+        callable $callable,
+        ?ReflectionFunction $reflector = null,
+    ): WebEvalResolver {
+        $callable = $callable(...);
+        $reflector ??= new ReflectionFunction($callable);
+        $parameters = [];
+        $arguments = function () use ($parameters): array { return $parameters; };
+
+        return new WebEvalClosureResolver($callable, $arguments);
+    }
+}
+
+echo eval('$runtime = new WebEvalRuntime();
+$callback = static function (): string { return "ok"; };
+echo $runtime->getResolver($callback)->resolve();');
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies an eval-declared grandchild invokes an inherited AOT constructor by its declaring class.
+#[test]
+fn web_eval_dynamic_grandchild_constructs_through_aot_ancestor() {
+    let dir = make_test_dir("web_eval_dynamic_grandchild_constructor");
+    let src = r#"<?php
+interface WebEvalConstructorParent {}
+
+abstract class WebEvalConstructorOwner {
+    public function __construct(
+        ?string $name,
+        ?WebEvalConstructorParent $parent = null,
+    ) {
+        echo $name;
+    }
+}
+
+class WebEvalConstructorAotParent extends WebEvalConstructorOwner {}
+
+echo eval('class WebEvalConstructorDynamicMiddle extends WebEvalConstructorAotParent {}
+class WebEvalConstructorDynamicLeaf extends WebEvalConstructorDynamicMiddle {}
+$node = new WebEvalConstructorDynamicLeaf("ok");
+');
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies a null-context runtime include inherits AOT constructor metadata from its seed context.
+#[test]
+fn web_runtime_include_fallback_inherits_aot_constructor_metadata() {
+    let dir = make_test_dir("web_runtime_include_fallback_metadata");
+    let included = dir.join("loaded.php");
+    fs::write(
+        &included,
+        r#"<?php
+class WebFallbackMetadataDynamic extends WebFallbackMetadataAotParent {}
+$node = new WebFallbackMetadataDynamic("ok");
+"#,
+    )
+    .expect("write runtime include fixture");
+    let src = r#"<?php
+interface WebFallbackMetadataParent {}
+
+abstract class WebFallbackMetadataOwner {
+    public function __construct(
+        ?string $name,
+        ?WebFallbackMetadataParent $parent = null,
+    ) {
+        echo $name;
+    }
+}
+
+class WebFallbackMetadataAotParent extends WebFallbackMetadataOwner {}
+
+function web_fallback_metadata_seed(): void {
+    eval('');
+}
+
+function web_fallback_metadata_include(string $path): void {
+    include $path;
+}
+
+web_fallback_metadata_seed();
+web_fallback_metadata_include($_GET['file']);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, &format!("/?file={}", included.display()));
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies a runtime include materializing an AOT-known class preserves its exact backing class.
+#[test]
+fn web_runtime_include_materializes_known_class_with_exact_aot_backing() {
+    let dir = make_test_dir("web_runtime_include_materialized_aot_class");
+    let included = dir.join("loaded.php");
+    fs::write(
+        &included,
+        r#"<?php
+class WebMaterializedBackingDynamic extends WebMaterializedBackingAotParent {}
+$node = new WebMaterializedBackingDynamic('ok');
+echo $node->fluent() instanceof WebMaterializedBackingDynamic ? '' : 'bad';
+"#,
+    )
+    .expect("write materialized runtime include fixture");
+    let src = r#"<?php
+interface WebMaterializedBackingParent {}
+
+abstract class WebMaterializedBackingOwner {
+    public function __construct(
+        ?string $name,
+        ?WebMaterializedBackingParent $parent = null,
+    ) {
+        echo $name;
+    }
+
+    public function fluent(): static {
+        return $this;
+    }
+}
+
+class WebMaterializedBackingAotParent extends WebMaterializedBackingOwner {}
+
+if (false) {
+    include __DIR__ . '/loaded.php';
+}
+
+function web_materialized_backing_seed(): void {
+    eval('');
+}
+
+function web_materialized_backing_include(string $path): void {
+    include $path;
+}
+
+web_materialized_backing_seed();
+web_materialized_backing_include($_GET['file']);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, &format!("/?file={}", included.display()));
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies an AOT dynamic class-string construction keeps a fluent static return in a property.
+#[test]
+fn web_aot_dynamic_class_string_construction_keeps_fluent_property_result() {
+    let dir = make_test_dir("web_aot_dynamic_class_string_fluent");
+    let src = r#"<?php
+class WebDynamicChainNode {
+    public function setParent(object $parent): static {
+        return $this;
+    }
+
+    public function getNode(): string {
+        return 'ok';
+    }
+}
+
+class WebDynamicChainBuilder {
+    private ?WebDynamicChainNode $root = null;
+
+    public function __construct(string $type) {
+        $classes = ['node' => WebDynamicChainNode::class];
+        $class = $classes[$type];
+        $this->root = (new $class())->setParent($this);
+    }
+
+    public function build(): string {
+        return $this->root->getNode();
+    }
+}
+
+echo (new WebDynamicChainBuilder('node'))->build();
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies a dense AOT class set uses the eval bridge instead of expanding every class string.
+#[test]
+fn web_dense_aot_dynamic_class_string_construction_uses_compact_bridge_dispatch() {
+    let dir = make_test_dir("web_dense_aot_dynamic_class_string");
+    let mut src = String::from(
+        r#"<?php
+interface WebDenseDynamicNewParent {}
+
+class WebDenseDynamicNewBase {
+    private string $value;
+    protected ?WebDenseDynamicNewParent $parent = null;
+
+    public function __construct(array $values, ?WebDenseDynamicNewParent $parent = null) {
+        $this->value = $values['value'];
+        $this->parent = $parent;
+    }
+
+    public function setParent(WebDenseDynamicNewParent $parent): static {
+        $this->parent = $parent;
+
+        return $this;
+    }
+
+    public function value(): string {
+        return $this->value;
+    }
+}
+
+class WebDenseDynamicNewCollection extends WebDenseDynamicNewBase implements WebDenseDynamicNewParent {
+    private array $children = [];
+
+    public function append(WebDenseDynamicNewBase $node): static {
+        $this->children['node'] = $node->setParent($this);
+
+        return $this;
+    }
+
+    public function createNode(): string {
+        foreach ($this->children as $child) {
+            $child->parent = $this;
+
+            return $child->value();
+        }
+
+        return 'missing';
+    }
+}
+"#,
+    );
+    for index in 0..48 {
+        src.push_str(&format!(
+            "class WebDenseDynamicNew{index} extends WebDenseDynamicNewBase {{}}\n"
+        ));
+    }
+    src.push_str("$classes = [\n");
+    for index in 0..48 {
+        src.push_str(&format!("    '{index}' => WebDenseDynamicNew{index}::class,\n"));
+    }
+    src.push_str(
+        r#"];
+$class = $classes[$_GET['class'] ?? '47'];
+$collection = new WebDenseDynamicNewCollection(['value' => 'collection']);
+$collection->append(new $class(['value' => 'ok']));
+echo $collection->createNode();
+"#,
+    );
+
+    let bin = compile_web(&dir, &src, "app");
+    let asm = fs::read_to_string(bin.with_extension("s")).expect("read generated assembly");
+    assert!(
+        !asm.contains("_eir_main_dynamic_new_mixed_case_"),
+        "dense dynamic construction must avoid per-class AOT dispatch"
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?class=47");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies a compact dynamic-new result survives a BuilderAware parent/clone flow into children.
+#[test]
+fn web_dense_dynamic_node_builder_flow_keeps_child_for_create_node() {
+    let dir = make_test_dir("web_dense_dynamic_node_builder");
+    let mut src = String::from(
+        r#"<?php
+interface WebDenseNodeParent {}
+
+interface WebDenseRuntimeNode {}
+
+interface WebDenseBuilderAware {
+    public function setBuilder(WebDenseNodeBuilder $builder): void;
+}
+
+class WebDenseNodeBase {
+    protected ?string $name = null;
+    protected object $normalization;
+    protected object $validation;
+    protected mixed $defaultValue;
+    protected bool $default = false;
+    protected bool $required = false;
+    protected array $deprecation = [];
+    protected object $merge;
+    protected bool $allowEmptyValue = true;
+    protected mixed $nullEquivalent = null;
+    protected mixed $trueEquivalent = true;
+    protected mixed $falseEquivalent = false;
+    protected string $pathSeparator = ".";
+    protected WebDenseNodeParent|WebDenseRuntimeNode|null $parent = null;
+    protected array $attributes = [];
+
+    public function __construct(?string $name, ?WebDenseNodeParent $parent = null) {
+        $this->name = $name;
+        $this->parent = $parent;
+    }
+
+    public function setParent(WebDenseNodeParent $parent): static {
+        $this->parent = $parent;
+
+        return $this;
+    }
+
+    public function getNode(): string {
+        return $this->name ?? 'missing';
+    }
+}
+
+class WebDenseNodeRuntime implements WebDenseRuntimeNode {}
+
+class WebDenseNodeCollection extends WebDenseNodeBase implements WebDenseNodeParent {
+    private array $children = [];
+    protected WebDenseNodeBase $prototype;
+
+    public function append(mixed $node): static {
+        $this->children[$node->name ?? ''] = $node->setParent($this);
+
+        return $this;
+    }
+
+    public function createNode(): string {
+        $result = 'missing';
+        $node = new WebDenseNodeRuntime();
+
+        foreach ($this->children as $child) {
+            $child->parent = $node;
+            $result = $child->getNode();
+        }
+
+        return $result;
+    }
+
+    public function prototype(WebDenseNodeBuilder $builder, string $type): WebDenseNodeBase {
+        return $this->prototype = $builder->node('prototype', $type)->setParent($this);
+    }
+
+    public function createPrototype(): string {
+        if (!isset($this->prototype)) {
+            return 'missing';
+        }
+
+        return $this->prototype->getNode();
+    }
+}
+
+class WebDenseNodeBuilder implements WebDenseNodeParent {
+    private ?WebDenseNodeCollection $parent;
+    private array $mapping;
+
+    public function __construct(WebDenseNodeCollection $parent) {
+        $this->parent = $parent;
+        $this->mapping = [
+"#,
+    );
+    for index in 0..48 {
+        src.push_str(&format!("            '{index}' => WebDenseNode{index}::class,\n"));
+    }
+    src.push_str(
+        r#"        ];
+    }
+
+    public function setParent(?WebDenseNodeCollection $parent): static {
+        $this->parent = $parent;
+
+        return $this;
+    }
+
+    public function append(WebDenseNodeBase $node): static {
+        if ($node instanceof WebDenseBuilderAware) {
+            $builder = clone $this;
+            $builder->setParent(null);
+            $node->setBuilder($builder);
+        }
+
+        if (null !== $this->parent) {
+            $this->parent->append($node);
+            $node->setParent($this);
+        }
+
+        return $this;
+    }
+
+    public function node(?string $name, string $type): WebDenseNodeBase {
+        $class = $this->mapping[$type];
+        $node = new $class($name);
+        $this->append($node);
+
+        return $node;
+    }
+}
+"#,
+    );
+    for index in 0..48 {
+        if index == 47 {
+            src.push_str(
+                r#"class WebDenseNode47 extends WebDenseNodeCollection implements WebDenseBuilderAware {
+    private WebDenseNodeBuilder $builder;
+
+    public function setBuilder(WebDenseNodeBuilder $builder): void {
+        $this->builder = $builder;
+    }
+}
+"#,
+            );
+        } else {
+            src.push_str(&format!("class WebDenseNode{index} extends WebDenseNodeBase {{}}\n"));
+        }
+    }
+    src.push_str(
+        r#"
+$root = new WebDenseNodeCollection('root');
+$builder = new WebDenseNodeBuilder($root);
+for ($i = 0; $i < 48; ++$i) {
+    $builder->node('n'.$i, (string) $i);
+}
+for ($i = 0; $i < 48; ++$i) {
+    $builder->node('duplicate', (string) $i);
+}
+$lastChild = $root->createNode();
+$root->prototype($builder, '47');
+echo $lastChild, ':', $root->createPrototype();
+"#,
+    );
+
+    let bin = compile_web(&dir, &src, "app");
+    let asm = fs::read_to_string(bin.with_extension("s")).expect("read generated assembly");
+    assert!(
+        !asm.contains("_eir_WebDenseNodeBuilder__node_dynamic_new_mixed_case_"),
+        "dense node-builder construction must avoid per-class AOT dispatch"
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        response.ends_with("duplicate:prototype"),
+        "response: {response:?}"
+    );
+}
+
+/// Verifies a retained fallback autoloader refreshes AOT metadata published after its creation.
+#[test]
+fn web_retained_fallback_autoloader_refreshes_aot_constructor_metadata() {
+    let dir = make_test_dir("web_retained_fallback_metadata");
+    let loader = dir.join("loader.php");
+    fs::write(
+        &loader,
+        r#"<?php
+spl_autoload_register(static function (string $class): void {
+    if ($class === 'WebDeferredMetadataDynamic') {
+        eval('class WebDeferredMetadataDynamic extends WebDeferredMetadataAotParent {}');
+    }
+});
+"#,
+    )
+    .expect("write deferred runtime autoloader fixture");
+    let src = r#"<?php
+interface WebDeferredMetadataParent {}
+
+abstract class WebDeferredMetadataOwner {
+    public function __construct(
+        ?string $name,
+        ?WebDeferredMetadataParent $parent = null,
+    ) {
+        echo $name;
+    }
+
+    public function fluent(): static {
+        return $this;
+    }
+}
+
+class WebDeferredMetadataAotParent extends WebDeferredMetadataOwner {}
+
+function web_deferred_metadata_include(string $path): void {
+    include $path;
+}
+
+function web_deferred_metadata_seed(): void {
+    eval('');
+}
+
+function web_deferred_metadata_construct(): void {
+    $node = new WebDeferredMetadataDynamic('ok');
+    echo $node->fluent() instanceof WebDeferredMetadataDynamic ? '' : 'bad';
+}
+
+web_deferred_metadata_include($_GET['file']);
+web_deferred_metadata_seed();
+web_deferred_metadata_construct();
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, &format!("/?file={}", loader.display()));
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
 /// Verifies $_GET is parsed from the query string, with percent-decoding.
 #[test]
 fn web_get_superglobal_parsed() {

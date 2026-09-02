@@ -50,6 +50,13 @@ pub(in crate::parser) use simple::try_parse_value_include;
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
 pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, CompileError> {
+    let doc_comment = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::DocComment(doc_comment)) => {
+            *pos += 1;
+            Some(doc_comment.clone())
+        }
+        _ => None,
+    };
     // PHP attribute groups (`#[...]`) may decorate any statement-level
     // declaration. We capture them here and attach the result to the parsed
     // statement; non-declaration kinds reject non-empty attribute lists below.
@@ -64,8 +71,11 @@ pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, Comp
     }
     let span = tokens[*pos].1.span;
 
-    let stmt = parse_stmt_dispatch(tokens, pos, span)?;
-    attach_attributes_to_stmt(stmt, attributes, span)
+    let mut stmt = attach_attributes_to_stmt(parse_stmt_dispatch(tokens, pos, span)?, attributes, span)?;
+    if let StmtKind::ClassDecl { doc_comment: slot, .. } = &mut stmt.kind {
+        *slot = doc_comment;
+    }
+    Ok(stmt)
 }
 
 /// Attaches parsed attribute groups to a statement, validating that the statement kind supports attributes.

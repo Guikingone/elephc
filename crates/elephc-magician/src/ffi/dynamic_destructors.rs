@@ -120,6 +120,14 @@ unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
         unregister_dynamic_object(identity);
         return 0;
     }
+    if context.closure_object_target(identity).is_some() {
+        let context_ptr = context as *mut ElephcEvalContext;
+        let should_finalize = context.forget_closure_object(identity);
+        if should_finalize {
+            unsafe { crate::ffi::context::finalize_eval_context_free(context_ptr) };
+        }
+        return 0;
+    }
     if context.dynamic_object_class(identity).is_none() {
         unregister_dynamic_object(identity);
         return 0;
@@ -129,23 +137,33 @@ unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
     let object_cell = match ElephcRuntimeOps::object_from_raw(object) {
         Ok(object_cell) => object_cell,
         Err(_) => {
-            for value in context.forget_dynamic_object(identity) {
+            let (property_values, should_finalize) = context.forget_dynamic_object(identity);
+            for value in property_values {
                 let _ = values.release(value);
+            }
+            drop(values);
+            if should_finalize {
+                unsafe { crate::ffi::context::finalize_eval_context_free(context as *mut _) };
             }
             return 1;
         }
     };
     let destruct_result =
         eval_dynamic_destructor_for_object_cell(identity, object_cell, context, &mut values);
-    let overlay_release_result = context
-        .forget_dynamic_object(identity)
+    let (property_values, should_finalize) = context.forget_dynamic_object(identity);
+    let overlay_release_result = property_values
         .into_iter()
         .try_for_each(|value| values.release(value));
     let release_result = values.release(object_cell);
-    match (destruct_result, overlay_release_result, release_result) {
+    let result = match (destruct_result, overlay_release_result, release_result) {
         (Ok(true), Ok(()), Ok(())) => 1,
         (Ok(false), Ok(()), Ok(())) => 0,
         (Err(EvalStatus::UnsupportedConstruct), _, _) => 1,
         (Err(_), _, _) | (_, Err(_), _) | (_, _, Err(_)) => 1,
+    };
+    drop(values);
+    if should_finalize {
+        unsafe { crate::ffi::context::finalize_eval_context_free(context as *mut _) };
     }
+    result
 }

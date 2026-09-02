@@ -147,6 +147,28 @@ macro_rules! impl_reflection_ops {
         Ok((flags != 0).then_some(flags))
     }
 
+    /// Returns an AOT class doc comment retained by the generated reflection bridge.
+    fn reflection_class_doc_comment(
+        &mut self,
+        class_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        let ptr = unsafe {
+            __elephc_eval_reflection_class_doc_comment(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+            )
+        };
+        if ptr.is_null() {
+            return Ok(None);
+        }
+        let handle = RuntimeCellHandle::from_raw(ptr);
+        let bytes = self.string_bytes(handle)?;
+        self.release(handle)?;
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| EvalStatus::RuntimeFatal)
+    }
+
     /// Returns the canonical generated AOT class-like name for a case-insensitive lookup.
     fn reflection_canonical_class_name(
         &mut self,

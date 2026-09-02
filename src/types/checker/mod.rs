@@ -38,7 +38,7 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::Platform;
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    CallableTarget, Expr, Program, TypeExpr,
+    CallableTarget, Expr, Program, StmtKind, TypeExpr,
 };
 use crate::span::Span;
 use crate::types::{
@@ -329,6 +329,8 @@ pub fn check_types(
 ) -> Result<CheckResult, CompileError> {
     let (mut checker, global_env) = driver::check_types_impl(program, target_platform)?;
 
+    attach_class_doc_comments(program, &mut checker.classes);
+
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);
     validate_magic_method_contracts(&checker)?;
@@ -374,6 +376,31 @@ pub fn check_types(
         by_ref_local_storage_types: checker.by_ref_local_storage_types,
         dynamic_ref_local_types: checker.dynamic_ref_local_types,
     })
+}
+
+/// Copies direct class declaration doc comments into the completed AOT class schema map.
+fn attach_class_doc_comments(program: &Program, classes: &mut HashMap<String, ClassInfo>) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::ClassDecl {
+                name, doc_comment, ..
+            } => {
+                let canonical_name = classes
+                    .keys()
+                    .find(|class_name| {
+                        class_name
+                            .trim_start_matches('\\')
+                            .eq_ignore_ascii_case(name.trim_start_matches('\\'))
+                    })
+                    .cloned();
+                if let Some(class) = canonical_name.and_then(|name| classes.get_mut(&name)) {
+                    class.doc_comment = doc_comment.clone();
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => attach_class_doc_comments(body, classes),
+            _ => {}
+        }
+    }
 }
 
 /// Removes duplicate warnings emitted by repeated checker stabilization passes.

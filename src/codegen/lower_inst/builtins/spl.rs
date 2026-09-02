@@ -141,7 +141,9 @@ pub(crate) fn lower_spl_autoload_bool(
     name: &str,
 ) -> Result<()> {
     match name {
-        "spl_autoload_register" => super::ensure_arg_count_between(inst, name, 0, 3)?,
+        "spl_autoload_register" => {
+            return super::eval::lower_eval_spl_autoload_register(ctx, inst);
+        }
         "spl_autoload_unregister" => super::ensure_arg_count(inst, name, 1)?,
         _ => return Err(CodegenIrError::unsupported(format!("autoload bool stub {}", name))),
     }

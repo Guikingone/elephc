@@ -8,6 +8,7 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use crate::ir_lower::context::TryHandlerFrame;
 
 /// Lowers a throwing statement into a terminator.
 pub(super) fn lower_throw(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) {
@@ -67,7 +68,9 @@ pub(super) fn lower_try_catch(
         Op::TryPushHandler.default_effects(),
         Some(span),
     );
+    let handler_depth = push_try_handler_frame(ctx, handler_token, span);
     lower_block(ctx, try_body);
+    pop_try_handler_frame_if_active(ctx, handler_depth);
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         branch_to(ctx, after_block);
@@ -169,6 +172,53 @@ pub(super) fn emit_try_pop_handler(ctx: &mut LoweringContext<'_, '_>, handler_to
         Op::TryPopHandler.default_effects(),
         Some(span),
     );
+}
+
+/// Records a protected body whose handler must be popped on non-throwing control exits.
+pub(super) fn push_try_handler_frame(
+    ctx: &mut LoweringContext<'_, '_>,
+    handler_token: i64,
+    span: Span,
+) -> usize {
+    let depth = ctx.try_handler_stack.len();
+    ctx.try_handler_stack.push(TryHandlerFrame {
+        handler_token,
+        span,
+        loop_depth: ctx.loop_stack.len(),
+    });
+    depth
+}
+
+/// Discards one lowering-only handler frame after its protected body has been lowered.
+pub(super) fn pop_try_handler_frame_if_active(ctx: &mut LoweringContext<'_, '_>, depth: usize) {
+    if ctx.try_handler_stack.len() > depth {
+        ctx.try_handler_stack.pop();
+    }
+}
+
+/// Emits handler pops for every protected body exited by a function return.
+pub(super) fn emit_try_handler_pops_for_return(ctx: &mut LoweringContext<'_, '_>) {
+    while let Some(frame) = ctx.try_handler_stack.pop() {
+        emit_try_pop_handler(ctx, frame.handler_token, frame.span);
+    }
+}
+
+/// Emits handler pops for protected bodies that a loop-control target leaves lexically.
+pub(super) fn emit_try_handler_pops_for_branch(
+    ctx: &mut LoweringContext<'_, '_>,
+    target_loop_index: usize,
+) {
+    while ctx
+        .try_handler_stack
+        .last()
+        .is_some_and(|frame| target_loop_index < frame.loop_depth)
+    {
+        let frame = ctx
+            .try_handler_stack
+            .pop()
+            .expect("try handler frame disappeared after last()");
+        emit_try_pop_handler(ctx, frame.handler_token, frame.span);
+    }
 }
 
 /// Lowers ordered catch matching and reports whether any catch reaches the post-try join.
@@ -329,4 +379,3 @@ pub(super) fn catch_variable_type(catch: &CatchClause) -> PhpType {
     }
     PhpType::Object("Throwable".to_string())
 }
-

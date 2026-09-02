@@ -71,10 +71,13 @@ pub(in crate::interpreter) fn execute_switch_stmt(
     for case in &cases[start_index..] {
         match execute_statements(&case.body, context, scope, values)? {
             EvalControl::None => {}
-            EvalControl::Break | EvalControl::Continue => break,
+            EvalControl::Break(1) | EvalControl::Continue(1) => break,
+            EvalControl::Break(level) => return Ok(EvalControl::Break(level - 1)),
+            EvalControl::Continue(level) => return Ok(EvalControl::Continue(level - 1)),
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
     }
     Ok(EvalControl::None)
@@ -90,11 +93,14 @@ pub(in crate::interpreter) fn execute_do_while_stmt(
 ) -> Result<EvalControl, EvalStatus> {
     loop {
         match execute_statements(body, context, scope, values)? {
-            EvalControl::None | EvalControl::Continue => {}
-            EvalControl::Break => break,
+            EvalControl::None | EvalControl::Continue(1) => {}
+            EvalControl::Break(1) => break,
+            EvalControl::Break(level) => return Ok(EvalControl::Break(level - 1)),
+            EvalControl::Continue(level) => return Ok(EvalControl::Continue(level - 1)),
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
         let condition = eval_expr(condition, context, scope, values)?;
         if !values.truthy(condition)? {
@@ -115,11 +121,14 @@ pub(in crate::interpreter) fn execute_for_stmt(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
     match execute_statements(init, context, scope, values)? {
-        EvalControl::None | EvalControl::Continue => {}
-        EvalControl::Break => return Ok(EvalControl::None),
+        EvalControl::None | EvalControl::Continue(1) => {}
+        EvalControl::Break(1) => return Ok(EvalControl::None),
+        EvalControl::Break(level) => return Ok(EvalControl::Break(level - 1)),
+        EvalControl::Continue(level) => return Ok(EvalControl::Continue(level - 1)),
         EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
         EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
         EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+        EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
     }
     loop {
         if let Some(condition) = condition {
@@ -129,18 +138,24 @@ pub(in crate::interpreter) fn execute_for_stmt(
             }
         }
         match execute_statements(body, context, scope, values)? {
-            EvalControl::None | EvalControl::Continue => {}
-            EvalControl::Break => break,
+            EvalControl::None | EvalControl::Continue(1) => {}
+            EvalControl::Break(1) => break,
+            EvalControl::Break(level) => return Ok(EvalControl::Break(level - 1)),
+            EvalControl::Continue(level) => return Ok(EvalControl::Continue(level - 1)),
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
         match execute_statements(update, context, scope, values)? {
-            EvalControl::None | EvalControl::Continue => {}
-            EvalControl::Break => break,
+            EvalControl::None | EvalControl::Continue(1) => {}
+            EvalControl::Break(1) => break,
+            EvalControl::Break(level) => return Ok(EvalControl::Break(level - 1)),
+            EvalControl::Continue(level) => return Ok(EvalControl::Continue(level - 1)),
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
     }
     Ok(EvalControl::None)
@@ -151,19 +166,44 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
     array: &EvalExpr,
     key_name: Option<&str>,
     value_name: &str,
+    value_by_ref: bool,
     body: &[EvalStmt],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let array = eval_expr(array, context, scope, values)?;
+    let (array, array_target) = if value_by_ref {
+        eval_call_arg_value(array, context, scope, values)?
+    } else {
+        (eval_expr(array, context, scope, values)?, None)
+    };
     match values.type_tag(array)? {
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
-            execute_foreach_array_stmt(array, key_name, value_name, body, context, scope, values)
+            let iteration_array = if value_by_ref {
+                values.retain(array)?
+            } else {
+                array
+            };
+            let result = execute_foreach_array_stmt(
+                iteration_array,
+                array_target.as_ref(),
+                key_name,
+                value_name,
+                value_by_ref,
+                body,
+                context,
+                scope,
+                values,
+            );
+            if value_by_ref {
+                values.release(iteration_array)?;
+            }
+            result
         }
-        EVAL_TAG_OBJECT => {
-            execute_foreach_object_stmt(array, key_name, value_name, body, context, scope, values)
-        }
+        EVAL_TAG_OBJECT if value_by_ref => Err(EvalStatus::RuntimeFatal),
+        EVAL_TAG_OBJECT => execute_foreach_object_stmt(
+            array, key_name, value_name, body, context, scope, values,
+        ),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -171,8 +211,10 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
 /// Executes `foreach` over a PHP array value using insertion-order runtime hooks.
 pub(super) fn execute_foreach_array_stmt(
     array: RuntimeCellHandle,
+    array_target: Option<&EvalReferenceTarget>,
     key_name: Option<&str>,
     value_name: &str,
+    value_by_ref: bool,
     body: &[EvalStmt],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -192,24 +234,47 @@ pub(super) fn execute_foreach_array_stmt(
             )? {
                 values.release(replaced)?;
             }
-        } else {
-            values.release(key)?;
         }
-        for replaced in set_scope_cell(
-            context,
-            scope,
-            value_name.to_string(),
-            value,
-            ScopeCellOwnership::Owned,
-        )? {
+        let replaced = if value_by_ref {
+            let reference_key =
+                eval_array_reference_key(key, values)?.ok_or(EvalStatus::RuntimeFatal)?;
+            let target = array_target.cloned().map_or_else(
+                || EvalReferenceTarget::Cell { cell: value },
+                |array_target| EvalReferenceTarget::NestedArrayElement {
+                    array_target: Box::new(array_target),
+                    index: reference_key,
+                },
+            );
+            let replaced = scope
+                .rebind_reference(value_name.to_string(), value, ScopeCellOwnership::Borrowed)
+                .into_iter()
+                .collect();
+            scope.set_reference_target(value_name.to_string(), target);
+            replaced
+        } else {
+            set_scope_cell(
+                context,
+                scope,
+                value_name.to_string(),
+                value,
+                ScopeCellOwnership::Owned,
+            )?
+        };
+        for replaced in replaced {
             values.release(replaced)?;
         }
+        if key_name.is_none() && !value_by_ref {
+            values.release(key)?;
+        }
         match execute_statements(body, context, scope, values)? {
-            EvalControl::None | EvalControl::Continue => {}
-            EvalControl::Break => break,
+            EvalControl::None | EvalControl::Continue(1) => {}
+            EvalControl::Break(1) => break,
+            EvalControl::Break(level) => return Ok(EvalControl::Break(level - 1)),
+            EvalControl::Continue(level) => return Ok(EvalControl::Continue(level - 1)),
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
     }
     Ok(EvalControl::None)
@@ -234,7 +299,15 @@ pub(super) fn execute_foreach_object_stmt(
         let iterator = eval_method_call_result(object, "getIterator", Vec::new(), context, values)?;
         return match values.type_tag(iterator)? {
             EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => execute_foreach_array_stmt(
-                iterator, key_name, value_name, body, context, scope, values,
+                iterator,
+                None,
+                key_name,
+                value_name,
+                false,
+                body,
+                context,
+                scope,
+                values,
             ),
             EVAL_TAG_OBJECT if eval_foreach_object_is_a(iterator, "Iterator", context, values)? => {
                 execute_foreach_iterator_stmt(
@@ -301,15 +374,18 @@ pub(super) fn execute_foreach_iterator_stmt(
         }
 
         match execute_statements(body, context, scope, values)? {
-            EvalControl::None | EvalControl::Continue => {
+            EvalControl::None | EvalControl::Continue(1) => {
                 let result =
                     eval_method_call_result(iterator, "next", Vec::new(), context, values)?;
                 values.release(result)?;
             }
-            EvalControl::Break => return Ok(EvalControl::None),
+            EvalControl::Break(1) => return Ok(EvalControl::None),
+            EvalControl::Break(level) => return Ok(EvalControl::Break(level - 1)),
+            EvalControl::Continue(level) => return Ok(EvalControl::Continue(level - 1)),
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
     }
 }

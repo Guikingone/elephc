@@ -58,6 +58,19 @@ pub fn scan_tokens(
         }
 
         let span = cursor.span();
+        if cursor.remaining().starts_with("/**") {
+            let mut doc_comment = String::new();
+            while let Some(ch) = cursor.advance() {
+                doc_comment.push(ch);
+                if ch == '*' && cursor.peek() == Some('/') {
+                    cursor.advance();
+                    doc_comment.push('/');
+                    break;
+                }
+            }
+            retain_declaration_doc_comment(&mut tokens, spanned(Token::DocComment(doc_comment), span));
+            continue;
+        }
         if matches!(mode, SourceMode::Lfc)
             && (cursor.remaining().starts_with("<?php")
                 || cursor.remaining().starts_with("?>"))
@@ -101,6 +114,26 @@ pub fn scan_tokens(
     Ok(tokens)
 }
 
+/// Retains a doc comment only where PHP can begin a declaration statement.
+///
+/// PHP treats doc comments as whitespace in expression and parameter positions. The parser only
+/// consumes them as declaration metadata, so retaining them after an open tag, statement
+/// terminator, or block boundary preserves class reflection while avoiding synthetic syntax in
+/// ordinary PHP constructs such as `function (/** @var T */ T $value)`.
+fn retain_declaration_doc_comment(tokens: &mut Vec<SpannedToken>, doc_comment: SpannedToken) {
+    match tokens.last().map(|(token, _)| token) {
+        Some(Token::DocComment(_)) => {
+            // PHP exposes the nearest contiguous docblock as declaration metadata.
+            tokens.pop();
+            tokens.push(doc_comment);
+        }
+        Some(Token::OpenTag | Token::Semicolon | Token::LBrace | Token::RBrace) => {
+            tokens.push(doc_comment);
+        }
+        _ => {}
+    }
+}
+
 /// Skips all whitespace, `//` line comments, `#` line comments (but not `#[` attribute
 /// groups), and `/* */` block comments. Uses `continue` to re-check after each comment
 /// type so adjacent comment forms are all skipped.
@@ -127,6 +160,10 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
                 if ch == '\n' { break; }
             }
             continue;
+        }
+
+        if cursor.remaining().starts_with("/**") {
+            break;
         }
 
         if cursor.remaining().starts_with("/*") {

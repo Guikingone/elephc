@@ -65,6 +65,11 @@ pub(super) fn lower_prop_get_nonnull(
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
         return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, property);
     }
+    if builtins::has_eval_context(ctx)
+        && matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_))
+    {
+        return builtins::lower_eval_property_get(ctx, inst, object, property);
+    }
     if let Some(class_name) = union_object_member_class(ctx, object)? {
         return lower_union_object_prop_get(ctx, inst, object, &class_name, property);
     }
@@ -96,8 +101,51 @@ pub(super) fn lower_prop_get_nonnull(
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
+    emit_aot_loaded_object_property_trace(ctx, object, property, &slot.php_type)?;
     materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
     store_if_result(ctx, inst)
+}
+
+/// Emits an opt-in trace for a loaded AOT object property while preserving the
+/// raw result register for normal materialization.
+///
+/// The trace is limited to object-shaped slots so its diagnostic helper may
+/// safely inspect the loaded word as an AOT object header. It is compiled only
+/// into eval-bridge programs when explicitly requested by the build environment.
+fn emit_aot_loaded_object_property_trace(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    property_ty: &PhpType,
+) -> Result<()> {
+    if std::env::var_os("ELEPHC_CODEGEN_AOT_PROPERTY_TRACE").is_none()
+        || !ctx.module.required_runtime_features.eval_bridge
+        || !matches!(property_ty.codegen_repr(), PhpType::Object(_))
+    {
+        return Ok(());
+    }
+    let site = format!("{}|{}|typed-after", ctx.function.name, property);
+    let (site_label, site_len) = ctx.data.add_string(site.as_bytes());
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_reg_move(ctx.emitter, value_arg, result_reg);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, result_reg, scratch_reg);
+    let site_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_symbol_address(ctx.emitter, site_ptr_arg, &site_label);
+    let site_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, site_len_arg, site_len as i64);
+    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    ctx.load_value_to_reg(object, receiver_arg)?;
+    let value_is_object_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_load_int_immediate(ctx.emitter, value_is_object_arg, 1);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_trace_aot_raw_property_receiver");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_pop_reg_pair(ctx.emitter, result_reg, scratch_reg);
+    Ok(())
 }
 
 /// Lowers `LoadPropRefCell`: loads the raw ref-cell pointer stored in a reference

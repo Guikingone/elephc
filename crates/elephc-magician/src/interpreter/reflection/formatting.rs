@@ -73,6 +73,7 @@ pub(super) fn eval_reflection_class_to_string_metadata(
         resolved_name: runtime_class_name.to_string(),
         source_location: None,
         attributes: context.native_class_attributes(runtime_class_name),
+        doc_comment: None,
         flags,
         modifiers,
         interface_names,

@@ -23,6 +23,44 @@ fn parse_fragment_accepts_empty_class_declaration_source() {
         ))]
     );
 }
+
+/// Verifies a class doc comment is retained verbatim for reflection metadata.
+#[test]
+fn parse_fragment_retains_class_doc_comment() {
+    let program = parse_fragment(b"/** Dynamic class docs */ class DynEvalDocumentedClass {}")
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(
+            EvalClass::new("DynEvalDocumentedClass", Vec::new(), Vec::new())
+                .with_doc_comment_option(Some("/** Dynamic class docs */".to_string()))
+        )]
+    );
+}
+
+/// Verifies member doc comments remain non-semantic parser trivia while class docs are retained.
+#[test]
+fn parse_fragment_accepts_documented_class_members() {
+    let program = parse_fragment(
+        b"/** Class docs */ class DynEvalDocumentedMembers { /** Method docs */ public function run() {} }",
+    )
+    .expect("fragment should parse");
+    let EvalStmt::ClassDecl(class) = &program.statements()[0] else {
+        panic!("expected class declaration");
+    };
+    assert_eq!(class.doc_comment(), Some("/** Class docs */"));
+    assert_eq!(class.methods().len(), 1);
+}
+
+/// Verifies documentation on trait, interface, and enum members remains valid eval syntax.
+#[test]
+fn parse_fragment_accepts_documented_non_class_members() {
+    let program = parse_fragment(
+        b"trait DynEvalDocumentedTrait { /** Method docs */ private function run() {} }\ninterface DynEvalDocumentedInterface { /** Method docs */ public function run(): void; }\nenum DynEvalDocumentedEnum { /** Case docs */ case Ready; }",
+    )
+    .expect("fragment should parse");
+    assert_eq!(program.statements().len(), 3);
+}
 /// Verifies class relation clauses lower into dynamic class metadata.
 #[test]
 fn parse_fragment_accepts_class_extends_and_implements_source() {

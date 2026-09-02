@@ -19,6 +19,11 @@ pub(super) fn method_signature(
     let key = php_symbol_key(method);
     if let Some((class_name, _)) = singular_object_class(&object_ty) {
         let normalized = class_name.trim_start_matches('\\');
+        if ctx.interfaces.contains_key(normalized) {
+            if let Some(signature) = narrowed_runtime_method_signature(ctx, normalized, &key) {
+                return Some(signature);
+            }
+        }
         return class_method_signature(ctx, normalized, &key)
             .cloned()
             .or_else(|| narrowed_runtime_method_signature(ctx, normalized, &key));

@@ -22,6 +22,86 @@ use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
 
 impl Lexer<'_> {
+    /// Reads a non-interpolating PHP heredoc or nowdoc into one literal string token.
+    ///
+    /// A nowdoc has the same closing-marker and flexible-indentation rules as a
+    /// heredoc, but its body is never interpolated or escape-expanded. An
+    /// unquoted/quoted heredoc with no interpolation is the same literal form;
+    /// a heredoc containing PHP interpolation remains explicitly unsupported
+    /// until it can reuse the full double-quoted interpolation token builder.
+    pub(super) fn lex_nowdoc(&mut self, line: i64) -> Result<Vec<Token>, EvalParseError> {
+        self.bump_char();
+        self.bump_char();
+        self.bump_char();
+        while matches!(self.peek_char(), Some(' ' | '\t')) {
+            self.bump_char();
+        }
+        let quote = match self.peek_char() {
+            Some('\'') | Some('"') => self.peek_char(),
+            _ => None,
+        };
+        if quote.is_some() {
+            self.bump_char();
+        }
+        let label = self.lex_ident();
+        if label.is_empty() || quote.is_some_and(|quote| self.peek_char() != Some(quote)) {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        if quote.is_some() {
+            self.bump_char();
+        }
+        if self.peek_char() == Some('\r') {
+            self.bump_char();
+        }
+        if self.peek_char() != Some('\n') {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        self.bump_char();
+
+        let mut content = String::new();
+        let mut at_line_start = true;
+        loop {
+            if self.peek_char().is_none() {
+                return Err(EvalParseError::UnterminatedString);
+            }
+            if at_line_start {
+                let remaining = self.remaining();
+                let indent = remaining
+                    .bytes()
+                    .take_while(|byte| matches!(*byte, b' ' | b'\t'))
+                    .count();
+                let after_indent = &remaining[indent..];
+                if after_indent.starts_with(&label) {
+                    let after_label = &after_indent[label.len()..];
+                    let closes = after_label
+                        .chars()
+                        .next()
+                        .is_none_or(|ch| !is_ident_start(ch) && !ch.is_ascii_digit());
+                    if closes {
+                        for _ in 0..indent + label.len() {
+                            self.bump_char();
+                        }
+                        if content.ends_with('\n') {
+                            content.pop();
+                            if content.ends_with('\r') {
+                                content.pop();
+                            }
+                        }
+                        let content = strip_nowdoc_indentation(&content, indent)?;
+                        if quote != Some('\'') && content.contains('$') {
+                            return Err(EvalParseError::UnsupportedConstruct);
+                        }
+                        return Ok(vec![Token::new(TokenKind::String(content), line)]);
+                    }
+                }
+            }
+            let ch = self.peek_char().expect("EOF handled above");
+            self.bump_char();
+            at_line_start = ch == '\n';
+            content.push(ch);
+        }
+    }
+
     /// Reads a double-quoted string literal starting at the opening quote.
     ///
     /// Returns exactly one `TokenKind::String` when the literal contains no
@@ -256,6 +336,33 @@ impl Lexer<'_> {
             }
         }
     }
+}
+
+/// Removes flexible-nowdoc indentation using PHP's closing-marker width rule.
+fn strip_nowdoc_indentation(content: &str, indent: usize) -> Result<String, EvalParseError> {
+    if indent == 0 {
+        return Ok(content.to_owned());
+    }
+    let mut stripped = String::new();
+    for (index, line) in content.split('\n').enumerate() {
+        if index > 0 {
+            stripped.push('\n');
+        }
+        let (body, carriage_return) = line
+            .strip_suffix('\r')
+            .map_or((line, ""), |body| (body, "\r"));
+        let removed = body
+            .bytes()
+            .take_while(|byte| matches!(*byte, b' ' | b'\t'))
+            .take(indent)
+            .count();
+        if removed < indent && !body.is_empty() {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        stripped.push_str(&body[removed..]);
+        stripped.push_str(carriage_return);
+    }
+    Ok(stripped)
 }
 
 /// Appends one already-tokenized interpolation part to the running stream, flushing the

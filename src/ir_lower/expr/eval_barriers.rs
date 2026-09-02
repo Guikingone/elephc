@@ -392,13 +392,15 @@ pub(super) fn lower_eval_class_probe(
     if aot_class_exists_for_eval_probe(ctx, class_name) {
         return None;
     }
-    if let Some(autoload) = args.get(1) {
-        lower_expr(ctx, autoload);
-    }
+    ctx.declare_eval_context_local();
+    let autoload = args.get(1).map(|autoload| {
+        let autoload_value = lower_expr(ctx, autoload);
+        lower_truthy_bool(ctx, autoload_value, Some(autoload.span)).value
+    });
     let data = ctx.intern_class_name(class_name);
     Some(ctx.emit_value(
         Op::EvalClassExists,
-        Vec::new(),
+        autoload.into_iter().collect(),
         Some(Immediate::Data(data)),
         PhpType::Bool,
         Op::EvalClassExists.default_effects(),
@@ -413,4 +415,3 @@ pub(super) fn aot_class_exists_for_eval_probe(ctx: &LoweringContext<'_, '_>, cla
         .keys()
         .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
 }
-

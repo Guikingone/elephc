@@ -179,9 +179,11 @@ impl ElephcEvalContext {
     pub fn set_global_scope(&mut self, scope: *mut ElephcEvalScope) -> bool {
         if scope.is_null() {
             self.global_scope = None;
+            self.owns_global_scope = false;
             false
         } else {
             self.global_scope = Some(scope);
+            self.owns_global_scope = false;
             true
         }
     }
@@ -189,6 +191,89 @@ impl ElephcEvalContext {
     /// Returns the non-owned global scope handle for eval `global` aliases.
     pub fn global_scope_ptr(&self) -> Option<*mut ElephcEvalScope> {
         self.global_scope
+    }
+
+    /// Reports whether this context has no retained SPL autoload callbacks.
+    pub(crate) fn has_no_autoload_callbacks(&self) -> bool {
+        self.autoload_callbacks.is_empty()
+    }
+
+    /// Reports whether one exact retained callback cell is already registered.
+    pub(crate) fn has_autoload_callback(&self, callback: RuntimeCellHandle) -> bool {
+        self.autoload_callbacks
+            .iter()
+            .any(|registered| registered.as_ptr() == callback.as_ptr())
+    }
+
+    /// Stores one already-retained SPL autoload callback at PHP's requested position.
+    pub(crate) fn register_autoload_callback(
+        &mut self,
+        callback: RuntimeCellHandle,
+        prepend: bool,
+    ) {
+        if prepend {
+            self.autoload_callbacks.insert(0, callback);
+        } else {
+            self.autoload_callbacks.push(callback);
+        }
+    }
+
+    /// Returns a snapshot of the callbacks in their PHP invocation order.
+    pub(crate) fn autoload_callbacks(&self) -> Vec<RuntimeCellHandle> {
+        self.autoload_callbacks.clone()
+    }
+
+    /// Removes one callback by its retained runtime-cell identity.
+    pub(crate) fn unregister_autoload_callback(
+        &mut self,
+        callback: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        let index = self
+            .autoload_callbacks
+            .iter()
+            .position(|registered| registered.as_ptr() == callback.as_ptr())?;
+        Some(self.autoload_callbacks.remove(index))
+    }
+
+    /// Drains every retained callback when the surrounding PHP request ends.
+    pub(crate) fn take_autoload_callbacks(&mut self) -> Vec<RuntimeCellHandle> {
+        std::mem::take(&mut self.autoload_callbacks)
+    }
+
+    /// Starts one class-autoload attempt and rejects recursive attempts for the same class.
+    pub(crate) fn begin_autoload_class(&mut self, class_name: &str) -> bool {
+        self.autoloading_classes
+            .insert(normalize_class_name(class_name))
+    }
+
+    /// Ends one class-autoload attempt, including error paths.
+    pub(crate) fn end_autoload_class(&mut self, class_name: &str) {
+        self.autoloading_classes
+            .remove(&normalize_class_name(class_name));
+    }
+
+    /// Transfers the active eval global scope to a context retained beyond its AOT frame.
+    pub(crate) fn retain_global_scope_for_request(
+        &mut self,
+        scope: *mut ElephcEvalScope,
+    ) -> bool {
+        if scope.is_null()
+            || self.global_scope != Some(scope)
+            || !self.has_retained_request_lifetime()
+        {
+            return false;
+        }
+        self.owns_global_scope = true;
+        true
+    }
+
+    /// Returns the frame scope whose ownership was transferred to this context.
+    pub(crate) fn take_owned_global_scope(&mut self) -> Option<*mut ElephcEvalScope> {
+        if !self.owns_global_scope {
+            return None;
+        }
+        self.owns_global_scope = false;
+        self.global_scope.take()
     }
 
     /// Pushes an eval-executed function name for magic-constant resolution.

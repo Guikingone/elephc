@@ -28,6 +28,13 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         EvalStmt::ArrayAppendVar { value, .. } => {
             eval_expr_uses_this_property(value, property_name)
         }
+        EvalStmt::ArrayAppend { target, value } => {
+            eval_expr_uses_this_property(target, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::ArrayAppendReferenceBind { source, .. } => {
+            eval_expr_uses_this_property(source, property_name)
+        }
         EvalStmt::ArraySetVar { index, value, .. } => {
             eval_expr_uses_this_property(index, property_name)
                 || eval_expr_uses_this_property(value, property_name)
@@ -35,13 +42,19 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         EvalStmt::ArrayDestructure { value, .. } => {
             eval_expr_uses_this_property(value, property_name)
         }
-        EvalStmt::Break
-        | EvalStmt::Continue
+        EvalStmt::ArrayReferenceBind { target, source } => {
+            eval_expr_uses_this_property(target, property_name)
+                || eval_expr_uses_this_property(source, property_name)
+        }
+        EvalStmt::Break(_)
+        | EvalStmt::Continue(_)
         | EvalStmt::ClassDecl(_)
         | EvalStmt::EnumDecl(_)
         | EvalStmt::FunctionDecl { .. }
         | EvalStmt::Global { .. }
+        | EvalStmt::Goto(_)
         | EvalStmt::InterfaceDecl(_)
+        | EvalStmt::Label(_)
         | EvalStmt::ReferenceAssign { .. }
         | EvalStmt::TraitDecl(_)
         | EvalStmt::UnsetVar { .. } => false,
@@ -320,6 +333,9 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
                     || eval_expr_uses_this_property(value, property_name)
             }
         }),
+        EvalExpr::ArrayDestructureAssign { value, .. } => {
+            eval_expr_uses_this_property(value, property_name)
+        }
         EvalExpr::ArrayGet { array, index } => {
             eval_expr_uses_this_property(array, property_name)
                 || eval_expr_uses_this_property(index, property_name)
@@ -473,6 +489,9 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
         } => {
             eval_expr_uses_this_property(value, property_name)
                 || eval_expr_uses_this_property(default, property_name)
+        }
+        EvalExpr::PostfixIncDec { target, .. } => {
+            eval_expr_uses_this_property(target, property_name)
         }
         EvalExpr::PropertyGet { object, property } => {
             eval_is_this_property(object, property, property_name)

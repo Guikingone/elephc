@@ -40,6 +40,10 @@ impl ElephcEvalContext {
         if self.functions.contains_key(&name) || self.native_functions.contains_key(&name) {
             return Err(function);
         }
+        #[cfg(not(test))]
+        if !crate::context::register_global_eval_function(&name, self as *mut Self) {
+            return Err(function);
+        }
         self.functions.insert(name, function);
         Ok(())
     }
@@ -66,7 +70,14 @@ impl ElephcEvalContext {
         identity: u64,
         target: EvalClosureObjectTarget,
     ) {
-        self.closure_objects.insert(identity, target);
+        if self.closure_objects.insert(identity, target).is_none() {
+            self.live_closure_objects
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        crate::ffi::dynamic_destructors::register_dynamic_object_context(
+            identity,
+            self as *mut Self,
+        );
     }
 
     /// Returns the callable target bound to a PHP `Closure` object.
@@ -83,6 +94,95 @@ impl ElephcEvalContext {
                 | EvalClosureObjectTarget::BoundNamed { name, .. } => Some(name.as_str()),
                 _ => None,
             })
+    }
+
+    /// Marks disposal as pending and reports whether no request-global value still owns this context.
+    ///
+    /// A closure or a function declared by a dynamic include can outlive the AOT frame that
+    /// executed that include. Their executable metadata remains in this context until the
+    /// associated object is released or the web request reaches its reset boundary.
+    pub fn request_retained_context_free(&self) -> bool {
+        self.retained_context_free_requested
+            .store(true, std::sync::atomic::Ordering::Release);
+        !self.has_retained_request_lifetime()
+    }
+
+    /// Removes a released Closure object and reports whether it completes a deferred context free.
+    pub fn forget_closure_object(&mut self, identity: u64) -> bool {
+        if self.closure_objects.remove(&identity).is_none() {
+            return false;
+        }
+        crate::ffi::dynamic_destructors::unregister_dynamic_object(identity);
+        let previous = self
+            .live_closure_objects
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        debug_assert!(previous > 0, "closure object lifetime count must not underflow");
+        previous == 1 && self.should_finalize_retained_context()
+    }
+
+    /// Releases one eval-class object lifetime and reports whether deferred context disposal can finish.
+    pub(crate) fn forget_dynamic_object_owner(&self) -> bool {
+        let previous = self
+            .live_dynamic_objects
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        debug_assert!(previous > 0, "dynamic object lifetime count must not underflow");
+        previous == 1 && self.should_finalize_retained_context()
+    }
+
+    /// Adds one request-global dynamic-function owner to this context.
+    pub(crate) fn retain_global_function(&self) {
+        self.live_global_functions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Removes one request-global dynamic-function owner and reports deferred-finalization state.
+    pub(crate) fn forget_global_function(&self) -> bool {
+        let previous = self
+            .live_global_functions
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        debug_assert!(previous > 0, "global function lifetime count must not underflow");
+        previous == 1 && self.should_finalize_retained_context()
+    }
+
+    /// Retains this context while its request-global SPL autoload table is non-empty.
+    pub(crate) fn retain_autoload_context(&self) {
+        self.live_autoload_contexts
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Releases the request-global SPL autoload ownership and reports finalization state.
+    pub(crate) fn forget_autoload_context(&self) -> bool {
+        let previous = self
+            .live_autoload_contexts
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        debug_assert!(previous > 0, "autoload context lifetime count must not underflow");
+        previous == 1 && self.should_finalize_retained_context()
+    }
+
+    /// Reports whether the context must outlive its originating AOT frame.
+    pub(crate) fn has_retained_request_lifetime(&self) -> bool {
+        self.live_closure_objects
+            .load(std::sync::atomic::Ordering::Acquire)
+            != 0
+            || self
+                .live_dynamic_objects
+                .load(std::sync::atomic::Ordering::Acquire)
+                != 0
+            || self
+                .live_global_functions
+                .load(std::sync::atomic::Ordering::Acquire)
+                != 0
+            || self
+                .live_autoload_contexts
+                .load(std::sync::atomic::Ordering::Acquire)
+                != 0
+    }
+
+    /// Reports whether a prior frame cleanup may now finalize this retained context.
+    fn should_finalize_retained_context(&self) -> bool {
+        self.retained_context_free_requested
+            .load(std::sync::atomic::Ordering::Acquire)
+            && !self.has_retained_request_lifetime()
     }
 
     /// Defines a generated native function callback, failing if the name already exists.

@@ -579,6 +579,51 @@ class ParameterCarrier extends ParameterBase {
     assert_eq!(out, "ok");
 }
 
+/// Verifies an eval barrier preserves an inherited boolean `$this` property.
+///
+/// `$this` is not assignable by PHP code, including dynamically included code. The following
+/// trait method must therefore keep its concrete object representation across the eval barrier
+/// and read the inherited boolean without routing the raw scalar through `__rt_mixed_cast_bool`.
+#[test]
+fn test_dynamic_include_preserves_inherited_bool_this_property_truthiness() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+trait DynamicBarrierBoolTrait {
+    protected function checkDynamicBarrierBool(): void {
+        $path = str_replace('/fixture/', '/fixture/', __DIR__ . '/fixture/declaration.php');
+        require $path;
+
+        if ($this->debug && !defined('DYNAMIC_BARRIER_BOOL_DISABLED')) {
+            echo 'ok';
+        }
+    }
+}
+
+class DynamicBarrierBoolBase {
+    public function __construct(protected bool $debug) {}
+}
+
+class DynamicBarrierBoolChild extends DynamicBarrierBoolBase {
+    use DynamicBarrierBoolTrait;
+
+    public function run(): void {
+        $this->checkDynamicBarrierBool();
+    }
+}
+
+(new DynamicBarrierBoolChild(true))->run();
+"#,
+            ),
+            ("fixture/declaration.php", "<?php\nfunction dynamic_barrier_marker(): void {}\n"),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies a namespaced dynamically included class reads its protected associative property.
 #[test]
 fn test_namespaced_dynamic_class_reads_protected_associative_property() {

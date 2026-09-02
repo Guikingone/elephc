@@ -36,7 +36,9 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
             context.set_pending_throw(result);
             Err(EvalStatus::UncaughtThrowable)
         }
-        EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
+        EvalControl::Break(_) | EvalControl::Continue(_) | EvalControl::Goto(_) => {
+            Err(EvalStatus::UnsupportedConstruct)
+        }
     }
 }
 
@@ -284,35 +286,29 @@ fn eval_declared_return_class_accepts(
         context,
     )?;
     let identity = values.object_identity(value)?;
-    if let Some(class) = context.dynamic_object_class(identity) {
-        return Ok(eval_declared_dynamic_object_is_a(
-            class.name(),
-            &target,
-            context,
-        ));
+    if context.dynamic_object_is_a(identity, &target) {
+        return Ok(true);
     }
     if values.object_is_a(value, &target, false)? {
         return Ok(true);
+    }
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let actual = values
+            .object_class_name(value)
+            .and_then(|name| {
+                let bytes = values.string_bytes(name)?;
+                values.release(name)?;
+                String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+            });
+        eprintln!(
+            "[elephc-eval-trace] phase=return_object_mismatch actual={actual:?} target={target:?}",
+        );
     }
     if target.eq_ignore_ascii_case("Traversable") {
         return Ok(values.object_is_a(value, "Iterator", false)?
             || values.object_is_a(value, "IteratorAggregate", false)?);
     }
     Ok(false)
-}
-
-/// Returns whether one eval-created object class satisfies a declared return target.
-fn eval_declared_dynamic_object_is_a(
-    class_name: &str,
-    target: &str,
-    context: &ElephcEvalContext,
-) -> bool {
-    if context.class_is_a(class_name, target, false) {
-        return true;
-    }
-    target.eq_ignore_ascii_case("Traversable")
-        && (context.class_is_a(class_name, "Iterator", false)
-            || context.class_is_a(class_name, "IteratorAggregate", false))
 }
 
 /// Resolves class keywords and aliases in a declared return type atom.

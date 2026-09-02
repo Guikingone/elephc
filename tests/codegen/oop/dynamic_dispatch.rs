@@ -114,6 +114,47 @@ fn test_dynamic_static_call_literal_method() {
     assert_eq!(out, "built");
 }
 
+/// Verifies a non-null `string|null` class name is unboxed before dynamic static dispatch.
+#[test]
+fn test_dynamic_static_call_from_nullable_class_string() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableDynamicStaticTarget {
+    public static function getProvidedTypes(): string { return "resolved"; }
+}
+
+class NullableDynamicStaticDefinition {
+    public function getClass(): ?string { return NullableDynamicStaticTarget::class; }
+}
+
+class NullableDynamicStaticReflection {
+    public function isSubclassOf(string $interface): bool { return true; }
+}
+
+class NullableDynamicStaticContainer {
+    public function getDefinition(string $id): NullableDynamicStaticDefinition {
+        return new NullableDynamicStaticDefinition();
+    }
+
+    public function getReflectionClass(string $class): NullableDynamicStaticReflection {
+        return new NullableDynamicStaticReflection();
+    }
+}
+
+$container = new NullableDynamicStaticContainer();
+foreach (["service" => []] as $id => $tags) {
+    if (!$r = $container->getReflectionClass($class = $container->getDefinition($id)->getClass())) {
+        echo "missing";
+    } elseif (!$r->isSubclassOf("Interface")) {
+        echo "invalid";
+    }
+    echo $class::getProvidedTypes();
+}
+"#,
+    );
+    assert_eq!(out, "resolved");
+}
+
 /// Verifies that `$cls::$method(args)` (both dynamic) dispatches a static method with arguments.
 #[test]
 fn test_dynamic_static_call_dynamic_method_with_args() {

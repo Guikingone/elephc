@@ -11,6 +11,72 @@
 
 use super::*;
 
+/// Handles lazy parent and constructor queries for eval-owned ReflectionClass objects.
+pub(in crate::interpreter) fn eval_reflection_class_lazy_relation_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    match method_name.to_ascii_lowercase().as_str() {
+        "getconstructor" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            eval_reflection_constructor_object_result(
+                EVAL_REFLECTION_OWNER_CLASS,
+                &reflected_name,
+                true,
+                context,
+                values,
+            )
+            .map(Some)
+        }
+        "getparentclass" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            let parent_class_name =
+                match eval_reflection_class_like_attributes(&reflected_name, context) {
+                    Some(metadata) => metadata.parent_class_name,
+                    None => eval_reflection_aot_parent_class_name(&reflected_name, values)?,
+                };
+            eval_reflection_related_class_result(
+                EVAL_REFLECTION_OWNER_CLASS,
+                parent_class_name.as_deref(),
+                false,
+                context,
+                values,
+            )
+            .map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Handles `ReflectionClass::getName()` from the class identity retained by the eval bridge.
+pub(in crate::interpreter) fn eval_reflection_class_name_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getName") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context.eval_reflection_class_name(identity) else {
+        return Ok(None);
+    };
+    eval_reflection_bind_no_args(evaluated_args)?;
+    values.string(reflected_name).map(Some)
+}
+
 /// Handles eval-backed `ReflectionClass::implementsInterface()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_implements_interface_result(
     identity: u64,
@@ -208,14 +274,41 @@ pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
     else {
         return Ok(None);
     };
-    let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) else {
-        return Ok(None);
-    };
     let method_key = method_name.to_ascii_lowercase();
+    let metadata = eval_reflection_class_like_attributes(&reflected_name, context);
+    if metadata.is_none() {
+        if method_key == "getdoccomment" {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            return match values.reflection_class_doc_comment(&reflected_name)? {
+                Some(doc_comment) => values.string(&doc_comment).map(Some),
+                None => values.bool_value(false).map(Some),
+            };
+        }
+        return Ok(None);
+    }
+    let metadata = metadata.expect("class reflection metadata was checked above");
     match method_key.as_str() {
         "getname" => {
             eval_reflection_bind_no_args(evaluated_args)?;
             values.string(&metadata.resolved_name).map(Some)
+        }
+        "getdoccomment" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                let preview = metadata.doc_comment.as_deref().map(|doc_comment| {
+                    doc_comment.chars().take(160).collect::<String>()
+                });
+                eprintln!(
+                    "[elephc-eval-trace] phase=reflection_doc_comment class={:?} present={} len={} preview={preview:?}",
+                    metadata.resolved_name,
+                    metadata.doc_comment.is_some(),
+                    metadata.doc_comment.as_ref().map_or(0, String::len),
+                );
+            }
+            match metadata.doc_comment {
+                Some(doc_comment) => values.string(&doc_comment).map(Some),
+                None => values.bool_value(false).map(Some),
+            }
         }
         "getshortname" => {
             eval_reflection_bind_no_args(evaluated_args)?;
@@ -402,16 +495,17 @@ pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
     };
     let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
     let requested_name = eval_reflection_string_arg(args[0], values)?;
-    let exists =
-        if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
-            metadata
-                .method_names
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(&requested_name))
-        } else {
-            eval_reflection_aot_method_metadata_if_exists(&reflected_name, &requested_name, values)?
-                .is_some()
-        };
+    let exists = if let Some(metadata) =
+        eval_reflection_class_like_attributes(&reflected_name, context)
+    {
+        metadata
+            .method_names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&requested_name))
+    } else {
+        eval_reflection_aot_method_metadata_if_exists(&reflected_name, &requested_name, values)?
+            .is_some()
+    };
     values.bool_value(exists).map(Some)
 }
 

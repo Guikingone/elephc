@@ -9,6 +9,37 @@
 
 use super::*;
 
+/// Installs a class declaration's physical source as the active magic-constant site.
+fn enter_dynamic_class_method_source(
+    class_name: &str,
+    method: &EvalClassMethod,
+    context: &mut ElephcEvalContext,
+) -> Option<(String, String, i64, Option<String>)> {
+    let file = context.class_source_file(class_name)?.to_string();
+    let previous = context.call_site();
+    let dir = std::path::Path::new(&file)
+        .parent()
+        .map(|parent| parent.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let line = method
+        .source_location()
+        .map_or(previous.2, |location| location.start_line() as i64);
+    context.set_call_site(file.clone(), dir, line);
+    context.set_file_magic_override(Some(file));
+    Some(previous)
+}
+
+/// Restores the caller's source metadata after a dynamic class method returns.
+fn leave_dynamic_class_method_source(
+    previous: Option<(String, String, i64, Option<String>)>,
+    context: &mut ElephcEvalContext,
+) {
+    if let Some((file, dir, line, override_file)) = previous {
+        context.set_call_site(file, dir, line);
+        context.set_file_magic_override(override_file);
+    }
+}
+
 /// Executes one eval-declared class method with `$this` bound in method scope.
 pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     class_name: &str,
@@ -113,6 +144,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
+    let previous_source = enter_dynamic_class_method_source(class_name, method, context);
     let result = execute_statements(method.body(), context, &mut method_scope, values);
     let persist_result = persist_static_locals(
         context,
@@ -139,6 +171,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
             values,
         ),
     };
+    leave_dynamic_class_method_source(previous_source, context);
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
@@ -244,6 +277,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
+    let previous_source = enter_dynamic_class_method_source(class_name, method, context);
     let result = execute_statements(method.body(), context, &mut method_scope, values);
     let persist_result = persist_static_locals(
         context,
@@ -270,6 +304,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
             values,
         ),
     };
+    leave_dynamic_class_method_source(previous_source, context);
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();

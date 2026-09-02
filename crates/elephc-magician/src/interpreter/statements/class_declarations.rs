@@ -35,25 +35,16 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         trace_class_decl_result(class, "runtime_trait_exists", values.trait_exists(name))?;
     let runtime_has_enum =
         trace_class_decl_result(class, "runtime_enum_exists", values.enum_exists(name))?;
-    if !context_has_class
-        && !context_has_interface
-        && !context_has_trait
-        && !context_has_enum
-        && runtime_has_class
+    let materialize_aot_include_class = runtime_has_class
         && !runtime_has_interface
         && !runtime_has_trait
         && !runtime_has_enum
-        && context.executing_include()
-        && context.claim_aot_include_classlike(name)
-    {
-        trace_aot_include_class_decl(class);
-        return Ok(());
-    }
+        && context.executing_include();
     if context_has_class
         || context_has_interface
         || context_has_trait
         || context_has_enum
-        || runtime_has_class
+        || (runtime_has_class && !materialize_aot_include_class)
         || runtime_has_interface
         || runtime_has_trait
         || runtime_has_enum
@@ -76,7 +67,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     let class = trace_class_decl_result(
         class,
         "expand_traits",
-        expand_eval_class_traits(class, context),
+        expand_eval_class_traits(class, context, values),
     )?
     .with_readonly_properties();
     let class = &class;
@@ -85,12 +76,20 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         "validate_modifiers",
         validate_eval_class_modifiers(class, context, values),
     )?;
+    ensure_eval_class_parent_available(class, context, values)?;
     let native_parent = trace_class_decl_result(
         class,
         "validate_parent",
         validate_eval_class_parent(class, context, values),
     )?;
     for interface in class.interfaces() {
+        if !context.has_interface(interface) && !eval_runtime_interface_exists(interface, values)? {
+            // PHP resolves an interface named by `implements` through the active
+            // autoloaders before rejecting the declaration. Dynamic classes must
+            // follow that same rule for interfaces provided by another included
+            // source file or by generated/AOT metadata.
+            let _ = eval_spl_autoload_class(interface, context, values)?;
+        }
         if !context.has_interface(interface) && !eval_runtime_interface_exists(interface, values)? {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -142,7 +141,9 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
             validate_concrete_class_aot_interface_requirements(class, context, values),
         )?;
     }
+    let declaration_file = context.eval_file_magic();
     if context.define_class(class.clone()) {
+        context.set_class_source_file(class.name(), declaration_file);
         if let Some(parent) = native_parent.as_deref() {
             if !context.define_native_class_parent(class.name(), parent) {
                 trace_class_decl_stage(class, "define_native_parent", EvalStatus::RuntimeFatal);
@@ -160,13 +161,49 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
                 values,
             ),
         )?;
-        trace_class_decl_result(
+        let result = trace_class_decl_result(
             class,
             "initialize_static_properties",
             initialize_eval_static_properties(class, context, scope, values),
-        )
+        );
+        if result.is_ok() && std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            eprintln!(
+                "[elephc-eval-trace] phase=class_decl_ok class={:?}",
+                class.name(),
+            );
+        }
+        result
     } else {
         trace_class_decl_stage(class, "define_class", EvalStatus::RuntimeFatal);
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Loads a missing parent class before validating an eval class declaration.
+///
+/// PHP resolves an `extends` target through the active SPL autoload chain at declaration time.
+/// The callback can register the parent in another request-global eval context, so synchronize
+/// local metadata before requiring that the resolved symbol is specifically a class.
+fn ensure_eval_class_parent_available(
+    class: &EvalClass,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(parent) = class.parent() else {
+        return Ok(());
+    };
+    let parent = context
+        .resolve_class_name(parent)
+        .unwrap_or_else(|| parent.trim_start_matches('\\').to_string());
+    if context.class(&parent).is_some() || values.class_exists(&parent)? {
+        return Ok(());
+    }
+    crate::interpreter::eval_spl_autoload_classlike_definition(&parent, context, values)?;
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
+    if context.class(&parent).is_some() || values.class_exists(&parent)? {
+        Ok(())
+    } else {
         Err(EvalStatus::RuntimeFatal)
     }
 }
@@ -215,17 +252,6 @@ fn trace_class_decl_duplicate(class: &EvalClass, matches: [bool; 8]) {
         matches[5],
         matches[6],
         matches[7],
-    );
-}
-
-/// Traces an include declaration already implemented by the compiled AOT class.
-fn trace_aot_include_class_decl(class: &EvalClass) {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
-        return;
-    }
-    eprintln!(
-        "[elephc-eval-trace] phase=class_decl_aot_include class={:?}",
-        class.name(),
     );
 }
 

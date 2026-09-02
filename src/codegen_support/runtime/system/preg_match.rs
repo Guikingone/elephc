@@ -148,7 +148,13 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     let group_idx_off = matches_array_off + 8;
     let max_group_off = group_idx_off + 8;
     let offset_off = max_group_off + 8;
-    let stack_size = (offset_off + 96 + 15) & !15;
+    let name_ptr_off = offset_off + 8;
+    let name_len_off = name_ptr_off + 8;
+    let value_ptr_off = name_len_off + 8;
+    let value_len_off = value_ptr_off + 8;
+    let key_lo_off = value_len_off + 8;
+    let key_hi_off = key_lo_off + 8;
+    let stack_size = (key_hi_off + 8 + 48 + 15) & !15;
     let save_off = stack_size - 16;
 
     emitter.blank();
@@ -220,11 +226,8 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("orr x10, x4, #4");                                     // REG_NOTBOL keeps ^ anchored to the full subject
     emitter.instruction("csel x4, x10, x4, gt");                                // add REG_NOTBOL only for positive offsets
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
-    emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec status across cleanup
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", regexec_result_off));     // reload regexec status
-    emitter.instruction("cbnz x0, __rt_preg_match_capture_no_match");           // no match frees capture storage and returns an empty array
+    emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec status across the matches construction
+    emitter.instruction("cbnz x0, __rt_preg_match_capture_no_match");           // no match releases the pattern and capture storage
 
     // -- find highest populated capture so trailing unmatched groups are omitted --
     emitter.instruction(&format!("ldr x12, [sp, #{}]", nmatch_off));            // reload the dynamic regmatch count
@@ -241,6 +244,11 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_match_capture_scan");                      // continue searching for the highest populated capture
     emitter.label("__rt_preg_match_capture_scan_found");
     emitter.instruction(&format!("str x12, [sp, #{}]", max_group_off));         // save highest capture index to materialize
+
+    // -- a compiled name table means PHP's $matches is an ordered hash, not a list --
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // the name table lives inside the compiled pattern
+    emitter.bl_c("elephc_pcre2_v1_name_count");                                 // ask PCRE2 how many capture groups were named
+    emitter.instruction("cbnz x0, __rt_preg_match_capture_named");              // any named group forces the hash-backed matches array
 
     // -- allocate and fill matches array --
     emitter.instruction(&format!("ldr x0, [sp, #{}]", nmatch_off));             // allocate enough slots for every compiled capture
@@ -276,7 +284,79 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save next capture index
     emitter.instruction("b __rt_preg_match_capture_group_loop");                // continue materializing captures
 
+
+    // -- named captures: PHP writes each name immediately before its own numeric key --
+    emitter.label("__rt_preg_match_capture_named");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", nmatch_off));             // size the table from the compiled capture count
+    emitter.instruction("lsl x0, x0, #1");                                      // reserve one bucket per numeric key and one per name
+    emitter.instruction("mov x1, #1");                                          // string-valued hash: the shape a PHP string array literal builds
+    emitter.instruction("bl __rt_hash_new");                                    // allocate the ordered hash that carries both key kinds
+    emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // save matches hash pointer across inserts
+    emitter.instruction(&format!("str xzr, [sp, #{}]", group_idx_off));         // start with capture index zero
+    emitter.label("__rt_preg_match_capture_named_loop");
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload current capture index
+    emitter.instruction(&format!("ldr x13, [sp, #{}]", max_group_off));         // reload highest capture index
+    emitter.instruction("cmp x12, x13");                                        // have all required captures been materialized?
+    emitter.instruction("b.gt __rt_preg_match_capture_success");                // finish after the highest populated capture
+    emitter.instruction("lsl x14, x12, #4");                                    // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("ldr x15, [sp, #{}]", regmatches_ptr_off));    // load dynamic offset-pair buffer base
+    emitter.instruction("add x14, x15, x14");                                   // compute address of this offset pair
+    emitter.instruction("ldr x15, [x14]");                                      // load signed-64-bit capture start
+    emitter.instruction("ldr x13, [x14, #8]");                                  // load signed-64-bit capture end
+    emitter.instruction("cmp x15, #0");                                         // detect unmatched captures before the highest populated slot
+    emitter.instruction("b.lt __rt_preg_match_capture_named_empty");            // emit PHP's empty string for an interior unmatched capture
+    emitter.instruction("sub x2, x13, x15");                                    // capture length = rm_eo - rm_so
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // reload subject C string base
+    emitter.instruction("add x1, x1, x15");                                     // compute capture string pointer
+    emitter.instruction("b __rt_preg_match_capture_named_value");               // insert this capture under both key kinds
+    emitter.label("__rt_preg_match_capture_named_empty");
+    emitter.instruction("mov x1, #0");                                          // empty unmatched capture has a null pointer
+    emitter.instruction("mov x2, #0");                                          // empty unmatched capture has zero length
+    emitter.label("__rt_preg_match_capture_named_value");
+    emitter.instruction(&format!("str x1, [sp, #{}]", value_ptr_off));          // hold the capture pointer across helper calls
+    emitter.instruction(&format!("str x2, [sp, #{}]", value_len_off));          // hold the capture length across helper calls
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass the compiled pattern holding the name table
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", group_idx_off));          // ask for this capture group's declared name
+    emitter.instruction(&format!("add x2, sp, #{}", name_ptr_off));             // receive the name pointer into pattern storage
+    emitter.instruction(&format!("add x3, sp, #{}", name_len_off));             // receive the name length
+    emitter.bl_c("elephc_pcre2_v1_group_name");                                 // resolve the name without exposing PCRE2 table layouts
+    emitter.instruction("cbnz w0, __rt_preg_match_capture_named_int");          // an unnamed group only gets its numeric key
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", name_ptr_off));           // load the resolved group name pointer
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", name_len_off));           // load the resolved group name length
+    emitter.instruction("bl __rt_hash_normalize_key");                          // apply PHP's numeric-string key normalization
+    emitter.instruction(&format!("str x1, [sp, #{}]", key_lo_off));             // hold the normalized key across the value persist
+    emitter.instruction(&format!("str x2, [sp, #{}]", key_hi_off));             // hold the key discriminant across the value persist
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", value_ptr_off));          // reload the capture pointer to persist
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", value_len_off));          // reload the capture length to persist
+    emitter.instruction("bl __rt_str_persist");                                 // the named entry owns its own copy of the capture bytes
+    emitter.instruction("mov x3, x1");                                          // pass the persisted capture as the entry value payload
+    emitter.instruction("mov x4, x2");                                          // pass the persisted capture length
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", key_lo_off));             // reload the normalized key
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", key_hi_off));             // reload the key discriminant
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_array_off));      // reload matches hash pointer
+    emitter.instruction("mov x5, #1");                                          // runtime value tag 1 = string
+    emitter.instruction("bl __rt_hash_set");                                    // insert the named key ahead of its numeric twin
+    emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // save possibly-grown matches hash pointer
+    emitter.label("__rt_preg_match_capture_named_int");
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", value_ptr_off));          // reload the capture pointer to persist
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", value_len_off));          // reload the capture length to persist
+    emitter.instruction("bl __rt_str_persist");                                 // the numeric entry owns its own copy of the capture bytes
+    emitter.instruction("mov x3, x1");                                          // pass the persisted capture as the entry value payload
+    emitter.instruction("mov x4, x2");                                          // pass the persisted capture length
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", group_idx_off));          // the capture index is the numeric key
+    emitter.instruction("mov x2, #-1");                                         // a key discriminant of -1 marks an integer key
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_array_off));      // reload matches hash pointer
+    emitter.instruction("mov x5, #1");                                          // runtime value tag 1 = string
+    emitter.instruction("bl __rt_hash_set");                                    // insert this capture under its numeric key
+    emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // save possibly-grown matches hash pointer
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload capture index after helper calls
+    emitter.instruction("add x12, x12, #1");                                    // advance to next capture index
+    emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save next capture index
+    emitter.instruction("b __rt_preg_match_capture_named_loop");                // continue materializing captures
+
     emitter.label("__rt_preg_match_capture_success");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload the pattern now every group name has been read
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic offset-pair buffer for cleanup
     emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning matches
     emitter.instruction("mov x0, #1");                                          // report that preg_match found a match
@@ -284,14 +364,18 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_match_capture_ret");                       // share helper epilogue
 
     emitter.label("__rt_preg_match_capture_no_match");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for the no-match cleanup path
-    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
-    emitter.instruction("b __rt_preg_match_capture_empty");                     // allocate and return the empty matches array
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled handle for the no-match cleanup path
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
+    emitter.instruction("b __rt_preg_match_capture_free_pairs");                // share the capture-buffer cleanup
 
     emitter.label("__rt_preg_match_capture_invalid_offset");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled handle for invalid-offset cleanup
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction("b __rt_preg_match_capture_no_match");                  // free pair storage and return an empty matches array
+
+    emitter.label("__rt_preg_match_capture_free_pairs");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for cleanup
+    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
+    emitter.instruction("b __rt_preg_match_capture_empty");                     // allocate and return the empty matches array
 
     emitter.label("__rt_preg_match_capture_malloc_fail");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload opaque handle after capture-buffer allocation failed
@@ -416,7 +500,13 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     let group_idx_off = matches_array_off + 8;
     let max_group_off = group_idx_off + 8;
     let offset_off = max_group_off + 8;
-    let stack_size = (offset_off + 32 + 15) & !15;
+    let name_ptr_off = offset_off + 8;
+    let name_len_off = name_ptr_off + 8;
+    let value_ptr_off = name_len_off + 8;
+    let value_len_off = value_ptr_off + 8;
+    let key_lo_off = value_len_off + 8;
+    let key_hi_off = key_lo_off + 8;
+    let stack_size = (key_hi_off + 8 + 32 + 15) & !15;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_match_capture ---");
@@ -479,12 +569,9 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("or r8d, 4");                                           // REG_NOTBOL keeps ^ anchored to the full subject
     emitter.label("__rt_preg_match_capture_exec_flags_ready_linux_x86_64");
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
-    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // save regexec status across regfree
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", regexec_result_off)); // reload saved regexec status
+    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // save regexec status across the matches construction
     emitter.instruction("test eax, eax");                                       // was there a successful regex match?
-    emitter.instruction("jnz __rt_preg_match_capture_no_match_linux_x86_64");   // no match frees capture storage and returns an empty array
+    emitter.instruction("jnz __rt_preg_match_capture_no_match_linux_x86_64");   // no match releases the pattern and capture storage
 
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", nmatch_off));  // reload the dynamic regmatch count
     emitter.instruction("sub r9, 1");                                           // start scanning from the last compiled capture slot
@@ -502,6 +589,12 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_match_capture_scan_linux_x86_64");       // continue searching for the highest populated capture
     emitter.label("__rt_preg_match_capture_scan_found_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off)); // save highest capture index to materialize
+
+    // -- a compiled name table means PHP's $matches is an ordered hash, not a list --
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // the name table lives inside the compiled pattern
+    emitter.bl_c("elephc_pcre2_v1_name_count");                                 // ask PCRE2 how many capture groups were named
+    emitter.instruction("test rax, rax");                                       // did the pattern declare any group name?
+    emitter.instruction("jnz __rt_preg_match_capture_named_linux_x86_64");      // any named group forces the hash-backed matches array
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // allocate enough slots for every compiled capture
     emitter.instruction("mov rsi, 16");                                         // string arrays use pointer/length payload slots
@@ -538,7 +631,81 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save next capture index
     emitter.instruction("jmp __rt_preg_match_capture_group_loop_linux_x86_64"); // continue materializing captures
 
+
+    // -- named captures: PHP writes each name immediately before its own numeric key --
+    emitter.label("__rt_preg_match_capture_named_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // size the table from the compiled capture count
+    emitter.instruction("shl rdi, 1");                                          // reserve one bucket per numeric key and one per name
+    emitter.instruction("mov esi, 1");                                          // string-valued hash: the shape a PHP string array literal builds
+    emitter.instruction("call __rt_hash_new");                                  // allocate the ordered hash that carries both key kinds
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save matches hash pointer across inserts
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start with capture index zero
+    emitter.label("__rt_preg_match_capture_named_loop_linux_x86_64");
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index
+    emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
+    emitter.instruction("cmp r9, r8");                                          // have all required captures been materialized?
+    emitter.instruction("jg __rt_preg_match_capture_success_linux_x86_64");     // finish after the highest populated capture
+    emitter.instruction("mov r10, r9");                                         // copy capture index before scaling
+    emitter.instruction("shl r10, 4");                                          // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("add r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // compute address of this offset pair
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load signed-64-bit capture start
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load signed-64-bit capture end
+    emitter.instruction("cmp r11, 0");                                          // detect unmatched captures before the highest populated slot
+    emitter.instruction("jl __rt_preg_match_capture_named_empty_linux_x86_64"); // emit PHP's empty string for an interior unmatched capture
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // reload subject C string base
+    emitter.instruction("add rsi, r11");                                        // compute capture string pointer
+    emitter.instruction("mov rdx, rcx");                                        // copy capture end offset before subtracting start
+    emitter.instruction("sub rdx, r11");                                        // capture length = rm_eo - rm_so
+    emitter.instruction("jmp __rt_preg_match_capture_named_value_linux_x86_64"); // insert this capture under both key kinds
+    emitter.label("__rt_preg_match_capture_named_empty_linux_x86_64");
+    emitter.instruction("xor esi, esi");                                        // empty unmatched capture has a null pointer
+    emitter.instruction("xor edx, edx");                                        // empty unmatched capture has zero length
+    emitter.label("__rt_preg_match_capture_named_value_linux_x86_64");
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", value_ptr_off)); // hold the capture pointer across calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", value_len_off)); // hold the capture length across calls
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass the compiled pattern holding the name table
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", group_idx_off)); // ask for this capture group's declared name
+    emitter.instruction(&format!("lea rdx, [rsp + {}]", name_ptr_off));         // receive the name pointer into pattern storage
+    emitter.instruction(&format!("lea rcx, [rsp + {}]", name_len_off));         // receive the name length
+    emitter.bl_c("elephc_pcre2_v1_group_name");                                 // resolve the name without exposing PCRE2 table layouts
+    emitter.instruction("test eax, eax");                                       // did this capture group carry a declared name?
+    emitter.instruction("jnz __rt_preg_match_capture_named_int_linux_x86_64");  // an unnamed group only gets its numeric key
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", name_ptr_off)); // load the resolved group name pointer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", name_len_off)); // load the resolved group name length
+    emitter.instruction("call __rt_hash_normalize_key");                        // apply PHP's numeric-string key normalization
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", key_lo_off)); // hold the normalized key across the persist
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", key_hi_off)); // hold the key discriminant across the persist
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length to persist
+    emitter.instruction("call __rt_str_persist");                               // the named entry owns its own copy of the capture bytes
+    emitter.instruction("mov rcx, rax");                                        // pass the persisted capture as the entry value payload
+    emitter.instruction("mov r8, rdx");                                         // pass the persisted capture length
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", key_lo_off)); // reload the normalized key
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", key_hi_off)); // reload the key discriminant
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // reload matches hash pointer
+    emitter.instruction("mov r9d, 1");                                          // runtime value tag 1 = string
+    emitter.instruction("call __rt_hash_set");                                  // insert the named key ahead of its numeric twin
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save possibly-grown hash pointer
+    emitter.label("__rt_preg_match_capture_named_int_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length to persist
+    emitter.instruction("call __rt_str_persist");                               // the numeric entry owns its own copy of the capture bytes
+    emitter.instruction("mov rcx, rax");                                        // pass the persisted capture as the entry value payload
+    emitter.instruction("mov r8, rdx");                                         // pass the persisted capture length
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", group_idx_off)); // the capture index is the numeric key
+    emitter.instruction("mov rdx, -1");                                         // a key discriminant of -1 marks an integer key
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // reload matches hash pointer
+    emitter.instruction("mov r9d, 1");                                          // runtime value tag 1 = string
+    emitter.instruction("call __rt_hash_set");                                  // insert this capture under its numeric key
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save possibly-grown hash pointer
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload capture index after helper calls
+    emitter.instruction("add r9, 1");                                           // advance to next capture index
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save next capture index
+    emitter.instruction("jmp __rt_preg_match_capture_named_loop_linux_x86_64"); // continue materializing captures
+
     emitter.label("__rt_preg_match_capture_success_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload the pattern now every group name has been read
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
     emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning matches
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", matches_array_off)); // return matches array pointer in rdx
@@ -546,14 +713,18 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_match_capture_ret_linux_x86_64");        // share helper epilogue
 
     emitter.label("__rt_preg_match_capture_no_match_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for the no-match cleanup path
-    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
-    emitter.instruction("jmp __rt_preg_match_capture_empty_linux_x86_64");      // allocate and return the empty matches array
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled handle for the no-match cleanup path
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
+    emitter.instruction("jmp __rt_preg_match_capture_free_pairs_linux_x86_64"); // share the capture-buffer cleanup
 
     emitter.label("__rt_preg_match_capture_invalid_offset_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled handle for invalid-offset cleanup
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction("jmp __rt_preg_match_capture_no_match_linux_x86_64");   // free pair storage and return an empty matches array
+
+    emitter.label("__rt_preg_match_capture_free_pairs_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
+    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
+    emitter.instruction("jmp __rt_preg_match_capture_empty_linux_x86_64");      // allocate and return the empty matches array
 
     emitter.label("__rt_preg_match_capture_malloc_fail_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload opaque handle after capture-buffer allocation failed

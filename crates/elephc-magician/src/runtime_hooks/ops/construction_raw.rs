@@ -44,6 +44,42 @@ macro_rules! impl_construction_raw_ops {
                 scope_ptr,
                 scope_len,
                 self.context.cast(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        unsafe {
+            __elephc_eval_value_release(arg_array.as_ptr());
+        }
+        if ok == 0 {
+            self.take_pending_native_throwable()
+                .map_or(Err(EvalStatus::RuntimeFatal), |thrown| {
+                    self.schedule_pending_throw(thrown)?;
+                    Err(EvalStatus::UncaughtThrowable)
+                })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Calls an AOT constructor through the generated bridge for its resolved declaring class.
+    fn construct_object_for_class(
+        &mut self,
+        class_name: &str,
+        object: RuntimeCellHandle,
+        args: Vec<RuntimeCellHandle>,
+    ) -> Result<(), EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let arg_array = Self::arg_array(args)?;
+        let ok = unsafe {
+            __elephc_eval_value_construct_object(
+                object.as_ptr(),
+                arg_array.as_ptr(),
+                scope_ptr,
+                scope_len,
+                self.context.cast(),
+                class_name.as_ptr(),
+                class_name.len() as u64,
             )
         };
         unsafe {

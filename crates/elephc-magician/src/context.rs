@@ -58,6 +58,12 @@ pub use reference_metadata::*;
 static GLOBAL_EVAL_CLASSES: OnceLock<Mutex<GlobalEvalClassRegistry>> = OnceLock::new();
 #[cfg(not(test))]
 static GLOBAL_EVAL_INCLUDED_FILES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+#[cfg(not(test))]
+static GLOBAL_EVAL_FUNCTIONS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+#[cfg(not(test))]
+static GLOBAL_EVAL_AUTOLOAD_CONTEXTS: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
+#[cfg(not(test))]
+static GLOBAL_EVAL_AOT_METADATA: OnceLock<Mutex<Option<GlobalEvalAotMetadata>>> = OnceLock::new();
 
 thread_local! {
     static NATIVE_FRAME_CALLED_CLASS_OVERRIDES: RefCell<Vec<NativeFrameCalledClassOverride>> =

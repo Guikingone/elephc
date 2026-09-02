@@ -10,7 +10,9 @@
 
 use std::collections::HashSet;
 
-use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
+use crate::names::{
+    php_symbol_key, property_hook_get_method, property_hook_set_method, DYNAMIC_INCLUDE_FUNCTION,
+};
 use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver, TypeExpr,
 };
@@ -36,6 +38,7 @@ impl Scanner<'_> {
             }
             ExprKind::NewObject { class_name, args } => {
                 let key = self.record_class(class_name.as_str());
+                self.record_reflection_constructor_target(class_name, args);
                 self.usage.instantiated_classes.insert(key.clone());
                 self.scan_method_signature_arguments(
                     &[key.clone()].into_iter().collect(),
@@ -196,6 +199,12 @@ impl Scanner<'_> {
     /// Scans a direct call, distinguishing literal introspection from dynamic hazards.
     pub(super) fn scan_function_call(&mut self, name: &str, args: &[Expr]) {
         let key = self.record_callable(name);
+        if key == "class_alias" {
+            if let Some((original, _)) = crate::autoload::resolved_class_alias_args(args) {
+                let original = self.record_class(&original);
+                self.usage.class_alias_targets.insert(original);
+            }
+        }
         self.record_builtin_requirements(name, args);
         self.scan_builtin_callback_arguments(&key, args);
         self.scan_declaration_arguments(&key, args);
@@ -217,7 +226,11 @@ impl Scanner<'_> {
             "method_exists" => self.method_exists(args),
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,
-            "eval" => {
+            "eval" | DYNAMIC_INCLUDE_FUNCTION => {
+                // Runtime include source is just as opaque as `eval()`: it can call any
+                // AOT declaration through the eval bridge after compilation. Keeping only
+                // statically visible methods makes valid calls fail at runtime because no
+                // bridge slot was emitted for their implementation.
                 self.usage.hazards.dynamic_function = true;
                 self.usage.hazards.dynamic_method = true;
                 self.usage.hazards.dynamic_class = true;
@@ -225,6 +238,46 @@ impl Scanner<'_> {
             _ => {}
         }
         self.scan_exprs(args);
+    }
+
+    /// Records the class-like target named by reflection constructors that autoload it in PHP.
+    fn record_reflection_constructor_target(
+        &mut self,
+        constructor: &crate::names::Name,
+        args: &[Expr],
+    ) {
+        let constructor = constructor
+            .as_canonical()
+            .trim_start_matches('\\')
+            .to_ascii_lowercase();
+        if !matches!(
+            constructor.as_str(),
+            "reflectionclass"
+                | "reflectionenum"
+                | "reflectionclassconstant"
+                | "reflectionmethod"
+                | "reflectionproperty"
+        ) {
+            return;
+        }
+        let Some(arg) = args.first() else {
+            return;
+        };
+        let arg = match &arg.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => arg,
+        };
+        match &arg.kind {
+            ExprKind::StringLiteral(class_name) => {
+                self.record_class(class_name);
+            }
+            ExprKind::ClassConstant {
+                receiver: StaticReceiver::Named(class_name),
+            } => {
+                self.record_class(&class_name.as_canonical());
+            }
+            _ => {}
+        }
     }
 
     /// Records class-like declarations and runtime protocols selected by builtin arguments.

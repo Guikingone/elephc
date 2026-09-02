@@ -19,7 +19,7 @@ use crate::ir::{
     validate_function, validate_module, ExternDecl, ExternParamDecl, Function, Immediate, IrType,
     InstId, LocalKind, Module, Op, TraitMethodInfo, ValidationError, ValueDef, ValueId,
 };
-use crate::ir_lower::{builtin_datetime, function, LoweringError};
+use crate::ir_lower::{body_contains_eval_call, builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
     ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind, Visibility,
@@ -68,6 +68,8 @@ pub(crate) fn lower(
     source_path: Option<&Path>,
     web: bool,
 ) -> Result<Module, LoweringError> {
+    let _dynamic_function_resolution =
+        super::context::enable_runtime_dynamic_function_resolution(body_contains_eval_call(program));
     let mut module = Module::new(target);
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;

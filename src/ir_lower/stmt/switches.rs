@@ -202,10 +202,12 @@ pub(super) fn lower_switch_bodies(
         cleanup: None,
         source_pin: None,
     });
+    let switch_try_handler_stack = ctx.try_handler_stack.clone();
     for index in 0..=cases.len() {
         if default.is_some() && default_index == index {
             ctx.builder.position_at_end(default_block);
             restore_switch_body_entry(ctx, &direct_entry, fallthrough.take());
+            ctx.try_handler_stack = switch_try_handler_stack.clone();
             if let Some(default) = default {
                 lower_block(ctx, default);
             }
@@ -218,6 +220,7 @@ pub(super) fn lower_switch_bodies(
         if let Some((_, body)) = cases.get(index) {
             ctx.builder.position_at_end(blocks[index]);
             restore_switch_body_entry(ctx, &direct_entry, fallthrough.take());
+            ctx.try_handler_stack = switch_try_handler_stack.clone();
             lower_block(ctx, body);
             record_switch_body_flow(ctx, body, &mut fallthrough, &mut exits);
             if !ctx.builder.insertion_block_is_terminated() {
@@ -241,6 +244,7 @@ pub(super) fn lower_switch_bodies(
         exits.push(fallthrough);
     }
     ctx.loop_stack.pop();
+    ctx.try_handler_stack = switch_try_handler_stack;
     ctx.builder.position_at_end(exit);
     restore_switch_exit_state(ctx, &exits, &direct_entry);
     ctx.clear_static_callable_locals();

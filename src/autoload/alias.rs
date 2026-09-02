@@ -332,6 +332,7 @@ fn synthesise_alias_decl(orig: &str, alias: &str, span: crate::span::Span) -> St
     let class_stmt = Stmt::new(
         StmtKind::ClassDecl {
             name: alias_local,
+            doc_comment: None,
             extends: Some(extends_name),
             implements: Vec::new(),
             is_abstract: false,
@@ -374,6 +375,7 @@ fn synthesise_resolved_alias_decl(
     Stmt::new(
         StmtKind::ClassDecl {
             name: alias.trim_start_matches('\\').to_string(),
+            doc_comment: None,
             extends: Some(Name::from_parts(NameKind::FullyQualified, orig_parts)),
             implements: Vec::new(),
             is_abstract: false,

@@ -20,7 +20,7 @@ pub(super) fn validate_concrete_class_requirements(
     if !pending_class_abstract_property_requirements(class, context)?.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    for interface in pending_class_interface_names(class, context) {
+    for interface in pending_class_contract_interface_names(class, context) {
         if context.has_interface(&interface) {
             validate_class_implements_eval_interface(class, &interface, context)?;
         }

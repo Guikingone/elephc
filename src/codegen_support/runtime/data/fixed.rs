@@ -19,11 +19,11 @@ use super::{
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
-    SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
+    SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
     STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
-use crate::codegen_support::data_section::comm_directive;
+use crate::codegen_support::data_section::{comm_directive, comm_directive_aligned};
 use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
@@ -225,8 +225,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         8,
         target,
     ));
-    out.push_str(&comm_directive("_heap_buf", heap_size, target));
+    out.push_str(&comm_directive_aligned("_heap_buf", heap_size, target, 16));
     out.push_str(&comm_directive("_heap_off", 8, target));
+    out.push_str(&comm_directive("_heap_stats_hash_origin", 8, target));
     out.push_str(&comm_directive("_heap_free_list", 8, target));
     out.push_str(&comm_directive("_heap_small_bins", 32, target));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
@@ -304,6 +305,16 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 5\n");
     out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
     out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
+    out.push_str(".globl _heap_stats_hash_origin_msg\n_heap_stats_hash_origin_msg:\n    .ascii \"Heap stats: hash_new_origin=\"\n");
+    out.push_str(".globl _heap_stats_return_msg\n_heap_stats_return_msg:\n    .ascii \"Heap stats: caller_return=\"\n");
+    out.push_str(".globl _heap_stats_request_msg\n_heap_stats_request_msg:\n    .ascii \"Heap stats: request=\"\n");
+    out.push_str(".globl _heap_stats_allocs_msg\n_heap_stats_allocs_msg:\n    .ascii \"Heap stats: allocs=\"\n");
+    out.push_str(".globl _heap_stats_frees_msg\n_heap_stats_frees_msg:\n    .ascii \" frees=\"\n");
+    out.push_str(".globl _heap_stats_live_msg\n_heap_stats_live_msg:\n    .ascii \" live=\"\n");
+    out.push_str(".globl _heap_stats_peak_msg\n_heap_stats_peak_msg:\n    .ascii \" peak=\"\n");
+    out.push_str(".globl _heap_stats_bump_msg\n_heap_stats_bump_msg:\n    .ascii \" bump=\"\n");
+    out.push_str(".globl _heap_stats_max_msg\n_heap_stats_max_msg:\n    .ascii \" max=\"\n");
+    out.push_str(".globl _heap_stats_nl\n_heap_stats_nl:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
     out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
     out.push_str(".globl _heap_dbg_free_list_msg\n_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
@@ -344,10 +355,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&format!(
         ".globl _sprintf_width_msg\n_sprintf_width_msg:\n    .ascii {:?}\n",
         SPRINTF_WIDTH_MSG
-    ));
-    out.push_str(&format!(
-        ".globl _sprintf_overflow_msg\n_sprintf_overflow_msg:\n    .ascii {:?}\n",
-        SPRINTF_OVERFLOW_MSG
     ));
     out.push_str(&format!(
         ".globl _sprintf_argcount_msg\n_sprintf_argcount_msg:\n    .ascii {:?}\n",
@@ -539,7 +546,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_gc_live", 8, target));
     out.push_str(&comm_directive("_gc_peak", 8, target));
     out.push_str(&comm_directive("_cstr_buf", 4096, target));
+    // C-string bridge buffers use the fixed scratch region for small inputs and retain one
+    // runtime-heap replacement for larger inputs. The dynamic path prevents an arbitrary
+    // string passed to a libc-facing builtin from overrunning the fixed scratch region or
+    // colliding with adjacent runtime globals.
+    out.push_str(&comm_directive("_cstr_buf_dynamic", 8, target));
     out.push_str(&comm_directive("_cstr_buf2", 4096, target));
+    out.push_str(&comm_directive("_cstr_buf2_dynamic", 8, target));
     out.push_str(&comm_directive("_eof_flags", 256, target));
     out.push_str(&comm_directive("_popen_files", 2048, target));
     out.push_str(&comm_directive("_dir_handles", 2048, target));
@@ -1380,5 +1393,39 @@ mod tests {
 
         assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
         assert!(asm.contains(".comm _stack_limit_main, 8, 8\n"));
+    }
+
+    /// Verifies both C-string scratch buffers retain a dynamic replacement-pointer slot.
+    #[test]
+    fn test_cstr_dynamic_slots_are_declared_for_each_object_format() {
+        for (platform, arch, alignment) in [
+            (Platform::MacOS, Arch::AArch64, "3"),
+            (Platform::Linux, Arch::AArch64, "8"),
+            (Platform::Linux, Arch::X86_64, "8"),
+        ] {
+            let asm = emit_runtime_data_fixed(8_388_608, Target { platform, arch });
+            for symbol in ["_cstr_buf_dynamic", "_cstr_buf2_dynamic"] {
+                assert!(
+                    asm.contains(&format!(".comm {symbol}, 8, {alignment}\n")),
+                    "{platform:?}/{arch:?}: missing {symbol} replacement-pointer slot"
+                );
+            }
+        }
+    }
+
+    /// Verifies the hash-allocation origin slot is emitted for every supported object format.
+    #[test]
+    fn test_heap_hash_origin_slot_is_declared_for_each_object_format() {
+        for (platform, arch, alignment) in [
+            (Platform::MacOS, Arch::AArch64, "3"),
+            (Platform::Linux, Arch::AArch64, "8"),
+            (Platform::Linux, Arch::X86_64, "8"),
+        ] {
+            let asm = emit_runtime_data_fixed(8_388_608, Target { platform, arch });
+            assert!(
+                asm.contains(&format!(".comm _heap_stats_hash_origin, 8, {alignment}\n")),
+                "{platform:?}/{arch:?}: missing hash-allocation origin slot"
+            );
+        }
     }
 }

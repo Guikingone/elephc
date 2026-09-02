@@ -85,6 +85,7 @@ pub fn compute(
         check_result,
         &call_signatures,
     );
+    let static_class_alias_targets = index.class_alias_targets();
     let executable_usage = usage::scan_executable_program(program, &call_signatures);
     let mut state = GraphState::new(
         index,
@@ -93,6 +94,9 @@ pub fn compute(
         check_result,
     );
     state.apply_usage(executable_usage, true);
+    for target in static_class_alias_targets {
+        state.keep_class_alias_target_methods(&target, true);
+    }
     for name in options.exported_functions {
         let name = php_symbol_key(name);
         state.reach.functions.insert(name.clone());
@@ -589,6 +593,9 @@ impl GraphState {
 
     /// Applies one usage summary, propagating hazards only from behaviorally reachable bodies.
     fn apply_usage(&mut self, usage: Usage, behavioral: bool) {
+        for target in &usage.class_alias_targets {
+            self.keep_class_alias_target_methods(target, behavioral);
+        }
         for root in &usage.instantiated_subclass_roots {
             self.keep_instantiable_subclasses(root, behavioral);
         }
@@ -654,6 +661,42 @@ impl GraphState {
                 .extend(usage.wildcard_methods);
         }
         self.apply_global_hazards();
+    }
+
+    /// Retains the complete callable hierarchy exposed through one PHP class alias.
+    ///
+    /// A class alias is an alternate class name, not a newly restricted subtype. Opaque runtime
+    /// code can therefore invoke any inherited instance or static method through the alias, even
+    /// when no statically visible call names that member. Keep the target hierarchy narrowly here
+    /// instead of promoting the global dynamic-method hazard and retaining unrelated classes.
+    fn keep_class_alias_target_methods(&mut self, target: &str, behavioral: bool) {
+        let mut current = php_symbol_key(target);
+        let mut seen = HashSet::new();
+        loop {
+            if !seen.insert(current.clone()) {
+                return;
+            }
+            let Some(node) = self.index.classes.get(&current) else {
+                return;
+            };
+            let methods = node.methods.keys().cloned().collect::<Vec<_>>();
+            let parent = node.parent.clone();
+            self.reach.classes.insert(current.clone());
+            if behavioral {
+                self.behavioral.classes.insert(current.clone());
+            }
+            for (method, is_static) in methods {
+                let method = (current.clone(), method, is_static);
+                self.reach.methods.insert(method.clone());
+                if behavioral {
+                    self.behavioral.methods.insert(method);
+                }
+            }
+            let Some(parent) = parent else {
+                return;
+            };
+            current = parent;
+        }
     }
 
     /// Retains every indexed class that is equal to or descends from one runtime-selected base.
