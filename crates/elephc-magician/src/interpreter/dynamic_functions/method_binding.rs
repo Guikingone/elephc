@@ -405,10 +405,10 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
         return values.cast_float(value);
     }
     if param_type.is_intersection() {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_parameter_type_error(param_type, value, context, values);
     }
     if context.strict_types() {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_parameter_type_error(param_type, value, context, values);
     }
     for variant in param_type.variants() {
         if let Some(coerced) =
@@ -417,7 +417,76 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
             return Ok(coerced);
         }
     }
-    Err(EvalStatus::RuntimeFatal)
+    eval_throw_parameter_type_error(param_type, value, context, values)
+}
+
+/// Schedules PHP's catchable TypeError for one rejected declared parameter value.
+fn eval_throw_parameter_type_error<T>(
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let callable = context.current_function().unwrap_or("{callable}");
+    let expected = eval_parameter_type_name(param_type);
+    let actual = eval_runtime_type_name(value, values)?;
+    eval_throw_type_error(
+        &format!("{callable}(): Argument must be of type {expected}, {actual} given"),
+        context,
+        values,
+    )
+}
+
+/// Renders one declared eval parameter type for a PHP TypeError message.
+pub(in crate::interpreter) fn eval_parameter_type_name(param_type: &EvalParameterType) -> String {
+    let separator = if param_type.is_intersection() { "&" } else { "|" };
+    let atoms = param_type
+        .variants()
+        .iter()
+        .map(eval_parameter_type_variant_name)
+        .collect::<Vec<_>>();
+    if param_type.allows_null() {
+        if atoms.len() == 1 {
+            return format!("?{}", atoms[0]);
+        }
+        return format!("{}|null", atoms.join(separator));
+    }
+    atoms.join(separator)
+}
+
+/// Renders one non-null eval parameter type atom for a PHP TypeError message.
+fn eval_parameter_type_variant_name(variant: &EvalParameterTypeVariant) -> String {
+    match variant {
+        EvalParameterTypeVariant::Array => String::from("array"),
+        EvalParameterTypeVariant::Bool => String::from("bool"),
+        EvalParameterTypeVariant::Callable => String::from("callable"),
+        EvalParameterTypeVariant::Class(name) => name.trim_start_matches('\\').to_string(),
+        EvalParameterTypeVariant::Float => String::from("float"),
+        EvalParameterTypeVariant::Int => String::from("int"),
+        EvalParameterTypeVariant::Iterable => String::from("iterable"),
+        EvalParameterTypeVariant::Mixed => String::from("mixed"),
+        EvalParameterTypeVariant::Never => String::from("never"),
+        EvalParameterTypeVariant::Object => String::from("object"),
+        EvalParameterTypeVariant::String => String::from("string"),
+        EvalParameterTypeVariant::Void => String::from("void"),
+    }
+}
+
+/// Renders one runtime cell category for a PHP TypeError message.
+pub(in crate::interpreter) fn eval_runtime_type_name(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<&'static str, EvalStatus> {
+    Ok(match values.type_tag(value)? {
+        EVAL_TAG_NULL => "null",
+        EVAL_TAG_BOOL => "bool",
+        EVAL_TAG_INT => "int",
+        EVAL_TAG_FLOAT => "float",
+        EVAL_TAG_STRING => "string",
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
+        EVAL_TAG_OBJECT => "object",
+        _ => "resource",
+    })
 }
 
 /// Returns whether a value satisfies one eval parameter type without scalar coercion.

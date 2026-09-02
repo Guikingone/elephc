@@ -1,9 +1,9 @@
 ---
-title: "DateTime php-src Compliance Spec v4.4"
+title: "DateTime php-src Compliance Spec v4.5"
 description: "Candidat ext/date corrigé après audit statique contre php-src 8.5.10-dev."
 ---
 
-# DateTime php-src Compliance Spec v4.4
+# DateTime php-src Compliance Spec v4.5
 
 ## Référence normative
 
@@ -119,7 +119,10 @@ retours appliquent donc le même binding scalaire strict ou coercitif que PHP : 
 rejette `int`, `float`, `bool`, `null`, ressources et objets, même lorsqu'il est invoqué depuis un
 fragment faible, et inversement. La coercition des arguments transmis *à* un callable reste celle
 de son site appelant, tandis que le retour reste celle du callable qui l'a déclaré; l'élargissement
-PHP `int` vers `float` est conservé dans les deux modes.
+PHP `int` vers `float` est conservé dans les deux modes. Les incompatibilités restantes empruntent
+le canal `TypeError` rattrapable de PHP plutôt qu'un fatal interne; un fallthrough implicite d'un
+retour nullable produit `null`, tandis que `return;` dans un callable typé reste une erreur PHP et
+n'est jamais normalisé en `null`.
 
 ### Reflection, sérialisation et debug
 
@@ -203,6 +206,11 @@ et au flag d'op-array propagé par
 [`zend_compile_func_decl()`](https://github.com/php/php-src/blob/47b563cbb856ec19155aacc3246931dfacbebd21/Zend/zend_compile.c#L7329-L7368).
 La distinction explicite entre le flag argument et le flag retour est définie par
 [`ZEND_ARG_USES_STRICT_TYPES` et `ZEND_RET_USES_STRICT_TYPES`](https://github.com/php/php-src/blob/47b563cbb856ec19155aacc3246931dfacbebd21/Zend/zend_compile.h#L627-L639).
+F3 a ensuite remplacé les rejets `RuntimeFatal` de validation paramètre/retour par le canal
+`TypeError` retenu par l'interpréteur, et a aligné le fallthrough implicite d'un retour nullable
+sur le `null` final émis par php-src. Le rejet de `return;` pour un callable typé demeure distinct,
+comme le compilateur Zend le formule dans
+[`zend_emit_return_type_check()`](https://github.com/php/php-src/blob/47b563cbb856ec19155aacc3246931dfacbebd21/Zend/zend_compile.c#L2623-L2667).
 Cette correction invalide les locks précédents et impose une nouvelle revue statique complète avant
 toute exécution de parité.
 
