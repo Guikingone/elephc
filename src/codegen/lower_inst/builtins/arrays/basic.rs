@@ -497,19 +497,11 @@ pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
             elem_ty
         )));
     }
-    // The dedup scan compares slots as RAW words, which is a POINTER for a boxed element, so
-    // two separately boxed `1`s never matched: `array_unique([1,"b",1,4])` answered `1,b,1,4`
-    // where PHP answers `1,b,4`. PHP compares these elements by their STRING rendering.
-    // Refused rather than answered wrongly, like the set operations that share the defect; the
-    // gate itself cannot carry this, because `array_reverse`, `shuffle` and `array_merge` use
-    // it too and never compare their elements.
-    if matches!(elem_ty, PhpType::Mixed | PhpType::Union(_)) {
-        return Err(CodegenIrError::unsupported(format!(
-            "array_unique compares boxed elements by identity, not by value, for indexed-array \
-             element PHP type {:?}",
-            elem_ty
-        )));
-    }
+    // A BOXED element's slot holds a CELL POINTER, so the raw-word scan compared cell ADDRESSES:
+    // two separately boxed `1`s never matched and `array_unique([1,"b",1,4])` answered `1,b,1,4`
+    // where PHP answers `1,b,4`. `__rt_array_to_hash_unique` now recognizes the boxed value_type
+    // and compares those slots through `__rt_mixed_string_eq`, PHP's own `SORT_STRING` rule for
+    // this builtin, so the boxed shape lowers with the same helper as every other element type.
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the dedup helper argument

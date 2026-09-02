@@ -9,8 +9,8 @@
 
 use super::*;
 
-/// Verifies the value-comparing array builtins refuse BOXED elements rather than compare their
-/// addresses.
+/// Verifies the two-operand value-comparing array builtins still refuse BOXED elements rather
+/// than compare their addresses.
 ///
 /// These helpers compare slots as raw 8-byte words — the value itself for an int or float, a
 /// POINTER for anything heap-backed. Boxed elements therefore compared cell addresses, and two
@@ -18,11 +18,10 @@ use super::*;
 ///
 /// - `array_diff([1,"b",3,4], [3,"z"])` answered `1,b,3,4`, PHP answers `1,b,4`
 /// - `array_intersect` of the same pair answered NOTHING, PHP answers `3`
-/// - `array_unique([1,"b",1,4])` answered `1,b,1,4`, PHP answers `1,b,4`
 ///
-/// All three silent. PHP compares these elements by their STRING rendering, which needs a
-/// by-value comparison in the runtime; until that exists the calls are refused, exactly as
-/// `array<string>` already is — its 16-byte slots do not fit these helpers either.
+/// Both silent. PHP compares these elements by their STRING rendering; until each takes the
+/// runtime comparator `array_unique` now uses, the calls are refused, exactly as `array<string>`
+/// already is — its 16-byte slots do not fit these helpers either.
 #[test]
 fn test_value_comparing_builtins_refuse_boxed_elements() {
     for (source, message) in [
@@ -34,10 +33,6 @@ fn test_value_comparing_builtins_refuse_boxed_elements() {
             r#"<?php $a = [1, "b", 3, 4]; $b = [3, "z"]; $r = array_intersect($a, $b);"#,
             "array_intersect compares boxed elements by identity",
         ),
-        (
-            r#"<?php $a = [1, "b", 1, 4]; $r = array_unique($a);"#,
-            "array_unique compares boxed elements by identity",
-        ),
     ] {
         let error = compile_source_expect_backend_error(source);
         assert!(
@@ -47,14 +42,87 @@ fn test_value_comparing_builtins_refuse_boxed_elements() {
     }
 }
 
+/// Verifies `array_unique` compares BOXED elements by their PHP string rendering.
+///
+/// A boxed slot holds a CELL POINTER, so the raw-word scan compared cell addresses:
+/// `array_unique([1,"b",1,4])` answered `1,b,1,4` where PHP answers `1,b,4`, and the call was
+/// refused rather than answered wrongly — which is how `Command::__construct` (`array_unique([
+/// ...$this->aliases, ...$aliases])`) stopped the Symfony compile. `SORT_STRING` is what makes
+/// `[0, false, null, "0", ""]` keep `0` AND `false`: their renderings are `"0"` and `""`, then
+/// `null` and `""` both render `""` and `"0"` renders `"0"`. PHP's `==` would have collapsed all
+/// five to one, so this fixture is what distinguishes a string-rendering comparison from a loose
+/// one.
+#[test]
+fn test_array_unique_compares_boxed_elements_by_string_rendering() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+var_dump(array_unique([1, "b", 1, 4]));
+var_dump(array_unique([1, "1", true, "b"]));
+var_dump(array_unique([0, false, null, "0", ""]));
+var_dump(array_unique([1.5, "1.5", 2, "x", 2.0]));
+$a = ["k", 3];
+$b = [3, "k", "k"];
+var_dump(array_unique(array_merge($a, $b)));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  string(1) \"b\"\n  [3]=>\n  int(4)\n}\n\
+         array(2) {\n  [0]=>\n  int(1)\n  [3]=>\n  string(1) \"b\"\n}\n\
+         array(2) {\n  [0]=>\n  int(0)\n  [1]=>\n  bool(false)\n}\n\
+         array(3) {\n  [0]=>\n  float(1.5)\n  [2]=>\n  int(2)\n  [3]=>\n  string(1) \"x\"\n}\n\
+         array(2) {\n  [0]=>\n  string(1) \"k\"\n  [1]=>\n  int(3)\n}\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies the vendor shape: `array_unique` over a spread of two declared string arrays.
+///
+/// `Symfony\Component\Console\Command\Command::__construct` builds its alias list this way, and
+/// the spread widens the element type to the boxed one the scan used to refuse. PHP keeps the
+/// FIRST occurrence at its ORIGINAL key, so the surviving `three` sits at key 3 with no key 2.
+/// No heap assertion: the same program with the `array_unique` call removed leaves the identical
+/// one-block residual behind.
+#[test]
+fn test_array_unique_over_a_spread_of_declared_string_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+/**
+ * @param string[] $existing
+ */
+function combine(array $existing, string $name): array {
+    $parts = explode('|', $name);
+    $first = array_shift($parts);
+    $aliases = array_unique([
+        ...$existing,
+        ...$parts,
+    ]);
+    return [$first, $aliases];
+}
+var_dump(combine(['one', 'two'], 'go|two|three|one'));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  string(2) \"go\"\n  [1]=>\n  array(3) {\n    [0]=>\n    \
+         string(3) \"one\"\n    [1]=>\n    string(3) \"two\"\n    [3]=>\n    string(5) \"three\"\n  \
+         }\n}\n"
+    );
+}
+
 /// Verifies the refusal of BOXED elements did not take the typed cases with it.
 ///
-/// `array_diff`, `array_intersect` and `array_unique` refuse a boxed source because they would
-/// compare cell addresses (see `test_error_value_comparing_builtins_refuse_boxed_elements`).
-/// The refusal has to be narrow: an `array<int>` slot IS the value, so raw comparison is the
-/// right one, and these three must keep working. `array_reverse` and `array_merge` share the
-/// element gate but never compare, so they still accept a boxed array — that is why the
-/// refusal sits at each comparing builtin rather than in the gate.
+/// `array_diff` and `array_intersect` refuse a boxed source because they would compare cell
+/// addresses (see `test_value_comparing_builtins_refuse_boxed_elements`). The refusal has to be
+/// narrow: an `array<int>` slot IS the value, so raw comparison is the right one, and these must
+/// keep working. `array_reverse` and `array_merge` share the element gate but never compare, so
+/// they still accept a boxed array — that is why the refusal sits at each comparing builtin
+/// rather than in the gate.
 #[test]
 fn test_value_comparing_builtins_still_accept_typed_elements() {
     let out = compile_and_run(
