@@ -45,10 +45,15 @@ struct ArrayWrite<'a> {
 /// that require an up-front representation contract: indexed/associative arrays with boxed
 /// `mixed` payloads, tagged nullable scalars, or whole-value `mixed` for a local crossing a
 /// back-edge.
-pub fn loop_carried_storage_types(
-    body: &[Stmt],
-    update: Option<&Stmt>,
+///
+/// `ref_value_binding` names a `foreach ($source as &$value)` pair whose SOURCE is a plain local.
+/// See [`apply_ref_value_binding_evidence`] for why what the body stores into `$value` is element
+/// evidence against `$source`.
+pub fn loop_carried_storage_types<'a>(
+    body: &'a [Stmt],
+    update: Option<&'a Stmt>,
     entry: &TypeEnv,
+    ref_value_binding: Option<(&'a str, &'a str)>,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> Vec<(String, PhpType)> {
     let mut assignments = Vec::new();
@@ -73,6 +78,12 @@ pub fn loop_carried_storage_types(
             infer_value,
             &mut whole_representation_sources,
         );
+        apply_ref_value_binding_evidence(
+            ref_value_binding,
+            &assignments,
+            &mut fixed,
+            infer_value,
+        );
         apply_array_write_evidence(&writes, &mut fixed, infer_value);
         if fixed == previous {
             break;
@@ -93,6 +104,85 @@ pub fn loop_carried_storage_types(
         .collect::<Vec<_>>();
     contracts.sort_by(|left, right| left.0.cmp(&right.0));
     contracts
+}
+
+/// Carries a by-REFERENCE `foreach` value variable's fixed-point type into the iterated array's
+/// element type.
+///
+/// `foreach ($chunks as &$chunk) { $chunk = new Chunk($chunk); }` writes THROUGH the reference into
+/// `$chunks`, so the loop's element type has to accommodate whatever the body stores — exactly as
+/// `$chunks[$k] = new Chunk(…)` would. Nothing else in this analysis knows that: the assignment is
+/// syntactically a plain local store, and `collect_array_writes` only sees writes that NAME a
+/// container. Without this the fixed point left `$chunks` at its entry `array<string>` while the
+/// body stored an object into it, and the checker reported `cannot reassign $chunk from string to
+/// Chunk` on code `php -n` runs (`Symfony\Component\String\ByteString::split` and its
+/// `CodePointString` twin are the shape).
+///
+/// The stored types are re-derived here rather than read off the value variable's joined entry in
+/// the fixed-point environment, because that entry cannot be trusted for this question:
+/// `apply_assignment_evidence` ends its inference with `.unwrap_or(PhpType::Mixed)`, so a value it
+/// has no answer for is indistinguishable from one that really is `mixed`, and boxing an array on
+/// the strength of a fallback is exactly the wrong direction. An expression this analysis cannot
+/// type is therefore NOT evidence at all — the same "only what can be typed exactly" discipline
+/// `mixed_storage_scan` follows, and the safe one: missing a real widening costs the pre-existing
+/// hard error, never a wrong representation.
+///
+/// It stays CONSERVATIVE where the checker is. `infer_type` answers `Mixed` for `int * int` —
+/// PHP's arithmetic overflows to float — so `foreach ($nums as &$n) { $n = $n * 10; }` over an
+/// `array<int>` really does box its payload. That is not a new answer: `$nums[$i] = $nums[$i] * 10`
+/// in a loop has always boxed through `apply_array_write_evidence`, from the identical inference.
+/// The two rules give the same answer to the same question by construction, which is the point of
+/// routing this through the same join.
+///
+/// Applied per ITERATION, right after the assignment evidence, so a payload promotion can still
+/// cascade — the array's new element type is what the next iteration's reads of `$chunk` see.
+///
+/// The join is the payload join, never the KEY one: a by-reference `foreach` visits the keys the
+/// array already has, so it can neither turn a packed array into a hash nor renumber a hash.
+/// A source that is not a plain local (`$this->items`) is not passed in at all — the caller can
+/// neither read nor re-type such a place through this contract, and a target with no expression
+/// behind it (a `RefAssign`, a `list()` element — [`AssignedValue::Opaque`]) has nothing to infer.
+fn apply_ref_value_binding_evidence<'a>(
+    ref_value_binding: Option<(&'a str, &'a str)>,
+    assignments: &[(&'a str, AssignedValue<'a>)],
+    env: &mut TypeEnv,
+    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+) {
+    let Some((source_local, value_var)) = ref_value_binding else {
+        return;
+    };
+    let mut stored: Option<PhpType> = None;
+    for (name, source) in assignments {
+        if *name != value_var {
+            continue;
+        }
+        let AssignedValue::Expr(value) = source else {
+            continue;
+        };
+        let Some(value_ty) = infer_storage_value_type(value, env, infer_value)
+            .or_else(|| precise_scalar_expr_type(value))
+        else {
+            continue;
+        };
+        stored = Some(match stored {
+            None => value_ty,
+            Some(previous) => join_array_payload_type(previous, value_ty),
+        });
+    }
+    let Some(stored) = stored else {
+        return;
+    };
+    let updated = match env.get(source_local).cloned() {
+        Some(PhpType::Array(element)) => {
+            PhpType::Array(Box::new(join_array_payload_type(*element, stored)))
+        }
+        Some(PhpType::AssocArray { key, value }) => PhpType::AssocArray {
+            key,
+            value: Box::new(join_array_payload_type(*value, stored)),
+        },
+        _ => return,
+    };
+    env.insert(source_local.to_string(), updated);
 }
 
 /// Applies every collected local assignment monotonically to one fixed-point iteration.

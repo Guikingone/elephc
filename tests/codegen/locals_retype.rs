@@ -3093,3 +3093,177 @@ fn test_incdec_after_a_widening_branch_answers() {
         compile_and_run("<?php $b = 0; if ($argc > 0) { $b = \"y\"; } $b++; echo $b, \"|\", \\gettype($b);");
     assert_eq!(out, "z|string");
 }
+
+/// A by-REFERENCE `foreach` whose body stores an OBJECT into the value variable really rewrites
+/// the iterated array's elements.
+///
+/// `foreach ($chunks as &$chunk) { $chunk = new C($chunk); }` is `Symfony\Component\String\
+/// ByteString::split` and its `CodePointString` twin, and it was the hard
+/// `cannot reassign $chunk from string to CodePointString`. The value variable is a CELL INTO the
+/// array, so the store is an element write: the array's payload has to be boxed `array<mixed>`
+/// from the loop PREHEADER on, which is exactly what the loop-storage contract already emits for
+/// `$chunks[$k] = new C(…)`. Nothing else could see that — the assignment is syntactically a plain
+/// local store, so `collect_array_writes` never looked at it.
+///
+/// Read back through a SECOND pass over the array rather than through `$chunk`, because the point
+/// is that the write reached `$chunks` and not merely the cell. Heap-debug is load-bearing: the
+/// preheader conversion boxes every element slot and the stores replace them, so an unpaired
+/// retain or release shows up here rather than as wrong output.
+#[test]
+fn test_by_ref_foreach_value_var_takes_an_object_into_the_array() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php class Chunk { public string $s = \"\"; }
+         $chunks = \\explode(\",\", \"aa,bb,cc\");
+         foreach ($chunks as &$chunk) { $w = new Chunk(); $w->s = $chunk; $chunk = $w; }
+         unset($chunk);
+         foreach ($chunks as $c) { echo $c->s, \"|\"; }
+         echo \\count($chunks);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "aa|bb|cc|3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The same rewrite on an ASSOCIATIVE source, which must keep its keys.
+///
+/// The element write is filed with NO index, so it joins the payload type without claiming
+/// anything about the keys — a by-reference `foreach` visits the keys the array already has and
+/// can never turn a packed array into a hash, nor a hash into a packed one. This asserts the keys
+/// as well as the values, so a contract that reached for `ArrayToHash` instead of `ArrayToMixed`
+/// would fail here rather than silently renumbering.
+#[test]
+fn test_by_ref_foreach_object_retype_keeps_associative_keys() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php class Wrap { public string $s = \"\"; }
+         $map = [\"a\" => \"one\", \"b\" => \"two\"];
+         foreach ($map as $k => &$v) { $w = new Wrap(); $w->s = $k . \":\" . $v; $v = $w; }
+         unset($v);
+         foreach ($map as $k => $v) { echo $k, \"=\", $v->s, \"|\"; }
+         echo \\count($map);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "a=a:one|b=b:two|2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The scalar half of the same rule: `string` elements replaced by `int`s through the reference.
+///
+/// A scalar-to-scalar change needs the identical preheader conversion — the slots still stop being
+/// raw `Str` pairs and start being boxed cells — so this is not a weaker case of the object shape
+/// but the same one with a payload that would fit in a register.
+///
+/// The heap is pinned at the EXACT residual rather than at "clean", because it is not clean: the
+/// boxed-element path this shape reaches leaves one 48-byte block live at teardown. That residual
+/// is not this rule's — it belongs to the boxed loop array, and the untouched sibling rule shows
+/// it at larger scale (`$nums[$i] = $nums[$i] * 10` in a `for` leaks twelve blocks / 672 bytes on
+/// this same tree, with no `foreach` reference anywhere in it). Pinning the number is what stops
+/// it from growing quietly.
+#[test]
+fn test_by_ref_foreach_value_var_takes_an_int_into_a_string_array() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $parts = \\explode(\",\", \"aa,bbb,cccc\");
+         foreach ($parts as &$part) { $part = \\strlen($part); }
+         unset($part);
+         foreach ($parts as $p) { echo $p, \"|\"; }
+         echo \\gettype($parts[0]);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|3|4|integer");
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=1 live_bytes=48"),
+        "expected the recorded 48-byte boxed-element residual, got: {}",
+        out.stderr
+    );
+}
+
+/// Control: a by-reference `foreach` that keeps the element type must NOT be boxed.
+///
+/// `$n = 7` over an `array<int>` joins `int` with `int`, `representation_contract` answers `None`,
+/// and the loop keeps its raw element slots — a clean heap is the observable proof, because the
+/// boxed path always leaves the 48-byte residual the fixture above pins. This is what fails if the
+/// rule ever degrades to "a by-reference foreach boxes its source".
+///
+/// `$n = $n * 10` is deliberately NOT the control: `infer_type` answers `Mixed` for `int * int`
+/// (PHP's arithmetic overflows to float), so that shape really does box — and it boxes for the
+/// same reason, and with the same 48-byte residual, as `$nums[$i] = $nums[$i] * 10` written out by
+/// hand, which reaches `apply_array_write_evidence` without any reference in sight. The second arm
+/// pins that agreement, so a future narrowing of arithmetic inference has to move both together.
+#[test]
+fn test_by_ref_foreach_without_a_retype_keeps_its_element_type() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $nums = [1, 2, 3];
+         foreach ($nums as &$n) { $n = 7; }
+         unset($n);
+         foreach ($nums as $x) { echo $x, \"|\"; }
+         echo \\gettype($nums[0]);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7|7|7|integer");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+
+    let through_reference = compile_and_run_with_heap_debug(
+        "<?php $nums = [1, 2, 3];
+         foreach ($nums as &$n) { $n = $n * 10; }
+         unset($n);
+         foreach ($nums as $x) { echo $x, \"|\"; }
+         echo \\gettype($nums[0]);",
+    );
+    let by_hand = compile_and_run_with_heap_debug(
+        "<?php $nums = [1, 2, 3];
+         for ($i = 0; $i < 3; $i++) { $nums[$i] = $nums[$i] * 10; }
+         foreach ($nums as $x) { echo $x, \"|\"; }
+         echo \\gettype($nums[0]);",
+    );
+    assert!(
+        through_reference.success,
+        "program failed: {}",
+        through_reference.stderr
+    );
+    assert!(by_hand.success, "program failed: {}", by_hand.stderr);
+    assert_eq!(through_reference.stdout, "10|20|30|integer");
+    assert_eq!(by_hand.stdout, through_reference.stdout);
+}
+
+/// The VALUE half of `error_tests::type_system::test_by_ref_foreach_value_var_retype_inside_the_body_type_checks`,
+/// on the very same program.
+///
+/// That fixture asserts only that the checker accepts the shape, and accepting a program says
+/// nothing about whether it answers what PHP answers. `php -n` prints `2CC` here — the array still
+/// has two elements and both are `C` instances — and this is the assertion that would catch a
+/// preheader conversion that boxed the slots but left the stores writing raw string pairs into
+/// them.
+///
+/// The heap is pinned at its residual rather than at "clean" because the program has no
+/// `unset($chunk)`: PHP leaves the value variable bound to the last element after the loop, so the
+/// reference cell and what it reaches are still live at teardown. The `unset` form is the sibling
+/// above, and it is clean.
+#[test]
+fn test_by_ref_foreach_object_retype_reads_back_as_php_does() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php class C { public string $s = \"\"; }
+         $chunks = \\explode(\",\", \"a,b\");
+         foreach ($chunks as &$chunk) { $chunk = new C(); }
+         echo \\count($chunks), \\get_class($chunks[0]), \\get_class($chunks[1]);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2CC");
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=4 live_bytes=192"),
+        "expected the recorded no-unset residual, got: {}",
+        out.stderr
+    );
+}

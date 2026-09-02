@@ -33,11 +33,15 @@ const FS_SKIP_DOTS: i64 = 4096;
 /// cascading promotions, non-literal RHSs, and raw-to-raw element changes converge before any
 /// header/body read is checked. EIR lowering later consumes the recorded contract for the same
 /// loop span rather than repeating expression inference.
+///
+/// `ref_value_binding` is `Some((source, value))` only for a by-REFERENCE `foreach` whose source is
+/// a plain local — the one shape whose body writes reach the iterated array without naming it.
 fn stabilize_loop_storage(
     checker: &mut Checker,
     loop_span: crate::span::Span,
     body: &[Stmt],
     update: Option<&Stmt>,
+    ref_value_binding: Option<(&str, &str)>,
     env: &mut TypeEnv,
 ) {
     let key = (checker.current_loop_storage_scope.clone(), loop_span);
@@ -54,6 +58,7 @@ fn stabilize_loop_storage(
         body,
         update,
         &snapshot,
+        ref_value_binding,
         &mut |expr, analysis_env| {
             let is_call = matches!(
                 expr.kind,
@@ -373,9 +378,35 @@ impl Checker {
                         "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported; use an array source or remove &",
                     ));
                 }
+                // A by-REFERENCE value variable is a cell INTO the iterated array, so every
+                // assignment to it is an element write and has to reach the storage fixed point
+                // as one. Only a plain local source qualifies: the contract re-types a NAME, and
+                // `$this->items` has no name in this environment to re-type.
+                let ref_value_binding = match (*value_by_ref, &array.kind) {
+                    (true, ExprKind::Variable(source)) => {
+                        Some((source.as_str(), value_var.as_str()))
+                    }
+                    _ => None,
+                };
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
-                stabilize_loop_storage(self, stmt.span, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, ref_value_binding, env);
+                // The contract may have just widened the SOURCE's payload — `array<string>` ->
+                // `array<mixed>` for `foreach ($chunks as &$chunk) { $chunk = new Chunk($chunk); }`
+                // — and the value variable is bound to that payload. Re-read it, or the body is
+                // checked against the element type the array had BEFORE the preheader conversion
+                // EIR lowering is about to emit, and the store into the cell is refused (or, worse
+                // under `--strict-locals` lifted, lowered at the narrower representation).
+                if let Some((source, value)) = ref_value_binding {
+                    let element = match env.get(source).map(PhpType::codegen_repr) {
+                        Some(PhpType::Array(element)) => Some(*element),
+                        Some(PhpType::AssocArray { value, .. }) => Some(*value),
+                        _ => None,
+                    };
+                    if let Some(element) = element {
+                        env.insert(value.to_string(), element);
+                    }
+                }
                 let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
                     Ok(())
@@ -518,7 +549,7 @@ impl Checker {
                 }
             }
             StmtKind::DoWhile { body, condition } => {
-                stabilize_loop_storage(self, stmt.span, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 if errors.is_empty() {
@@ -528,7 +559,7 @@ impl Checker {
                 }
             }
             StmtKind::While { condition, body } => {
-                stabilize_loop_storage(self, stmt.span, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, None, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 let truthy_short_circuit_bindings =
                     self.install_truthy_short_circuit_effects(condition, env)?;
@@ -574,7 +605,7 @@ impl Checker {
                 if let Some(s) = init {
                     self.check_stmt(s, env)?;
                 }
-                stabilize_loop_storage(self, stmt.span, body, update.as_deref(), env);
+                stabilize_loop_storage(self, stmt.span, body, update.as_deref(), None, env);
                 if let Some(c) = condition {
                     self.infer_type_with_assignment_effects(c, env)?;
                 }

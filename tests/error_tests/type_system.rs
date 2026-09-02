@@ -2154,6 +2154,31 @@ fn test_by_ref_foreach_value_var_retype_still_errors() {
     );
 }
 
+/// A store to the value variable INSIDE the loop body is a different question, and it is not a
+/// retype decision at all.
+///
+/// `foreach ($chunks as &$chunk) { $chunk = new C(…); }` writes THROUGH the reference into
+/// `$chunks`, so the answer is the array's payload representation, not the local's binding: the
+/// loop-storage contract widens `$chunks` to `array<mixed>` in the preheader and the value
+/// variable is then bound to that `mixed` payload, which every value fits. Nothing consults
+/// `local_binding_is_widenable`, so `--strict-locals` accepts it too — asserted here, because a
+/// future change that routed this through the widening arm instead would still pass the
+/// permissive half and silently start rejecting the strict one.
+///
+/// This is the DECISION half only. What the program prints is pinned against `php -n` by
+/// `codegen::locals_retype::test_by_ref_foreach_value_var_takes_an_object_into_the_array` and its
+/// three siblings, which run the same shapes and compare the output; accepting a program is not
+/// evidence that it answers what PHP answers, so neither assertion stands alone.
+///
+/// The pin above stays exactly as it was: it is the store AFTER the loop, where the widening
+/// really is the only available answer and the cell is the array's last element.
+#[test]
+fn test_by_ref_foreach_value_var_retype_inside_the_body_type_checks() {
+    let inside = "<?php class C { public string $s = \"\"; } $chunks = \\explode(\",\", \"a,b\"); foreach ($chunks as &$chunk) { $chunk = new C(); } echo \\count($chunks), \\get_class($chunks[0]), \\get_class($chunks[1]);";
+    expect_no_error(inside);
+    expect_no_error_strict(inside);
+}
+
 /// Control for the pin above: with a by-VALUE `foreach` nothing is aliased, so a pre-bound `$v`
 /// keeps the ordinary permissive retype — a warning in default mode, the hard error under
 /// `--strict-locals`. The by-ref fix must not cost the by-value shape its coverage.
