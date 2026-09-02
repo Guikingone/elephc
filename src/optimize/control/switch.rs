@@ -28,15 +28,34 @@ pub(crate) fn prune_switch_stmt(
     strict_types: bool,
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
-    let (cases, default) = strip_final_switch_break(
-        cases
-            .into_iter()
-            .map(|(patterns, body)| {
-                (patterns.into_iter().map(prune_expr).collect(), prune_block(body))
-            })
-            .collect(),
-        default.map(prune_block),
-    );
+    // A `default` written between cases falls through into the case after it, which every
+    // structural rewrite below (empty-case folding, constant materialization, the single-case
+    // `if`) models as "default runs last". Such a switch only gets its bodies pruned; EIR
+    // lowering places the bodies at their source positions.
+    let default_is_middle = default
+        .as_ref()
+        .is_some_and(|body| !switch_default_runs_last(&cases, body));
+    let cases: Vec<(Vec<Expr>, Vec<Stmt>)> = cases
+        .into_iter()
+        .map(|(patterns, body)| {
+            (patterns.into_iter().map(prune_expr).collect(), prune_block(body))
+        })
+        .collect();
+    let default = default.map(prune_block);
+    if default_is_middle {
+        return vec![Stmt {
+            kind: StmtKind::Switch {
+                subject,
+                cases,
+                default,
+            },
+            span,
+            source_mode,
+            strict_types,
+            attributes: Vec::new(),
+        }];
+    }
+    let (cases, default) = strip_final_switch_break(cases, default);
     let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(cases)));
     let default = normalize_optional_block(default);
 
@@ -145,34 +164,6 @@ fn strip_final_switch_break(
         *body = strip_trailing_terminator(std::mem::take(body), TailTerminator::SwitchBreak);
     }
     (cases, None)
-}
-
-/// Returns whether the `default` body is the last body of the switch in source order, which is
-/// the position EIR lowering gives it: the AST keeps `default` apart from the cases, and
-/// `ir_lower::stmt::switches::switch_default_source_index` recovers its place from spans, so
-/// this mirrors that rule exactly. A default with no statements, a dummy span on the default or
-/// on any case pattern, or an empty case list all lower with the default last.
-fn switch_default_runs_last(cases: &[(Vec<Expr>, Vec<Stmt>)], default: &[Stmt]) -> bool {
-    let Some(default_start) = default.first().map(|stmt| stmt.span) else {
-        return true;
-    };
-    if default_start == crate::span::Span::dummy() {
-        return true;
-    }
-    for (patterns, _) in cases {
-        let Some(case_start) = patterns.first().map(|pattern| pattern.span) else {
-            return true;
-        };
-        if case_start == crate::span::Span::dummy() {
-            return true;
-        }
-        let case_is_after = case_start.line > default_start.line
-            || (case_start.line == default_start.line && case_start.col >= default_start.col);
-        if case_is_after {
-            return false;
-        }
-    }
-    true
 }
 
 /// Returns whether rewriting this single-case switch into an `if` would put a node the CHECKER

@@ -562,3 +562,35 @@ fn test_normalize_control_flow_keeps_break_of_default_written_between_cases() {
         )]
     );
 }
+
+/// A switch whose `default` sits between cases is left structurally untouched: the empty
+/// `case 1` before it must keep falling into the `default`, not be merged into `case 2`, and
+/// the fallthrough `default` keeps its position.
+#[test]
+fn test_normalize_control_flow_keeps_switch_with_default_between_cases_untouched() {
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![
+                (
+                    vec![Expr::new(ExprKind::IntLiteral(1), span_at_line(1))],
+                    Vec::new(),
+                ),
+                (
+                    vec![Expr::new(ExprKind::IntLiteral(2), span_at_line(3))],
+                    vec![
+                        Stmt::new(StmtKind::Echo(Expr::int_lit(2)), span_at_line(3)),
+                        Stmt::new(StmtKind::Break(1), span_at_line(3)),
+                    ],
+                ),
+            ],
+            default: Some(vec![Stmt::new(
+                StmtKind::Echo(Expr::int_lit(9)),
+                span_at_line(2),
+            )]),
+        },
+        Span::dummy(),
+    )];
+
+    assert_eq!(normalize_control_flow(program.clone()), program);
+}

@@ -389,6 +389,9 @@ pub(super) fn dce_switch_stmt(
     span: crate::span::Span,
     guards: &GuardState,
 ) -> Vec<Stmt> {
+    if switch_default_is_middle(&cases, &default) {
+        return dce_switch_bodies_only(subject, cases, default, span, guards);
+    }
     let subject = prune_expr(subject);
     let has_default = default.is_some();
     let (cases, default) = prune_switch_patterns_with_guards(
@@ -437,6 +440,45 @@ pub(super) fn dce_switch_stmt(
     )]
 }
 
+/// Returns whether the switch has a `default` written between cases, which falls through into
+/// the case after it. Every switch rewrite in this pass models `default` as the body that runs
+/// last, so such a switch must not be reshaped.
+fn switch_default_is_middle(cases: &[(Vec<Expr>, Vec<Stmt>)], default: &Option<Vec<Stmt>>) -> bool {
+    default
+        .as_ref()
+        .is_some_and(|body| !switch_default_runs_last(cases, body))
+}
+
+/// Applies DCE to each body of a switch whose `default` sits between cases, under the outer
+/// guards only, and keeps the switch shape untouched so EIR lowering can place the bodies at
+/// their source positions. No case pruning, tail sinking, or guard fact is derived from it.
+fn dce_switch_bodies_only(
+    subject: Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+    guards: &GuardState,
+) -> Vec<Stmt> {
+    let cases = cases
+        .into_iter()
+        .map(|(patterns, body)| {
+            (
+                patterns.into_iter().map(prune_expr).collect(),
+                dce_block_with_guards(body, guards.clone()),
+            )
+        })
+        .collect();
+    let default = default.map(|body| dce_block_with_guards(body, guards.clone()));
+    vec![Stmt::new(
+        StmtKind::Switch {
+            subject: prune_expr(subject),
+            cases,
+            default,
+        },
+        span,
+    )]
+}
+
 /// Applies DCE to a switch statement with a tail of statements to execute after the switch.
 ///
 /// The tail is first processed with DCE. If the switch has level-sensitive loop exits,
@@ -453,6 +495,11 @@ pub(super) fn dce_switch_stmt_with_tail(
     span: crate::span::Span,
     guards: &GuardState,
 ) -> Vec<Stmt> {
+    if switch_default_is_middle(&cases, &default) {
+        let mut stmts = dce_switch_bodies_only(subject, cases, default, span, guards);
+        stmts.extend(dce_block_with_guards(tail, guards.clone()));
+        return stmts;
+    }
     let subject = prune_expr(subject);
     let tail = dce_block_with_guards(tail, guards.clone());
     let has_default = default.is_some();

@@ -195,3 +195,35 @@ echo "|", $j;
 
     assert_eq!(out, "a|1|bb2b3|3");
 }
+
+/// A `default` written between cases that falls through must continue into the next case, and
+/// the code after the switch must run only once control leaves it: for `$x = 3` PHP prints `db|`.
+/// Before the fix the optimizer sank the tail into the default's fallthrough path and printed
+/// `d|b|` (issue #881).
+#[test]
+fn test_dead_code_elimination_keeps_middle_default_fallthrough_into_next_case() {
+    let out = compile_and_run(
+        r#"<?php
+function f($x) {
+    switch ($x) {
+        case 1: echo "a"; break;
+        default: echo "d";
+        case 2: echo "b"; break;
+    }
+    echo "|";
+}
+function g($x) {
+    switch ($x) {
+        case 1:
+        default: echo "d";
+        case 2: echo "b";
+    }
+    echo "|";
+}
+f($argc); f($argc + 1); f($argc + 2);
+g($argc); g($argc + 1); g($argc + 2);
+"#,
+    );
+
+    assert_eq!(out, "a|b|db|db|b|db|");
+}
