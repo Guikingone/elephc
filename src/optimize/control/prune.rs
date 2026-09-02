@@ -13,6 +13,7 @@ mod loop_exit;
 mod statements;
 
 pub(crate) use expr::{callable_target_effect, prune_expr};
+pub(crate) use loop_exit::block_contains_loop_exit;
 #[cfg(test)]
 pub(crate) use expr::expr_has_side_effects;
 pub(crate) use statements::prune_block;

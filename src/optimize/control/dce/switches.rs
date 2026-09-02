@@ -480,6 +480,15 @@ pub(super) fn dce_switch_stmt_with_tail(
         return dce_switch_stmt(subject, cases, default, span, guards);
     }
 
+    // A `break` / `continue` in the tail targets a loop around the switch; inside a case or
+    // default body the same statement would target the switch itself, so such a tail stays
+    // after the switch instead of being sunk.
+    if block_contains_loop_exit(&tail) {
+        let mut stmts = dce_switch_stmt(subject, cases, default, span, guards);
+        stmts.extend(tail);
+        return stmts;
+    }
+
     let reachability = analyze_switch_tail_paths(&cases, &default);
     if reachability
         .case_tail_paths
@@ -516,30 +525,22 @@ pub(super) fn dce_switch_stmt_with_tail(
     }
 
     let no_default = default.is_none();
-    let case_count = cases.len();
-    for (index, (_, body)) in cases.iter_mut().enumerate() {
-        match block_terminal_effect(body) {
-            TerminalEffect::Breaks => {
-                *body = sink_tail_into_terminal_path(
-                    std::mem::take(body),
-                    tail.clone(),
-                    TailSinkTarget::Breaks,
-                );
-            }
-            TerminalEffect::FallsThrough
-                if no_default
-                    && index + 1 == case_count
-                    && matches!(reachability.case_tail_paths[index], TailPathKind::FallsThrough) =>
-            {
-                *body = sink_tail_into_terminal_path(
-                    std::mem::take(body),
-                    tail.clone(),
-                    TailSinkTarget::FallsThrough,
-                );
-            }
-            _ => {}
+    for (_, body) in cases.iter_mut() {
+        if matches!(block_terminal_effect(body), TerminalEffect::Breaks) {
+            *body = sink_tail_into_terminal_path(
+                std::mem::take(body),
+                tail.clone(),
+                TailSinkTarget::Breaks,
+            );
         }
     }
+
+    // Without a `default`, a subject that matches no case reaches the tail too, and so does the
+    // last case when it falls off the switch. Both paths enter a synthesized `default` holding
+    // the tail; sinking a second copy into the last case would run the tail twice on fallthrough.
+    // The tail is already cloned once per `break` path, so `dce_block` has proven it carries no
+    // declaration, control flow, or span-keyed checker decision that must stay singular.
+    let default = if no_default { Some(tail) } else { default };
 
     dce_switch_stmt(subject, cases, default, span, guards)
 }
