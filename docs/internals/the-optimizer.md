@@ -199,7 +199,7 @@ Current normalization coverage includes:
 - non-throwing `try` / `catch` simplification
 - outer `finally` blocks folded into a single inner `try` when they wrap exactly one inner `try` that does not already have its own `finally`
 - safe hoisting of non-throwing, fallthrough prefixes out of `try` blocks
-- conservative flattening of `try` / `finally` when the `try` body cannot throw and the body falls through
+- conservative flattening of `try` / `finally` when the `try` body cannot throw, falls through, and cannot leave early: a `return`, `break`, or `continue` nested in a branch of the body still runs `finally` under PHP, so such a body keeps its shell (the same rule gates DCE's flattening and its sinking of a tail into `finally`)
 ### Example
 
 ```php

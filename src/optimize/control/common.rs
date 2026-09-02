@@ -343,13 +343,20 @@ fn stmt_has_level_sensitive_loop_exit(stmt: &Stmt) -> bool {
 /// The hoistable prefix contains only statements that may not throw and
 /// always fall through. The tail contains the first statement that may throw
 /// or any statement with a non-fallthrough terminal effect.
+/// When the `try` has a `finally` (`protects_finally`), a statement that can
+/// leave early through a nested `return` / `break` / `continue` also ends the
+/// prefix: hoisted out of the `try`, that exit would skip the `finally`.
 /// Used to separate invariant code from throwing code in try blocks.
-pub(crate) fn split_hoistable_try_prefix(mut try_body: Vec<Stmt>) -> (Vec<Stmt>, Vec<Stmt>) {
+pub(crate) fn split_hoistable_try_prefix(
+    mut try_body: Vec<Stmt>,
+    protects_finally: bool,
+) -> (Vec<Stmt>, Vec<Stmt>) {
     let hoist_len = try_body
         .iter()
         .take_while(|stmt| {
             !stmt_may_throw(stmt)
                 && matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough)
+                && !(protects_finally && block_has_early_exit(std::slice::from_ref(stmt), 0))
         })
         .count();
     let tail = try_body.split_off(hoist_len);
@@ -422,4 +429,73 @@ pub(crate) fn build_switch_match_condition(subject: &Expr, patterns: &[Expr]) ->
         );
     }
     Some(prune_expr(condition))
+}
+
+/// Returns whether `body` can leave its enclosing block on a path other than falling off its
+/// end: a `return`, a `throw` statement, or a `break` / `continue` that reaches past the
+/// `depth` loop / `switch` shells between `body` and that block (a direct body asks with `0`).
+/// A `try { body } finally { F }` may only be flattened into `body; F` when this is `false`,
+/// because every such exit would otherwise skip `F`. `exit` / `die` are not exits here: PHP
+/// terminates without running `finally`, so flattening keeps their behavior.
+pub(crate) fn block_has_early_exit(body: &[Stmt], depth: usize) -> bool {
+    body.iter().any(|stmt| stmt_has_early_exit(stmt, depth))
+}
+
+/// Statement-level walker for `block_has_early_exit`.
+fn stmt_has_early_exit(stmt: &Stmt, depth: usize) -> bool {
+    match &stmt.kind {
+        StmtKind::Return(_) | StmtKind::Throw(_) => true,
+        StmtKind::Break(levels) | StmtKind::Continue(levels) => *levels > depth,
+        StmtKind::Synthetic(stmts)
+        | StmtKind::IncludeOnceGuard { body: stmts, .. }
+        | StmtKind::NamespaceBlock { body: stmts, .. } => block_has_early_exit(stmts, depth),
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            block_has_early_exit(then_body, depth)
+                || elseif_clauses
+                    .iter()
+                    .any(|(_, body)| block_has_early_exit(body, depth))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_early_exit(body, depth))
+        }
+        StmtKind::IfDef {
+            then_body, else_body, ..
+        } => {
+            block_has_early_exit(then_body, depth)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_early_exit(body, depth))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            block_has_early_exit(try_body, depth)
+                || catches
+                    .iter()
+                    .any(|catch| block_has_early_exit(&catch.body, depth))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_early_exit(body, depth))
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. } => block_has_early_exit(body, depth + 1),
+        StmtKind::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| block_has_early_exit(body, depth + 1))
+                || default
+                    .as_ref()
+                    .is_some_and(|body| block_has_early_exit(body, depth + 1))
+        }
+        _ => false,
+    }
 }

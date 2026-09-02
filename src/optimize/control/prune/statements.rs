@@ -218,13 +218,19 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
                 }
             }
 
-            let (mut hoisted_prefix, try_body) = split_hoistable_try_prefix(try_body);
+            let (mut hoisted_prefix, try_body) =
+                split_hoistable_try_prefix(try_body, finally_body.is_some());
 
             let mut remaining = if try_body.is_empty() {
                 finally_body.unwrap_or_default()
             } else if !block_may_throw(&try_body) {
                 if let Some(finally_body) = finally_body {
-                    if matches!(block_terminal_effect(&try_body), TerminalEffect::FallsThrough) {
+                    // Flattening `try { B } finally { F }` into `B; F` is only sound when every
+                    // path through B reaches its end: a nested `return` / `break` / `continue`
+                    // still runs F under PHP, and would skip the inlined copy.
+                    if matches!(block_terminal_effect(&try_body), TerminalEffect::FallsThrough)
+                        && !block_has_early_exit(&try_body, 0)
+                    {
                         let mut stmts = try_body;
                         stmts.extend(finally_body);
                         stmts
