@@ -111,6 +111,10 @@ fn test_date_formatter_has_no_unreachable_libc_fast_path() {
         crate::codegen_support::runtime::system::emit_date(&mut emitter);
         let asm = emitter.output();
         assert!(asm.contains("elephc_tz_format"), "{target_name}: {asm}");
+        assert!(
+            !asm.contains("strlen"),
+            "{target_name}: formatter must use the bridge's explicit byte length: {asm}"
+        );
         assert!(!asm.contains("call localtime"), "{target_name}: {asm}");
         assert!(!asm.contains("call gmtime"), "{target_name}: {asm}");
         assert!(!asm.contains("bl _localtime"), "{target_name}: {asm}");

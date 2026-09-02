@@ -546,6 +546,10 @@ The runtime also resets the concat-buffer cursor before the final `longjmp`, so 
 
 `DateTimeZone` introspection (`getLocation()`, `getTransitions()`, `listAbbreviations()`), procedural date formatting, and free-form parsing are backed by the bundled **`elephc-tz`** workspace crate. It vendors php-src timelib and IANA timezone data, exposes the bridge symbols `elephc_tz_format`, `elephc_tz_strtotime`, `elephc_tz_location`, `elephc_tz_transitions`, and `elephc_tz_abbreviations`, and is linked only when a program reaches this surface. This avoids platform-libc divergence for historical offsets, negative timestamps, and expanded years.
 
+The formatter consumes the PHP format as a pointer-and-length byte span and returns the result with
+an explicit byte length. Runtime wrappers never scan it with `strlen()`, so embedded NUL and
+non-UTF-8 literal bytes survive intact.
+
 ### JSON routines
 
 **Files:** `system/json_data.rs`, `system/json_depth.rs`, `system/json_throw_error.rs`, `system/json_last_error_msg.rs`, `system/json_validate/`, `system/json_decode.rs`, `system/json_decode_mixed/`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_float.rs`, `system/json_encode_str/`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_encode_object.rs`, `system/json_pretty.rs`, plus `objects/stdclass.rs` for stdClass-specific JSON object encoding.

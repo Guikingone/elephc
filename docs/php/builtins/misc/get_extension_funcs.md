@@ -23,7 +23,7 @@ In weak typing mode, PHP scalar values are coerced to their string form and `nul
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/get_extension_funcs.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/get_extension_funcs.rs)).
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin with the same weak/strict string binding ([`crates/elephc-magician/src/interpreter/builtins/network_env/get_extension_funcs.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/get_extension_funcs.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

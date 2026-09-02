@@ -224,6 +224,34 @@ echo strlen($dt->format("Y"));
     assert_eq!(out, "4");
 }
 
+/// Preserves embedded NUL and invalid UTF-8 literal bytes through date formatting.
+#[test]
+fn test_datetime_format_preserves_binary_literals() {
+    let out = compile_and_run(
+        r#"<?php
+$format = "\0\xff";
+$date = new DateTimeImmutable("@0");
+$utc = gmdate($format, 0);
+$object = $date->format($format);
+$civil = $date->setDate(4294967396, 1, 1)->format($format);
+echo strlen($utc), ":", bin2hex($utc), "|", strlen($object), ":", bin2hex($object), "|", strlen($civil), ":", bin2hex($civil);
+"#,
+    );
+    assert_eq!(out, "2:00ff|2:00ff|2:00ff");
+}
+
+/// Matches php-src's C-int narrowing for the DateTime leap-year format token.
+#[test]
+fn test_datetime_format_leap_token_narrows_extreme_civil_year() {
+    let out = compile_and_run(
+        r#"<?php
+$date = (new DateTimeImmutable("@0"))->setDate(4294967396, 1, 1);
+echo $date->format("L");
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
 /// Verifies `DateTimeImmutable` satisfies `instanceof DateTimeInterface`.
 #[test]
 fn test_datetime_immutable_implements_datetime_interface() {

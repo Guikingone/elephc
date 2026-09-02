@@ -3096,7 +3096,8 @@ method("format")
             e_this_prop("__elephc_civil_override"),
             vec![
                 s_assign("civil", e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_this_prop("timezone_name"), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_year")), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_month")), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_day"))),
-                s_assign("r", e_call("elephc_tz_format_civil", vec![e_this_prop("timestamp"), e_this_prop("microsecond"), e_var("format"), e_call("strlen", vec![e_var("format")]), e_var("civil"), e_call("strlen", vec![e_var("civil")])])),
+                s_assign("raw", e_call("elephc_tz_format_civil", vec![e_this_prop("timestamp"), e_this_prop("microsecond"), e_var("format"), e_call("strlen", vec![e_var("format")]), e_var("civil"), e_call("strlen", vec![e_var("civil")])])),
+                s_assign("r", e_call("__elephc_ptr_read_string", vec![e_var("raw"), e_call("elephc_tz_format_civil_length", vec![])])),
                 s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
                 s_return(e_var("r")),
             ],
@@ -8402,7 +8403,8 @@ method("format")
             e_this_prop("__elephc_civil_override"),
             vec![
                 s_assign("civil", e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_this_prop("timezone_name"), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_year")), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_month")), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_day"))),
-                s_assign("r", e_call("elephc_tz_format_civil", vec![e_this_prop("timestamp"), e_this_prop("microsecond"), e_var("format"), e_call("strlen", vec![e_var("format")]), e_var("civil"), e_call("strlen", vec![e_var("civil")])])),
+                s_assign("raw", e_call("elephc_tz_format_civil", vec![e_this_prop("timestamp"), e_this_prop("microsecond"), e_var("format"), e_call("strlen", vec![e_var("format")]), e_var("civil"), e_call("strlen", vec![e_var("civil")])])),
+                s_assign("r", e_call("__elephc_ptr_read_string", vec![e_var("raw"), e_call("elephc_tz_format_civil_length", vec![])])),
                 s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
                 s_return(e_var("r")),
             ],

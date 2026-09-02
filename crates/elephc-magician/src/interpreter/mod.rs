@@ -121,7 +121,10 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    match execute_statements(program.statements(), context, scope, values) {
+    let previous_strict_types = context.replace_strict_types(program.strict_types());
+    let control = execute_statements(program.statements(), context, scope, values);
+    context.replace_strict_types(previous_strict_types);
+    match control {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => Ok(EvalOutcome::Value(result)),
         Ok(EvalControl::Throw(result)) => Ok(EvalOutcome::Throwable(result)),

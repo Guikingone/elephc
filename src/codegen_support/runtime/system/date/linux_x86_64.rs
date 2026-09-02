@@ -53,12 +53,11 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                      // reload the UTC selector
     emitter.instruction("xor rax, 1");                                         // bridge arg 7: date=local, gmdate=UTC
     emitter.instruction("mov QWORD PTR [rsp], rax");                           // place arg 7 in the SysV outgoing stack slot
-    emitter.bl_c("elephc_tz_format");
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                      // preserve the bridge string across strlen
-    emitter.instruction("mov rdi, rax");                                       // strlen argument = formatted string
-    emitter.bl_c("strlen");
-    emitter.instruction("mov rdx, rax");                                       // return the byte length
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                      // return the bridge string pointer
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                        // initialize the explicit output-length slot
+    emitter.instruction("lea rax, [rbp - 40]");                                // bridge arg 8 = output-length address
+    emitter.instruction("mov QWORD PTR [rsp + 8], rax");                       // place arg 8 beside the seventh outgoing slot
+    emitter.bl_c("elephc_tz_format");                                         // rax = raw date bytes, including embedded NUL
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                      // return the bridge-provided byte length
     emitter.instruction("leave");                                              // restore the caller frame and stack
     emitter.instruction("ret");                                                // return the formatted string pair
 }

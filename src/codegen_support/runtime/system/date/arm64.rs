@@ -50,12 +50,12 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #8]");                                   // bridge arg 3 = format pointer
     emitter.instruction("ldr x3, [sp, #16]");                                  // bridge arg 4 = format byte length
     emitter.instruction("ldr x6, [sp, #24]");                                  // reload the UTC selector
-    emitter.instruction("eor x6, x6, #1");                                    // bridge arg 7: date=local, gmdate=UTC
-    emitter.bl_c("elephc_tz_format");
-    emitter.instruction("str x0, [sp, #32]");                                  // preserve the bridge string across strlen
-    emitter.bl_c("strlen");
-    emitter.instruction("mov x2, x0");                                         // return the byte length
-    emitter.instruction("ldr x1, [sp, #32]");                                  // return the bridge string pointer
+    emitter.instruction("eor x6, x6, #1");                                     // bridge arg 7: date=local, gmdate=UTC
+    emitter.instruction("add x7, sp, #32");                                    // bridge arg 8 = writable explicit output-length slot
+    emitter.instruction("str xzr, [sp, #32]");                                 // initialize the byte-count result
+    emitter.bl_c("elephc_tz_format");                                         // x0 = raw date bytes, including embedded NUL
+    emitter.instruction("ldr x2, [sp, #32]");                                  // return the bridge-provided byte length
+    emitter.instruction("mov x1, x0");                                         // return the raw PHP string pointer
     emitter.instruction("ldp x29, x30, [sp, #64]");                            // restore the caller frame and return address
     emitter.instruction("add sp, sp, #80");                                    // release the wrapper frame
     emitter.instruction("ret");                                                // return the formatted string pair

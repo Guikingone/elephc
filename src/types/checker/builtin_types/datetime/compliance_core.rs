@@ -1698,7 +1698,7 @@ pub(super) const CIVIL_FORMAT_SRC: &str = r#"if ($this->__elephc_civil_override)
         . $this->__elephc_civil_year . "\t"
         . $this->__elephc_civil_month . "\t"
         . $this->__elephc_civil_day;
-    $r = elephc_tz_format_civil(
+    $raw = elephc_tz_format_civil(
         $this->timestamp,
         $this->microsecond,
         $format,
@@ -1706,6 +1706,7 @@ pub(super) const CIVIL_FORMAT_SRC: &str = r#"if ($this->__elephc_civil_override)
         $civil,
         strlen($civil)
     );
+    $r = __elephc_ptr_read_string($raw, elephc_tz_format_civil_length());
     date_default_timezone_set($saved);
     return $r;
 }

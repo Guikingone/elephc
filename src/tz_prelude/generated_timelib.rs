@@ -36,7 +36,7 @@ fn decl_extern_elephc_tz_gmmktime() -> Stmt {
         .build()
 }
 
-/// `elephc_tz_format_civil` — transcribed from the PHP form.
+/// `elephc_tz_format_civil` — returns a raw pointer to the exact byte payload.
 fn decl_extern_elephc_tz_format_civil() -> Stmt {
     extern_fn("elephc_tz_format_civil", "elephc_tz")
         .param("timestamp", CType::Int)
@@ -45,7 +45,14 @@ fn decl_extern_elephc_tz_format_civil() -> Stmt {
         .param("format_length", CType::Int)
         .param("payload", CType::Str)
         .param("payload_length", CType::Int)
-        .returns(CType::Str)
+        .returns(CType::Ptr)
+        .build()
+}
+
+/// `elephc_tz_format_civil_length` — returns the last format payload's byte count.
+fn decl_extern_elephc_tz_format_civil_length() -> Stmt {
+    extern_fn("elephc_tz_format_civil_length", "elephc_tz")
+        .returns(CType::Int)
         .build()
 }
 
@@ -653,6 +660,7 @@ pub(crate) fn timelib_declarations() -> Program {
             decl_extern_elephc_tz_mktime(),
             decl_extern_elephc_tz_gmmktime(),
             decl_extern_elephc_tz_format_civil(),
+            decl_extern_elephc_tz_format_civil_length(),
             decl_extern_elephc_tz_date_parse(),
             decl_extern_elephc_tz_date_parse_from_format(),
             decl_extern_elephc_tz_create_from_format(),

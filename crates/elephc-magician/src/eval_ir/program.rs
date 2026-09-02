@@ -13,14 +13,16 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalProgram {
     source_len: usize,
+    strict_types: bool,
     statements: Vec<EvalStmt>,
 }
 
 impl EvalProgram {
     /// Creates an EvalIR program for a source fragment and statement list.
-    pub fn new(source_len: usize, statements: Vec<EvalStmt>) -> Self {
+    pub fn new(source_len: usize, strict_types: bool, statements: Vec<EvalStmt>) -> Self {
         Self {
             source_len,
+            strict_types,
             statements,
         }
     }
@@ -28,6 +30,11 @@ impl EvalProgram {
     /// Returns the byte length of the parsed eval fragment.
     pub const fn source_len(&self) -> usize {
         self.source_len
+    }
+
+    /// Returns whether this eval fragment declared `strict_types=1` at file scope.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
     }
 
     /// Returns the ordered EvalIR statements in source order.

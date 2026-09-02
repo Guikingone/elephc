@@ -107,6 +107,20 @@ fn eval_get_extension_funcs_name(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<u8>, EvalStatus> {
     let tag = values.type_tag(extension)?;
+    if context.strict_types() && tag != EVAL_TAG_STRING {
+        let actual = if tag == EVAL_TAG_OBJECT {
+            runtime_object_class_name(extension, values)?
+        } else {
+            eval_get_extension_funcs_type_name(tag).to_string()
+        };
+        return eval_throw_type_error(
+            &format!(
+                "get_extension_funcs(): Argument #1 ($extension) must be of type string, {actual} given"
+            ),
+            context,
+            values,
+        );
+    }
     if tag == EVAL_TAG_NULL {
         values.deprecated(
             "\nDeprecated: get_extension_funcs(): Passing null to parameter #1 ($extension) of type string is deprecated",

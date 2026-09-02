@@ -94,6 +94,7 @@ pub struct ElephcEvalContext {
     pub(super) call_dir: String,
     pub(super) call_line: i64,
     pub(super) file_magic_override: Option<String>,
+    pub(super) strict_types: bool,
 }
 
 impl ElephcEvalContext {
@@ -169,6 +170,7 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
+            strict_types: false,
         }
     }
 
@@ -245,11 +247,22 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
+            strict_types: false,
         }
     }
 
     /// Returns the ABI version this context was created for.
     pub const fn abi_version(&self) -> u32 {
         self.abi_version
+    }
+
+    /// Replaces the active eval file's strict-types flag and returns the prior nested-file value.
+    pub(crate) fn replace_strict_types(&mut self, strict_types: bool) -> bool {
+        std::mem::replace(&mut self.strict_types, strict_types)
+    }
+
+    /// Returns whether the currently executing eval file uses strict scalar parameter binding.
+    pub(crate) const fn strict_types(&self) -> bool {
+        self.strict_types
     }
 }

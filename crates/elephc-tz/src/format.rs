@@ -64,14 +64,14 @@ unsafe extern "C" {
     );
 }
 
-/// Formats a timestamp with php-src's `date()` token semantics.
+/// Formats a timestamp with php-src's byte-oriented `date()` token semantics.
 pub(crate) fn format_timestamp(
     timestamp: i64,
     microsecond: i64,
     timezone_name: &str,
-    format: &str,
+    format: &[u8],
     localtime: bool,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     let parts = timestamp_parts(timestamp, microsecond, timezone_name, localtime)?;
     format_parts(&parts, format)
 }
@@ -84,12 +84,12 @@ pub(crate) fn format_civil_timestamp(
     timestamp: i64,
     microsecond: i64,
     timezone_name: &str,
-    format: &str,
+    format: &[u8],
     localtime: bool,
     year: i64,
     month: i64,
     day: i64,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     let mut parts = timestamp_parts(timestamp, microsecond, timezone_name, localtime)?;
     parts.year = year;
     parts.month = month;
@@ -97,43 +97,68 @@ pub(crate) fn format_civil_timestamp(
     format_parts(&parts, format)
 }
 
-/// Formats already-normalized timelib parts with php-src's date token semantics.
-fn format_parts(parts: &TimestampParts, format: &str) -> Option<String> {
-    let mut output = String::new();
-    let bytes = format.as_bytes();
+/// Collects PHP date output while preserving arbitrary literal bytes.
+#[derive(Default)]
+struct FormatBytes(Vec<u8>);
+
+impl FormatBytes {
+    /// Appends one ASCII format-token result or UTF-8 text fragment.
+    fn push(&mut self, value: char) {
+        let mut encoded = [0; 4];
+        self.0
+            .extend_from_slice(value.encode_utf8(&mut encoded).as_bytes());
+    }
+
+    /// Appends a token expansion whose generated text is valid UTF-8.
+    fn push_str(&mut self, value: &str) {
+        self.0.extend_from_slice(value.as_bytes());
+    }
+
+    /// Appends one literal PHP format byte without UTF-8 decoding.
+    fn push_byte(&mut self, value: u8) {
+        self.0.push(value);
+    }
+
+    /// Returns the completed PHP string payload.
+    fn into_inner(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+/// Formats already-normalized timelib parts with php-src's byte-oriented date semantics.
+fn format_parts(parts: &TimestampParts, format: &[u8]) -> Option<Vec<u8>> {
+    let mut output = FormatBytes::default();
     let mut index = 0;
     let mut iso = None;
-    while index < bytes.len() {
-        if !bytes[index].is_ascii() {
-            let literal = format[index..].chars().next()?;
-            output.push(literal);
-            index += literal.len_utf8();
+    while index < format.len() {
+        let byte = format[index];
+        if !byte.is_ascii() {
+            output.push_byte(byte);
+            index += 1;
             continue;
         }
-        let token = bytes[index] as char;
+        let token = byte as char;
         if token == '\\' {
             index += 1;
-            if index < bytes.len() {
-                if bytes[index].is_ascii() {
-                    output.push(bytes[index] as char);
-                    index += 1;
+            if index < format.len() {
+                if format[index].is_ascii() {
+                    output.push(format[index] as char);
                 } else {
-                    let literal = format[index..].chars().next()?;
-                    output.push(literal);
-                    index += literal.len_utf8();
+                    output.push_byte(format[index]);
                 }
+                index += 1;
             }
             continue;
         }
         append_token(&mut output, token, parts, &mut iso);
         index += 1;
     }
-    Some(output)
+    Some(output.into_inner())
 }
 
 /// Appends one php-src date-format token or literal byte.
 fn append_token(
-    output: &mut String,
+    output: &mut FormatBytes,
     token: char,
     parts: &TimestampParts,
     iso: &mut Option<(i64, i64)>,
@@ -168,7 +193,7 @@ fn append_token(
             timelib_days_in_month(parts.year, parts.month)
         }
         .to_string()),
-        'L' => output.push(if is_leap(parts.year) { '1' } else { '0' }),
+        'L' => output.push(if is_leap_php_int(parts.year) { '1' } else { '0' }),
         'y' => output.push_str(&format!("{:02}", parts.year % 100)),
         'Y' => output.push_str(&expanded_year(parts.year, false, false)),
         'x' => output.push_str(&expanded_year(parts.year, true, false)),
@@ -272,8 +297,9 @@ fn iso_week(parts: &TimestampParts, cached: &mut Option<(i64, i64)>) -> (i64, i6
     })
 }
 
-/// Implements php-src's Gregorian leap-year predicate.
-fn is_leap(year: i64) -> bool {
+/// Implements php-src's Gregorian leap-year predicate after its C `int` narrowing.
+fn is_leap_php_int(year: i64) -> bool {
+    let year = i64::from(year as i32);
     year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
@@ -385,12 +411,12 @@ mod tests {
                 i64::MIN,
                 0,
                 "UTC",
-                "c\nr\no\ny\nY\nU",
+                b"c\nr\no\ny\nY\nU",
                 true,
             )
             .as_deref(),
             Some(
-                "-292277022657-01-27T08:29:52+00:00\nSun, 27 Jan -292277022657 08:29:52 +0000\n-292277022657\n-57\n-292277022657\n-9223372036854775808"
+                b"-292277022657-01-27T08:29:52+00:00\nSun, 27 Jan -292277022657 08:29:52 +0000\n-292277022657\n-57\n-292277022657\n-9223372036854775808".as_slice()
             ),
         );
     }
@@ -399,8 +425,8 @@ mod tests {
     #[test]
     fn formats_maximum_timestamp() {
         assert_eq!(
-            format_timestamp(i64::MAX, 0, "UTC", "Y-m-d H:i:s U", true).as_deref(),
-            Some("292277026596-12-04 15:30:07 9223372036854775807"),
+            format_timestamp(i64::MAX, 0, "UTC", b"Y-m-d H:i:s U", true).as_deref(),
+            Some(b"292277026596-12-04 15:30:07 9223372036854775807".as_slice()),
         );
     }
 
@@ -412,11 +438,11 @@ mod tests {
                 -59_042_996_372,
                 0,
                 "Europe/Amsterdam",
-                "Y-m-d H:i:s P T",
+                b"Y-m-d H:i:s P T",
                 true,
             )
             .as_deref(),
-            Some("0099-01-01 00:00:00 +00:19 LMT"),
+            Some(b"0099-01-01 00:00:00 +00:19 LMT".as_slice()),
         );
     }
 
@@ -424,8 +450,8 @@ mod tests {
     #[test]
     fn preserves_utf8_format_literals() {
         assert_eq!(
-            format_timestamp(0, 0, "UTC", "あ\\い", true).as_deref(),
-            Some("あい"),
+            format_timestamp(0, 0, "UTC", "あ\\い".as_bytes(), true).as_deref(),
+            Some("あい".as_bytes()),
         );
     }
 
@@ -437,7 +463,7 @@ mod tests {
                 -62_167_170_816,
                 0,
                 "UTC",
-                "Y|x|X|m|d",
+                b"Y|x|X|m|d",
                 true,
                 i64::MIN,
                 1,
@@ -445,8 +471,27 @@ mod tests {
             )
             .as_deref(),
             Some(
-                "-9223372036854775808|-9223372036854775808|-9223372036854775808|01|02"
+                b"-9223372036854775808|-9223372036854775808|-9223372036854775808|01|02".as_slice()
             ),
+        );
+    }
+
+    /// Preserves NUL and non-UTF-8 literal date-format bytes exactly.
+    #[test]
+    fn preserves_binary_format_literals() {
+        assert_eq!(
+            format_timestamp(0, 0, "UTC", b"\0\xff", true).as_deref(),
+            Some(b"\0\xff".as_slice()),
+        );
+    }
+
+    /// Narrows civil years to php-src's C `int` for the `L` leap-year token.
+    #[test]
+    fn leap_token_uses_php_int_year_narrowing() {
+        assert_eq!(
+            format_civil_timestamp(0, 0, "UTC", b"L", true, 4_294_967_396, 1, 1)
+                .as_deref(),
+            Some(b"0".as_slice()),
         );
     }
 }

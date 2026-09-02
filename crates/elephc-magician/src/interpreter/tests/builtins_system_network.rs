@@ -902,6 +902,33 @@ return get_extension_funcs(null) === false;"#,
     );
 }
 
+/// Verifies eval strict-types calls reject scalar coercion for get_extension_funcs().
+#[test]
+fn execute_program_get_extension_funcs_honors_strict_types() {
+    let program = parse_fragment(
+        br#"declare(strict_types=1);
+try {
+    get_extension_funcs(0);
+    echo "bad";
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "get_extension_funcs(): Argument #1 ($extension) must be of type string, int given"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert!(values.warnings.is_empty());
+}
+
 /// Verifies eval `extension_loaded()` resolves the compile-time-known extension set.
 ///
 /// `curl` is the one deliberate exception that tracks `cfg!(feature = "curl")` instead of

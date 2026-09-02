@@ -1,9 +1,9 @@
 ---
-title: "DateTime php-src Compliance Spec v4.1"
-description: "Candidat ext/date post-rebase contre php-src 8.5.10-dev, timelib et tzdb 2026.3."
+title: "DateTime php-src Compliance Spec v4.2"
+description: "Candidat ext/date corrigé après audit statique contre php-src 8.5.10-dev."
 ---
 
-# DateTime php-src Compliance Spec v4.1
+# DateTime php-src Compliance Spec v4.2
 
 ## Référence normative
 
@@ -78,6 +78,12 @@ Les structures C sont couvertes par des assertions compile-time exhaustives de t
 d'alignement et d'offset sur les ABI 64 bits de toutes les cibles supportées. Les objets timelib
 et leurs `tz_info` suivent le contrat d'ownership du code vendu.
 
+Le résultat du bridge de formatage est un couple pointeur/longueur explicite : aucune longueur
+n'est redécouverte avec `strlen()`. Les octets littéraux du format, y compris `NUL` et les octets
+non UTF-8, sont donc restitués tels quels par `date()`, `gmdate()` et `DateTime::format()`.
+Le token `L` reproduit volontairement le cast C `int` de php-src avant le calcul bissextile,
+y compris pour les années civiles hors plage 32 bits.
+
 ### Fuseaux horaires
 
 - Les tables location, transitions et abréviations sont générées depuis le même php-src.
@@ -105,6 +111,11 @@ Cela couvre notamment:
 Les exceptions et messages des constructeurs, parseurs, sérialisations et arguments invalides
 suivent php-src, y compris le type concret rejeté dans les `TypeError` de `add()`/`sub()` et de
 `date_add()`/`date_sub()`.
+
+Magician conserve la directive de fichier `declare(strict_types=0|1)` dans son EvalIR. Les appels
+dynamiques à `get_extension_funcs()` appliquent donc le même binding scalaire strict ou coercitif
+que les appels AOT, y compris le `TypeError` strict pour `int`, `float`, `bool`, `null`, ressources
+et objets.
 
 ### Reflection, sérialisation et debug
 
@@ -169,6 +180,11 @@ Le rebase vers `a7bb4cd92c` a intégré le correctif de `main` pour les construc
 sans retirer les chemins DateTime spécialisés. Ce point est soumis à une revue statique fraîche
 avant le rerun des preuves ci-dessus; il est interdit de présenter ces compteurs pré-rebase comme
 une validation du SHA post-rebase.
+
+Le premier audit post-rebase a également signalé trois écarts désormais corrigés dans ce candidat :
+la perte des octets binaires au passage de l'ABI timelib, le calcul `L` sur une année 64 bits au
+lieu du `int` php-src, et l'absence de `strict_types` dans Magician. Cette correction invalide les
+locks précédents et impose une nouvelle revue statique complète avant toute exécution de parité.
 
 Commande locale principale:
 

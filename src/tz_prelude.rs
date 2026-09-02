@@ -50,7 +50,8 @@ const TIMELIB_PRELUDE_SRC: &str = r#"<?php
 extern "elephc_tz" {
     function elephc_tz_mktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int;
     function elephc_tz_gmmktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int;
-    function elephc_tz_format_civil(int $timestamp, int $microsecond, string $format, int $format_length, string $payload, int $payload_length): string;
+    function elephc_tz_format_civil(int $timestamp, int $microsecond, string $format, int $format_length, string $payload, int $payload_length): ptr;
+    function elephc_tz_format_civil_length(): int;
     function elephc_tz_date_parse(string $datetime, int $datetime_length): string;
     function elephc_tz_date_parse_from_format(string $format, int $format_length, string $datetime, int $datetime_length): string;
     function elephc_tz_create_from_format(string $format, int $format_length, string $datetime, int $datetime_length, int $base_timestamp, string $timezone, int $timezone_length): string;
@@ -649,6 +650,7 @@ mod tests {
         let group = inventory.groups.get("tz").expect("tz group must be recorded");
         assert!(group.functions.contains("__elephc_timelib_period_parse"));
         assert!(group.externs.contains("elephc_tz_format_civil"));
+        assert!(group.externs.contains("elephc_tz_format_civil_length"));
         let runtime_group = inventory
             .groups
             .get(TIMELIB_RUNTIME_REACHABILITY_GROUP)
@@ -659,6 +661,7 @@ mod tests {
                 .contains("__elephc_timelib_period_parse")
         );
         assert!(runtime_group.externs.contains("elephc_tz_format_civil"));
+        assert!(runtime_group.externs.contains("elephc_tz_format_civil_length"));
         assert!(!runtime_group.functions.contains("timezone_offset_get"));
         assert!(
             !runtime_group

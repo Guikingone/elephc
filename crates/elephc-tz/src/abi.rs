@@ -17,6 +17,9 @@
 //!   would let one thread free the bytes another thread was just handed a pointer
 //!   into (`elephc-pdo` shipped exactly that bug — see
 //!   `sqlstate_buffers_are_isolated_between_threads`).
+//! - Text serialization returns a NUL-terminated `CString`; date formatting returns
+//!   a pointer plus explicit byte length from a `Vec<u8>` so PHP strings retain
+//!   embedded NUL and non-UTF-8 literal format bytes.
 //! - An empty return marks "no data" (a false-zone or unknown name), since every
 //!   present location/transition serialization is non-empty.
 
@@ -40,6 +43,15 @@ unsafe fn sized_string<'a>(ptr: *const u8, len: i64) -> Cow<'a, str> {
         return Cow::Borrowed("");
     }
     String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len as usize))
+}
+
+/// Reads one borrowed byte span from Elephc's pointer-and-length string ABI.
+unsafe fn sized_bytes<'a>(ptr: *const u8, len: i64) -> &'a [u8] {
+    if ptr.is_null() || len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(ptr, len as usize)
+    }
 }
 
 /// Reads a borrowed zone name from a NUL-terminated C string — the way elephc
@@ -165,17 +177,38 @@ fn parse_cell() -> &'static Mutex<CString> {
     CELL.get_or_init(|| Mutex::new(CString::default()))
 }
 
-/// Returns the process-wide buffer cell for formatted date strings.
-fn format_cell() -> &'static Mutex<CString> {
-    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(CString::default()))
+/// Returns the process-wide byte buffer for formatted PHP date strings.
+fn format_cell() -> &'static Mutex<Vec<u8>> {
+    static CELL: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Replaces the date-format byte buffer and returns its non-null data pointer.
+fn stash_format(s: Vec<u8>) -> *const u8 {
+    let mut guard = format_cell()
+        .lock()
+        .expect("tz bridge format buffer mutex poisoned");
+    *guard = s;
+    if guard.is_empty() {
+        std::ptr::NonNull::<u8>::dangling().as_ptr()
+    } else {
+        guard.as_ptr()
+    }
+}
+
+/// Returns the byte length of the most recently formatted date payload.
+fn format_length() -> i64 {
+    format_cell()
+        .lock()
+        .expect("tz bridge format buffer mutex poisoned")
+        .len() as i64
 }
 
 /// C ABI: formats a signed Unix timestamp through vendored timelib.
 ///
 /// `localtime` selects the supplied timezone (`1`, PHP `date()`) or UTC (`0`,
-/// PHP `gmdate()`). The returned NUL-terminated pointer remains valid until the
-/// next call to this formatter.
+/// PHP `gmdate()`). `output_len` receives the exact byte count, and the returned
+/// pointer remains valid until the next call to either date formatter.
 ///
 /// # Safety
 /// Both pointer/length pairs must designate readable byte slices.
@@ -188,18 +221,21 @@ pub unsafe extern "C" fn elephc_tz_format(
     timezone_ptr: *const u8,
     timezone_len: i64,
     localtime: i64,
-) -> *const c_char {
-    let format_value = sized_string(format_ptr, format_len);
+    output_len: *mut i64,
+) -> *const u8 {
     let timezone = sized_string(timezone_ptr, timezone_len);
     let output = format::format_timestamp(
         timestamp,
         microsecond,
         &timezone,
-        &format_value,
+        sized_bytes(format_ptr, format_len),
         localtime != 0,
     )
     .unwrap_or_default();
-    stash(format_cell(), output)
+    if !output_len.is_null() {
+        *output_len = output.len() as i64;
+    }
+    stash_format(output)
 }
 
 /// C ABI: formats a timestamp with separately retained civil date fields.
@@ -214,37 +250,42 @@ pub unsafe extern "C" fn elephc_tz_format_civil(
     format_len: i64,
     payload_ptr: *const u8,
     payload_len: i64,
-) -> *const c_char {
-    let format_value = sized_string(format_ptr, format_len);
+) -> *const u8 {
     let payload = sized_string(payload_ptr, payload_len);
     let mut fields = payload.split('\t');
     let Some(timezone) = fields.next() else {
-        return stash(format_cell(), String::new());
+        return stash_format(Vec::new());
     };
     let Some(year) = fields.next().and_then(|field| field.parse::<i64>().ok()) else {
-        return stash(format_cell(), String::new());
+        return stash_format(Vec::new());
     };
     let Some(month) = fields.next().and_then(|field| field.parse::<i64>().ok()) else {
-        return stash(format_cell(), String::new());
+        return stash_format(Vec::new());
     };
     let Some(day) = fields.next().and_then(|field| field.parse::<i64>().ok()) else {
-        return stash(format_cell(), String::new());
+        return stash_format(Vec::new());
     };
     if fields.next().is_some() {
-        return stash(format_cell(), String::new());
+        return stash_format(Vec::new());
     }
     let output = format::format_civil_timestamp(
         timestamp,
         microsecond,
         timezone,
-        &format_value,
+        sized_bytes(format_ptr, format_len),
         true,
         year,
         month,
         day,
     )
     .unwrap_or_default();
-    stash(format_cell(), output)
+    stash_format(output)
+}
+
+/// C ABI: returns the exact byte length of the last date-format result.
+#[no_mangle]
+pub extern "C" fn elephc_tz_format_civil_length() -> i64 {
+    format_length()
 }
 
 /// C ABI: computes a local PHP `mktime()` timestamp through vendored timelib.
@@ -714,6 +755,29 @@ mod tests {
         };
         assert_eq!(success, 1);
         assert_eq!(timestamp, i64::MIN);
+    }
+
+    /// Returns exact format bytes through the C ABI, including NUL and invalid UTF-8 literals.
+    #[test]
+    fn format_abi_preserves_binary_result_bytes() {
+        let format = b"\0\xff";
+        let timezone = b"UTC";
+        let mut length = -1;
+        let pointer = unsafe {
+            elephc_tz_format(
+                0,
+                0,
+                format.as_ptr(),
+                format.len() as i64,
+                timezone.as_ptr(),
+                timezone.len() as i64,
+                0,
+                &mut length,
+            )
+        };
+        assert_eq!(length, 2);
+        let bytes = unsafe { std::slice::from_raw_parts(pointer, length as usize) };
+        assert_eq!(bytes, format);
     }
 
     /// The abbreviation serialization yields 144 lines in PHP order, and a null
