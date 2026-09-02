@@ -481,7 +481,8 @@ fn dce_switch_bodies_only(
 
 /// Applies DCE to a switch statement with a tail of statements to execute after the switch.
 ///
-/// The tail is first processed with DCE. If the switch has level-sensitive loop exits,
+/// The tail is first processed with DCE. If the switch has level-sensitive loop exits, has no
+/// `default` (the no-match path would need a copy of its own), or the tail carries a loop exit,
 /// the tail is appended after the full switch statement. If the switch has unknown
 /// reachability paths, the tail is appended to the switch result without further
 /// optimization. Otherwise, the tail is sunk into case and default bodies that
@@ -527,10 +528,15 @@ pub(super) fn dce_switch_stmt_with_tail(
         return dce_switch_stmt(subject, cases, default, span, guards);
     }
 
+    // Without a `default`, the tail is reached by every `break` path, by the last case falling
+    // off the switch, AND by a subject that matches nothing. Sinking would clone it once per
+    // `break` plus once into a synthesized `default` for the last two paths — a default that is
+    // dead when the cases are exhaustive — so the tail simply stays after the switch.
+    //
     // A `break` / `continue` in the tail targets a loop around the switch; inside a case or
     // default body the same statement would target the switch itself, so such a tail stays
-    // after the switch instead of being sunk.
-    if block_contains_loop_exit(&tail) {
+    // after the switch as well.
+    if default.is_none() || block_contains_loop_exit(&tail) {
         let mut stmts = dce_switch_stmt(subject, cases, default, span, guards);
         stmts.extend(tail);
         return stmts;
@@ -571,7 +577,6 @@ pub(super) fn dce_switch_stmt_with_tail(
         }
     }
 
-    let no_default = default.is_none();
     for (_, body) in cases.iter_mut() {
         if matches!(block_terminal_effect(body), TerminalEffect::Breaks) {
             *body = sink_tail_into_terminal_path(
@@ -581,13 +586,6 @@ pub(super) fn dce_switch_stmt_with_tail(
             );
         }
     }
-
-    // Without a `default`, a subject that matches no case reaches the tail too, and so does the
-    // last case when it falls off the switch. Both paths enter a synthesized `default` holding
-    // the tail; sinking a second copy into the last case would run the tail twice on fallthrough.
-    // The tail is already cloned once per `break` path, so `dce_block` has proven it carries no
-    // declaration, control flow, or span-keyed checker decision that must stay singular.
-    let default = if no_default { Some(tail) } else { default };
 
     dce_switch_stmt(subject, cases, default, span, guards)
 }
