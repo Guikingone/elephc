@@ -1,13 +1,14 @@
 ---
-title: "DateTime php-src Compliance Spec v4.0"
-description: "Conformité ext/date vérifiée contre php-src 8.5.10-dev, timelib et tzdb 2026.3."
+title: "DateTime php-src Compliance Spec v4.1"
+description: "Candidat ext/date post-rebase contre php-src 8.5.10-dev, timelib et tzdb 2026.3."
 ---
 
-# DateTime php-src Compliance Spec v4.0
+# DateTime php-src Compliance Spec v4.1
 
 ## Référence normative
 
 - Branche Elephc: `feat/datetime-php-src-compliance`.
+- Base intégrée: `origin/main` `a7bb4cd92c3be7762af6e4630aae91f9781896c1`.
 - php-src: commit `47b563cbb856ec19155aacc3246931dfacbebd21` (`PHP 8.5.10-dev`).
 - Sources: `ext/date/php_date.stub.php`, `ext/date/php_date.c`, `ext/date/lib/` et les PHPT
   de `ext/date/tests/`.
@@ -67,6 +68,11 @@ Elephc compile la copie vendue du timelib de php-src pour:
 - la grammaire ISO et relative de `DateInterval`;
 - la grammaire ISO de `DatePeriod`;
 - `DateTime*::add()`/`sub()` et les distinctions wall/civil de php-src.
+
+Les wrappers procéduraux `date()` et `gmdate()` passent eux aussi intégralement par ce bridge,
+sur ARM64 comme x86_64. Il n'existe plus de fast path libc concurrent : les timestamps négatifs,
+les années étendues et les transitions historiques suivent la même source timelib que le reste de
+la surface DateTime.
 
 Les structures C sont couvertes par des assertions compile-time exhaustives de taille,
 d'alignement et d'offset sur les ABI 64 bits de toutes les cibles supportées. Les objets timelib
@@ -140,11 +146,12 @@ Les gates permanents comprennent:
   (`PhpRelCmp`) sans troncature entière préalable;
 - arithmétique, microsecondes, DST, ownership, COW et parité AArch64/x86_64.
 
-Verdict final sur cette révision:
+Éléments de preuve acquis avant le rebase final — ils ne constituent pas le verdict du candidat
+post-rebase et doivent être reproduits après le verrou d'audit ci-dessous:
 
-- filtre DateTime codegen: `319 passed; 0 failed; 0 ignored`;
-- PHPT `ext/date`: 692 fichiers uniques, soit 628 sorties exactes, 15 différences limitées aux
-  identifiants d'objet, 36 équivalences `EXPECT`/`EXPECTF` et 13 skips php-src;
+- filtre DateTime codegen: `324 passed; 0 failed; 0 ignored`;
+- PHPT `ext/date`: 692 fichiers uniques, soit 627 sorties exactes, 15 différences limitées aux
+  identifiants d'objet, 37 équivalences `EXPECT`/`EXPECTF` et 13 skips php-src;
 - donc 679/679 PHPT exécutables conformes, sans différence de code de sortie ni timeout;
 - suites `--lib` des membres workspace par défaut: `3259 passed; 0 failed; 3 ignored`;
 - intégration CLI `error_reporting=E_ALL&~E_DEPRECATED` sous le profil PHP 8.5: `1 passed`,
@@ -157,6 +164,11 @@ Verdict final sur cette révision:
   pages générées validées;
 - assembly DateTime non vide sur les cinq cibles; archives statiques iOS device et simulator
   assemblées et liées.
+
+Le rebase vers `a7bb4cd92c` a intégré le correctif de `main` pour les constructeurs privés hérités
+sans retirer les chemins DateTime spécialisés. Ce point est soumis à une revue statique fraîche
+avant le rerun des preuves ci-dessus; il est interdit de présenter ces compteurs pré-rebase comme
+une validation du SHA post-rebase.
 
 Commande locale principale:
 
@@ -173,7 +185,7 @@ d'environnement Xdebug ou de version tzdb d'un PHP système ne constituent pas l
 
 La revue finale est fail-closed et porte sur le hash SHA-256 exact de cette spec. Kimi K3 et
 GLM-5.3 sont exécutés séquentiellement via Ollama, puis GPT-5.6 Sol effectue une troisième revue
-indépendante en raisonnement `high`. Chaque reviewer reçoit le hash,
+indépendante en raisonnement `xhigh`. Chaque reviewer reçoit le hash,
 le commit php-src normatif, le diff Elephc, les inventaires/tests et les résultats PHPT/matrice;
 il doit répondre `LOCK <hash>` ou fournir des écarts reproductibles. Tout écart doit décrire le
 manque, le problème ou la faille, son impact et son reproducer, avec les liens précis vers le code
