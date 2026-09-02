@@ -76,7 +76,8 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let trait_decl = expand_eval_trait_traits(trait_decl, context)?;
+    let trait_decl = expand_eval_trait_traits(trait_decl, context)?
+        .with_direct_method_strict_types(context.strict_types());
     validate_eval_trait_attribute_targets(&trait_decl)?;
     validate_eval_declared_constants(trait_decl.constants())?;
     validate_eval_magic_methods(trait_decl.name(), trait_decl.methods(), values)?;

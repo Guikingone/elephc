@@ -16,14 +16,12 @@ Returns functions exported by a loaded extension.
 **Parameters**:
 - `$extension` (`string`)
 
-In weak typing mode, PHP scalar values are coerced to their string form and `null` is coerced to `""` with PHP's deprecation diagnostic. Arrays, resources, and objects that do not implement `Stringable` raise a catchable `TypeError`; strict-types code accepts only a string. Extension names are compared case-insensitively.
-
 **Returns**: `mixed`
 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin with the same weak/strict string binding ([`crates/elephc-magician/src/interpreter/builtins/network_env/get_extension_funcs.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/get_extension_funcs.rs)).
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/get_extension_funcs.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/get_extension_funcs.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

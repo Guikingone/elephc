@@ -929,6 +929,71 @@ return true;"#,
     assert!(values.warnings.is_empty());
 }
 
+/// Verifies eval callables retain their defining compilation unit's strictness.
+#[test]
+fn execute_program_get_extension_funcs_retains_callable_lexical_strictness() {
+    let strict_definitions = parse_fragment(
+        br#"declare(strict_types=1);
+function strict_eval_function() { return get_extension_funcs(0); }
+$strict_eval_closure = static function() { return get_extension_funcs(0); };
+class StrictEvalMethod { public static function direct() { return get_extension_funcs(0); } }
+trait StrictEvalTrait { public function imported() { return get_extension_funcs(0); } }
+class StrictEvalTraitConsumer { use StrictEvalTrait; }"#,
+    )
+    .expect("parse strict callable definitions");
+    let weak_calls = parse_fragment(
+        br#"try { strict_eval_function(); echo "function"; } catch (TypeError $error) { echo "F"; }
+try { $strict_eval_closure(); echo "closure"; } catch (TypeError $error) { echo "C"; }
+try { StrictEvalMethod::direct(); echo "method"; } catch (TypeError $error) { echo "M"; }
+$trait_consumer = new StrictEvalTraitConsumer();
+try { $trait_consumer->imported(); echo "trait"; } catch (TypeError $error) { echo "T"; }
+return true;"#,
+    )
+    .expect("parse weak callable invocations");
+    let weak_definitions = parse_fragment(
+        br#"function weak_eval_function() { return get_extension_funcs(0) === false; }
+$weak_eval_closure = static function() { return get_extension_funcs(0) === false; };
+class WeakEvalMethod { public static function direct() { return get_extension_funcs(0) === false; } }
+trait WeakEvalTrait { public function imported() { return get_extension_funcs(0) === false; } }
+class WeakEvalTraitConsumer { use WeakEvalTrait; }"#,
+    )
+    .expect("parse weak callable definitions");
+    let strict_calls = parse_fragment(
+        br#"declare(strict_types=1);
+$trait_consumer = new WeakEvalTraitConsumer();
+return weak_eval_function()
+    && $weak_eval_closure()
+    && WeakEvalMethod::direct()
+    && $trait_consumer->imported();"#,
+    )
+    .expect("parse strict callable invocations");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program_with_context(
+        &mut context,
+        &strict_definitions,
+        &mut scope,
+        &mut values,
+    )
+    .expect("declare strict callables");
+    let weak_result = execute_program_with_context(&mut context, &weak_calls, &mut scope, &mut values)
+        .expect("weak caller must catch each strict callable error");
+
+    assert_eq!(values.output, "FCMT");
+    assert_eq!(values.get(weak_result), FakeValue::Bool(true));
+
+    execute_program_with_context(&mut context, &weak_definitions, &mut scope, &mut values)
+        .expect("declare weak callables");
+    let strict_result =
+        execute_program_with_context(&mut context, &strict_calls, &mut scope, &mut values)
+            .expect("strict caller must not alter weak callable bodies");
+
+    assert_eq!(values.get(strict_result), FakeValue::Bool(true));
+    assert!(values.warnings.is_empty());
+}
+
 /// Verifies eval `extension_loaded()` resolves the compile-time-known extension set.
 ///
 /// `curl` is the one deliberate exception that tracks `cfg!(feature = "curl")` instead of

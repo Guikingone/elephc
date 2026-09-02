@@ -10,16 +10,15 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/get_extension_funcs.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/get_extension_funcs.rs)
-- **Argument lowering**: [`src/ir_lower/expr/array_builtin_args.rs`](https://github.com/illegalstudio/elephc/blob/main/src/ir_lower/expr/array_builtin_args.rs) (`lower_get_extension_funcs_args`)
-- **Direct-AST coercion helper**: [`src/get_extension_funcs_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/get_extension_funcs_prelude.rs)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Keeps the registry's typed `runtime.get_extension_funcs` target for extension lookup.
-- Lowers the first operand through a pay-for-use direct Rust AST helper before the runtime call.
-- The helper implements PHP's weak string-parameter binding: scalar coercion, the null deprecation, Stringable objects, and catchable `TypeError`s for arrays, resources, and non-Stringable objects. In strict-types code it rejects every non-string value.
-- Production code never embeds PHP source or routes this helper through the PHP parser.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.get_extension_funcs` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
 
@@ -35,7 +34,7 @@ sidebar:
 ## EIR and runtime boundary
 
 - **Typed EIR target**: `runtime.get_extension_funcs`
-- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch after the direct-AST argument binder has produced the extension string.
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 
@@ -46,7 +45,6 @@ function get_extension_funcs(string $extension): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
-- **Binding**: PHP-compatible weak coercion is applied at lowering time because the public registry signature remains usable by typed callers; strict-types calls and invalid runtime values throw the same catchable errors as PHP.
 
 ## Eval interpreter (magician)
 

@@ -121,9 +121,9 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    let previous_strict_types = context.replace_strict_types(program.strict_types());
-    let control = execute_statements(program.statements(), context, scope, values);
-    context.replace_strict_types(previous_strict_types);
+    let control = with_lexical_strict_types(context, program.strict_types(), |context| {
+        execute_statements(program.statements(), context, scope, values)
+    });
     match control {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => Ok(EvalOutcome::Value(result)),
@@ -135,6 +135,22 @@ pub fn execute_program_outcome_with_context(
             .ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => Err(status),
     }
+}
+
+/// Runs one lexical PHP body under its compiled strict-types mode and restores its caller.
+///
+/// This deliberately wraps bodies only: PHP applies scalar parameter coercion at the
+/// caller's site, while calls written inside a function, closure, or method use the
+/// callable's compiled lexical mode.
+pub(in crate::interpreter) fn with_lexical_strict_types<T>(
+    context: &mut ElephcEvalContext,
+    strict_types: bool,
+    operation: impl FnOnce(&mut ElephcEvalContext) -> T,
+) -> T {
+    let previous_strict_types = context.replace_strict_types(strict_types);
+    let result = operation(context);
+    context.replace_strict_types(previous_strict_types);
+    result
 }
 
 /// Executes a zero-argument function declared in the shared eval context.

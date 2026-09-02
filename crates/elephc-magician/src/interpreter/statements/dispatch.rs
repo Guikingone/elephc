@@ -115,6 +115,7 @@ pub(in crate::interpreter) fn execute_stmt(
         } => {
             let key = name.to_ascii_lowercase();
             let mut function = EvalFunction::new(name.clone(), params.clone(), body.clone())
+                .with_strict_types(context.strict_types())
                 .with_attributes(attributes.clone())
                 .with_parameter_attributes(parameter_attributes.clone())
                 .with_parameter_types(parameter_types.clone())

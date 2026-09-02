@@ -1,9 +1,9 @@
 ---
-title: "DateTime php-src Compliance Spec v4.2"
+title: "DateTime php-src Compliance Spec v4.3"
 description: "Candidat ext/date corrigé après audit statique contre php-src 8.5.10-dev."
 ---
 
-# DateTime php-src Compliance Spec v4.2
+# DateTime php-src Compliance Spec v4.3
 
 ## Référence normative
 
@@ -112,10 +112,13 @@ Les exceptions et messages des constructeurs, parseurs, sérialisations et argum
 suivent php-src, y compris le type concret rejeté dans les `TypeError` de `add()`/`sub()` et de
 `date_add()`/`date_sub()`.
 
-Magician conserve la directive de fichier `declare(strict_types=0|1)` dans son EvalIR. Les appels
-dynamiques à `get_extension_funcs()` appliquent donc le même binding scalaire strict ou coercitif
-que les appels AOT, y compris le `TypeError` strict pour `int`, `float`, `bool`, `null`, ressources
-et objets.
+Magician conserve la directive de fichier `declare(strict_types=0|1)` dans son EvalIR et retient ce
+mode lexical sur les fonctions, closures et méthodes de classes/traits/enums déclarées par le
+fragment. Les appels à `get_extension_funcs()` écrits dans leurs corps appliquent donc le même
+binding scalaire strict ou coercitif que PHP : un corps strict rejette `int`, `float`, `bool`,
+`null`, ressources et objets, même lorsqu'il est invoqué depuis un fragment faible, et inversement.
+La coercition des arguments transmis *à* un callable reste celle de son site appelant, comme dans
+php-src.
 
 ### Reflection, sérialisation et debug
 
@@ -183,8 +186,17 @@ une validation du SHA post-rebase.
 
 Le premier audit post-rebase a également signalé trois écarts désormais corrigés dans ce candidat :
 la perte des octets binaires au passage de l'ABI timelib, le calcul `L` sur une année 64 bits au
-lieu du `int` php-src, et l'absence de `strict_types` dans Magician. Cette correction invalide les
-locks précédents et impose une nouvelle revue statique complète avant toute exécution de parité.
+lieu du `int` php-src, et l'absence initiale de `strict_types` dans Magician. Une contre-revue
+ultérieure a identifié F1 : le premier correctif ne conservait la stricte compilation que dans
+l'état ambiant du programme, perdant le mode lexical des callables retardés. La correction F1
+retient ce mode sur chaque `EvalFunction` et `EvalClassMethod`, le propage aux closures et aux
+méthodes importées de traits, ne l'active que pendant l'exécution du corps, puis restaure le mode
+appelant sur tous les retours et exceptions. C'est conforme à la règle de portée lexicale de
+[la documentation PHP](https://www.php.net/manual/en/language.types.declarations.php#language.types.declarations.strict)
+et au flag d'op-array propagé par
+[`zend_compile_func_decl()`](https://github.com/php/php-src/blob/47b563cbb856ec19155aacc3246931dfacbebd21/Zend/zend_compile.c#L7329-L7368).
+Cette correction invalide les locks précédents et impose une nouvelle revue statique complète avant
+toute exécution de parité.
 
 Commande locale principale:
 

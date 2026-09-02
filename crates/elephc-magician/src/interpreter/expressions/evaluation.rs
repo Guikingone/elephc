@@ -343,7 +343,11 @@ pub(super) fn eval_closure_expr(
     for capture in captures {
         bindings.push(eval_closure_capture(capture, context, scope, values)?);
     }
-    let closure = EvalClosure::new(function.clone(), bindings, is_static);
+    let closure = EvalClosure::new(
+        function.clone().with_strict_types(context.strict_types()),
+        bindings,
+        is_static,
+    );
     let name = context.define_closure(closure);
     eval_closure_object_expr(EvalClosureObjectTarget::Named(name), context, values)
 }

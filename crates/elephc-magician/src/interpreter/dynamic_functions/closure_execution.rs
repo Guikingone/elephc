@@ -98,7 +98,9 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
-    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    let result = with_lexical_strict_types(context, function.strict_types(), |context| {
+        execute_statements(function.body(), context, &mut function_scope, values)
+    });
     let persist_result = persist_static_locals(
         context,
         function.name(),
@@ -400,7 +402,9 @@ fn eval_closure_with_optional_binding(
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
-    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    let result = with_lexical_strict_types(context, function.strict_types(), |context| {
+        execute_statements(function.body(), context, &mut function_scope, values)
+    });
     let persist_result = persist_static_locals(
         context,
         function.name(),

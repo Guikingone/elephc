@@ -41,6 +41,7 @@ impl EvalClosureCapture {
 pub struct EvalFunction {
     name: String,
     source_location: Option<EvalSourceLocation>,
+    strict_types: bool,
     attributes: Vec<EvalAttribute>,
     params: Vec<String>,
     parameter_attributes: Vec<Vec<EvalAttribute>>,
@@ -56,6 +57,7 @@ impl PartialEq for EvalFunction {
     /// Compares function metadata while ignoring retained source-location decoration.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
+            && self.strict_types == other.strict_types
             && self.attributes == other.attributes
             && self.params == other.params
             && self.parameter_attributes == other.parameter_attributes
@@ -79,6 +81,7 @@ impl EvalFunction {
         Self {
             name: name.into(),
             source_location: None,
+            strict_types: false,
             attributes: Vec::new(),
             params,
             parameter_attributes,
@@ -94,6 +97,12 @@ impl EvalFunction {
     /// Returns a copy of this function with source-location metadata attached.
     pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
         self.source_location = Some(source_location);
+        self
+    }
+
+    /// Retains the strict-types mode of the compilation unit that owns this body.
+    pub const fn with_strict_types(mut self, strict_types: bool) -> Self {
+        self.strict_types = strict_types;
         self
     }
 
@@ -150,6 +159,11 @@ impl EvalFunction {
     /// Returns eval-fragment source-location metadata, when retained.
     pub const fn source_location(&self) -> Option<EvalSourceLocation> {
         self.source_location
+    }
+
+    /// Returns the lexical strict-types mode used while this function body executes.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
     }
 
     /// Returns attributes declared directly on this eval function.
